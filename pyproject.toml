@@ -13,8 +13,8 @@ dependencies = [
 ]
 
 [project.urls]
-  Source = "https://github.com/fairinternal/exca"
-  Tracker = "https://github.com/fairinternal/exca/issues"
+  Source = "https://github.com/facebookresearch/exca"
+  Tracker = "https://github.com/facebookresearch/exca/issues"
 
 [project.optional-dependencies]
     dev = [

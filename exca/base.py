@@ -169,7 +169,7 @@ class BaseInfra(pydantic.BaseModel):
     ) -> None:
         msg = (
             "infra.apply_on is deprecated, update your code with @infra.apply "
-            "(see how-to: https://fairinternal.github.io/brainai/infra/howto.html#migrating-to-new-infra-api)"
+            "(see how-to: https://facebookresearch.github.io/brainai/infra/howto.html#migrating-to-new-infra-api)"
         )
         raise RuntimeError(msg)
 

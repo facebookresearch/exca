@@ -35,13 +35,12 @@ Updating `process` to enable caching of its output and running it on slurm only 
 
 ```python continuation
 import typing as tp
-import torch
-import exca
+import exca as xk
 
 
 class TutorialTask(pydantic.BaseModel):
     param: int = 12
-    infra: exca.TaskInfra = exca.TaskInfra(version="1")
+    infra: xk.TaskInfra = xk.TaskInfra(version="1")
 
     @infra.apply
     def process(self) -> float:
