@@ -1,0 +1,97 @@
+name: Build & run pytest-mypy-linters
+env:
+    IN_GITHUB_ACTION: 1
+
+on: [push]
+
+jobs:
+  run-on-ubuntu:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 5
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    # Building/caching the environment
+
+    - name: Add conda to system path
+      run: |
+        # $CONDA is an environment variable pointing to the root of the miniconda directory
+        echo $CONDA
+        echo $CONDA/bin >> $GITHUB_PATH
+        echo $CONDA_PREFIX
+
+    - name: Cache conda env
+      id: cache-conda
+      uses: actions/cache@v4
+      env:
+        # change name here (only) to invalidate cache
+        cache-name: cache-conda-env-v0
+      with:
+          key: ${{ env.cache-name }}-${{ hashFiles('pyproject.toml') }}
+          path: ./ci_env
+
+    - name: Create conda env
+      run: |
+        # creates the env if it does not exist (not loaded from cache)
+        sudo apt-get update
+        if [ ! -d "./ci_env" ]; then \
+          conda create -p ./ci_env python=3.10 ipython -y
+        fi
+
+    - name: Install dependencies
+      run: |
+        source activate ./ci_env
+        pip install -e .[dev]
+
+    - name: Print installed packages
+      run: |
+        source activate ./ci_env
+        pip freeze
+
+    # start checks
+
+    - name: Run type hint checks with mypy
+      run: |
+        source activate ./ci_env
+        pip show mypy
+        mypy exca
+
+    - name: Test with pytest
+      run: |
+        source activate ./ci_env
+        pip show pytest
+        pytest exca --durations=10
+
+    - name: Test README code blocks
+      run: |
+        source activate ./ci_env
+        cd docs
+        # update readmes to avoid running on slurm:
+        sed -i 's/cluster: slurm/cluster: null/g' infra/*.md
+        # on Mac: sed -i '' 's/cluster: slurm/cluster: null/g' infra/*.md
+        # check readmes
+        pytest --markdown-docs -m markdown-docs .
+
+    - name: Run basic pylint
+      run: |
+        source activate ./ci_env
+        pip show pylint
+        pylint exca --disable=all --enable=unused-import,unused-variable,redefined-builtin,used-before-assignment,super-init-not-called,useless-super-delegation,dangerous-default-value,unnecessary-pass,attribute-defined-outside-init
+
+    - name: black
+      run: |
+        source activate ./ci_env
+        black --version
+        black -v --check --diff exca
+
+    - name: isort
+      run: |
+        source activate ./ci_env
+        isort --version
+        isort --check --diff exca

@@ -1,0 +1,30 @@
+name: Build documentation
+
+on: [push, workflow_dispatch]  # pull_request, 
+
+permissions:
+  contents: write
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+      - name: Install dependencies
+        run: |
+          pip install -U pip
+          pip install sphinx sphinx_rtd_theme myst_parser pytest
+          pip install -e .
+      - name: Verify basic install
+        run: pytest exca/test_task.py::test_task_infra
+      - name: Sphinx build
+        run: pushd docs;make html;popd 
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        with:
+          publish_branch: gh-pages
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docs/_build/html
+          force_orphan: true
