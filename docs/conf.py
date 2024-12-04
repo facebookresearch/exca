@@ -60,4 +60,4 @@ def linkcode_resolve(domain, info):
         )
         if not (base / filepath).with_suffix(".py").exists():
             return None
-    return "https://github.com/fairinternal/exca/blob/main/%s.py" % filepath
+    return "https://github.com/facebookresearch/exca/blob/main/%s.py" % filepath
