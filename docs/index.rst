@@ -3,8 +3,8 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Exca - Executation and caching infrastructure
-=============================================
+Exca - Execution and caching infrastructure
+===========================================
 
 .. toctree::
    :maxdepth: 2
