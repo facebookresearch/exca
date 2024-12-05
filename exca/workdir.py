@@ -59,14 +59,14 @@ class WorkDir(pydantic.BaseModel):
         to copy to the new working directory folder.
     folder: Path/str
         folder to use as working directory,
-        if not specified, infra will create one automatically `<infra_uid_folder>/code/<date>-<random_uid>/`.
+        if not specified, infra will create one automatically :code:`<infra_uid_folder>/code/<date>-<random_uid>/`.
         The folder is logged so you should be able to see what happened in your stderr/stdout.
         This parameter can be used in particular to store the code in a specific location
         or reuse workdir from a previous run.
     includes: sequence of str
         file name pattern than must be included (recursively)
         folder are always included except if explitely excluded
-        eg: `["*.py"]` to include only python files
+        eg: :code:`["*.py"]` to include only python files
     excludes: sequence of str
         file/folder name pattern than mush be excluded
     log_commit: bool

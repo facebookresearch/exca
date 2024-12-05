@@ -176,7 +176,7 @@ assert mymodel.x == 12
 One can then instantiate it easily with `mymodel = MyModel(x=12)` and access attributes like `mymodel.x`. One important feature is the typechecking when instantiating the objects, as `x` is typed as an `int`, the field will not accept a string, and the following code would raise an exception: `mymodel = MyModel(x="wrong")`.
 
 
-**Note**: `pydantic` is very similar to the more standard `dataclasses` with a few important features: models are type checked (dataclasses are not), one can set mutable default values like `[]` without risks (with dataclasses this can be buggy or require a factory), and one can use discriminators for sub-configs ([more on that here](howto-discriminator).
+**Note**: `pydantic` is very similar to the more standard `dataclasses` with a few important features: models are type checked (dataclasses are not), one can set mutable default values like `[]` without risks (with dataclasses this can be buggy or require a factory), and one can use discriminators for sub-configs ([more on that here](howto-discriminator)).
 
 
 For more safety, one should set `extra="forbid"` for models as this will trigger an error as well if you instantiate an object with parameters that do not exist in the model:

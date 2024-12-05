@@ -50,7 +50,7 @@ class ConfDict(dict[str, tp.Any]):
 
     Example
     -------
-    ConDict({"training.optim.lr": 0.01}) == {"training": {"optim": {"lr": 0.01}}}
+    :code:`ConDict({"training.optim.lr": 0.01}) == {"training": {"optim": {"lr": 0.01}}}`
 
     Note
     ----
@@ -152,7 +152,7 @@ class ConfDict(dict[str, tp.Any]):
         self, mapping: Mapping | None = None, **kwargs: tp.Any
     ) -> None:
         """Updates recursively the keys of the confdict.
-        No key is removed unless a sub-dictionary contains `"=replace=": True`,
+        No key is removed unless a sub-dictionary contains :code:`"=replace=": True`,
         in this case the existing keys in the sub-dictionary are wiped
         """
         if mapping is not None:
@@ -210,7 +210,7 @@ def _to_simplified_dict(data: tp.Any) -> tp.Any:
     """Simplify the dict structure by merging keys
     of dictionaries that have only one key
     Eg:
-    {"a": 1, "b": {"c": 12}} -> {"a": 1, "b.c": 12}
+    :code:`{"a": 1, "b": {"c": 12}} -> {"a": 1, "b.c": 12}`
     """
     if isinstance(data, ConfDict):
         out = {}
