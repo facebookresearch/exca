@@ -1,4 +1,4 @@
-# Exca - Computation and caching
+# Exca - Execution and caching
 
 This is an explanation to why `exca` was built. If you are only intereseted in how to use it, you can move to [tutorials](tutorials.md) and [how-to](howto.md) pages.
 
