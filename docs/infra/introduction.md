@@ -179,6 +179,7 @@ model = ConvCfg().build()
 ```
 
 **Cost**: classes become coupled (then again, you don't need importing `ConvModel` anymore)
+
 **Benefit**: fixes all issues mentioned above with 1 set of defaults, in a single place
 
 

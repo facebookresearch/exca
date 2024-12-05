@@ -23,7 +23,7 @@ SUBMITIT_EXECUTORS = ("auto", "local", "slurm", "debug")
 
 
 class SubmititMixin(pydantic.BaseModel):
-    """Config for creating a submitit executor:
+    """Mixin class for creating a submitit runner infra
 
     Parameters
     ----------

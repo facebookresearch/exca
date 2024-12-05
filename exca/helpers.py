@@ -138,9 +138,8 @@ class with_infra:
         def my_func(....)
             ...
 
-    or directly `my_func = with_infra(folder="whavetever")(my_func)`
-
-    then the function will always use this infra
+    or directly :code:`my_func = with_infra(folder="whavetever")(my_func)`
+    then the function will always use this infra.
     """
 
     def __init__(self, **kwargs: tp.Any) -> None:
@@ -204,7 +203,7 @@ def find_slurm_job(
     r"""Attemps to instantiate a submitit.SlurmJob instance from a cache folder and a `job_id`,
     looking for it recursively.
     This is based on default configuration of the log folder position
-    (`<cache folder>/logs/<username>/<job_id>`), and some additional heuristic that may be
+    (:code:`<cache folder>/logs/<username>/<job_id>`), and some additional heuristic that may be
     invalid in other pipelines (skipping logs/wandb folders) so this can fail
     with other configurations and may need adaptations, but should answer 95% of cases.
 
@@ -218,21 +217,21 @@ def find_slurm_job(
 
     Notes
     -----
-    - a submitit.Job instance has:
-        - `job.paths.stderr/stdout`: pathlib.Path of the logs
-        - `job.stderr()/stdout()`: string of the logs
-        - `job.result()`: output of the job (waits in not completed, raises if error)
-        - `job.done()`: True if job is completed
+    - a :code:`submitit.Job` instance has:
+        - :code:`job.paths.stderr/stdout`: pathlib.Path of the logs
+        - :code:`job.stderr()/stdout()`: string of the logs
+        - :code:`job.result()`: output of the job (waits in not completed, raises if error)
+        - :code:`job.done()`: True if job is completed
 
     - On top of it, the returned job has attributes:
-        - `config`: the full configuration of the job
-        - `uid_config`: the non default uid configuration of the job
+        - :code:`config`: the full configuration of the job
+        - :code:`uid_config`: the non default uid configuration of the job
 
     - The search assumes there is only one "logs" folder in the path
       (as we assume the default configuration of the logs path) and will probably
       fail if the cache folder contains /logs/ in it It also assumes there is no /code/ in it.
 
-    - Get the err using this line: `out = job.stderr().split("\\n")`
+    - Get the err using this line: :code:`out = job.stderr().split("\\n")`
 
 
     Example

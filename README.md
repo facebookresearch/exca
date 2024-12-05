@@ -30,7 +30,7 @@ class TutorialTask(pydantic.BaseModel):
         return self.param * np.random.rand()
 ```
 
-Updating `process` to enable caching of its output and running it on slurm only requires adding a [`TaskInfra`](https://cautious-bassoon-6kq1qy6.pages.github.io/infra/reference.html#exca.TaskInfra) sub-configuration and decorate the method:
+Updating `process` to enable caching of its output and running it on slurm only requires adding a [`TaskInfra`](https://facebookresearch.github.io/exca/infra/reference.html#exca.TaskInfra) sub-configuration and decorate the method:
 
 
 ```python continuation
@@ -56,7 +56,7 @@ out = task.process()  # runs on slurm if available
 # calling process again will load the cache and not a new random number
 assert out == task.process()
 ```
-See the [API reference for all the details](https://cautious-bassoon-6kq1qy6.pages.github.io/infra/reference.html#exca.TaskInfra)
+See the [API reference for all the details](https://facebookresearch.github.io/exca/infra/reference.html#exca.TaskInfra)
 
 ## Contributing
 
