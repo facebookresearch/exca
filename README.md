@@ -1,8 +1,10 @@
 # Exca - ⚔
 
+Execute and cache seamlessly in python.
+
 ![workflow badge](https://github.com/facebookresearch/exca/actions/workflows/test-type-lint.yaml/badge.svg)
 
-## Quick install 
+## Quick install
 
 ```
 pip install exca
@@ -14,49 +16,79 @@ Documentation is available at [https://facebookresearch.github.io/exca/](https:/
 
 ## Basic overview
 
+`exca` provides simple decorators to:
+- execute a (hierarchy of) computation(s) either locally or on distant nodes,
+- cache the result.
 
-Consider you have one `pydantic` model/config (if you do not know `pydantic`, it is similar to dataclasses) that fully defines one processing to perform, for instance through a `process` method like below: 
-
+### The problem:
+In ML pipelines, the use of a simple python function, such as `my_task`:
 
 ```python
 import numpy as np
-import typing as tp
-import pydantic
 
-class TutorialTask(pydantic.BaseModel):
-    param: int = 12
-
-    def process(self) -> float:
-        return self.param * np.random.rand()
+def my_task(param: int = 12) -> float:
+    return self.param * np.random.rand()
 ```
 
-Updating `process` to enable caching of its output and running it on slurm only requires adding a [`TaskInfra`](https://facebookresearch.github.io/exca/infra/reference.html#exca.TaskInfra) sub-configuration and decorate the method:
-
-
+often requires cumbersome overheads to (1) configure the parameters, (2) submit the job on a cluster, (3) cache the results: e.g.
 ```python continuation
-import typing as tp
-import exca as xk
+import pickle
+from pathlib import Path
+import submitit
+
+# Configure
+param = 12
+
+# Check task has already been executed
+fname = Path(f'result-{param}.npy')
+if not fname.exists():
+
+    # Submit job on cluster
+    executor = submitit.AutoExecutor()
+    job = executor.submit(my_task, param)
+    result = job.result()
+
+    # Cache result
+    with open(fname, "wb") as f:
+        pickle.dump(result, f)
+```
+
+These overheads lead to several issues, such as debugging, handling hierarchical execution and properly saving the results (ending in the classic `'result-parm12-v2_final_FIX.npy'`).
 
 
-class TutorialTask(pydantic.BaseModel):
+### The solution:
+`exca` can be used to decorate the method of a [`pydantic` model](https://docs.pydantic.dev/latest/) so as to seamlessly configure its execution and caching:
+
+```python fixture:tmp_path
+import numpy as np
+import pydantic
+
+class MyTask(pydantic.BaseModel):
     param: int = 12
-    infra: xk.TaskInfra = xk.TaskInfra(version="1")
+    infra: xk.TaskInfra = xk.TaskInfra()
 
     @infra.apply
     def process(self) -> float:
         return self.param * np.random.rand()
-```
 
-`TaskInfra` provides configuration for caching and computation, in particular providing a `folder` activates caching through the filesystem:
-`TaskInfra` provides configuration for caching and computation, in particular providing a `folder` activates caching through the filesystem, and setting `cluster="auto"` triggers computation either on slurm cluster if available, or in a dedicated process otherwise.
 
-```python continuation fixture:tmp_path
-task = TutorialTask(param=1, infra={"folder": tmp_path, "cluster": "auto"})
+task = MyTask(param=1, infra={"folder": tmp_path, "cluster": "auto"})
 out = task.process()  # runs on slurm if available
 # calling process again will load the cache and not a new random number
 assert out == task.process()
 ```
 See the [API reference for all the details](https://facebookresearch.github.io/exca/infra/reference.html#exca.TaskInfra)
+
+
+## Quick comparison
+
+| **feature \ tool**            | lru_cache | hydra |  submitit | stool | exca |
+| ----------------------------- | :-------: | :---: |  :------: | :---: | :--: |
+| RAM cache                     | ✔         |       |           |       | ✔    |
+| file cache                    |           |       |           |       | ✔    |
+| remote compute                |           | ✔     |  ✔        |  ✔    | ✔    |
+| pure python (vs commandline)  | ✔         |       |  ✔        |       | ✔    |
+| hierarchical config           |           | ✔     |           |       | ✔    |
 
 ## Contributing
 
