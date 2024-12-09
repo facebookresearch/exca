@@ -27,11 +27,11 @@ In ML pipelines, the use of a simple python function, such as `my_task`:
 import numpy as np
 
 def my_task(param: int = 12) -> float:
-    return self.param * np.random.rand()
+    return param * np.random.rand()
 ```
 
 often requires cumbersome overheads to (1) configure the parameters, (2) submit the job on a cluster, (3) cache the results: e.g.
-```python continuation
+```python continuation fixture:tmp_path
 import pickle
 from pathlib import Path
 import submitit
@@ -40,16 +40,16 @@ import submitit
 param = 12
 
 # Check task has already been executed
-fname = Path(f'result-{param}.npy')
-if not fname.exists():
+filepath = tmp_path / f'result-{param}.npy'
+if not filepath.exists():
 
     # Submit job on cluster
-    executor = submitit.AutoExecutor()
+    executor = submitit.AutoExecutor(cluster=None, folder=tmp_path)
     job = executor.submit(my_task, param)
     result = job.result()
 
     # Cache result
-    with open(fname, "wb") as f:
+    with filepath.open("wb") as f:
         pickle.dump(result, f)
 ```
 
@@ -62,6 +62,7 @@ These overheads lead to several issues, such as debugging, handling hierarchical
 ```python fixture:tmp_path
 import numpy as np
 import pydantic
+import exca as xk
 
 class MyTask(pydantic.BaseModel):
     param: int = 12
@@ -82,13 +83,13 @@ See the [API reference for all the details](https://facebookresearch.github.io/e
 
 ## Quick comparison
 
-| **feature \ tool**            | lru_cache | hydra |  submitit | stool | exca |
-| ----------------------------- | :-------: | :---: |  :------: | :---: | :--: |
-| RAM cache                     | ✔         |       |           |       | ✔    |
-| file cache                    |           |       |           |       | ✔    |
-| remote compute                |           | ✔     |  ✔        |  ✔    | ✔    |
-| pure python (vs commandline)  | ✔         |       |  ✔        |       | ✔    |
-| hierarchical config           |           | ✔     |           |       | ✔    |
+| **feature \ tool**            | lru_cache | hydra |  submitit | exca |
+| ----------------------------- | :-------: | :---: |  :------: | :--: |
+| RAM cache                     | ✔         |       |           | ✔    |
+| file cache                    |           |       |           | ✔    |
+| remote compute                |           | ✔     |  ✔        | ✔    |
+| pure python (vs commandline)  | ✔         |       |  ✔        | ✔    |
+| hierarchical config           |           | ✔     |           | ✔    |
 
 ## Contributing
 
