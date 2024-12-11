@@ -1,14 +1,14 @@
-
-from torchvision import datasets, transforms
-from torchvision.models import resnet18
-import torch
-import pydantic
-import exca
-import typing as tp
 import sys
+import typing as tp
+
+import exca
+import pydantic
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
+import torch
+from torchvision import datasets, transforms
+from torchvision.models import resnet18
 
 
 class ResNet(pl.LightningModule):
@@ -125,14 +125,22 @@ class Experiment(pydantic.BaseModel):
                 save_top_k=1,
                 monitor="val_loss",
                 mode="min")
-            ]  # question: if training is preempted (how is the exca checkpoint loading going to behave?)
+            ]
         trainer = self.trainer.build(callbacks=callbacks)
         return mnist, model, trainer
 
     @infra.apply
     def fit(self):
         data_loaders, model, trainer = self.build()
-        trainer.fit(model, data_loaders)
+        # Define the checkpoint directory
+        checkpoint_dir = self.infra.uid_folder() / 'checkpoint'
+
+        # Find the latest checkpoint if it exists
+        checkpoints = sorted(checkpoint_dir.glob('*.ckpt'))
+        ckpt_path = sorted(checkpoints)[-1] if checkpoints else None
+        
+        # Fit model
+        trainer.fit(model, data_loaders, ckpt_path=ckpt_path)
         return model
 
     def validate(self):
