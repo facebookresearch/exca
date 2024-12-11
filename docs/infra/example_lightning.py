@@ -1,3 +1,4 @@
+import inspect
 import sys
 import typing as tp
 
@@ -65,15 +66,50 @@ class AutoConfig(pydantic.BaseModel):  # TODO move to exca.helpers?
     model_config = pydantic.ConfigDict(extra="forbid")
     _cls: tp.ClassVar[tp.Any]
 
-    def model_post_init(self, log__: tp.Any) -> None:
-        super().model_post_init(log__)
-        exca.helpers.validate_kwargs(self._cls, self._public_params())
-    
-    def _public_params(self):
-        return {k: v for k, v in self.dict().items() if not k.startswith("_")}
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
+        """Checks that the config default values match the _cls defaults"""
+        super().__pydantic_init_subclass__(**kwargs)
+        super().__init_subclass__()
 
-    def build(self, **kwargs):
-        return self._cls(**self._public_params(), **kwargs)
+        if isinstance(cls._cls, type):
+            func_or_class = cls._cls.__init__
+        else:
+            func_or_class = cls._cls
+        
+        # Get the function signature
+        signature = inspect.signature(func_or_class)
+        func_params = signature.parameters
+        
+        # Iterate through the class fields and verify their defaults
+        for field_name, field_info in cls.model_fields.items():
+            # Check if the field has a default value or is required
+            model_default = field_info.default
+            model_required = field_info.is_required()
+            
+            # Check if the parameter exists in the function signature
+            if field_name not in func_params:
+                raise ValueError(f"Field '{field_name}' is missing in the function parameters.")
+            
+            func_param = func_params[field_name]
+            func_default = func_param.default
+            
+            # Check if the field is required in both the function and the model
+            if model_required != (func_default is inspect.Parameter.empty):
+                raise ValueError(f"Field '{field_name}' is required in the model but not in the function or vice versa.")
+            
+            # If it has a default in both, compare them
+            if model_default != func_default and func_default is not inspect.Parameter.empty:
+                raise ValueError(f"Field '{field_name}' default value mismatch: model has '{model_default}', function has '{func_default}'.")
+    
+    def model_post_init(self, log__: tp.Any) -> None:
+        """Check that the parameters are compatible with _cls"""
+        super().model_post_init(log__)
+        exca.helpers.validate_kwargs(self._cls, self.dict())
+    
+    def build(self, **kwargs):  #  /!\ **kwargs needed for trainer checkpoint, but bad api for uid?
+        return self._cls(**self.dict(), **kwargs)
+
 
 def args_to_nested_dict(args: list[str]) -> tp.Dict[str, tp.Any]:  # TODO move to exca.helpers?
     """
@@ -104,7 +140,7 @@ class MnistConfig(AutoConfig):
 
 
 class TrainerConfig(AutoConfig):
-    max_epochs: int = 5
+    max_epochs: tp.Optional[int] = None
     _cls = Trainer
 
 
@@ -150,7 +186,7 @@ class Experiment(pydantic.BaseModel):
 
 
 if __name__ == '__main__':
-    config = args_to_nested_dict(sys.argv[1:])
+    config = args_to_nested_dict(['--trainer.max_epochs=5'] + sys.argv[1:])
     exp = Experiment(**config)
     score = exp.validate()
     print(score)
