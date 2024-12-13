@@ -202,6 +202,17 @@ class ConfDict(dict[str, tp.Any]):
         """Provides a unique string for the config"""
         return _to_uid(_to_simplified_dict(self))
 
+    @classmethod
+    def from_args(cls, args: list[str]) -> "ConfDict":
+        """Parses a list of Bash-style arguments (e.g., --key=value) into a ConfDict.
+        typically used as :code:`MyConfig(**ConfDict(sys.argv[1:]))`
+        This method supports sub-arguments eg: :code:`--optimizer.lr=0.01`
+        """
+        if not all(arg.startswith("--") and "=" in arg for arg in args):
+            raise ValueError(f"arguments need to be if type --key=value, got {args}")
+        out = dict(arg.lstrip("--").split("=", 1) for arg in args)
+        return cls(out)
+
 
 # INTERNALS
 
