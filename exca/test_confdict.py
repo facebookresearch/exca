@@ -162,3 +162,9 @@ def test_flat_types() -> None:
     cfg = {"a": {"b": Path("blublu")}}
     flat = confdict.ConfDict(cfg).flat()
     assert flat == {"a.b": Path("blublu")}
+
+
+def test_from_args() -> None:
+    args = ["--name=stuff", "--optim.lr=0.01", "--optim.name=Adam"]
+    confd = ConfDict.from_args(args)
+    assert confd == {'name': 'stuff', 'optim': {'lr': '0.01', 'name': 'Adam'}}
