@@ -167,4 +167,4 @@ def test_flat_types() -> None:
 def test_from_args() -> None:
     args = ["--name=stuff", "--optim.lr=0.01", "--optim.name=Adam"]
     confd = ConfDict.from_args(args)
-    assert confd == {'name': 'stuff', 'optim': {'lr': '0.01', 'name': 'Adam'}}
+    assert confd == {"name": "stuff", "optim": {"lr": "0.01", "name": "Adam"}}
