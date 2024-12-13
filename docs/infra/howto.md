@@ -53,10 +53,10 @@ Similarly as with calling `task.infra.job()`, previously computed tasks are not 
 
 ## Monitoring
 
-To monitor running jobs on a the cluster, one can use the `squeue` command. However, when running a lot of slurm jobs it can become complex to figure out which job does what. We provide a basic helper function to access the logs and config of a given job (assuming default log folder position): `exca.helpers.find_slurm_job`
+To monitor running jobs on slurm clusters, one can use the `squeue` command. However, when running a lot of slurm jobs it can become complex to figure out which job does what. We provide a basic helper function to access the logs and config of a given job (assuming default log folder position): `exca.helpers.find_slurm_job`
 See more details in its [API reference](#exca.helpers.find_slurm_job).
 
-We also recommend using [Turm](https://github.com/kabouzeid/turm), which provides a real-time interface to access the `stdout/stderr` of running jobs.
+We also recommend using [Turm](https://github.com/kabouzeid/turm), which provides a real-time interface to access the `stdout/stderr` of running jobs. Simply install it with `pip install turm` and you can then use `turm --slurm-refresh 20 --me --states RUNNING` to check your running jobs (please use at least 20s for the slurm refresh rate to avoid overloading the cluster).
 
 
 ## Efficient caching: cache and class uid exclusion
