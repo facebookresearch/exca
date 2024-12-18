@@ -300,7 +300,10 @@ def recursive_freeze(obj: tp.Any) -> None:
 
 
 def find_models(
-    obj: tp.Any, Type: tp.Type[T], include_private: bool = True
+    obj: tp.Any,
+    Type: tp.Type[T],
+    include_private: bool = True,
+    stop_on_find: bool = False,
 ) -> tp.Dict[str, T]:
     """Recursively find submodels"""
     out: dict[str, T] = {}
@@ -310,6 +313,8 @@ def find_models(
         # copy and set to avoid modifying class attribute instead of instance attribute
         if isinstance(obj, Type):
             out = {"": obj}
+            if stop_on_find:
+                return out
         private = obj.__pydantic_private__
         obj = dict(obj)
         if include_private and private is not None:
