@@ -310,11 +310,10 @@ def find_models(
         # copy and set to avoid modifying class attribute instead of instance attribute
         if isinstance(obj, Type):
             out = {"": obj}
+        private = obj.__pydantic_private__
         obj = dict(obj)
-        if include_private:
-            private = obj.__pydantic_private__
-            if private is not None:
-                obj.update(private)
+        if include_private and private is not None:
+            obj.update(private)
     if isinstance(obj, collections.abc.Sequence):
         obj = {str(k): sub for k, sub in enumerate(obj)}
     if isinstance(obj, dict):
