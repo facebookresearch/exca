@@ -419,7 +419,7 @@ class BaseInfra(pydantic.BaseModel):
         """Returns a dictionary of all infras part of the current model/config
         (including sub-configs)
         """
-        return utils.find_models(self._obj, BaseInfra)
+        return utils.find_models(self._obj, BaseInfra, stop_on_find=True)
 
     def __eq__(self, other: tp.Any) -> bool:
         # override __eq__ to avoid recursive checks to private fields
