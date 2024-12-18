@@ -317,13 +317,16 @@ def find_models(
                 return out
         private = obj.__pydantic_private__
         obj = dict(obj)
+        print(obj)
         if include_private and private is not None:
             obj.update(private)
     if isinstance(obj, collections.abc.Sequence):
         obj = {str(k): sub for k, sub in enumerate(obj)}
     if isinstance(obj, dict):
         for name, sub in obj.items():
-            subout = find_models(sub, Type)
+            subout = find_models(
+                sub, Type, include_private=include_private, stop_on_find=stop_on_find
+            )
             out.update({f"{name}.{n}" if n else name: y for n, y in subout.items()})
     return out
 
