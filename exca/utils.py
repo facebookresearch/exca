@@ -329,7 +329,6 @@ def find_models(
                 return out
         private = obj.__pydantic_private__
         obj = dict(obj)
-        print(obj)
         if include_private and private is not None:
             obj.update(private)
     if isinstance(obj, collections.abc.Sequence):
