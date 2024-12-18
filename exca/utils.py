@@ -292,29 +292,22 @@ def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
 
 def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hieararchy"""
-    if isinstance(obj, (str, int, float, np.ndarray, TorchTensor)):
-        return  # fast track
-    if isinstance(obj, pydantic.BaseModel):
-        # copy and set to avoid modifying class attribute instead of instance attribute
-        mconfig = copy.deepcopy(obj.model_config)
+    models = find_models(obj, pydantic.BaseModel)
+    for m in models.values():
+        mconfig = copy.deepcopy(m.model_config)
         mconfig["frozen"] = True
-        object.__setattr__(obj, "model_config", mconfig)
-        obj = dict(obj)
-    if isinstance(obj, dict):
-        obj = list(obj.values())
-    if isinstance(obj, collections.abc.Sequence):
-        for sub in obj:
-            recursive_freeze(sub)
+        object.__setattr__(m, "model_config", mconfig)
 
 
 def find_models(obj: tp.Any, Type: tp.Type[T]) -> tp.Dict[str, T]:
-    """Recursively freeze a pydantic model hieararchy"""
+    """Recursively find submodels"""
+    out = {}
     if isinstance(obj, (str, int, float, np.ndarray, TorchTensor)):
-        return {}  # fast track
+        return out
     if isinstance(obj, pydantic.BaseModel):
         # copy and set to avoid modifying class attribute instead of instance attribute
         if isinstance(obj, Type):
-            return {"": obj}
+            out = {"": obj}
         private = obj.__pydantic_private__
         obj = dict(obj)
         if private is not None:
@@ -322,12 +315,10 @@ def find_models(obj: tp.Any, Type: tp.Type[T]) -> tp.Dict[str, T]:
     if isinstance(obj, collections.abc.Sequence):
         obj = {str(k): sub for k, sub in enumerate(obj)}
     if isinstance(obj, dict):
-        output = {}
         for name, sub in obj.items():
             subout = find_models(sub, Type)
-            output.update({f"{name}.{n}" if n else name: y for n, y in subout.items()})
-        return output
-    return {}
+            out.update({f"{name}.{n}" if n else name: y for n, y in subout.items()})
+    return out
 
 
 def _pydantic_hints(hint: tp.Any) -> tp.List[tp.Type[pydantic.BaseModel]]:
