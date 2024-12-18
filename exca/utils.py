@@ -291,15 +291,17 @@ def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
 
 
 def recursive_freeze(obj: tp.Any) -> None:
-    """Recursively freeze a pydantic model hieararchy"""
-    models = find_models(obj, pydantic.BaseModel)
+    """Recursively freeze a pydantic model hierarchy"""
+    models = find_models(obj, pydantic.BaseModel, include_private=False)
     for m in models.values():
         mconfig = copy.deepcopy(m.model_config)
         mconfig["frozen"] = True
         object.__setattr__(m, "model_config", mconfig)
 
 
-def find_models(obj: tp.Any, Type: tp.Type[T]) -> tp.Dict[str, T]:
+def find_models(
+    obj: tp.Any, Type: tp.Type[T], include_private: bool = True
+) -> tp.Dict[str, T]:
     """Recursively find submodels"""
     out = {}
     if isinstance(obj, (str, int, float, np.ndarray, TorchTensor)):
@@ -308,10 +310,11 @@ def find_models(obj: tp.Any, Type: tp.Type[T]) -> tp.Dict[str, T]:
         # copy and set to avoid modifying class attribute instead of instance attribute
         if isinstance(obj, Type):
             out = {"": obj}
-        private = obj.__pydantic_private__
         obj = dict(obj)
-        if private is not None:
-            obj.update(private)
+        if include_private:
+            private = obj.__pydantic_private__
+            if private is not None:
+                obj.update(private)
     if isinstance(obj, collections.abc.Sequence):
         obj = {str(k): sub for k, sub in enumerate(obj)}
     if isinstance(obj, dict):
