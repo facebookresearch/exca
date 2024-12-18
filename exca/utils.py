@@ -305,7 +305,19 @@ def find_models(
     include_private: bool = True,
     stop_on_find: bool = False,
 ) -> tp.Dict[str, T]:
-    """Recursively find submodels"""
+    """Recursively find submodels
+
+    Parameters
+    ----------
+    obj: Any
+        object to check recursively
+    Type: pydantic.BaseModel subtype
+        type to look for
+    include_private: bool
+        include private attributes in the search
+    stop_on_find: bool
+        stop the search when reaching the searched type
+    """
     out: dict[str, T] = {}
     if isinstance(obj, (str, int, float, np.ndarray, TorchTensor)):
         return out
