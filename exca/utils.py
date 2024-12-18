@@ -303,7 +303,7 @@ def find_models(
     obj: tp.Any, Type: tp.Type[T], include_private: bool = True
 ) -> tp.Dict[str, T]:
     """Recursively find submodels"""
-    out = {}
+    out: dict[str, T] = {}
     if isinstance(obj, (str, int, float, np.ndarray, TorchTensor)):
         return out
     if isinstance(obj, pydantic.BaseModel):
