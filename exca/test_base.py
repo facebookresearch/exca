@@ -392,6 +392,20 @@ def test_missing_base_model() -> None:
             infra: TaskInfra = TaskInfra(version="12")
 
 
+class WeirdTypes(pydantic.BaseModel):
+    alphas: tp.List[float] = list(np.ones(2))
+    infra: TaskInfra = TaskInfra()
+
+    @infra.apply
+    def build(self) -> int:
+        return 8
+
+
+def test_weird_types(tmp_path: Path) -> None:
+    whatever = WeirdTypes(infra={"folder": tmp_path})  # type: ignore
+    whatever.build()
+
+
 def test_defined_in_main() -> None:
     try:
         import neuralset as ns
