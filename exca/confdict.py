@@ -32,13 +32,17 @@ _sentinel = object()
 OVERRIDE = "=replace="
 
 
-def _path_representer(dumper: tp.Any, data: tp.Any) -> tp.Any:
+def _special_representer(dumper: tp.Any, data: tp.Any) -> tp.Any:
     "Represents Path instances as strings"
-    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
+    if isinstance(data, (PosixPath, WindowsPath)):
+        return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
+    elif isinstance(data, (np.float64, np.int64, np.float32, np.int32)):
+        return dumper.represent_scalar("tag:yaml.org,2002:float", str(float(data)))
+    raise NotImplementedError(f"Cannot represent data {data} of type {type(data)}")
 
 
-_yaml.representer.SafeRepresenter.add_representer(PosixPath, _path_representer)
-_yaml.representer.SafeRepresenter.add_representer(WindowsPath, _path_representer)
+for t in (PosixPath, WindowsPath, np.float32, np.float64, np.int32, np.int64):
+    _yaml.representer.SafeRepresenter.add_representer(t, _special_representer)
 
 
 class ConfDict(dict[str, tp.Any]):
@@ -201,6 +205,17 @@ class ConfDict(dict[str, tp.Any]):
     def to_uid(self) -> str:
         """Provides a unique string for the config"""
         return _to_uid(_to_simplified_dict(self))
+
+    @classmethod
+    def from_args(cls, args: list[str]) -> "ConfDict":
+        """Parses a list of Bash-style arguments (e.g., --key=value) into a ConfDict.
+        typically used as :code:`MyConfig(**ConfDict(sys.argv[1:]))`
+        This method supports sub-arguments eg: :code:`--optimizer.lr=0.01`
+        """
+        if not all(arg.startswith("--") and "=" in arg for arg in args):
+            raise ValueError(f"arguments need to be if type --key=value, got {args}")
+        out = dict(arg.lstrip("--").split("=", 1) for arg in args)
+        return cls(out)
 
 
 # INTERNALS
