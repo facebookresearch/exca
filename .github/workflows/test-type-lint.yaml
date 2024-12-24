@@ -48,7 +48,7 @@ jobs:
       run: |
         source activate ./ci_env
         pip install -e .[dev]
-        pip install sklearn lightning  # for docs
+        pip install scikit-learn lightning  # for docs
 
     - name: Print installed packages
       run: |
