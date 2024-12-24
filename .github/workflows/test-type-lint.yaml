@@ -48,6 +48,7 @@ jobs:
       run: |
         source activate ./ci_env
         pip install -e .[dev]
+        pip install sklearn lightning  # for docs
 
     - name: Print installed packages
       run: |
@@ -76,7 +77,7 @@ jobs:
         sed -i 's/\"auto\"/None/g' README.md
         # on Mac: sed -i '' 's/cluster: slurm/cluster: null/g' infra/*.md
         # check readmes
-        pytest --markdown-docs -m markdown-docs `**/*.md`
+        pytest --markdown-docs -m markdown-docs .
 
     - name: Run basic pylint
       run: |
