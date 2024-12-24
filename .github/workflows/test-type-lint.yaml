@@ -78,7 +78,7 @@ jobs:
         # check readmes
         pwd
         ls
-        pytest --markdown-docs -m markdown-docs **/*.md
+        pytest --markdown-docs -m markdown-docs `**/*.md`
 
     - name: Run basic pylint
       run: |
