@@ -406,6 +406,23 @@ def test_weird_types(tmp_path: Path) -> None:
     whatever.build()
 
 
+def test_recursive_model() -> None:
+    class SubData(pydantic.BaseModel):
+        x: int = 12
+
+    class Recursive(pydantic.BaseModel):
+        submodels: list["Recursive"] = []
+        subd: SubData = SubData()
+        infra: TaskInfra = TaskInfra()
+
+    r = Recursive(submodels=[{}, {}], subd={"y": 3})  # type: ignore
+    print("Cfg", SubData.model_config)
+    r = Recursive(submodels=[{}, {}], subd={"y": 3})  # type: ignore
+    r.subd.y = 13
+    print(r.subd.y)
+    raise
+
+
 def test_defined_in_main() -> None:
     try:
         import neuralset as ns
