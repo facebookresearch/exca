@@ -83,12 +83,16 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     cache: cd.CacheDict[np.ndarray] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     cache["blublu.tmp"] = data
     assert cache.cache_type not in [None, "Pickle"]
-    name1, name2 = [fp.name for fp in tmp_path.iterdir() if not fp.name.startswith(".")]
-    if name2.endswith(".key"):
-        name1, name2 = name2, name1
-    num = len(name1) - 4
-    assert name1[:num] == name2[:num], f"Non-matching names {name1} and {name2}"
+    names = [fp.name for fp in tmp_path.iterdir() if not fp.name.startswith(".")]
+    assert len(names) == 3
+    k_name = [n for n in names if n.endswith(".key")][0]
+    j_name = [n for n in names if n.endswith("-info.jsonl")][0]
+    v_name = [n for n in names if not n.endswith((".key", "-info.jsonl"))][0]
+    num = len(k_name) - 4
+    assert k_name[:num] == k_name[:num], f"Non-matching names {k_name} and {v_name}"
     assert isinstance(cache["blublu.tmp"], type(data))
+    print((tmp_path / j_name).read_text())
+    raise
 
 
 @pytest.mark.parametrize(

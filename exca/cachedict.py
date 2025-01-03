@@ -8,9 +8,12 @@
 Disk, RAM caches
 """
 import hashlib
+import json
 import logging
 import shutil
+import socket
 import subprocess
+import threading
 import typing as tp
 from concurrent import futures
 from pathlib import Path
@@ -91,8 +94,8 @@ class CacheDict(tp.Generic[X]):
                 except Exception as e:
                     msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
                     logger.warning(msg)
-        self._ram_data: tp.Dict[str, X] = {}
-        self._key_uid: tp.Dict[str, str] = {}
+        self._ram_data: dict[str, X] = {}
+        self._key_info: dict[str, dict[str, tp.Any]] = {}
         self.cache_type = cache_type
         self._set_cache_type(cache_type)
 
@@ -101,9 +104,16 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram = self._keep_in_ram
         return f"{name}({self.folder},{keep_in_ram=})"
 
+    @property
+    def _write_fp(self) -> Path:
+        if self.folder is None:
+            raise RuntimeError("No write filepath with no provided folder")
+        name = f"{socket.gethostname()}-{threading.get_native_id()}-info.jsonl"
+        return Path(self.folder) / name
+
     def clear(self) -> None:
         self._ram_data.clear()
-        self._key_uid.clear()
+        self._key_info.clear()
         if self.folder is not None:
             # let's remove content but not the folder to keep same permissions
             for sub in self.folder.iterdir():
@@ -118,10 +128,11 @@ class CacheDict(tp.Generic[X]):
     def keys(self) -> tp.Iterator[str]:
         keys = set(self._ram_data)
         if self.folder is not None:
+            folder = Path(self.folder)
             # read all existing key files as fast as possible (pathlib.glob is slow)
             try:
                 out = subprocess.check_output(
-                    'find . -type f -name "*.key"', shell=True, cwd=self.folder
+                    'find . -type f -name "*.key"', shell=True, cwd=folder
                 ).decode("utf8")
             except subprocess.CalledProcessError as e:
                 out = e.output.decode("utf8")  # stderr contains missing tmp files
@@ -130,12 +141,27 @@ class CacheDict(tp.Generic[X]):
             # parallelize content reading
             with futures.ThreadPoolExecutor() as ex:
                 jobs = {
-                    name[:-4]: ex.submit((self.folder / name).read_text, "utf8")
+                    name[:-4]: ex.submit((folder / name).read_text, "utf8")
                     for name in names
-                    if name[:-4] not in self._key_uid
+                    if name[:-4] not in self._key_info
                 }
-            self._key_uid.update({j.result(): name for name, j in jobs.items()})
-            keys |= set(self._key_uid)
+            self._key_info.update({j.result(): {"uid": name} for name, j in jobs.items()})
+            keys |= set(self._key_info)
+            # read all existing jsonl files
+            try:
+                out = subprocess.check_output(
+                    'find . -type f -name "*-info.jsonl"', shell=True, cwd=folder
+                ).decode("utf8")
+            except subprocess.CalledProcessError as e:
+                out = e.output.decode("utf8")  # stderr contains missing tmp files
+            names = out.splitlines()
+            for name in names:
+                lines = (folder / name).read_text().splitlines()
+                for line in lines:
+                    if not line:
+                        continue
+                    info = json.loads(line)
+                    self._key_info[info.pop("key")] = info
         return iter(keys)
 
     def values(self) -> tp.Iterable[X]:
@@ -156,9 +182,9 @@ class CacheDict(tp.Generic[X]):
         # necessarily in file cache folder from now on
         if self.folder is None:
             raise RuntimeError("This should not happen")
-        if key not in self._key_uid:
+        if key not in self._key_info:
             _ = key in self
-        if key not in self._key_uid:
+        if key not in self._key_info:
             # trigger folder cache update:
             # https://stackoverflow.com/questions/3112546/os-path-exists-lies/3112717
             self.folder.chmod(self.folder.stat().st_mode)
@@ -167,11 +193,12 @@ class CacheDict(tp.Generic[X]):
             self.check_cache_type()
         if self.cache_type is None:
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
-        uid = self._key_uid[key]
+        info = self._key_info[key]
+        uid = info["uid"]
         loader = DumperLoader.CLASSES[self.cache_type]
         loaded = loader.load(self.folder / uid)
         if self._keep_in_ram:
-            self._ram_data[key] = loaded  # type: ignore
+            self._ram_data[key] = loaded
         return loaded  # type: ignore
 
     def _set_cache_type(self, cache_type: str | None) -> None:
@@ -209,12 +236,16 @@ class CacheDict(tp.Generic[X]):
             self._ram_data[key] = value
         if self.folder is not None:
             uid = _string_uid(key)  # use a safe mapping
-            self._key_uid[key] = uid
+            self._key_info[key] = {"uid": uid}
             dumper = DumperLoader.CLASSES[self.cache_type]()
             dumper.dump(self.folder / uid, value)
             dumpfile = dumper.filepath(self.folder / uid)
             keyfile = self.folder / (uid + ".key")
             keyfile.write_text(key, encoding="utf8")
+            # new write
+            info = {"key": key, "uid": uid}
+            with self._write_fp.open("a") as f:
+                f.write(json.dumps(info) + "\n")
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if self.permissions is not None:
@@ -226,7 +257,7 @@ class CacheDict(tp.Generic[X]):
 
     def __delitem__(self, key: str) -> None:
         # necessarily in file cache folder from now on
-        if key not in self._key_uid:
+        if key not in self._key_info:
             _ = key in self
         self._ram_data.pop(key, None)
         if self.folder is None:
@@ -235,11 +266,11 @@ class CacheDict(tp.Generic[X]):
             self.check_cache_type()
         if self.cache_type is None:
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
-        uid = self._key_uid.pop(key)
-        keyfile = self.folder / (uid + ".key")
+        info = self._key_info.pop(key)
+        keyfile = self.folder / (info["uid"] + ".key")
         keyfile.unlink()
         dumper = DumperLoader.CLASSES[self.cache_type]()
-        fp = dumper.filepath(self.folder / uid)
+        fp = dumper.filepath(self.folder / info["uid"])
         with utils.fast_unlink(fp):  # moves then delete to avoid weird effects
             pass
 
@@ -249,12 +280,12 @@ class CacheDict(tp.Generic[X]):
             return True
         if self.folder is not None:
             # in folder (already read once)
-            if key in self._key_uid:
+            if key in self._key_info:
                 return True
             # maybe in folder (never read it)
             uid = _string_uid(key)
             fp = self.folder / f"{uid}.key"
             if fp.exists():
-                self._key_uid[key] = uid
+                self._key_info[key] = {"uid": uid}
                 return True
         return False  # lazy check
