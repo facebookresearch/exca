@@ -79,10 +79,12 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram: bool = False,
         cache_type: None | str = None,
         permissions: int | None = 0o777,
+        _write_legacy_key_files: bool = False,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
         self._keep_in_ram = keep_in_ram
+        self._write_legacy_key_files = _write_legacy_key_files
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
 
@@ -123,6 +125,7 @@ class CacheDict(tp.Generic[X]):
                     sub.unlink()
 
     def __len__(self) -> int:
+        print("in len")
         return len(list(self.keys()))  # inefficient, but correct
 
     def keys(self) -> tp.Iterator[str]:
@@ -146,23 +149,30 @@ class CacheDict(tp.Generic[X]):
                     if name[:-4] not in self._key_info
                 }
             self._key_info.update({j.result(): {"uid": name} for name, j in jobs.items()})
+            self._load_info_files()
             keys |= set(self._key_info)
-            # read all existing jsonl files
-            try:
-                out = subprocess.check_output(
-                    'find . -type f -name "*-info.jsonl"', shell=True, cwd=folder
-                ).decode("utf8")
-            except subprocess.CalledProcessError as e:
-                out = e.output.decode("utf8")  # stderr contains missing tmp files
-            names = out.splitlines()
-            for name in names:
-                lines = (folder / name).read_text().splitlines()
-                for line in lines:
-                    if not line:
-                        continue
-                    info = json.loads(line)
-                    self._key_info[info.pop("key")] = info
         return iter(keys)
+
+    def _load_info_files(self) -> None:
+        if self.folder is None:
+            return
+        folder = Path(self.folder)
+        # read all existing jsonl files
+        try:
+            out = subprocess.check_output(
+                'find . -type f -name "*-info.jsonl"', shell=True, cwd=folder
+            ).decode("utf8")
+        except subprocess.CalledProcessError as e:
+            out = e.output.decode("utf8")  # stderr contains missing tmp files
+        print("JSON", out)
+        names = out.splitlines()
+        for name in names:
+            lines = (folder / name).read_text().splitlines()
+            for line in lines:
+                if not line:
+                    continue
+                info = json.loads(line)
+                self._key_info[info.pop("key")] = info
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -240,16 +250,21 @@ class CacheDict(tp.Generic[X]):
             dumper = DumperLoader.CLASSES[self.cache_type]()
             dumper.dump(self.folder / uid, value)
             dumpfile = dumper.filepath(self.folder / uid)
-            keyfile = self.folder / (uid + ".key")
-            keyfile.write_text(key, encoding="utf8")
+            files = [dumpfile]
+            if self._write_legacy_key_files:
+                keyfile = self.folder / (uid + ".key")
+                keyfile.write_text(key, encoding="utf8")
+                files.append(keyfile)
             # new write
             info = {"key": key, "uid": uid}
-            with self._write_fp.open("a") as f:
+            write_fp = self._write_fp
+            with write_fp.open("a") as f:
                 f.write(json.dumps(info) + "\n")
+            files.append(write_fp)
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if self.permissions is not None:
-                for fp in [dumpfile, keyfile]:
+                for fp in files:
                     try:
                         fp.chmod(self.permissions)
                     except Exception:  # pylint: disable=broad-except
@@ -278,6 +293,7 @@ class CacheDict(tp.Generic[X]):
         # in-memory cache
         if key in self._ram_data:
             return True
+        self._load_info_files()
         if self.folder is not None:
             # in folder (already read once)
             if key in self._key_info:
