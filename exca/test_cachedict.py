@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import typing as tp
+from concurrent import futures
 from pathlib import Path
 
 import nibabel as nib
@@ -113,22 +114,29 @@ def test_specialized_dump(tmp_path: Path, data: tp.Any, cache_type: str) -> None
 @pytest.mark.parametrize(
     "legacy_write,remove_jsonl", ((True, True), (True, False), (False, False))
 )
-def test_info_jsonl(tmp_path: Path, legacy_write: bool, remove_jsonl: bool) -> None:
+@pytest.mark.parametrize("process", (False,))  # add True for more (slower) tests
+def test_info_jsonl(
+    tmp_path: Path, legacy_write: bool, remove_jsonl: bool, process: bool
+) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
     )
-    cache["x"] = 12
-    cache["y"] = 3
+    Pool = futures.ProcessPoolExecutor if process else futures.ThreadPoolExecutor
+    with Pool(max_workers=2) as ex:
+        ex.submit(cache.__setitem__, "x", 12)
+        ex.submit(cache.__setitem__, "y", 3)
+        ex.submit(cache.__setitem__, "z", 24)
     # check files
     fps = list(tmp_path.iterdir())
-    info_path = [fp for fp in fps if fp.name.endswith("-info.jsonl")][0]
-    print(info_path.read_text())
+    info_paths = [fp for fp in fps if fp.name.endswith("-info.jsonl")]
+    assert len(info_paths) == 2
     if remove_jsonl:
-        info_path.unlink()
+        for ipath in info_paths:
+            ipath.unlink()
     # restore
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert cache["x"] == 12
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert "y" in cache
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    assert len(cache) == 2
+    assert len(cache) == 3
