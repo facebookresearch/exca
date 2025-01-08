@@ -110,8 +110,10 @@ def test_specialized_dump(tmp_path: Path, data: tp.Any, cache_type: str) -> None
     assert isinstance(cache["x"], type(data))
 
 
-@pytest.mark.parametrize("legacy_write", (True, False))
-def test_info_jsonl(tmp_path: Path, legacy_write: bool) -> None:
+@pytest.mark.parametrize(
+    "legacy_write,remove_jsonl", ((True, True), (True, False), (False, False))
+)
+def test_info_jsonl(tmp_path: Path, legacy_write: bool, remove_jsonl: bool) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
     )
@@ -121,11 +123,12 @@ def test_info_jsonl(tmp_path: Path, legacy_write: bool) -> None:
     fps = list(tmp_path.iterdir())
     info_path = [fp for fp in fps if fp.name.endswith("-info.jsonl")][0]
     print(info_path.read_text())
+    if remove_jsonl:
+        info_path.unlink()
     # restore
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert cache["x"] == 12
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert "y" in cache
-    print("CHECKING SIZE")
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert len(cache) == 2

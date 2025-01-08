@@ -125,7 +125,6 @@ class CacheDict(tp.Generic[X]):
                     sub.unlink()
 
     def __len__(self) -> int:
-        print("in len")
         return len(list(self.keys()))  # inefficient, but correct
 
     def keys(self) -> tp.Iterator[str]:
@@ -164,7 +163,6 @@ class CacheDict(tp.Generic[X]):
             ).decode("utf8")
         except subprocess.CalledProcessError as e:
             out = e.output.decode("utf8")  # stderr contains missing tmp files
-        print("JSON", out)
         names = out.splitlines()
         for name in names:
             lines = (folder / name).read_text().splitlines()
