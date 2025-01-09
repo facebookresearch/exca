@@ -291,11 +291,13 @@ class CacheDict(tp.Generic[X]):
         info = self._key_info.pop(key)
         keyfile = self.folder / (info["uid"] + ".key")
         keyfile.unlink(missing_ok=True)
-        jsonl = Path(info["_jsonl"])
-        brange = info["_byterange"]
-        with jsonl.open("rb+") as f:
-            f.seek(brange[0])
-            f.write(b" " * (brange[1] - brange[0] - 1) + b"\n")
+        if "_jsonl" in info:
+            jsonl = Path(info["_jsonl"])
+            brange = info["_byterange"]
+            # overwrite with whitespaces
+            with jsonl.open("rb+") as f:
+                f.seek(brange[0])
+                f.write(b" " * (brange[1] - brange[0] - 1) + b"\n")
         dumper = DumperLoader.CLASSES[self.cache_type]()
         fp = dumper.filepath(self.folder / info["uid"])
         with utils.fast_unlink(fp):  # moves then delete to avoid weird effects

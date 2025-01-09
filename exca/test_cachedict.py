@@ -151,14 +151,15 @@ def test_info_jsonl(
 def test_info_jsonl_deletion(
     tmp_path: Path, legacy_write: bool, remove_jsonl: bool
 ) -> None:
-    for k, v in [("x", 12), ("blüblû", 3)]:
-        cache: cd.CacheDict[str] = cd.CacheDict(
+    keys = ("x", "blüblû", "stuff")
+    for k in keys:
+        cache: cd.CacheDict[int] = cd.CacheDict(
             folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
         )
-        cache[k] = v
+        cache[k] = 12 if k == "x" else 3
     _ = cache.keys()  # listing
     info = cache._key_info
-    cache: cd.CacheDict[int] = cd.CacheDict(
+    cache = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
     )
     _ = cache.keys()  # listing
@@ -170,12 +171,17 @@ def test_info_jsonl_deletion(
             f.seek(r[0])
             out = f.read(r[1] - r[0])
             assert out.startswith(b"{") and out.endswith(b"}\n")
-            print(out)
+    if remove_jsonl:
+        for ipath in tmp_path.glob("*.jsonl"):
+            ipath.unlink()
+        cache = cd.CacheDict(
+            folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
+        )
     # remove one
-    chosen = np.random.choice(["x", "blüblû"])
+    chosen = np.random.choice(keys)
     del cache[chosen]
-    assert len(cache) == 1
-    cache: cd.CacheDict[int] = cd.CacheDict(
+    assert len(cache) == 2
+    cache = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
     )
-    assert len(cache) == 1
+    assert len(cache) == 2
