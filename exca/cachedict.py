@@ -259,7 +259,7 @@ class CacheDict(tp.Generic[X]):
                 keyfile.write_text(key, encoding="utf8")
                 files.append(keyfile)
             # new write
-            info = {"key": key, "uid": uid}
+            info: dict[str, tp.Any] = {"key": key, "uid": uid}
             write_fp = self._write_fp
             with write_fp.open("ab") as f:
                 b = json.dumps(info).encode("utf8")
