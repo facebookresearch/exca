@@ -169,13 +169,14 @@ class CacheDict(tp.Generic[X]):
             num = 0
             with fp.open("rb") as f:
                 for line in f:
+                    count = len(line)
                     line = line.strip()
                     if not line:
                         continue
                     info = json.loads(line.decode("utf8"))
-                    info.update(_jsonl=fp, _byterange=(num, num + len(line)))
+                    info.update(_jsonl=fp, _byterange=(num, num + count))
                     self._key_info[info.pop("key")] = info
-                    num += len(line)
+                    num += count
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -262,8 +263,9 @@ class CacheDict(tp.Generic[X]):
             write_fp = self._write_fp
             with write_fp.open("ab") as f:
                 b = json.dumps(info).encode("utf8")
+                current = f.tell()
                 f.write(b + b"\n")
-                info.update(_jsonl=write_fp, _byterange=(0, 0))
+                info.update(_jsonl=write_fp, _byterange=(current, current + len(b) + 1))
             self._key_info[key] = info
             files.append(write_fp)
             # reading will reload to in-memory cache if need be
@@ -289,6 +291,11 @@ class CacheDict(tp.Generic[X]):
         info = self._key_info.pop(key)
         keyfile = self.folder / (info["uid"] + ".key")
         keyfile.unlink(missing_ok=True)
+        jsonl = Path(info["_jsonl"])
+        brange = info["_byterange"]
+        with jsonl.open("rb+") as f:
+            f.seek(brange[0])
+            f.write(b" " * (brange[1] - brange[0] - 1) + b"\n")
         dumper = DumperLoader.CLASSES[self.cache_type]()
         fp = dumper.filepath(self.folder / info["uid"])
         with utils.fast_unlink(fp):  # moves then delete to avoid weird effects
