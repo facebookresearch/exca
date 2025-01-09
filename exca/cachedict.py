@@ -79,7 +79,7 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram: bool = False,
         cache_type: None | str = None,
         permissions: int | None = 0o777,
-        _write_legacy_key_files: bool = False,
+        _write_legacy_key_files: bool = True,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
@@ -165,12 +165,17 @@ class CacheDict(tp.Generic[X]):
             out = e.output.decode("utf8")  # stderr contains missing tmp files
         names = out.splitlines()
         for name in names:
-            lines = (folder / name).read_text().splitlines()
-            for line in lines:
-                if not line:
-                    continue
-                info = json.loads(line)
-                self._key_info[info.pop("key")] = info
+            fp = folder / name
+            num = 0
+            with fp.open("rb") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    info = json.loads(line.decode("utf8"))
+                    info.update(_jsonl=fp, _byterange=(num, num + len(line)))
+                    self._key_info[info.pop("key")] = info
+                    num += len(line)
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -244,7 +249,6 @@ class CacheDict(tp.Generic[X]):
             self._ram_data[key] = value
         if self.folder is not None:
             uid = _string_uid(key)  # use a safe mapping
-            self._key_info[key] = {"uid": uid}
             dumper = DumperLoader.CLASSES[self.cache_type]()
             dumper.dump(self.folder / uid, value)
             dumpfile = dumper.filepath(self.folder / uid)
@@ -256,8 +260,11 @@ class CacheDict(tp.Generic[X]):
             # new write
             info = {"key": key, "uid": uid}
             write_fp = self._write_fp
-            with write_fp.open("a") as f:
-                f.write(json.dumps(info) + "\n")
+            with write_fp.open("ab") as f:
+                b = json.dumps(info).encode("utf8")
+                f.write(b + b"\n")
+                info.update(_jsonl=write_fp, _byterange=(0, 0))
+            self._key_info[key] = info
             files.append(write_fp)
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
@@ -281,7 +288,7 @@ class CacheDict(tp.Generic[X]):
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
         info = self._key_info.pop(key)
         keyfile = self.folder / (info["uid"] + ".key")
-        keyfile.unlink()
+        keyfile.unlink(missing_ok=True)
         dumper = DumperLoader.CLASSES[self.cache_type]()
         fp = dumper.filepath(self.folder / info["uid"])
         with utils.fast_unlink(fp):  # moves then delete to avoid weird effects
