@@ -132,13 +132,12 @@ class CacheDict(tp.Generic[X]):
         if self.folder is not None:
             folder = Path(self.folder)
             # read all existing key files as fast as possible (pathlib.glob is slow)
+            find_cmd = 'find . -type f -name "*.key"'
             try:
-                out = subprocess.check_output(
-                    'find . -type f -name "*.key"', shell=True, cwd=folder
-                ).decode("utf8")
+                out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
             except subprocess.CalledProcessError as e:
-                out = e.output.decode("utf8")  # stderr contains missing tmp files
-            names = out.splitlines()
+                out = e.output
+            names = out.decode("utf8").splitlines()
             jobs = {}
             # parallelize content reading
             with futures.ThreadPoolExecutor() as ex:
