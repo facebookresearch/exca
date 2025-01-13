@@ -156,13 +156,12 @@ class CacheDict(tp.Generic[X]):
             return
         folder = Path(self.folder)
         # read all existing jsonl files
+        find_cmd = 'find . -type f -name "*-info.jsonl"'
         try:
-            out = subprocess.check_output(
-                'find . -type f -name "*-info.jsonl"', shell=True, cwd=folder
-            ).decode("utf8")
+            out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
         except subprocess.CalledProcessError as e:
-            out = e.output.decode("utf8")  # stderr contains missing tmp files
-        names = out.splitlines()
+            out = e.output  # stderr contains missing tmp files
+        names = out.decode("utf8").splitlines()
         for name in names:
             fp = folder / name
             num = 0
@@ -260,13 +259,14 @@ class CacheDict(tp.Generic[X]):
             # new write
             info: dict[str, tp.Any] = {"key": key, "uid": uid}
             write_fp = self._write_fp
+            if not write_fp.exists():
+                files.append(write_fp)  # no need to update the file permission again
             with write_fp.open("ab") as f:
                 b = json.dumps(info).encode("utf8")
                 current = f.tell()
                 f.write(b + b"\n")
                 info.update(_jsonl=write_fp, _byterange=(current, current + len(b) + 1))
             self._key_info[key] = info
-            files.append(write_fp)
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if self.permissions is not None:
