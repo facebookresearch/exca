@@ -461,8 +461,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
     def _call_and_store(
         self, items: tp.Sequence[tp.Any], use_cache_dict: bool = True
-    ) -> tp.Dict[str, tp.Any]:
-        d: tp.Dict[str, tp.Any] = self.cache_dict if use_cache_dict else {}  # type: ignore
+    ) -> dict[str, tp.Any]:
+        d: dict[str, tp.Any] = self.cache_dict if use_cache_dict else {}  # type: ignore
         imethod = self._infra_method
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
