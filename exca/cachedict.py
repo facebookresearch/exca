@@ -89,6 +89,10 @@ class CacheDict(tp.Generic[X]):
         self._key_info: dict[str, dict[str, tp.Any]] = {}
         self.cache_type = cache_type
         self._set_cache_type(cache_type)
+        self._informed_size: int | None = None
+
+    def inform_size(self, size: int) -> None:
+        self._informed_size = size
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -209,6 +213,9 @@ class CacheDict(tp.Generic[X]):
             raise RuntimeError("Shouldn't get called with no cache type")
         if key not in self._loaders:
             self._loaders[key] = DumperLoader.CLASSES[self.cache_type](self.folder)
+            if self._informed_size is not None:
+                if hasattr(self._loaders[key], "size"):
+                    self._loaders[key].size = self._informed_size
         return self._loaders[key]
 
     def _set_cache_type(self, cache_type: str | None) -> None:

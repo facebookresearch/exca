@@ -466,6 +466,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         imethod = self._infra_method
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
+        if isinstance(d, CacheDict):
+            d.inform_size(len(items))
         item_uid = imethod.item_uid
         if items:  # make sure some overlapping job did not already run stuff
             keys = set(d)  # update cache dict
