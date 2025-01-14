@@ -7,7 +7,6 @@
 """
 Disk, RAM caches
 """
-import hashlib
 import json
 import logging
 import shutil
@@ -17,21 +16,12 @@ from concurrent import futures
 from pathlib import Path
 
 from . import utils
-from .dumperloader import DumperLoader, host_pid
+from .dumperloader import DumperLoader, StaticDumperLoader, _string_uid, host_pid
 
 X = tp.TypeVar("X")
 Y = tp.TypeVar("Y")
 
-UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 logger = logging.getLogger(__name__)
-
-
-def _string_uid(string: str) -> str:
-    out = string.translate(UNSAFE_TABLE)
-    if len(out) > 80:
-        out = out[:40] + "[.]" + out[-40:]
-    h = hashlib.md5(string.encode("utf8")).hexdigest()[:8]
-    return f"{out}-{h}"
 
 
 class CacheDict(tp.Generic[X]):
@@ -172,7 +162,7 @@ class CacheDict(tp.Generic[X]):
                         continue
                     info = json.loads(line.decode("utf8"))
                     info.update(_jsonl=fp, _byterange=(num, num + count))
-                    self._key_info[info.pop("key")] = info
+                    self._key_info[info.pop("_key")] = info
                     num += count
 
     def values(self) -> tp.Iterable[X]:
@@ -205,9 +195,8 @@ class CacheDict(tp.Generic[X]):
         if self.cache_type is None:
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
         info = self._key_info[key]
-        uid = info["uid"]
         loader = self._get_loader()
-        loaded = loader.load(self.folder / uid)
+        loaded = loader.load(**{x: y for x, y in info.items() if not x.startswith("_")})
         if self._keep_in_ram:
             self._ram_data[key] = loaded
         return loaded  # type: ignore
@@ -254,17 +243,15 @@ class CacheDict(tp.Generic[X]):
         if self._keep_in_ram and self.folder is None:
             self._ram_data[key] = value
         if self.folder is not None:
-            uid = _string_uid(key)  # use a safe mapping
             dumper = self._get_loader()
-            dumper.dump(self.folder / uid, value)
-            dumpfile = dumper.filepath(self.folder / uid)
-            files = [dumpfile]
-            if self._write_legacy_key_files:
-                keyfile = self.folder / (uid + ".key")
+            info = dumper.dump(key, value)
+            files = [self.folder / info["filename"]]
+            if self._write_legacy_key_files and isinstance(dumper, StaticDumperLoader):
+                keyfile = self.folder / (info["filename"][: -len(dumper.SUFFIX)] + ".key")
                 keyfile.write_text(key, encoding="utf8")
                 files.append(keyfile)
             # new write
-            info: dict[str, tp.Any] = {"key": key, "uid": uid}
+            info["_key"] = key
             write_fp = self._write_fp
             if not write_fp.exists():
                 files.append(write_fp)  # no need to update the file permission again
@@ -294,9 +281,11 @@ class CacheDict(tp.Generic[X]):
             self.check_cache_type()
         if self.cache_type is None:
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
+        loader = self._get_loader()
         info = self._key_info.pop(key)
-        keyfile = self.folder / (info["uid"] + ".key")
-        keyfile.unlink(missing_ok=True)
+        if isinstance(loader, StaticDumperLoader):
+            keyfile = self.folder / (info["filename"][: -len(loader.SUFFIX)] + ".key")
+            keyfile.unlink(missing_ok=True)
         if "_jsonl" in info:
             jsonl = Path(info["_jsonl"])
             brange = info["_byterange"]
@@ -304,10 +293,11 @@ class CacheDict(tp.Generic[X]):
             with jsonl.open("rb+") as f:
                 f.seek(brange[0])
                 f.write(b" " * (brange[1] - brange[0] - 1) + b"\n")
-        dumper = DumperLoader.CLASSES[self.cache_type]()
-        fp = dumper.filepath(self.folder / info["uid"])
-        with utils.fast_unlink(fp):  # moves then delete to avoid weird effects
-            pass
+        info = {x: y for x, y in info.items() if not x.startswith("_")}
+        if len(info) == 1:  # only filename -> we can remove it as it is not shared
+            # moves then delete to avoid weird effects
+            with utils.fast_unlink(Path(self.folder) / info["filename"]):
+                pass
 
     def __contains__(self, key: str) -> bool:
         # in-memory cache
@@ -322,6 +312,12 @@ class CacheDict(tp.Generic[X]):
             uid = _string_uid(key)
             fp = self.folder / f"{uid}.key"
             if fp.exists():
-                self._key_info[key] = {"uid": uid}
+                loader = self._get_loader()
+                if not isinstance(loader, StaticDumperLoader):
+                    raise RuntimeError(
+                        "Cannot regenerate info from non-static dumper-loader"
+                    )
+                filename = _string_uid(key) + loader.SUFFIX
+                self._key_info[key] = {"filename": filename}
                 return True
         return False  # lazy check

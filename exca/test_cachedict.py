@@ -52,26 +52,6 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
 
 
 @pytest.mark.parametrize(
-    "string,expected",
-    [
-        (
-            "whave\t-er I want/to\nput i^n there",
-            "whave--er-I-want-to-put-i^n-there-391137b5",
-        ),
-        (
-            "whave\t-er I want/to put i^n there",  # same but space instead of line return
-            "whave--er-I-want-to-put-i^n-there-cef06284",
-        ),
-        (50 * "a" + 50 * "b", 40 * "a" + "[.]" + 40 * "b" + "-932620a9"),
-        (51 * "a" + 50 * "b", 40 * "a" + "[.]" + 40 * "b" + "-86bb658a"),  # longer
-    ],
-)
-def test_string_uid(string: str, expected: str) -> None:
-    out = cd._string_uid(string)
-    assert out == expected
-
-
-@pytest.mark.parametrize(
     "data",
     (
         np.random.rand(2, 12),
