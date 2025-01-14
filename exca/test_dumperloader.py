@@ -40,10 +40,10 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     Cls = dumperloader.DumperLoader.default_class(type(data))
     if not isinstance(data, str):
         assert Cls is not dumperloader.Pickle
-    dl = Cls()
+    dl = Cls(tmp_path)
     # test with an extension, as it's easy to mess the new name with Path.with_suffix
-    dl.dump(tmp_path / "blublu.ext", data)
-    reloaded = dl.load(tmp_path / "blublu.ext")
+    info = dl.dump("blublu.ext", data)
+    reloaded = dl.load(**info)
     ExpectedCls = type(data)
     if ExpectedCls is mne.io.RawArray:
         ExpectedCls = mne.io.Raw
@@ -55,9 +55,9 @@ def test_text_df(tmp_path: Path, name: str) -> None:
     df = pd.DataFrame(
         [{"type": "Word", "text": "None"}, {"type": "Something", "number": 12}]
     )
-    dl = dumperloader.DumperLoader.CLASSES[name]()
-    dl.dump(tmp_path / "blublu", df)
-    reloaded = dl.load(tmp_path / "blublu")
+    dl = dumperloader.DumperLoader.CLASSES[name](tmp_path)
+    info = dl.dump("blublu", df)
+    reloaded = dl.load(**info)
     assert reloaded.loc[0, "text"] == "None"
     assert pd.isna(reloaded.loc[1, "text"])  # type: ignore
     assert pd.isna(reloaded.loc[0, "number"])  # type: ignore
@@ -83,9 +83,9 @@ def test_dump_torch_view(tmp_path: Path) -> None:
     data = torch.arange(8)[:2]
     assert dumperloader.is_view(data)
     # reloading it should not be a view as it was cloned
-    dl = dumperloader.TorchTensor()
-    dl.dump(tmp_path / "blublu", data)
-    reloaded = dl.load(tmp_path / "blublu")
+    dl = dumperloader.TorchTensor(tmp_path)
+    info = dl.dump("blublu", data)
+    reloaded = dl.load(**info)
     assert not dumperloader.is_view(reloaded)
 
 

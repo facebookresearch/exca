@@ -202,7 +202,7 @@ else:
                 if not filepath.exists():
                     # fallback to csv for compatibility when updating to parquet
                     return PandasDataFrame.static_load(filepath.with_suffix(".csv"))
-                return pd.read_parquet(fp, dtype_backend="numpy_nullable")
+                return pd.read_parquet(filepath, dtype_backend="numpy_nullable")
 
             @classmethod
             def static_dump(cls, filepath: Path, value: pd.DataFrame) -> None:
