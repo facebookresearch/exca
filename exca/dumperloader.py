@@ -69,7 +69,7 @@ class DumperLoader(tp.Generic[X]):
 class StaticDumperLoader(DumperLoader[X]):
     SUFFIX = ""
 
-    def load(self, filename: str) -> X:
+    def load(self, filename: str) -> X:  # type: ignore
         filepath = self.folder / filename
         return self.static_load(filepath)
 
@@ -136,7 +136,7 @@ class NumpyMemmapArrayDumper(DumperLoader[np.ndarray]):
         self.row = 0
         self._name: str | None = None
 
-    def load(self, filename: str, row: int) -> np.ndarray:
+    def load(self, filename: str, row: int) -> np.ndarray:  # type: ignore
         return np.load(self.folder / filename, mmap_mode="r")[row]  # type: ignore
 
     def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:

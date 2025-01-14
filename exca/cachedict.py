@@ -205,6 +205,8 @@ class CacheDict(tp.Generic[X]):
         key = host_pid()  # make sure we dont use a loader from another thread
         if self.folder is None:
             raise RuntimeError("Cannot get loader with no folder")
+        if self.cache_type is None:
+            raise RuntimeError("Shouldn't get called with no cache type")
         if key not in self._loaders:
             self._loaders[key] = DumperLoader.CLASSES[self.cache_type](self.folder)
         return self._loaders[key]
