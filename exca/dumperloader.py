@@ -128,7 +128,7 @@ class NumpyMemmapArray(NumpyArray):
         return np.load(filepath, mmap_mode="r")  # type: ignore
 
 
-class NumpyMemmapArrayDumper(DumperLoader[np.ndarray]):
+class MultiMemmapArray(DumperLoader[np.ndarray]):
 
     def __init__(self, folder: Path | str) -> None:
         super().__init__(folder)
@@ -156,8 +156,7 @@ class NumpyMemmapArrayDumper(DumperLoader[np.ndarray]):
         )
         memmap[self.row] = value
         memmap.flush()
-        memmap.close()
-        out = {"row": self.row, "filename": str(fp)}
+        out = {"row": self.row, "filename": fp.name}
         self.row += 1
         if self.size == self.row:
             self.size = max(self.size + 1, int(round(1.2 * self.size)))

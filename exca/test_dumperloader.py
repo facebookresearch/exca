@@ -112,3 +112,16 @@ def test_default_class() -> None:
 def test_string_uid(string: str, expected: str) -> None:
     out = dumperloader._string_uid(string)
     assert out == expected
+
+
+def test_multi_memmap_array(tmp_path: Path) -> None:
+    dl = dumperloader.MultiMemmapArray(folder=tmp_path)
+    dl.size = 2
+    info = []
+    x = np.random.rand(2, 3)
+    info.append(dl.dump("x", x))
+    info.append(dl.dump("y", np.random.rand(2, 3)))
+    info.append(dl.dump("z", np.random.rand(2, 3)))
+    assert info[0]["filename"] == info[1]["filename"]
+    assert info[2]["filename"] != info[1]["filename"]
+    np.testing.assert_array_equal(dl.load(**info[0]), x)
