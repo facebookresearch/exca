@@ -11,15 +11,13 @@ import hashlib
 import json
 import logging
 import shutil
-import socket
 import subprocess
-import threading
 import typing as tp
 from concurrent import futures
 from pathlib import Path
 
 from . import utils
-from .dumperloader import DumperLoader
+from .dumperloader import DumperLoader, host_pid
 
 X = tp.TypeVar("X")
 Y = tp.TypeVar("Y")
@@ -85,6 +83,7 @@ class CacheDict(tp.Generic[X]):
         self.permissions = permissions
         self._keep_in_ram = keep_in_ram
         self._write_legacy_key_files = _write_legacy_key_files
+        self._loaders: dict[str, DumperLoader] = {}  # loaders are persistent
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
 
@@ -110,7 +109,7 @@ class CacheDict(tp.Generic[X]):
     def _write_fp(self) -> Path:
         if self.folder is None:
             raise RuntimeError("No write filepath with no provided folder")
-        name = f"{socket.gethostname()}-{threading.get_native_id()}-info.jsonl"
+        name = f"{host_pid()}-info.jsonl"
         return Path(self.folder) / name
 
     def clear(self) -> None:
@@ -207,11 +206,19 @@ class CacheDict(tp.Generic[X]):
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
         info = self._key_info[key]
         uid = info["uid"]
-        loader = DumperLoader.CLASSES[self.cache_type]
+        loader = self._get_loader()
         loaded = loader.load(self.folder / uid)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
         return loaded  # type: ignore
+
+    def _get_loader(self) -> DumperLoader:
+        key = host_pid()  # make sure we dont use a loader from another thread
+        if self.folder is None:
+            raise RuntimeError("Cannot get loader with no folder")
+        if key not in self._loaders:
+            self._loaders[key] = DumperLoader.CLASSES[self.cache_type](self.folder)
+        return self._loaders[key]
 
     def _set_cache_type(self, cache_type: str | None) -> None:
         if self.folder is None:
@@ -248,7 +255,7 @@ class CacheDict(tp.Generic[X]):
             self._ram_data[key] = value
         if self.folder is not None:
             uid = _string_uid(key)  # use a safe mapping
-            dumper = DumperLoader.CLASSES[self.cache_type]()
+            dumper = self._get_loader()
             dumper.dump(self.folder / uid, value)
             dumpfile = dumper.filepath(self.folder / uid)
             files = [dumpfile]

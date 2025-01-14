@@ -5,7 +5,10 @@
 # LICENSE file in the root directory of this source tree.
 
 import pickle
+import socket
+import threading
 import typing as tp
+import uuid
 import warnings
 from pathlib import Path
 
@@ -17,10 +20,17 @@ X = tp.TypeVar("X")
 Y = tp.TypeVar("Y", bound=tp.Type[tp.Any])
 
 
+def host_pid() -> str:
+    return f"{socket.gethostname()}-{threading.get_native_id()}"
+
+
 class DumperLoader(tp.Generic[X]):
     CLASSES: tp.MutableMapping[str, "tp.Type[DumperLoader[tp.Any]]"] = {}
     DEFAULTS: tp.MutableMapping[tp.Any, "tp.Type[DumperLoader[tp.Any]]"] = {}
     SUFFIX = ""
+
+    def __init__(self, folder: str | Path = "") -> None:
+        self.folder = Path(folder)
 
     @classmethod
     def filepath(cls, basepath: str | Path) -> Path:
@@ -96,6 +106,43 @@ class NumpyMemmapArray(NumpyArray):
     @classmethod
     def load(cls, basepath: Path) -> np.ndarray:
         return np.load(cls.filepath(basepath), mmap_mode="r")  # type: ignore
+
+
+class NumpyMemmapArrayDumper(DumperLoader[np.ndarray]):
+
+    def __init__(self, folder: Path | str) -> None:
+        super().__init__(folder)
+        self.size = 1
+        self.row = 0
+        self._name: str | None = None
+
+    def load(self, filename: str, row: int) -> np.ndarray:
+        return np.load(self.folder / filename, mmap_mode="r")[row]  # type: ignore
+
+    def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:
+        if not isinstance(value, np.ndarray):
+            raise TypeError(f"Expected numpy array but got {value} ({type(value)})")
+        mode = "r+"
+        shape: tp.Any = None
+        if self._name is None:
+            self.size = max(self.size, 1)
+            shape = (self.size,) + value.shape
+            self._name = f"{host_pid()}-{uuid.uuid4().hex[:8]}.npy"
+            self.row = 0
+            mode = "w+"
+        fp = self.folder / self._name
+        memmap = np.lib.format.open_memmap(
+            filename=fp, mode=mode, dtype=float, shape=shape
+        )
+        memmap[self.row] = value
+        memmap.flush()
+        memmap.close()
+        out = {"row": self.row, "filename": str(fp)}
+        self.row += 1
+        if self.size == self.row:
+            self.size = max(self.size + 1, int(round(1.2 * self.size)))
+            self._name = None
+        return out
 
 
 try:
