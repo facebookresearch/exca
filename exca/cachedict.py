@@ -67,7 +67,7 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram: bool = False,
         cache_type: None | str = None,
         permissions: int | None = 0o777,
-        _write_legacy_key_files: bool = True,
+        _write_legacy_key_files: bool = False,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
@@ -257,14 +257,13 @@ class CacheDict(tp.Generic[X]):
             info["_key"] = key
             info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
             if not info_fp.exists():
-                files.append(
-                    write_fp
-                )  # no need to update the file permission if already there
-            with write_fp.open("ab") as f:
+                # no need to update the file permission if pre-existing
+                files.append(info_fp)
+            with info_fp.open("ab") as f:
                 b = json.dumps(info).encode("utf8")
                 current = f.tell()
                 f.write(b + b"\n")
-                info.update(_jsonl=write_fp, _byterange=(current, current + len(b) + 1))
+                info.update(_jsonl=info_fp, _byterange=(current, current + len(b) + 1))
             self._key_info[key] = info
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
