@@ -68,7 +68,7 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram: bool = False,
         cache_type: None | str = None,
         permissions: int | None = 0o777,
-        _write_legacy_key_files: bool = False,
+        _write_legacy_key_files: bool = True,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
