@@ -99,13 +99,6 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram = self._keep_in_ram
         return f"{name}({self.folder},{keep_in_ram=})"
 
-    @property
-    def _write_fp(self) -> Path:
-        if self.folder is None:
-            raise RuntimeError("No write filepath with no provided folder")
-        name = f"{host_pid()}-info.jsonl"
-        return Path(self.folder) / name
-
     def clear(self) -> None:
         self._ram_data.clear()
         self._key_info.clear()
@@ -214,8 +207,9 @@ class CacheDict(tp.Generic[X]):
         if key not in self._loaders:
             self._loaders[key] = DumperLoader.CLASSES[self.cache_type](self.folder)
             if self._informed_size is not None:
-                if hasattr(self._loaders[key], "size"):
-                    self._loaders[key].size = self._informed_size
+                if hasattr(self._loaders[key], "size"):  # HACKY!
+                    self._loaders[key].size = self._informed_size  # type: ignore
+                    self._informed_size = None
         return self._loaders[key]
 
     def _set_cache_type(self, cache_type: str | None) -> None:
@@ -261,9 +255,11 @@ class CacheDict(tp.Generic[X]):
                 files.append(keyfile)
             # new write
             info["_key"] = key
-            write_fp = self._write_fp
-            if not write_fp.exists():
-                files.append(write_fp)  # no need to update the file permission again
+            info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
+            if not info_fp.exists():
+                files.append(
+                    write_fp
+                )  # no need to update the file permission if already there
             with write_fp.open("ab") as f:
                 b = json.dumps(info).encode("utf8")
                 current = f.tell()
