@@ -57,8 +57,9 @@ class CacheDict(tp.Generic[X]):
 
     Note
     ----
-    Each item is cached as 1 file, with an additional .key file with the same name holding
-    the actual key for the item (which can differ from the file name)
+    Dicts write to .jsonl files to hold keys and how to read the
+    corresponding item. Different threads write to different jsonl
+    files to avoid interferences.
     """
 
     def __init__(
