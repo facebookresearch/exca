@@ -65,6 +65,12 @@ class DumperLoader(tp.Generic[X]):
             pass
         return Cls  # type: ignore
 
+    @classmethod
+    def check_valid_cache_type(cls, cache_type: str) -> None:
+        if cache_type not in DumperLoader.CLASSES:
+            avail = list(DumperLoader.CLASSES)
+            raise ValueError(f"Unknown {cache_type=}, use one of {avail}")
+
 
 class StaticDumperLoader(DumperLoader[X]):
     SUFFIX = ""

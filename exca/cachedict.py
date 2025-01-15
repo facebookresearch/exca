@@ -189,8 +189,6 @@ class CacheDict(tp.Generic[X]):
             self.folder.chmod(self.folder.stat().st_mode)
             _ = key in self
         if self.cache_type is None:
-            self.check_cache_type()
-        if self.cache_type is None:
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
         info = self._key_info[key]
         loader = self._get_loader()
@@ -220,24 +218,14 @@ class CacheDict(tp.Generic[X]):
         if cache_type is None:
             if fp.exists():
                 cache_type = fp.read_text()
-                if cache_type not in DumperLoader.CLASSES:
-                    logger.warning("Ignoring cache_type file providing: %s", cache_type)
-                    cache_type = None
-        self.check_cache_type(cache_type)
         if cache_type is not None:
+            DumperLoader.check_valid_cache_type(cache_type)
             self.cache_type = cache_type
             if not fp.exists():
                 self.folder.mkdir(exist_ok=True)
                 fp.write_text(cache_type)
                 if self.permissions is not None:
                     fp.chmod(self.permissions)
-
-    @staticmethod
-    def check_cache_type(cache_type: None | str = None) -> None:
-        if cache_type is not None:
-            if cache_type not in DumperLoader.CLASSES:
-                avail = list(DumperLoader.CLASSES)
-                raise ValueError(f"Unknown {cache_type=}, use one of {avail}")
 
     def __setitem__(self, key: str, value: X) -> None:
         if self.cache_type is None:
@@ -282,8 +270,6 @@ class CacheDict(tp.Generic[X]):
         self._ram_data.pop(key, None)
         if self.folder is None:
             return
-        if self.cache_type is None:
-            self.check_cache_type()
         if self.cache_type is None:
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
         loader = self._get_loader()
