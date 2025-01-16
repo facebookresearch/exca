@@ -133,9 +133,13 @@ class CacheDict(tp.Generic[X]):
             except subprocess.CalledProcessError as e:
                 out = e.output
             names = out.decode("utf8").splitlines()
+            if not names:
+                return iter(keys)
             jobs = {}
             if self.cache_type is None:
                 self._set_cache_type(None)
+            if self.cache_type is None:
+                raise RuntimeError("cache_type should have been detected")
             # parallelize content reading
             with futures.ThreadPoolExecutor() as ex:
                 jobs = {
@@ -143,8 +147,6 @@ class CacheDict(tp.Generic[X]):
                     for name in names
                     if name[:-4] not in self._key_info
                 }
-            if jobs and self.cache_type is None:
-                raise RuntimeError("cache_type should have been detected")
             info = {
                 j.result(): {
                     "uid": name,
