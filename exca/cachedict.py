@@ -136,8 +136,6 @@ class CacheDict(tp.Generic[X]):
             jobs = {}
             if self.cache_type is None:
                 self._set_cache_type(None)
-            if self.cache_type is None:
-                raise RuntimeError("cache_type should have been detected")
             # parallelize content reading
             with futures.ThreadPoolExecutor() as ex:
                 jobs = {
@@ -145,6 +143,8 @@ class CacheDict(tp.Generic[X]):
                     for name in names
                     if name[:-4] not in self._key_info
                 }
+            if jobs and self.cache_type is None:
+                raise RuntimeError("cache_type should have been detected")
             info = {
                 j.result(): {
                     "uid": name,
@@ -310,10 +310,11 @@ class CacheDict(tp.Generic[X]):
         info = self._key_info.pop(key)
         dinfo: DumpInfo = info["_dump_info"]
         loader = self._get_loader(dinfo.cache_type)
-        if dinfo.jsonl.suffix == ".key":
-            dinfo.jsonl.unlink(missing_ok=True)
-        else:
-            brange = dinfo.byte_range
+        if isinstance(loader, StaticDumperLoader):  # legacy
+            keyfile = self.folder / (info["filename"][: -len(loader.SUFFIX)] + ".key")
+            keyfile.unlink(missing_ok=True)
+        brange = dinfo.byte_range
+        if brange[0] != brange[1]:
             # overwrite with whitespaces
             with dinfo.jsonl.open("rb+") as f:
                 f.seek(brange[0])
@@ -345,6 +346,7 @@ class CacheDict(tp.Generic[X]):
                         "Cannot regenerate info from non-static dumper-loader"
                     )
                 filename = _string_uid(key) + loader.SUFFIX
-                self._key_info[key] = {"filename": filename}
+                dinfo = DumpInfo(byte_range=(0, 0), jsonl=fp, cache_type=self.cache_type)
+                self._key_info[key] = {"filename": filename, "_dump_info": dinfo}
                 return True
         return False  # lazy check
