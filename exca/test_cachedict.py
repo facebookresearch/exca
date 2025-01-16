@@ -146,8 +146,8 @@ def test_info_jsonl_deletion(
     _ = cache.keys()  # listing
     assert cache._key_info == info
     for sub in info.values():
-        fp = Path(sub["_jsonl"])
-        r = sub["_byterange"]
+        fp = sub["_dump_info"].jsonl
+        r = sub["_dump_info"].byte_range
         with fp.open("rb") as f:
             f.seek(r[0])
             out = f.read(r[1] - r[0])
