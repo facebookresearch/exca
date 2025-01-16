@@ -151,17 +151,21 @@ class CacheDict(tp.Generic[X]):
         names = out.decode("utf8").splitlines()
         for name in names:
             fp = folder / name
-            num = 0
+            last = 0
+            meta = {}
             with fp.open("rb") as f:
-                for line in f:
+                for k, line in enumerate(f):
                     count = len(line)
+                    last = last + count
                     line = line.strip()
                     if not line:
                         continue
                     info = json.loads(line.decode("utf8"))
-                    info.update(_jsonl=fp, _byterange=(num, num + count))
+                    if not k:  # metadata
+                        meta = info
+                        continue
+                    info.update(_jsonl=fp, _byterange=(last - count, last), **meta)
                     self._key_info[info.pop("_key")] = info
-                    num += count
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -245,10 +249,13 @@ class CacheDict(tp.Generic[X]):
             # new write
             info["_key"] = key
             info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
-            if not info_fp.exists():
-                # no need to update the file permission if pre-existing
-                files.append(info_fp)
+            first_write = not info_fp.exists()
             with info_fp.open("ab") as f:
+                if first_write:
+                    # no need to update the file permission if pre-existing
+                    files.append(info_fp)
+                    meta = {"_cache_type": dumper.__class__.__name__}
+                    f.write(json.dumps(meta).encode("utf8") + b"\n")
                 b = json.dumps(info).encode("utf8")
                 current = f.tell()
                 f.write(b + b"\n")
