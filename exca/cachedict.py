@@ -32,6 +32,21 @@ class DumpInfo:
     cache_type: str
 
 
+def _write_info(info_fp: Path, info: dict, cache_type: str) -> DumpInfo:
+    first_write = not info_fp.exists()
+    meta = {"cache_type": cache_type}
+    with info_fp.open("ab") as f:
+        if first_write:
+            f.write(json.dumps(meta).encode("utf8") + b"\n")
+        b = json.dumps(info).encode("utf8")
+        current = f.tell()
+        f.write(b + b"\n")
+        dinfo = DumpInfo(
+            jsonl=info_fp, byte_range=(current, current + len(b) + 1), **meta
+        )
+    return dinfo
+
+
 class CacheDict(tp.Generic[X]):
     """Dictionary-like object that caches and loads data on disk and ram.
 
@@ -276,19 +291,20 @@ class CacheDict(tp.Generic[X]):
             # new write
             info["_key"] = key
             info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
-            first_write = not info_fp.exists()
-            meta = {"cache_type": dumper.__class__.__name__}
-            with info_fp.open("ab") as f:
-                if first_write:
-                    files.append(info_fp)
-                    f.write(json.dumps(meta).encode("utf8") + b"\n")
-                b = json.dumps(info).encode("utf8")
-                current = f.tell()
-                f.write(b + b"\n")
-                dinfo = DumpInfo(
-                    jsonl=info_fp, byte_range=(current, current + len(b) + 1), **meta
-                )
-                info["_dump_info"] = dinfo
+            # first_write = not info_fp.exists()
+            # meta = {"cache_type": dumper.__class__.__name__}
+            # with info_fp.open("ab") as f:
+            #     if first_write:
+            #         files.append(info_fp)
+            #         f.write(json.dumps(meta).encode("utf8") + b"\n")
+            #     b = json.dumps(info).encode("utf8")
+            #     current = f.tell()
+            #     f.write(b + b"\n")
+            #     dinfo = DumpInfo(
+            #         jsonl=info_fp, byte_range=(current, current + len(b) + 1), **meta
+            #     )
+            dinfo = _write_info(info_fp, info, self.cache_type)
+            info["_dump_info"] = dinfo
             self._key_info[key] = info
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
