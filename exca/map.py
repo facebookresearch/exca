@@ -290,7 +290,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         except ValueError:
             pass  # no caching
         else:
-            missing = {k: item for k, item in missing.items() if k not in cache}
+            keys = list(cache.keys())
+            missing = {k: item for k, item in missing.items() if k not in keys}
         self._check_configs(write=True)  # if there is a cache, check config or write it
         executor = self.executor()
         if not hasattr(self, "mode"):  # compatibility

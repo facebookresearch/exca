@@ -76,7 +76,7 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram: bool = False,
         cache_type: None | str = None,
         permissions: int | None = 0o777,
-        _write_legacy_key_files: bool = True,
+        _write_legacy_key_files: bool = False,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
@@ -168,6 +168,7 @@ class CacheDict(tp.Generic[X]):
         # read all existing jsonl files
         find_cmd = 'find . -type f -name "*-info.jsonl"'
         try:
+            print(find_cmd, folder)
             out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
         except subprocess.CalledProcessError as e:
             out = e.output  # stderr contains missing tmp files
