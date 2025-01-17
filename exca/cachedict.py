@@ -133,12 +133,10 @@ class CacheDict(tp.Generic[X]):
             except subprocess.CalledProcessError as e:
                 out = e.output
             names = out.decode("utf8").splitlines()
-            if not names:
-                return iter(keys)
             jobs = {}
             if self.cache_type is None:
                 self._set_cache_type(None)
-            if self.cache_type is None:
+            if names and self.cache_type is None:
                 raise RuntimeError("cache_type should have been detected")
             # parallelize content reading
             with futures.ThreadPoolExecutor() as ex:
@@ -153,7 +151,7 @@ class CacheDict(tp.Generic[X]):
                     "_dump_info": DumpInfo(
                         byte_range=(0, 0),
                         jsonl=folder / (name + ".key"),
-                        cache_type=self.cache_type,
+                        cache_type=self.cache_type,  # type: ignore
                     ),
                 }
                 for name, j in jobs.items()

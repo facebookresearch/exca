@@ -152,6 +152,7 @@ def test_info_jsonl_deletion(
             f.seek(r[0])
             out = f.read(r[1] - r[0])
             assert out.startswith(b"{") and out.endswith(b"}\n")
+
     if remove_jsonl:
         for ipath in tmp_path.glob("*.jsonl"):
             ipath.unlink()
