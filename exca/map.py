@@ -407,6 +407,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             np.random.shuffle(missing)
             if pool is None:
                 # run locally
+                msg = "Computing %s missing items"
+                logger.debug(msg, len(missing))
                 cached = self.folder is not None
                 out = self._call_and_store(
                     [ki[1] for ki in missing], use_cache_dict=cached
