@@ -127,13 +127,15 @@ def test_multi_memmap_array(tmp_path: Path) -> None:
     np.testing.assert_array_equal(dl.load(**info[0]), x)
 
 
-def test_multi_memmap_array64(tmp_path: Path) -> None:
-    dl = dumperloader.MultiMemmapArray64(folder=tmp_path)
+def test_multi_memmap_array_file(tmp_path: Path) -> None:
+    dl = dumperloader.MemmapArrayFile(folder=tmp_path)
     info = []
     x = np.random.rand(2, 3)
     info.append(dl.dump("x", x))
     info.append(dl.dump("y", np.random.rand(3, 3)))
     info.append(dl.dump("z", np.random.rand(4, 3)))
     assert info[0]["filename"] == info[1]["filename"]
-    np.testing.assert_array_equal(dl.load(**info[0]), x)
+    x2 = dl.load(**info[0])
+    info.append(dl.dump("w", np.random.rand(5, 3)))  # write in between reads
+    np.testing.assert_array_equal(x2, x)
     assert dl.load(**info[1]).shape == (3, 3)

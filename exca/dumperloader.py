@@ -170,12 +170,12 @@ class MultiMemmapArray(DumperLoader[np.ndarray]):
         return out
 
 
-class MultiMemmapArray64(DumperLoader[np.ndarray]):
+class MemmapArrayFile(DumperLoader[np.ndarray]):
 
-    def load(self, filename: str, offset: int, shape: tuple[int, ...]) -> np.ndarray:  # type: ignore
+    def load(self, filename: str, offset: int, shape: tuple[int, ...], dtype: str) -> np.ndarray:  # type: ignore
         return np.memmap(
             self.folder / filename,
-            dtype=np.float64,
+            dtype=dtype,
             mode="r",
             offset=offset,
             shape=shape,
@@ -188,8 +188,13 @@ class MultiMemmapArray64(DumperLoader[np.ndarray]):
         name = f"{host_pid()}.data"
         with (self.folder / name).open("ab") as f:
             offset = f.tell()
-            f.write(np.ascontiguousarray(value, dtype=np.float64).data)
-        return {"filename": name, "offset": offset, "shape": tuple(value.shape)}
+            f.write(np.ascontiguousarray(value).data)
+        return {
+            "filename": name,
+            "offset": offset,
+            "shape": tuple(value.shape),
+            "dtype": str(value.dtype),
+        }
 
 
 try:
