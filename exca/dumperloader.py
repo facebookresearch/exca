@@ -170,6 +170,28 @@ class MultiMemmapArray(DumperLoader[np.ndarray]):
         return out
 
 
+class MultiMemmapArray64(DumperLoader[np.ndarray]):
+
+    def load(self, filename: str, offset: int, shape: tuple[int, ...]) -> np.ndarray:  # type: ignore
+        return np.memmap(
+            self.folder / filename,
+            dtype=np.float64,
+            mode="r",
+            offset=offset,
+            shape=shape,
+            order="C",
+        )
+
+    def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:
+        if not isinstance(value, np.ndarray):
+            raise TypeError(f"Expected numpy array but got {value} ({type(value)})")
+        name = f"{host_pid()}.data"
+        with (self.folder / name).open("ab") as f:
+            offset = f.tell()
+            f.write(np.ascontiguousarray(value, dtype=np.float64).data)
+        return {"filename": name, "offset": offset, "shape": tuple(value.shape)}
+
+
 try:
     import pandas as pd
 except ImportError:
