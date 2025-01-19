@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import collections
+import contextlib
 import dataclasses
 import functools
 import inspect
@@ -469,8 +470,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         imethod = self._infra_method
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
-        if isinstance(d, CacheDict):
-            d.inform_size(len(items))
         item_uid = imethod.item_uid
         if items:  # make sure some overlapping job did not already run stuff
             keys = set(d)  # update cache dict
@@ -481,12 +480,15 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         method = functools.partial(imethod.method, self._obj)
         outputs = method(items)
         sentinel = base.Sentinel()
-        for item, output in itertools.zip_longest(items, outputs, fillvalue=sentinel):
-            if item is sentinel or output is sentinel:
-                raise RuntimeError(
-                    f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
-                )
-            d[item_uid(item)] = output
+        with contextlib.ExitStack() as estack:
+            if isinstance(d, CacheDict):
+                estack.enter_context(d.write_mode())
+            for item, output in itertools.zip_longest(items, outputs, fillvalue=sentinel):
+                if item is sentinel or output is sentinel:
+                    raise RuntimeError(
+                        f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
+                    )
+                d[item_uid(item)] = output
         # don't return the whole cache dict if data is cached
         return {} if use_cache_dict else d
 

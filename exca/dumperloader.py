@@ -4,7 +4,9 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextlib
 import hashlib
+import io
 import pickle
 import socket
 import threading
@@ -41,6 +43,10 @@ class DumperLoader(tp.Generic[X]):
 
     def __init__(self, folder: str | Path = "") -> None:
         self.folder = Path(folder)
+
+    @contextlib.contextmanager
+    def write_mode(self) -> tp.Iterator[None]:
+        yield
 
     @classmethod
     def __init_subclass__(cls, **kwargs: tp.Any) -> None:
@@ -172,6 +178,20 @@ class MultiMemmapArray(DumperLoader[np.ndarray]):
 
 class MemmapArrayFile(DumperLoader[np.ndarray]):
 
+    def __init__(self, folder: str | Path = "") -> None:
+        super().__init__(folder)
+        self._f: io.BufferedWriter | None = None
+        self._name: str | None = None
+
+    @contextlib.contextmanager
+    def write_mode(self) -> tp.Iterator[None]:
+        self._name = f"{host_pid()}.data"
+        with (self.folder / self._name).open("ab") as f:
+            self._f = f
+            yield
+        self._f = None
+        self._name = None
+
     def load(self, filename: str, offset: int, shape: tuple[int, ...], dtype: str) -> np.ndarray:  # type: ignore
         return np.memmap(
             self.folder / filename,
@@ -183,14 +203,14 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
         )
 
     def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:
+        if self._f is None or self._name is None:
+            raise RuntimeError("Need a write_mode context")
         if not isinstance(value, np.ndarray):
             raise TypeError(f"Expected numpy array but got {value} ({type(value)})")
-        name = f"{host_pid()}.data"
-        with (self.folder / name).open("ab") as f:
-            offset = f.tell()
-            f.write(np.ascontiguousarray(value).data)
+        offset = self._f.tell()
+        self._f.write(np.ascontiguousarray(value).data)
         return {
-            "filename": name,
+            "filename": self._name,
             "offset": offset,
             "shape": tuple(value.shape),
             "dtype": str(value.dtype),

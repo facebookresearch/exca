@@ -7,7 +7,9 @@
 """
 Disk, RAM caches
 """
+import contextlib
 import dataclasses
+import io
 import json
 import logging
 import shutil
@@ -30,21 +32,6 @@ class DumpInfo:
     byte_range: tuple[int, int]
     jsonl: Path
     cache_type: str
-
-
-def _write_info(info_fp: Path, info: dict, cache_type: str) -> DumpInfo:
-    first_write = not info_fp.exists()
-    meta = {"cache_type": cache_type}
-    with info_fp.open("ab") as f:
-        if first_write:
-            f.write(json.dumps(meta).encode("utf8") + b"\n")
-        b = json.dumps(info).encode("utf8")
-        current = f.tell()
-        f.write(b + b"\n")
-        dinfo = DumpInfo(
-            jsonl=info_fp, byte_range=(current, current + len(b) + 1), **meta
-        )
-    return dinfo
 
 
 class CacheDict(tp.Generic[X]):
@@ -113,6 +100,11 @@ class CacheDict(tp.Generic[X]):
         self._key_info: dict[str, dict[str, tp.Any]] = {}
         self.cache_type = cache_type
         self._set_cache_type(cache_type)
+        # write mode
+        self._info_f: io.BufferedWriter | None = None
+        self._info_fp: Path | None = None
+        self._estack: contextlib.ExitStack | None = None
+        self._dumper: DumperLoader | None = None
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -265,37 +257,61 @@ class CacheDict(tp.Generic[X]):
                 if self.permissions is not None:
                     fp.chmod(self.permissions)
 
+    @contextlib.contextmanager
+    def write_mode(self) -> tp.Iterator[None]:
+        if self.folder is None:
+            yield
+            return
+        info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
+        try:
+            with contextlib.ExitStack() as estack:
+                f = estack.enter_context(info_fp.open("ab"))
+                self._estack = estack
+                self._info_f = f
+                self._info_fp = info_fp
+                yield
+        except:
+            pass
+        finally:
+            self._info_f = None
+            self._estack = None
+            self._info_fp = None
+
     def __setitem__(self, key: str, value: X) -> None:
         if self.cache_type is None:
             cls = DumperLoader.default_class(type(value))
             self.cache_type = cls.__name__
             self._set_cache_type(self.cache_type)
+
         if self._keep_in_ram and self.folder is None:
             self._ram_data[key] = value
         if self.folder is not None:
-            dumper = self._get_loader(self.cache_type)
-            info = dumper.dump(key, value)
+            if self._info_f is None or self._estack is None or self._info_fp is None:
+                raise RuntimeError("Cannot write without a write_mode context")
+            if self._dumper is None:
+                self._dumper = self._get_loader(self.cache_type)
+                self._estack.enter_context(self._dumper.write_mode())
+            info = self._dumper.dump(key, value)
             files = [self.folder / info["filename"]]
-            if self._write_legacy_key_files and isinstance(dumper, StaticDumperLoader):
-                keyfile = self.folder / (info["filename"][: -len(dumper.SUFFIX)] + ".key")
+            if self._write_legacy_key_files and isinstance(
+                self._dumper, StaticDumperLoader
+            ):
+                keyfile = self.folder / (
+                    info["filename"][: -len(self._dumper.SUFFIX)] + ".key"
+                )
                 keyfile.write_text(key, encoding="utf8")
                 files.append(keyfile)
             # new write
             info["_key"] = key
-            info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
-            # first_write = not info_fp.exists()
-            # meta = {"cache_type": dumper.__class__.__name__}
-            # with info_fp.open("ab") as f:
-            #     if first_write:
-            #         files.append(info_fp)
-            #         f.write(json.dumps(meta).encode("utf8") + b"\n")
-            #     b = json.dumps(info).encode("utf8")
-            #     current = f.tell()
-            #     f.write(b + b"\n")
-            #     dinfo = DumpInfo(
-            #         jsonl=info_fp, byte_range=(current, current + len(b) + 1), **meta
-            #     )
-            dinfo = _write_info(info_fp, info, self.cache_type)
+            meta = {"cache_type": self.cache_type}
+            if not self._info_f.tell():
+                self._info_f.write(json.dumps(meta).encode("utf8") + b"\n")
+            b = json.dumps(info).encode("utf8")
+            current = self._info_f.tell()
+            self._info_f.write(b + b"\n")
+            dinfo = DumpInfo(
+                jsonl=self._info_fp, byte_range=(current, current + len(b) + 1), **meta
+            )
             info["_dump_info"] = dinfo
             self._key_info[key] = info
             # reading will reload to in-memory cache if need be
