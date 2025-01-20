@@ -93,8 +93,8 @@ class LocalJob:
 class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     """Processing/caching infrastructure ready to be applied to a pydantic.BaseModel method.
     To use it, the configuration can be set as an attribute of a pydantic BaseModel,
-    then `@infra.apply` must be set on the method to process/cache
-    this will effectively replace the function with a cached/remotely-computed version of itself
+    then `@infra.apply` must be set on the parameter-free method to process/cache.
+    This will effectively replace the function with a cached/remotely-computed version of itself
 
     Parameters
     ----------
@@ -461,6 +461,28 @@ class CachedMethod:
 
 
 class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
+    """Processing infrastructure ready to be applied to a pydantic.BaseModel method.
+    To use it, the configuration can be set as an attribute of a pydantic BaseModel,
+    then `@infra.apply` must be set on the method to process
+    this will effectively replace the function with a remotely-computed version of itself.
+    Contrarily to TaskInfra, outputs of the method are not cached, and the method can take arguments
+
+    Parameters
+    ----------
+    folder: optional Path or str
+        Path to directory for dumping/loading the cache on disk, if provided
+
+    Slurm/submitit parameters
+    -------------------------
+    Check out :class:`exca.slurm.SubmititMixin`
+
+    Note
+    ----
+    - the method must take as input an iterable of items of a type X, and yield
+      one output of a type Y for each input.
+    """
+
+    _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
 
     # pylint: disable=unused-argument
     def apply(self, method: base.C) -> base.C:
@@ -485,13 +507,31 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         return property(self._infra_method)  # type: ignore
 
     def submit(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
-        if self._infra_method is not None:
-            raise RuntimeError("Infra was already applied")
+        if self._infra_method is None:
+            raise RuntimeError("Infra must be applied to a method.")
         method = functools.partial(self._infra_method.method, self._obj)
-        executor = self.executor()
+        executor = self._array_executor
+        if executor is None:
+            executor = self.executor()
         if executor is None:
             return LocalJob(method, *args, **kwargs)
         return executor.submit(method, *args, **kwargs)
+
+    @contextlib.contextmanager
+    def batch(self, max_workers: int = 256) -> tp.Iterator[None]:
+        """Context for batching submissions through infra.submit into a unique array job"""
+        executor = self.executor()
+        with contextlib.ExitStack() as estack:
+            self._array_executor = executor
+            if isinstance(executor, submitit.Executor):
+                executor.update_parameters(slurm_array_parallelism=max_workers)
+                estack.enter_context(executor.batch())
+            try:
+                yield
+            except Exception:
+                raise
+            finally:
+                self._array_executor = None
 
     def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:  # type: ignore
         # this method replaces the decorated method

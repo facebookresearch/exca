@@ -38,3 +38,13 @@ def test_submit_infra(tmp_path: Path) -> None:
         assert 15 < out < 20
     assert outs[0] != outs[1]
     assert outs[1] != outs[2]
+
+
+def test_submit_infra_array(tmp_path: Path) -> None:
+    whatever = Whatever(param=15, infra={"folder": tmp_path, "cluster": "debug"})  # type: ignore
+    with pytest.raises(AttributeError):  # must use submit and not process directly
+        with whatever.infra.batch():
+            whatever.process(coeff=5)
+    with whatever.infra.batch():
+        job = whatever.infra.submit(coeff=5)
+    assert 15 < job.result() < 20
