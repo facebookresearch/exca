@@ -43,10 +43,12 @@ class Log(tp.Generic[X]):
 class LocalJob:
     job_id: str = "#local#"
 
-    def __init__(self, func: tp.Callable[[], tp.Any]) -> None:
+    def __init__(
+        self, func: tp.Callable[..., tp.Any], *args: tp.Any, **kwargs: tp.Any
+    ) -> None:
         status: tp.Literal["success", "failure"] = "success"
         try:
-            out = func()
+            out = func(*args, **kwargs)
         except Exception as e:
             out = (e, traceback.format_exc())
             status = "failure"
@@ -161,10 +163,6 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             raise RuntimeError("No folder specified")
         logs = Path(str(logs).replace("{folder}", str(uid_folder.parent)))
         return logs
-
-    def xp_folder(self) -> None:
-        msg = "infra.xp_folder() is deprecated in favor of infra.uid_folder()"
-        raise RuntimeError(msg)
 
     def clear_job(self) -> None:
         """Clears and possibly cancels this task's job
@@ -457,3 +455,47 @@ class CachedMethod:
     def __call__(self) -> tp.Any:
         # this method replaces the decorated method
         return self.infra._infra_method()  # type: ignore
+
+
+## similar to TaskInfra but without cache
+
+
+class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
+
+    # pylint: disable=unused-argument
+    def apply(self, method: base.C) -> base.C:
+        """Applies the infra on a method taking no parameter (except `self`)
+
+        Parameters
+        ----------
+        method: callable
+            a method of a pydantic.BaseModel taking as input an iterable of items
+            of a type X, and yielding one output of a type Y for each input item.
+        exclude_from_cache_uid: iterable of str / method / method name
+            fields that must be removed from the uid of the cache (in addition to
+            the ones already removed from the class uid)
+
+        Usage
+        -----
+        either decorate with `@infra.apply` or `@infra.apply(exclude_from_cache_uid=<whatever>)`
+        """
+        if self._infra_method is not None:
+            raise RuntimeError("Infra was already applied")
+        self._infra_method = base.InfraMethod(method=method)
+        return property(self._infra_method)  # type: ignore
+
+    def submit(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
+        method = functools.partial(self._infra_method.method, self._obj)
+        executor = self.executor()
+        if executor is None:
+            return LocalJob(method, *args, **kwargs)
+        return executor.submit(method, *args, **kwargs)
+
+    def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:  # type: ignore
+        # this method replaces the decorated method
+        job = self.submit(*args, **kwargs)
+        return job.results()[0]  # only first for multi-tasks
+
+    def uid(self) -> str:
+        # bypass any complicated check
+        return self._factory()
