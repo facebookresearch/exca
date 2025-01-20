@@ -29,7 +29,7 @@ def test_submit_infra_nofolder() -> None:
 
 
 def test_submit_infra(tmp_path: Path) -> None:
-    whatever = Whatever(param=15, infra={"folder": tmp_path, "cluster": "debug"})
+    whatever = Whatever(param=15, infra={"folder": tmp_path, "cluster": "debug"})  # type: ignore
     outs = []
     outs.append(whatever.process(coeff=5))
     outs.append(whatever.process(coeff=5))

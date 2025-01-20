@@ -485,6 +485,8 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         return property(self._infra_method)  # type: ignore
 
     def submit(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
+        if self._infra_method is not None:
+            raise RuntimeError("Infra was already applied")
         method = functools.partial(self._infra_method.method, self._obj)
         executor = self.executor()
         if executor is None:
