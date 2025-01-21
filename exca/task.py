@@ -93,7 +93,7 @@ class LocalJob:
 class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     """Processing/caching infrastructure ready to be applied to a pydantic.BaseModel method.
     To use it, the configuration must be set as an attribute of a pydantic BaseModel,
-    then `@infra.apply` must be set on the parameter-free method to process/cache.
+    then :code:`@infra.apply` must be set on the parameter-free method to process/cache.
     This will effectively replace the function with a cached/remotely-computed version of itself
 
     Parameters
@@ -444,7 +444,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
 
         Usage
         -----
-        either decorate with `@infra.apply` or `@infra.apply(exclude_from_cache_uid=<whatever>)`
+        either decorate with :code:`@infra.apply` or :code:`@infra.apply(exclude_from_cache_uid=<whatever>)`
         """
         params = locals()
         for name in ["method", "self"]:
@@ -478,7 +478,7 @@ class CachedMethod:
 class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
     """Processing infrastructure ready to be applied to a pydantic.BaseModel method.
     To use it, the configuration must be set as an attribute of a pydantic BaseModel,
-    then `@infra.apply` must be set on the method to process
+    then :code:`@infra.apply` must be set on the method to process
     this will effectively replace the function with a remotely-computed version of itself.
     Contrarily to TaskInfra, outputs of the method are not cached, and the method can take arguments
 
@@ -566,6 +566,7 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         Usage
         -----
         .. code-block:: python
+
             with cfg.infra.batch():
                 job1 = cfg.infra.submit(y=1)
                 job2 = cfg.infra.submit(y=2)
