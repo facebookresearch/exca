@@ -92,7 +92,7 @@ class LocalJob:
 
 class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     """Processing/caching infrastructure ready to be applied to a pydantic.BaseModel method.
-    To use it, the configuration can be set as an attribute of a pydantic BaseModel,
+    To use it, the configuration must be set as an attribute of a pydantic BaseModel,
     then `@infra.apply` must be set on the parameter-free method to process/cache.
     This will effectively replace the function with a cached/remotely-computed version of itself
 
@@ -115,10 +115,20 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     -------------------------
     Check out :class:`exca.slurm.SubmititMixin`
 
-    Note
-    ----
-    - the method must take as input an iterable of items of a type X, and yield
-      one output of a type Y for each input.
+    Usage
+    -----
+    .. code-block:: python
+
+        class MyTask(pydantic.BaseModel):
+            x: int
+            infra: exca.TaskInfra = exca.TaskInfra()
+
+            @infra.apply
+            def compute(self) -> int:
+                return 2 * self.x
+
+        cfg = MyTask(12, infra={"folder": "tmp", "cluster": "slurm"})
+        assert cfg.compute() == 24  # "compute" runs on slurm and is cached
     """
 
     # running configuration
@@ -195,6 +205,11 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     def job_array(self, max_workers: int = 256) -> tp.Iterator[tp.List[tp.Any]]:
         """Creates a list object to populate
         The tasks in the list will be sent as a job array when exiting the context
+
+        Parameter
+        ---------
+        max_workers: int
+            maximum number of jobs in the array that can be running at a given time
         """
         executor = self.executor()
         tasks: tp.List[tp.Any] = []
@@ -462,7 +477,7 @@ class CachedMethod:
 
 class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
     """Processing infrastructure ready to be applied to a pydantic.BaseModel method.
-    To use it, the configuration can be set as an attribute of a pydantic BaseModel,
+    To use it, the configuration must be set as an attribute of a pydantic BaseModel,
     then `@infra.apply` must be set on the method to process
     this will effectively replace the function with a remotely-computed version of itself.
     Contrarily to TaskInfra, outputs of the method are not cached, and the method can take arguments
@@ -476,10 +491,22 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
     -------------------------
     Check out :class:`exca.slurm.SubmititMixin`
 
-    Note
-    ----
-    - the method must take as input an iterable of items of a type X, and yield
-      one output of a type Y for each input.
+    Usage
+    -----
+    .. code-block:: python
+
+        class MyTask(pydantic.BaseModel):
+            x: int
+            infra: exca.TaskInfra = exca.TaskInfra()
+
+            @infra.apply
+            def compute(self, y: int) -> int:
+                return 2 * self.x
+
+        cfg = MyTask(12, infra={"folder": "tmp", "cluster": "slurm"})
+        assert cfg.compute(y=1) == 25  # "compute" runs on slurm but is not cached
+        job = cfg.infra.submit(y=1)  # runs the computation asynchronously
+        assert job.result() == 25
     """
 
     _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
@@ -488,25 +515,35 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
     def apply(self, method: base.C) -> base.C:
         """Applies the infra on a method taking no parameter (except `self`)
 
-        Parameters
-        ----------
+        Parameter
+        ---------
         method: callable
             a method of a pydantic.BaseModel taking as input an iterable of items
             of a type X, and yielding one output of a type Y for each input item.
-        exclude_from_cache_uid: iterable of str / method / method name
-            fields that must be removed from the uid of the cache (in addition to
-            the ones already removed from the class uid)
 
         Usage
         -----
-        either decorate with `@infra.apply` or `@infra.apply(exclude_from_cache_uid=<whatever>)`
+        Decorate the method with :code:`@infra.apply`
         """
         if self._infra_method is not None:
             raise RuntimeError("Infra was already applied")
         self._infra_method = base.InfraMethod(method=method)
         return property(self._infra_method)  # type: ignore
 
-    def submit(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
+    def submit(self, *args: tp.Any, **kwargs: tp.Any) -> submitit.Job[tp.Any] | LocalJob:
+        """Submit an asynchroneous job. This call is non-blocking and returns a
+        :code:`Job` instance that has a :code:`result()` method that awaits
+        for the computation to be over.
+
+        Parameters
+        ----------
+        *args, **kwargs: parameters of the decorated method
+
+        Note
+        ----
+        As a reminder, outputs are not cached so submitting several time will
+        run as many jobs.
+        """
         if self._infra_method is None:
             raise RuntimeError("Infra must be applied to a method.")
         method = functools.partial(self._infra_method.method, self._obj)
@@ -519,7 +556,21 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
 
     @contextlib.contextmanager
     def batch(self, max_workers: int = 256) -> tp.Iterator[None]:
-        """Context for batching submissions through infra.submit into a unique array job"""
+        """Context for batching submissions through infra.submit into a unique array job
+
+        Parameter
+        ---------
+        max_workers: int
+            maximum number of jobs in the array that can be running at a given time
+
+        Usage
+        -----
+        .. code-block:: python
+            with cfg.infra.batch():
+                job1 = cfg.infra.submit(y=1)
+                job2 = cfg.infra.submit(y=2)
+            # job1 and job2 are submitted together as a job array
+        """
         executor = self.executor()
         with contextlib.ExitStack() as estack:
             self._array_executor = executor
