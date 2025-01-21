@@ -188,9 +188,11 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
         self._name = f"{host_pid()}.data"
         with (self.folder / self._name).open("ab") as f:
             self._f = f
-            yield
-        self._f = None
-        self._name = None
+            try:
+                yield
+            finally:
+                self._f = None
+                self._name = None
 
     def load(self, filename: str, offset: int, shape: tuple[int, ...], dtype: str) -> np.ndarray:  # type: ignore
         return np.memmap(

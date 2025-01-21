@@ -171,7 +171,6 @@ class CacheDict(tp.Generic[X]):
         # read all existing jsonl files
         find_cmd = 'find . -type f -name "*-info.jsonl"'
         try:
-            print(find_cmd, folder)
             out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
         except subprocess.CalledProcessError as e:
             out = e.output  # stderr contains missing tmp files
@@ -263,19 +262,17 @@ class CacheDict(tp.Generic[X]):
             yield
             return
         info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
-        try:
-            with contextlib.ExitStack() as estack:
-                f = estack.enter_context(info_fp.open("ab"))
+        with contextlib.ExitStack() as estack:
+            f = estack.enter_context(info_fp.open("ab"))
+            try:
                 self._estack = estack
                 self._info_f = f
                 self._info_fp = info_fp
                 yield
-        except:
-            pass
-        finally:
-            self._info_f = None
-            self._estack = None
-            self._info_fp = None
+            finally:
+                self._info_f = None
+                self._estack = None
+                self._info_fp = None
 
     def __setitem__(self, key: str, value: X) -> None:
         if self.cache_type is None:
