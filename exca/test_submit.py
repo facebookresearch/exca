@@ -54,3 +54,21 @@ def test_submit_infra_array(tmp_path: Path) -> None:
     with whatever.infra.batch():
         job = whatever.infra.submit(coeff=5)
     assert 15 < job.result() < 20
+
+
+class WhateverStatic(pydantic.BaseModel):
+    infra: SubmitInfra = SubmitInfra(version="1")
+    param: int = 12
+    # uid internals:
+
+    @infra.apply
+    @staticmethod
+    def process(coeff: float = 1) -> float:
+        return np.random.rand() * coeff
+
+
+def test_submit_infra_array_static(tmp_path: Path) -> None:
+    whatever = WhateverStatic(param=13)
+    assert 0 < whatever.process(5) < 5
+    whatever = WhateverStatic(param=15, infra={"folder": tmp_path, "cluster": "debug"})  # type: ignore
+    assert 0 < whatever.process(5) < 5

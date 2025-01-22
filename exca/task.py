@@ -507,6 +507,11 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         assert cfg.compute(y=1) == 25  # "compute" runs on slurm but is not cached
         job = cfg.infra.submit(y=1)  # runs the computation asynchronously
         assert job.result() == 25
+
+    Note
+    ----
+    The decorated method can be a staticmethod to avoid pickling the owner object
+    along with the other parameters.
     """
 
     _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
@@ -546,7 +551,9 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         """
         if self._infra_method is None:
             raise RuntimeError("Infra must be applied to a method.")
-        method = functools.partial(self._infra_method.method, self._obj)
+        method = self._infra_method.method
+        if not isinstance(method, staticmethod):
+            method = functools.partial(self._infra_method.method, self._obj)
         executor = self._array_executor
         if executor is None:
             executor = self.executor()
