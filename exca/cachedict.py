@@ -100,11 +100,6 @@ class CacheDict(tp.Generic[X]):
         self._key_info: dict[str, dict[str, tp.Any]] = {}
         self.cache_type = cache_type
         self._set_cache_type(cache_type)
-        # write mode
-        self._info_f: io.BufferedWriter | None = None
-        self._info_fp: Path | None = None
-        self._estack: contextlib.ExitStack | None = None
-        self._dumper: DumperLoader | None = None
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -246,67 +241,13 @@ class CacheDict(tp.Generic[X]):
                     fp.chmod(self.permissions)
 
     @contextlib.contextmanager
-    def write_mode(self) -> tp.Iterator[None]:
-        if self._estack is not None:
-            raise RuntimeError("Cannot open write_mode within a write mode")
-        try:
-            with contextlib.ExitStack() as estack:
-                self._estack = estack
-                if self.folder is not None:
-                    self._info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
-                    print(self._info_fp.name)
-                    self._info_f = estack.enter_context(self._info_fp.open("ab"))
-                yield
-        finally:
-            self._info_f = None
-            self._estack = None
-            self._info_fp = None
+    def writer(self) -> tp.Iterator["CacheDictWriter"]:
+        writer = CacheDictWriter(self)
+        with writer.open():
+            yield writer
 
     def __setitem__(self, key: str, value: X) -> None:
-        if self.cache_type is None:
-            cls = DumperLoader.default_class(type(value))
-            self.cache_type = cls.__name__
-            self._set_cache_type(self.cache_type)
-
-        if self._keep_in_ram and self.folder is None:
-            self._ram_data[key] = value
-        if self.folder is not None:
-            if self._info_f is None or self._estack is None or self._info_fp is None:
-                raise RuntimeError("Cannot write without a write_mode context")
-            if self._dumper is None:
-                self._dumper = DumperLoader.CLASSES[self.cache_type](self.folder)
-                self._estack.enter_context(self._dumper.write_mode())
-            info = self._dumper.dump(key, value)
-            files = [self.folder / info["filename"]]
-            if self._write_legacy_key_files and isinstance(
-                self._dumper, StaticDumperLoader
-            ):
-                keyfile = self.folder / (
-                    info["filename"][: -len(self._dumper.SUFFIX)] + ".key"
-                )
-                keyfile.write_text(key, encoding="utf8")
-                files.append(keyfile)
-            # new write
-            info["_key"] = key
-            meta = {"cache_type": self.cache_type}
-            if not self._info_f.tell():
-                self._info_f.write(json.dumps(meta).encode("utf8") + b"\n")
-            b = json.dumps(info).encode("utf8")
-            current = self._info_f.tell()
-            self._info_f.write(b + b"\n")
-            dinfo = DumpInfo(
-                jsonl=self._info_fp, byte_range=(current, current + len(b) + 1), **meta
-            )
-            info["_dump_info"] = dinfo
-            self._key_info[key] = info
-            # reading will reload to in-memory cache if need be
-            # (since dumping may have loaded the underlying data, let's not keep it)
-            if self.permissions is not None:
-                for fp in files:
-                    try:
-                        fp.chmod(self.permissions)
-                    except Exception:  # pylint: disable=broad-except
-                        pass  # avoid issues in case of overlapping processes
+        raise RuntimeError("Use a writer context")
 
     def __delitem__(self, key: str) -> None:
         # necessarily in file cache folder from now on
@@ -360,3 +301,85 @@ class CacheDict(tp.Generic[X]):
                 self._key_info[key] = {"filename": filename, "_dump_info": dinfo}
                 return True
         return False  # lazy check
+
+
+class CacheDictWriter:
+
+    def __init__(self, cache: CacheDict):
+        self.cache = cache
+        # write mode
+        self._estack: contextlib.ExitStack | None = None
+        self._info_filepath: Path | None = None
+        self._info_handle: io.BufferedWriter | None = None
+        self._dumper: DumperLoader | None = None
+
+    @contextlib.contextmanager
+    def open(self) -> tp.Iterator[None]:
+        if self._estack is not None:
+            raise RuntimeError("Cannot open write_mode within a write mode")
+        try:
+            with contextlib.ExitStack() as estack:
+                self._estack = estack
+                if self.cache.folder is not None:
+                    self._info_filepath = (
+                        Path(self.cache.folder) / f"{host_pid()}-info.jsonl"
+                    )
+                    self._info_handle = estack.enter_context(
+                        self._info_filepath.open("ab")
+                    )
+                yield
+        finally:
+            self._estack = None
+            self._info_filepath = None
+            self._info_handle = None
+            self._dumper = None
+
+    def __setitem__(self, key: str, value: X) -> None:
+        if self._estack is None:
+            raise RuntimeError("Cannot write out of a writer context")
+        cd = self.cache
+        if cd.cache_type is None:
+            cls = DumperLoader.default_class(type(value))
+            cd.cache_type = cls.__name__
+            cd._set_cache_type(cd.cache_type)
+        if cd._keep_in_ram and cd.folder is None:
+            cd._ram_data[key] = value
+        if cd.folder is not None:
+            if self._info_filepath is None or self._info_handle is None:
+                raise RuntimeError("Cannot write out of a writer context")
+            if self._dumper is None:
+                self._dumper = DumperLoader.CLASSES[cd.cache_type](cd.folder)
+                self._estack.enter_context(self._dumper.write_mode())
+            info = self._dumper.dump(key, value)
+            files = [cd.folder / info["filename"]]
+            if cd._write_legacy_key_files and isinstance(
+                self._dumper, StaticDumperLoader
+            ):
+                keyfile = cd.folder / (
+                    info["filename"][: -len(self._dumper.SUFFIX)] + ".key"
+                )
+                keyfile.write_text(key, encoding="utf8")
+                files.append(keyfile)
+            # new write
+            info["_key"] = key
+            meta = {"cache_type": cd.cache_type}
+            if not self._info_handle.tell():
+                self._info_handle.write(json.dumps(meta).encode("utf8") + b"\n")
+            b = json.dumps(info).encode("utf8")
+            current = self._info_handle.tell()
+            self._info_handle.write(b + b"\n")
+            dinfo = DumpInfo(
+                jsonl=self._info_filepath,
+                byte_range=(current, current + len(b) + 1),
+                **meta,
+            )
+            info["_dump_info"] = dinfo
+            cd._key_info[key] = info
+            # reading will reload to in-memory cache if need be
+            # (since dumping may have loaded the underlying data, let's not keep it)
+            if cd.permissions is not None:
+                for fp in files:
+                    try:
+                        fp.chmod(cd.permissions)
+                    except Exception:  # pylint: disable=broad-except
+                        pass  # avoid issues in case of overlapping processes
