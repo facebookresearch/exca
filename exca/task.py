@@ -516,6 +516,9 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
 
     _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
 
+    def _exclude_from_cls_uid(self) -> tp.List[str]:
+        return ["."]  # not taken into accound for uid
+
     # pylint: disable=unused-argument
     def apply(self, method: base.C) -> base.C:
         """Applies the infra on a method taking no parameter (except `self`)
