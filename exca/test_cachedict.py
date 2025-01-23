@@ -34,7 +34,7 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
     assert set(cache.keys()) == {"blublu"}
     assert bool(cache._ram_data) is in_ram
     cache2: cd.CacheDict[tp.Any] = cd.CacheDict(folder=folder)
-    with cache.write_mode():
+    with cache2.write_mode():
         cache2["blabla"] = 2 * x
     assert "blabla" in cache
     assert set(cache.keys()) == {"blublu", "blabla"}
@@ -96,6 +96,12 @@ def test_specialized_dump(tmp_path: Path, data: tp.Any, cache_type: str) -> None
     assert isinstance(cache["x"], type(data))
 
 
+def _setval(cache: cd.CacheDict[tp.Any], key: str, val: tp.Any) -> None:
+    with cache.write_mode():
+        print(key, val, cache._info_fp)
+        cache[key] = val
+
+
 @pytest.mark.parametrize(
     "legacy_write,remove_jsonl", ((True, True), (True, False), (False, False))
 )
@@ -103,15 +109,17 @@ def test_specialized_dump(tmp_path: Path, data: tp.Any, cache_type: str) -> None
 def test_info_jsonl(
     tmp_path: Path, legacy_write: bool, remove_jsonl: bool, process: bool
 ) -> None:
-    pytest.skip()
     cache: cd.CacheDict[int] = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
     )
     Pool = futures.ProcessPoolExecutor if process else futures.ThreadPoolExecutor
+    jobs = []
     with Pool(max_workers=2) as ex:
-        ex.submit(cache.__setitem__, "x", 12)
-        ex.submit(cache.__setitem__, "y", 3)
-        ex.submit(cache.__setitem__, "z", 24)
+        jobs.append(ex.submit(_setval, cache, "x", 12))
+        jobs.append(ex.submit(_setval, cache, "y", 3))
+        jobs.append(ex.submit(_setval, cache, "z", 24))
+    for j in jobs:
+        j.result()
     # check files
     fps = list(tmp_path.iterdir())
     info_paths = [fp for fp in fps if fp.name.endswith("-info.jsonl")]

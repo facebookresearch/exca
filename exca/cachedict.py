@@ -78,7 +78,7 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram: bool = False,
         cache_type: None | str = None,
         permissions: int | None = 0o777,
-        _write_legacy_key_files: bool = False,
+        _write_legacy_key_files: bool = True,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
@@ -223,22 +223,11 @@ class CacheDict(tp.Generic[X]):
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
         info = self._key_info[key]
         dinfo: DumpInfo = info["_dump_info"]
-        loader = self._get_loader(dinfo.cache_type)
+        loader = DumperLoader.CLASSES[dinfo.cache_type](self.folder)
         loaded = loader.load(**{x: y for x, y in info.items() if not x.startswith("_")})
         if self._keep_in_ram:
             self._ram_data[key] = loaded
         return loaded  # type: ignore
-
-    def _get_loader(self, cache_type: str) -> DumperLoader:
-        key = (
-            cache_type,
-            host_pid(),
-        )  # make sure we dont use a loader from another thread
-        if self.folder is None:
-            raise RuntimeError("Cannot get loader with no folder")
-        if key not in self._loaders:
-            self._loaders[key] = DumperLoader.CLASSES[cache_type](self.folder)
-        return self._loaders[key]
 
     def _set_cache_type(self, cache_type: str | None) -> None:
         if self.folder is None:
@@ -258,21 +247,20 @@ class CacheDict(tp.Generic[X]):
 
     @contextlib.contextmanager
     def write_mode(self) -> tp.Iterator[None]:
-        if self.folder is None:
-            yield
-            return
-        info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
-        with contextlib.ExitStack() as estack:
-            f = estack.enter_context(info_fp.open("ab"))
-            try:
+        if self._estack is not None:
+            raise RuntimeError("Cannot open write_mode within a write mode")
+        try:
+            with contextlib.ExitStack() as estack:
                 self._estack = estack
-                self._info_f = f
-                self._info_fp = info_fp
+                if self.folder is not None:
+                    self._info_fp = Path(self.folder) / f"{host_pid()}-info.jsonl"
+                    print(self._info_fp.name)
+                    self._info_f = estack.enter_context(self._info_fp.open("ab"))
                 yield
-            finally:
-                self._info_f = None
-                self._estack = None
-                self._info_fp = None
+        finally:
+            self._info_f = None
+            self._estack = None
+            self._info_fp = None
 
     def __setitem__(self, key: str, value: X) -> None:
         if self.cache_type is None:
@@ -286,7 +274,7 @@ class CacheDict(tp.Generic[X]):
             if self._info_f is None or self._estack is None or self._info_fp is None:
                 raise RuntimeError("Cannot write without a write_mode context")
             if self._dumper is None:
-                self._dumper = self._get_loader(self.cache_type)
+                self._dumper = DumperLoader.CLASSES[self.cache_type](self.folder)
                 self._estack.enter_context(self._dumper.write_mode())
             info = self._dumper.dump(key, value)
             files = [self.folder / info["filename"]]
@@ -331,7 +319,7 @@ class CacheDict(tp.Generic[X]):
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
         info = self._key_info.pop(key)
         dinfo: DumpInfo = info["_dump_info"]
-        loader = self._get_loader(dinfo.cache_type)
+        loader = DumperLoader.CLASSES[dinfo.cache_type](self.folder)
         if isinstance(loader, StaticDumperLoader):  # legacy
             keyfile = self.folder / (info["filename"][: -len(loader.SUFFIX)] + ".key")
             keyfile.unlink(missing_ok=True)
@@ -362,7 +350,7 @@ class CacheDict(tp.Generic[X]):
             if self.cache_type is None:
                 self._set_cache_type(None)
             if fp.exists() and self.cache_type is not None:
-                loader = self._get_loader(self.cache_type)
+                loader = DumperLoader.CLASSES[self.cache_type](self.folder)
                 if not isinstance(loader, StaticDumperLoader):
                     raise RuntimeError(
                         "Cannot regenerate info from non-static dumper-loader"
