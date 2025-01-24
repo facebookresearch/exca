@@ -315,7 +315,7 @@ class CacheDictWriter:
     def __init__(self, cache: CacheDict) -> None:
         self.cache = cache
         # write mode
-        self._estack: contextlib.ExitStack | None = None
+        self._exit_stack: contextlib.ExitStack | None = None
         self._info_filepath: Path | None = None
         self._info_handle: io.BufferedWriter | None = None
         self._dumper: DumperLoader | None = None
@@ -327,11 +327,11 @@ class CacheDictWriter:
     @contextlib.contextmanager
     def open(self) -> tp.Iterator[None]:
         cd = self.cache
-        if self._estack is not None:
+        if self._exit_stack is not None:
             raise RuntimeError("Cannot re-open an already open writer")
         try:
             with contextlib.ExitStack() as estack:
-                self._estack = estack
+                self._exit_stack = estack
                 if cd.folder is not None:
                     fp = Path(cd.folder) / f"{host_pid()}-info.jsonl"
                     self._info_filepath = fp
@@ -341,13 +341,13 @@ class CacheDictWriter:
             fp2 = self._info_filepath
             if cd.permissions is not None and fp2 is not None and fp2.exists():
                 fp2.chmod(cd.permissions)
-            self._estack = None
+            self._exit_stack = None
             self._info_filepath = None
             self._info_handle = None
             self._dumper = None
 
     def __setitem__(self, key: str, value: X) -> None:
-        if self._estack is None:
+        if self._exit_stack is None:
             raise RuntimeError("Cannot write out of a writer context")
         cd = self.cache
         # figure out cache type
@@ -364,7 +364,7 @@ class CacheDictWriter:
                 raise RuntimeError("Cannot write out of a writer context")
             if self._dumper is None:
                 self._dumper = DumperLoader.CLASSES[cd.cache_type](cd.folder)
-                self._estack.enter_context(self._dumper.write_mode())
+                self._exit_stack.enter_context(self._dumper.write_mode())
             info = self._dumper.dump(key, value)
             files = [cd.folder / info["filename"]]
             if cd._write_legacy_key_files:  # legacy
