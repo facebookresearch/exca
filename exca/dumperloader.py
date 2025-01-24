@@ -11,7 +11,6 @@ import pickle
 import socket
 import threading
 import typing as tp
-import uuid
 import warnings
 from pathlib import Path
 
@@ -138,42 +137,6 @@ class NumpyMemmapArray(NumpyArray):
     @classmethod
     def static_load(cls, filepath: Path) -> np.ndarray:
         return np.load(filepath, mmap_mode="r")  # type: ignore
-
-
-class MultiMemmapArray(DumperLoader[np.ndarray]):
-
-    def __init__(self, folder: Path | str) -> None:
-        super().__init__(folder)
-        self.size = 1
-        self.row = 0
-        self._name: str | None = None
-
-    def load(self, filename: str, row: int) -> np.ndarray:  # type: ignore
-        return np.load(self.folder / filename, mmap_mode="r")[row]  # type: ignore
-
-    def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:
-        if not isinstance(value, np.ndarray):
-            raise TypeError(f"Expected numpy array but got {value} ({type(value)})")
-        mode = "r+"
-        shape: tp.Any = None
-        if self._name is None:
-            self.size = max(self.size, 1)
-            shape = (self.size,) + value.shape
-            self._name = f"{host_pid()}-{uuid.uuid4().hex[:8]}.npy"
-            self.row = 0
-            mode = "w+"
-        fp = self.folder / self._name
-        memmap = np.lib.format.open_memmap(  # type: ignore
-            filename=fp, mode=mode, dtype=float, shape=shape
-        )
-        memmap[self.row] = value
-        memmap.flush()
-        out = {"row": self.row, "filename": fp.name}
-        self.row += 1
-        if self.size == self.row:
-            self.size = max(self.size + 1, int(round(1.2 * self.size)))
-            self._name = None
-        return out
 
 
 class MemmapArrayFile(DumperLoader[np.ndarray]):
