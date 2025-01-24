@@ -18,7 +18,7 @@ from . import dumperloader
 
 
 def make_meeg(
-    ch_type: tp.Literal["eeg", "ecog", "seeg", "mag", "grad"]
+    ch_type: tp.Literal["eeg", "ecog", "seeg", "mag", "grad", "ref_meg"]
 ) -> mne.io.RawArray:
     n_channels, sfreq, duration = 4, 64, 60
     data = np.random.rand(n_channels, sfreq * duration)
