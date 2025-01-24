@@ -32,6 +32,7 @@ class DumpInfo:
     byte_range: tuple[int, int]
     jsonl: Path
     cache_type: str
+    content: dict[str, tp.Any]
 
 
 class CacheDict(tp.Generic[X]):
@@ -97,7 +98,7 @@ class CacheDict(tp.Generic[X]):
                     msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
                     logger.warning(msg)
         self._ram_data: dict[str, X] = {}
-        self._key_info: dict[str, dict[str, tp.Any]] = {}
+        self._key_info: dict[str, DumpInfo] = {}
         self.cache_type = cache_type
         self._set_cache_type(cache_type)
 
@@ -144,14 +145,12 @@ class CacheDict(tp.Generic[X]):
                     if name[:-4] not in self._key_info
                 }
             info = {
-                j.result(): {
-                    "uid": name,
-                    "_dump_info": DumpInfo(
-                        byte_range=(0, 0),
-                        jsonl=folder / (name + ".key"),
-                        cache_type=self.cache_type,  # type: ignore
-                    ),
-                }
+                j.result(): DumpInfo(
+                    byte_range=(0, 0),
+                    jsonl=folder / (name + ".key"),
+                    cache_type=self.cache_type,  # type: ignore
+                    content={"uid": name},  # TODO fix
+                )
                 for name, j in jobs.items()
             }
             self._key_info.update(info)
@@ -185,9 +184,11 @@ class CacheDict(tp.Generic[X]):
                     if not k:  # metadata
                         meta = info
                         continue
-                    dinfo = DumpInfo(jsonl=fp, byte_range=(last - count, last), **meta)
-                    info["_dump_info"] = dinfo
-                    self._key_info[info.pop("_key")] = info
+                    key = info.pop("_key")
+                    dinfo = DumpInfo(
+                        jsonl=fp, byte_range=(last - count, last), **meta, content=info
+                    )
+                    self._key_info[key] = dinfo
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -216,10 +217,9 @@ class CacheDict(tp.Generic[X]):
             _ = key in self
         if self.cache_type is None:
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
-        info = self._key_info[key]
-        dinfo: DumpInfo = info["_dump_info"]
+        dinfo = self._key_info[key]
         loader = DumperLoader.CLASSES[dinfo.cache_type](self.folder)
-        loaded = loader.load(**{x: y for x, y in info.items() if not x.startswith("_")})
+        loaded = loader.load(**{x: y for x, y in dinfo.content.items()})
         if self._keep_in_ram:
             self._ram_data[key] = loaded
         return loaded  # type: ignore
@@ -258,11 +258,12 @@ class CacheDict(tp.Generic[X]):
             return
         if self.cache_type is None:
             raise RuntimeError(f"Could not figure cache_type in {self.folder}")
-        info = self._key_info.pop(key)
-        dinfo: DumpInfo = info["_dump_info"]
+        dinfo = self._key_info.pop(key)
         loader = DumperLoader.CLASSES[dinfo.cache_type](self.folder)
         if isinstance(loader, StaticDumperLoader):  # legacy
-            keyfile = self.folder / (info["filename"][: -len(loader.SUFFIX)] + ".key")
+            keyfile = self.folder / (
+                dinfo.content["filename"][: -len(loader.SUFFIX)] + ".key"
+            )
             keyfile.unlink(missing_ok=True)
         brange = dinfo.byte_range
         if brange[0] != brange[1]:
@@ -270,7 +271,7 @@ class CacheDict(tp.Generic[X]):
             with dinfo.jsonl.open("rb+") as f:
                 f.seek(brange[0])
                 f.write(b" " * (brange[1] - brange[0] - 1))
-        info = {x: y for x, y in info.items() if not x.startswith("_")}
+        info = {x: y for x, y in dinfo.content.items() if not x.startswith("_")}
         if len(info) == 1:  # only filename -> we can remove it as it is not shared
             # moves then delete to avoid weird effects
             with utils.fast_unlink(Path(self.folder) / info["filename"]):
@@ -293,12 +294,16 @@ class CacheDict(tp.Generic[X]):
             if fp.exists() and self.cache_type is not None:
                 loader = DumperLoader.CLASSES[self.cache_type](self.folder)
                 if not isinstance(loader, StaticDumperLoader):
-                    raise RuntimeError(
-                        "Cannot regenerate info from non-static dumper-loader"
-                    )
+                    msg = "Cannot regenerate info from non-static dumper-loader"
+                    raise RuntimeError(msg)
                 filename = _string_uid(key) + loader.SUFFIX
-                dinfo = DumpInfo(byte_range=(0, 0), jsonl=fp, cache_type=self.cache_type)
-                self._key_info[key] = {"filename": filename, "_dump_info": dinfo}
+                dinfo = DumpInfo(
+                    byte_range=(0, 0),
+                    jsonl=fp,
+                    cache_type=self.cache_type,
+                    content={"filename": filename},
+                )
+                self._key_info[key] = dinfo
                 return True
         return False  # lazy check
 
@@ -331,9 +336,9 @@ class CacheDictWriter:
                     self._info_handle = estack.enter_context(fp.open("ab"))
                 yield
         finally:
-            fp = self._info_filepath
-            if cd.permissions is not None and fp is not None and fp.exists():
-                fp.chmod(cd.permissions)
+            fp2 = self._info_filepath
+            if cd.permissions is not None and fp2 is not None and fp2.exists():
+                fp2.chmod(cd.permissions)
             self._estack = None
             self._info_filepath = None
             self._info_handle = None
@@ -376,10 +381,10 @@ class CacheDictWriter:
             dinfo = DumpInfo(
                 jsonl=self._info_filepath,
                 byte_range=(current, current + len(b) + 1),
+                content=info,
                 **meta,
             )
-            info["_dump_info"] = dinfo
-            cd._key_info[key] = info
+            info[key] = dinfo
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if cd.permissions is not None:
