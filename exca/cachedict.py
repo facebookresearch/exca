@@ -29,9 +29,11 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class DumpInfo:
-    byte_range: tuple[int, int]
-    jsonl: Path
+    """Structure for keeping track of metadata/how to read data"""
+
     cache_type: str
+    jsonl: Path
+    byte_range: tuple[int, int]
     content: dict[str, tp.Any]
 
 
@@ -122,43 +124,49 @@ class CacheDict(tp.Generic[X]):
         return len(list(self.keys()))  # inefficient, but correct
 
     def keys(self) -> tp.Iterator[str]:
-        keys = set(self._ram_data)
-        if self.folder is not None:
-            folder = Path(self.folder)
-            # read all existing key files as fast as possible (pathlib.glob is slow)
-            find_cmd = 'find . -type f -name "*.key"'
-            try:
-                out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
-            except subprocess.CalledProcessError as e:
-                out = e.output
-            names = out.decode("utf8").splitlines()
-            jobs = {}
-            if self.cache_type is None:
-                self._set_cache_type(None)
-            if names and self.cache_type is None:
-                raise RuntimeError("cache_type should have been detected")
-            # parallelize content reading
-            with futures.ThreadPoolExecutor() as ex:
-                jobs = {
-                    name[:-4]: ex.submit((folder / name).read_text, "utf8")
-                    for name in names
-                    if name[:-4] not in self._key_info
-                }
-            info = {
-                j.result(): DumpInfo(
-                    byte_range=(0, 0),
-                    jsonl=folder / (name + ".key"),
-                    cache_type=self.cache_type,  # type: ignore
-                    content={"uid": name},  # TODO fix
-                )
-                for name, j in jobs.items()
-            }
-            self._key_info.update(info)
-            self._load_info_files()
-            keys |= set(self._key_info)
+        self._read_key_files()
+        self._read_info_files()
+        keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
-    def _load_info_files(self) -> None:
+    def _read_key_files(self) -> None:
+        if self.folder is None:
+            return
+        folder = Path(self.folder)
+        # read all existing key files as fast as possible (pathlib.glob is slow)
+        find_cmd = 'find . -type f -name "*.key"'
+        try:
+            out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
+        except subprocess.CalledProcessError as e:
+            out = e.output
+        names = out.decode("utf8").splitlines()
+        jobs = {}
+        if not names:
+            return
+        if self.cache_type is None:
+            raise RuntimeError("cache_type should have been detected")
+        # parallelize content reading
+        loader = DumperLoader.CLASSES[self.cache_type](self.folder)
+        if not isinstance(loader, StaticDumperLoader):
+            raise RuntimeError("Old key files with non legacy writer")
+        with futures.ThreadPoolExecutor() as ex:
+            jobs = {
+                name[:-4]: ex.submit((folder / name).read_text, "utf8")
+                for name in names
+                if name[:-4] not in self._key_info
+            }
+        info = {
+            j.result(): DumpInfo(
+                byte_range=(0, 0),
+                jsonl=folder / (name + ".key"),
+                cache_type=self.cache_type,  # type: ignore
+                content={"filename": name + loader.SUFFIX},
+            )
+            for name, j in jobs.items()
+        }
+        self._key_info.update(info)
+
+    def _read_info_files(self) -> None:
         """Load current info files"""
         if self.folder is None:
             return
@@ -283,7 +291,7 @@ class CacheDict(tp.Generic[X]):
         # in-memory cache
         if key in self._ram_data:
             return True
-        self._load_info_files()
+        self._read_info_files()
         if self.folder is not None:
             # in folder (already read once)
             if key in self._key_info:
