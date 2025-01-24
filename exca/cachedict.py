@@ -344,6 +344,8 @@ class CacheDictWriter:
             cd.cache_type = cls.__name__
             cd._set_cache_type(cd.cache_type)
         if cd._keep_in_ram and cd.folder is None:
+            # if folder is not None,
+            # ram_data will be reloaded from cache for consistency
             cd._ram_data[key] = value
         if cd.folder is not None:
             if self._info_filepath is None or self._info_handle is None:
