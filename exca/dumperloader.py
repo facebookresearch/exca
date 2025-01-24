@@ -302,7 +302,7 @@ else:
 
         @classmethod
         def static_load(cls, filepath: Path) -> torch.Tensor:
-            return torch.load(filepath, map_location="cpu")  # type: ignore
+            return torch.load(filepath, map_location="cpu", weights_only=True)  # type: ignore
 
         @classmethod
         def static_dump(cls, filepath: Path, value: torch.Tensor) -> None:
