@@ -184,7 +184,7 @@ class CacheDict(tp.Generic[X]):
                     if not k:  # metadata
                         meta = info
                         continue
-                    key = info.pop("_key")
+                    key = info.pop("#key")
                     dinfo = DumpInfo(
                         jsonl=fp, byte_range=(last - count, last), **meta, content=info
                     )
@@ -271,8 +271,9 @@ class CacheDict(tp.Generic[X]):
             with dinfo.jsonl.open("rb+") as f:
                 f.seek(brange[0])
                 f.write(b" " * (brange[1] - brange[0] - 1))
-        info = {x: y for x, y in dinfo.content.items() if not x.startswith("_")}
-        if len(info) == 1:  # only filename -> we can remove it as it is not shared
+        if (
+            len(dinfo.content) == 1
+        ):  # only filename -> we can remove it as it is not shared
             # moves then delete to avoid weird effects
             with utils.fast_unlink(Path(self.folder) / info["filename"]):
                 pass
@@ -371,7 +372,7 @@ class CacheDictWriter:
                     keyfile.write_text(key, encoding="utf8")
                     files.append(keyfile)
             # new write
-            info["_key"] = key
+            info["#key"] = key
             meta = {"cache_type": cd.cache_type}
             if not self._info_handle.tell():
                 self._info_handle.write(json.dumps(meta).encode("utf8") + b"\n")
