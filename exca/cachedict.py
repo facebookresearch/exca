@@ -364,7 +364,7 @@ class CacheDictWriter:
                 raise RuntimeError("Cannot write out of a writer context")
             if self._dumper is None:
                 self._dumper = DumperLoader.CLASSES[cd.cache_type](cd.folder)
-                self._exit_stack.enter_context(self._dumper.write_mode())
+                self._exit_stack.enter_context(self._dumper.open())
             info = self._dumper.dump(key, value)
             files = [cd.folder / info["filename"]]
             if cd._write_legacy_key_files:  # legacy

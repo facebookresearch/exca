@@ -44,7 +44,7 @@ class DumperLoader(tp.Generic[X]):
         self.folder = Path(folder)
 
     @contextlib.contextmanager
-    def write_mode(self) -> tp.Iterator[None]:
+    def open(self) -> tp.Iterator[None]:
         yield
 
     @classmethod
@@ -147,7 +147,9 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
         self._name: str | None = None
 
     @contextlib.contextmanager
-    def write_mode(self) -> tp.Iterator[None]:
+    def open(self) -> tp.Iterator[None]:
+        if self._name is not None:
+            raise RuntimeError("Cannot reopen DumperLoader context")
         self._name = f"{host_pid()}.data"
         with (self.folder / self._name).open("ab") as f:
             self._f = f

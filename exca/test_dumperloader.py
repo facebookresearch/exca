@@ -118,13 +118,13 @@ def test_memmap_array_file(tmp_path: Path) -> None:
     dl = dumperloader.MemmapArrayFile(folder=tmp_path)
     info = []
     x = np.random.rand(2, 3)
-    with dl.write_mode():
+    with dl.open():
         info.append(dl.dump("x", x))
         info.append(dl.dump("y", np.random.rand(3, 3)))
         info.append(dl.dump("z", np.random.rand(4, 3)))
     assert info[0]["filename"] == info[1]["filename"]
     x2 = dl.load(**info[0])
-    with dl.write_mode():
+    with dl.open():
         info.append(dl.dump("w", np.random.rand(5, 3)))  # write in between reads
     np.testing.assert_array_equal(x2, x)
     assert dl.load(**info[1]).shape == (3, 3)
