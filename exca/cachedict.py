@@ -196,7 +196,7 @@ class CacheDict(tp.Generic[X]):
     def __iter__(self) -> tp.Iterator[str]:
         return self.keys()
 
-    def items(self) -> tp.Generator[tp.Tuple[str, X], None, None]:
+    def items(self) -> tp.Iterator[tuple[str, X]]:
         for key in self:
             yield key, self[key]
 
@@ -305,7 +305,7 @@ class CacheDict(tp.Generic[X]):
 
 class CacheDictWriter:
 
-    def __init__(self, cache: CacheDict):
+    def __init__(self, cache: CacheDict) -> None:
         self.cache = cache
         # write mode
         self._estack: contextlib.ExitStack | None = None
