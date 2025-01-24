@@ -247,7 +247,7 @@ class CacheDict(tp.Generic[X]):
             yield writer
 
     def __setitem__(self, key: str, value: X) -> None:
-        raise RuntimeError("Use a writer context")
+        raise RuntimeError('Use cachedict.writer() as writer" context to set items')
 
     def __delitem__(self, key: str) -> None:
         # necessarily in file cache folder from now on
@@ -315,20 +315,21 @@ class CacheDictWriter:
 
     @contextlib.contextmanager
     def open(self) -> tp.Iterator[None]:
+        cd = self.cache
         if self._estack is not None:
-            raise RuntimeError("Cannot open write_mode within a write mode")
+            raise RuntimeError("Cannot re-open an already open writer")
         try:
             with contextlib.ExitStack() as estack:
                 self._estack = estack
-                if self.cache.folder is not None:
-                    self._info_filepath = (
-                        Path(self.cache.folder) / f"{host_pid()}-info.jsonl"
-                    )
-                    self._info_handle = estack.enter_context(
-                        self._info_filepath.open("ab")
-                    )
+                if cd.folder is not None:
+                    fp = Path(cd.folder) / f"{host_pid()}-info.jsonl"
+                    self._info_filepath = fp
+                    self._info_handle = estack.enter_context(fp.open("ab"))
                 yield
         finally:
+            fp = self._info_filepath
+            if cd.permissions is not None and fp is not None and fp.exists():
+                fp.chmod(cd.permissions)
             self._estack = None
             self._info_filepath = None
             self._info_handle = None
