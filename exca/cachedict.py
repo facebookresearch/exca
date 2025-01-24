@@ -159,6 +159,7 @@ class CacheDict(tp.Generic[X]):
         return iter(keys)
 
     def _load_info_files(self) -> None:
+        """Load current info files"""
         if self.folder is None:
             return
         folder = Path(self.folder)
@@ -275,7 +276,7 @@ class CacheDict(tp.Generic[X]):
             len(dinfo.content) == 1
         ):  # only filename -> we can remove it as it is not shared
             # moves then delete to avoid weird effects
-            with utils.fast_unlink(Path(self.folder) / info["filename"]):
+            with utils.fast_unlink(Path(self.folder) / dinfo.content["filename"]):
                 pass
 
     def __contains__(self, key: str) -> bool:
@@ -349,6 +350,7 @@ class CacheDictWriter:
         if self._estack is None:
             raise RuntimeError("Cannot write out of a writer context")
         cd = self.cache
+        # figure out cache type
         if cd.cache_type is None:
             cls = DumperLoader.default_class(type(value))
             cd.cache_type = cls.__name__
