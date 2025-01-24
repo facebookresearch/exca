@@ -147,31 +147,71 @@ else:
 
 try:
     import mne
+    import pybv  # XXX Might not be needed if only caching MEG
+    from mne.io.brainvision.brainvision import RawBrainVision
 except ImportError:
     pass
 else:
 
-    class MneRaw(DumperLoader[mne.io.Raw]):
-        SUFFIX = "-raw.fif"
+    Raw = mne.io.Raw | RawBrainVision
+    mne_ch_types = tp.Literal[
+        "eeg", "seeg", "ecog", "mag", "grad", "ref_meg"
+    ]  # XXX Actually a lot more of these, see mne/_fiff/meas_info.py
+
+    class MneRaw(DumperLoader[Raw]):
+        """Use .fif format for mag, grad and ref_meg data, otherwise use BrainVision format."""
+
+        SUFFIXES: list[str] = ["-raw.fif", "-raw.vhdr"]
+
+        @staticmethod
+        def _get_suffix(
+            ch_types: list[mne_ch_types],
+        ) -> tp.Literal["-raw.fif", "-raw.vhdr"]:
+            if any([ch_type in ["mag", "grad", "ref_meg"] for ch_type in ch_types]):
+                return "-raw.fif"
+            return "-raw.vhdr"
 
         @classmethod
-        def load(cls, basepath: Path) -> mne.io.Raw:
-            fp = cls.filepath(basepath)
-            try:
-                return mne.io.read_raw_fif(fp, verbose=False, allow_maxshield=False)
-            except ValueError:
-                raw = mne.io.read_raw_fif(fp, verbose=False, allow_maxshield=True)
-                msg = "MaxShield data detected, consider applying Maxwell filter and interpolating bad channels"
-                warnings.warn(msg)
-                return raw
+        def filepath(cls, basepath: str | Path, suffix: str) -> Path:
+            basepath = Path(basepath)
+            return basepath.parent / f"{basepath.name}{suffix}"
 
         @classmethod
-        def dump(cls, basepath: Path, value: mne.io.Raw) -> None:
-            fp = cls.filepath(basepath)
+        def _load_from_suffix(cls, basepath, suffix: str) -> Raw:
+            fp = cls.filepath(basepath, suffix)
+            if suffix == "-raw.fif":
+                try:
+                    return mne.io.read_raw_fif(fp, verbose=False, allow_maxshield=False)
+                except ValueError:
+                    raw = mne.io.read_raw_fif(fp, verbose=False, allow_maxshield=True)
+                    msg = "MaxShield data detected, consider applying Maxwell filter and interpolating bad channels"
+                    warnings.warn(msg)
+                    return raw
+            else:
+                return mne.io.read_raw_brainvision(fp, verbose=False)
+
+        @classmethod
+        def load(cls, basepath: Path) -> Raw:
+            for (
+                suffix
+            ) in cls.SUFFIXES:  # We don't know yet what file format was used; try both
+                try:
+                    return cls._load_from_suffix(basepath, suffix)
+                except FileNotFoundError:
+                    pass
+
+        @classmethod
+        def dump(cls, basepath: Path, value: Raw) -> None:
+            ch_types = value.info.get_channel_types()
+            suffix = cls._get_suffix(ch_types)
+            fp = cls.filepath(basepath, suffix=suffix)
             with utils.temporary_save_path(fp) as tmp:
-                value.save(tmp)
+                if suffix == "-raw.fif":
+                    value.save(tmp)
+                else:
+                    mne.export.export_raw(tmp, value, fmt="brainvision", verbose=False)
 
-    DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray)] = MneRaw
+    DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray, RawBrainVision)] = MneRaw
 
 
 try:
@@ -186,7 +226,7 @@ else:
         SUFFIX = ".nii.gz"
 
         @classmethod
-        def load(cls, basepath: Path) -> mne.io.Raw:
+        def load(cls, basepath: Path) -> Nifti:
             fp = cls.filepath(basepath)
             return nibabel.load(fp, mmap=True)
 

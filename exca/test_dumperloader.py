@@ -17,10 +17,12 @@ import torch
 from . import dumperloader
 
 
-def make_meg() -> mne.io.RawArray:
+def make_meeg(
+    ch_type: tp.Literal["eeg", "ecog", "seeg", "mag", "grad"]
+) -> mne.io.RawArray:
     n_channels, sfreq, duration = 4, 64, 60
     data = np.random.rand(n_channels, sfreq * duration)
-    info = mne.create_info(n_channels, sfreq=sfreq)
+    info = mne.create_info(n_channels, sfreq=sfreq, ch_types=[ch_type] * n_channels)
     return mne.io.RawArray(data, info=info)
 
 
@@ -32,7 +34,12 @@ def make_meg() -> mne.io.RawArray:
         nib.Nifti1Image(np.ones(5), np.eye(4)),
         nib.Nifti2Image(np.ones(5), np.eye(4)),
         pd.DataFrame([{"blu": 12}]),
-        make_meg(),
+        make_meeg("eeg"),
+        make_meeg("ecog"),
+        make_meeg("seeg"),
+        make_meeg("mag"),
+        make_meeg("grad"),
+        make_meeg("ref_meg"),
         "stuff",
     ),
 )
@@ -46,7 +53,11 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     reloaded = dl.load(tmp_path / "blublu.ext")
     ExpectedCls = type(data)
     if ExpectedCls is mne.io.RawArray:
-        ExpectedCls = mne.io.Raw
+        ch_type = data.get_channel_types()[0]
+        if ch_type in ["mag", "grad", "ref_meg"]:
+            ExpectedCls = mne.io.Raw
+        else:
+            ExpectedCls = mne.io.brainvision.brainvision.RawBrainVision
     assert isinstance(reloaded, ExpectedCls)
 
 

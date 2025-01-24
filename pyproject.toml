@@ -22,6 +22,7 @@ dependencies = [
         "pandas>=2.2.2",
         "torch>=2.0.1",
         "mne>=1.4.0",
+        "pybv>=0.7.6",
         "nibabel>=5.1.0",
         "pyarrow>=17.0.0",
         # Test
