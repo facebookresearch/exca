@@ -353,14 +353,12 @@ class CacheDictWriter:
                 self._estack.enter_context(self._dumper.write_mode())
             info = self._dumper.dump(key, value)
             files = [cd.folder / info["filename"]]
-            if cd._write_legacy_key_files and isinstance(
-                self._dumper, StaticDumperLoader
-            ):
-                keyfile = cd.folder / (
-                    info["filename"][: -len(self._dumper.SUFFIX)] + ".key"
-                )
-                keyfile.write_text(key, encoding="utf8")
-                files.append(keyfile)
+            if cd._write_legacy_key_files:  # legacy
+                if isinstance(self._dumper, StaticDumperLoader):
+                    name = info["filename"][: -len(self._dumper.SUFFIX)] + ".key"
+                    keyfile = cd.folder / name
+                    keyfile.write_text(key, encoding="utf8")
+                    files.append(keyfile)
             # new write
             info["_key"] = key
             meta = {"cache_type": cd.cache_type}
