@@ -19,7 +19,7 @@ from concurrent import futures
 from pathlib import Path
 
 from . import utils
-from .dumperloader import DumperLoader, StaticDumperLoader, _string_uid, host_pid
+from .dumperloader import DumperLoader, StaticDumperLoader, host_pid
 
 X = tp.TypeVar("X")
 Y = tp.TypeVar("Y")
@@ -128,11 +128,17 @@ class CacheDict(tp.Generic[X]):
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
+    # LEGACY
     def _read_key_files(self) -> None:
         """Legacy reader"""
         if self.folder is None:
             return
         folder = Path(self.folder)
+        if self.cache_type is None:
+            fp = folder / ".cache_type"
+            if not fp.exists():
+                return  # no key file if no .cache_type file
+            self.cache_type = fp.read_text()
         # read all existing key files as fast as possible (pathlib.glob is slow)
         find_cmd = 'find . -type f -name "*.key"'
         try:
@@ -143,11 +149,6 @@ class CacheDict(tp.Generic[X]):
         jobs = {}
         if not names:
             return
-        if self.cache_type is None:
-            fp = self.folder / ".cache_type"
-            if not fp.exists():
-                raise RuntimeError("Missing cache_type")
-            self.cache_type = fp.read_text()
         # parallelize content reading
         loader = DumperLoader.CLASSES[self.cache_type](self.folder)
         if not isinstance(loader, StaticDumperLoader):
@@ -296,29 +297,10 @@ class CacheDict(tp.Generic[X]):
             return True
         if key in self._key_info:
             return True
+        # not available, so checking files again
+        self._read_key_files()
         self._read_info_files()
-        if self.folder is not None:
-            # in folder (already read once)
-            if key in self._key_info:
-                return True
-            # maybe in folder (never read it)
-            uid = _string_uid(key)
-            fp = self.folder / f"{uid}.key"
-            if fp.exists() and self.cache_type is not None:
-                loader = DumperLoader.CLASSES[self.cache_type](self.folder)
-                if not isinstance(loader, StaticDumperLoader):
-                    msg = "Cannot regenerate info from non-static dumper-loader"
-                    raise RuntimeError(msg)
-                filename = _string_uid(key) + loader.SUFFIX
-                dinfo = DumpInfo(
-                    byte_range=(0, 0),
-                    jsonl=fp,
-                    cache_type=self.cache_type,
-                    content={"filename": filename},
-                )
-                self._key_info[key] = dinfo
-                return True
-        return False  # lazy check
+        return key in self._key_info
 
 
 class CacheDictWriter:
