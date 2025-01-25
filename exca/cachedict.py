@@ -102,7 +102,6 @@ class CacheDict(tp.Generic[X]):
         self._ram_data: dict[str, X] = {}
         self._key_info: dict[str, DumpInfo] = {}
         self.cache_type = cache_type
-        self._set_cache_type(cache_type)
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -130,6 +129,7 @@ class CacheDict(tp.Generic[X]):
         return iter(keys)
 
     def _read_key_files(self) -> None:
+        """Legacy reader"""
         if self.folder is None:
             return
         folder = Path(self.folder)
@@ -144,7 +144,10 @@ class CacheDict(tp.Generic[X]):
         if not names:
             return
         if self.cache_type is None:
-            raise RuntimeError("cache_type should have been detected")
+            fp = self.folder / ".cache_type"
+            if not fp.exists():
+                raise RuntimeError("Missing cache_type")
+            self.cache_type = fp.read_text()
         # parallelize content reading
         loader = DumperLoader.CLASSES[self.cache_type](self.folder)
         if not isinstance(loader, StaticDumperLoader):
@@ -233,21 +236,21 @@ class CacheDict(tp.Generic[X]):
             self._ram_data[key] = loaded
         return loaded  # type: ignore
 
-    def _set_cache_type(self, cache_type: str | None) -> None:
-        if self.folder is None:
-            return  # not needed
-        fp = self.folder / ".cache_type"
-        if cache_type is None:
-            if fp.exists():
-                cache_type = fp.read_text()
-        if cache_type is not None:
-            DumperLoader.check_valid_cache_type(cache_type)
-            self.cache_type = cache_type
-            if not fp.exists():
-                self.folder.mkdir(exist_ok=True)
-                fp.write_text(cache_type)
-                if self.permissions is not None:
-                    fp.chmod(self.permissions)
+    # def _set_cache_type(self, cache_type: str | None) -> None:
+    #     if self.folder is None:
+    #         return  # not needed
+    #     fp = self.folder / ".cache_type"
+    #     if cache_type is None:
+    #         if fp.exists():
+    #             cache_type = fp.read_text()
+    #     if cache_type is not None:
+    #         DumperLoader.check_valid_cache_type(cache_type)
+    #         self.cache_type = cache_type
+    #         if not fp.exists():
+    #             self.folder.mkdir(exist_ok=True)
+    #             fp.write_text(cache_type)
+    #             if self.permissions is not None:
+    #                 fp.chmod(self.permissions)
 
     @contextlib.contextmanager
     def writer(self) -> tp.Iterator["CacheDictWriter"]:
@@ -291,6 +294,8 @@ class CacheDict(tp.Generic[X]):
         # in-memory cache
         if key in self._ram_data:
             return True
+        if key in self._key_info:
+            return True
         self._read_info_files()
         if self.folder is not None:
             # in folder (already read once)
@@ -299,8 +304,6 @@ class CacheDict(tp.Generic[X]):
             # maybe in folder (never read it)
             uid = _string_uid(key)
             fp = self.folder / f"{uid}.key"
-            if self.cache_type is None:
-                self._set_cache_type(None)
             if fp.exists() and self.cache_type is not None:
                 loader = DumperLoader.CLASSES[self.cache_type](self.folder)
                 if not isinstance(loader, StaticDumperLoader):
@@ -362,7 +365,6 @@ class CacheDictWriter:
         if cd.cache_type is None:
             cls = DumperLoader.default_class(type(value))
             cd.cache_type = cls.__name__
-            cd._set_cache_type(cd.cache_type)
         if cd._keep_in_ram and cd.folder is None:
             # if folder is not None,
             # ram_data will be loaded from cache for consistency
