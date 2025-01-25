@@ -13,6 +13,7 @@ import pydantic
 import pytest
 
 from . import MapInfra, TaskInfra
+from .cachedict import CacheDict
 
 DATA = Path(__file__).parent / "data"
 
@@ -60,3 +61,9 @@ def test_backward_compatibility(tmp_path: Path, uid_first: bool, fp: Path | None
     # check outputs
     assert cfg.process_task() == 26
     assert tuple(cfg.process_map([3])) == (39,)
+
+
+def test_legacy_key_files() -> None:
+    cd = CacheDict(folder=DATA / "cachedict2501", cache_type="NumpyMemmapArray")
+    assert "x" in cd
+    assert set(cd.keys()) == {"x", "y"}
