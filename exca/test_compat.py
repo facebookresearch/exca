@@ -65,8 +65,7 @@ def test_backward_compatibility(tmp_path: Path, uid_first: bool, fp: Path | None
 
 
 def test_legacy_key_files() -> None:
-    cd: CacheDict[np.ndarray] = CacheDict(
-        folder=DATA / "cachedict2501", cache_type="NumpyMemmapArray"
-    )
+    folder = DATA / "cachedict2501"
+    cd: CacheDict[np.ndarray] = CacheDict(folder=folder, cache_type="NumpyMemmapArray")
     assert "x" in cd
     assert set(cd.keys()) == {"x", "y"}
