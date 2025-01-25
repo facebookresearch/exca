@@ -113,7 +113,7 @@ class SubmititMixin(pydantic.BaseModel):
         if self.tasks_per_node > 1 and not self.slurm_use_srun:
             if self.cluster in ["slurm", "auto"]:
                 msg = "Currently you must set slurm_use_srun=True if tasks_per_node > 1\n"
-                msg = "(this implies that your job won't be able to run spawn sub-jobs)"
+                msg += "(this implies that your job won't be able to run spawn sub-jobs)"
                 raise ValueError(msg)
         if self.conda_env is not None:
             acceptable = list(SUBMITIT_EXECUTORS)
