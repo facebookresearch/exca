@@ -167,7 +167,7 @@ class CacheDict(tp.Generic[X]):
             raise RuntimeError("Old key files with non legacy writer")
         with futures.ThreadPoolExecutor() as ex:
             jobs = {
-                name[:-4]: ex.submit((folder / name).read_text, "utf8")
+                name[:-4]: ex.submit((self.folder / name).read_text, "utf8")
                 for name in names
                 if name[:-4] not in self._key_info
             }
@@ -176,7 +176,7 @@ class CacheDict(tp.Generic[X]):
                 byte_range=(0, 0),
                 jsonl=folder / (name + ".key"),
                 cache_type=cache_type,  # type: ignore
-                content={"filename": name + loader.SUFFIX},
+                content={"filename": (self.folder / name).name + loader.SUFFIX},
             )
             for name, j in jobs.items()
         }
@@ -186,7 +186,6 @@ class CacheDict(tp.Generic[X]):
         """Load current info files"""
         if self.folder is None:
             return
-        print("Reading info file")
         folder = Path(self.folder)
         # read all existing jsonl files
         find_cmd = 'find . -type f -name "*-info.jsonl"'
@@ -194,7 +193,6 @@ class CacheDict(tp.Generic[X]):
         nothing_new = self._folder_modified == modified
         self._folder_modified = modified
         if nothing_new:
-            print("Nothing new")
             logger.debug("Nothing new to read from info files")
             return  # nothing new!
         try:
@@ -219,7 +217,6 @@ class CacheDict(tp.Generic[X]):
                     if not line:
                         continue
                     strline = line.decode("utf8")
-                    print("line", strline)
                     try:
                         info = json.loads(strline)
                     except json.JSONDecodeError:
@@ -232,21 +229,18 @@ class CacheDict(tp.Generic[X]):
                         continue
                     if not k:  # metadata
                         meta = info
-                        preread = self._info_files_preread.get(name, 0)
-                        if preread:
-                            logger.debug(
-                                "Forwarding to byte %s in info file %s", preread, name
-                            )
-                            print("forwarding", name, preread)
-                            f.seek(preread)
+                        last = self._info_files_preread.get(name, last)
+                        if last:
+                            msg = "Forwarding to byte %s in info file %s"
+                            logger.debug(msg, last, name)
+                            f.seek(last)
                         continue
                     key = info.pop("#key")
                     dinfo = DumpInfo(
                         jsonl=fp, byte_range=(last - count, last), **meta, content=info
                     )
                     self._key_info[key] = dinfo
-                self._info_files_preread[name] = f.tell()
-                print("read", name, f.tell())
+                self._info_files_preread[fp.name] = f.tell()
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -312,7 +306,6 @@ class CacheDict(tp.Generic[X]):
                 pass
 
     def __contains__(self, key: str) -> bool:
-        print("Checking", key)
         # in-memory cache
         if key in self._ram_data:
             return True
@@ -411,10 +404,9 @@ class CacheDictWriter:
                 content=info,
                 **meta,
             )
-            # cd._key_info[key] = dinfo
-            # cd._info_files_preread[self._info_filepath.name] = self._info_handle.tell()
+            cd._key_info[key] = dinfo
+            cd._info_files_preread[self._info_filepath.name] = self._info_handle.tell()
 
-            print("wrote", key, self._info_filepath.name, self._info_handle.tell())
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if cd.permissions is not None:
