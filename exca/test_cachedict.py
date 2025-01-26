@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import logging
 import typing as tp
 from concurrent import futures
 from pathlib import Path
@@ -15,6 +16,8 @@ import pytest
 import torch
 
 from . import cachedict as cd
+
+logging.getLogger("exca").setLevel(logging.DEBUG)
 
 
 @pytest.mark.parametrize("in_ram", (True, False))
@@ -37,6 +40,7 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
     with cache2.writer() as writer:
         writer["blabla"] = 2 * x
     assert "blabla" in cache
+    assert "blabla2" not in cache
     assert set(cache.keys()) == {"blublu", "blabla"}
     d = dict(cache2.items())
     np.testing.assert_almost_equal(d["blabla"], 2 * d["blublu"])
@@ -161,6 +165,8 @@ def test_info_jsonl_deletion(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
     )
     _ = cache.keys()  # listing
+    print("key info", cache._key_info)
+    print("    info", info)
     assert cache._key_info == info
     for sub in info.values():
         fp = sub.jsonl

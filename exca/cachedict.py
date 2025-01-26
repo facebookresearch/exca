@@ -88,9 +88,9 @@ class CacheDict(tp.Generic[X]):
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
+        self.cache_type = cache_type
         self._keep_in_ram = keep_in_ram
         self._write_legacy_key_files = _write_legacy_key_files
-        self._loaders: dict[tuple[str, str], DumperLoader] = {}  # loaders are persistent
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
         if self.folder is not None:
@@ -101,9 +101,12 @@ class CacheDict(tp.Generic[X]):
                 except Exception as e:
                     msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
                     logger.warning(msg)
+        # file cache access and RAM cache
         self._ram_data: dict[str, X] = {}
         self._key_info: dict[str, DumpInfo] = {}
-        self.cache_type = cache_type
+        # json info file reading
+        self._folder_modified = 0
+        self._info_files_preread = {}
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -120,6 +123,11 @@ class CacheDict(tp.Generic[X]):
                     shutil.rmtree(sub)
                 else:
                     sub.unlink()
+
+    def __bool__(self) -> bool:
+        if self._ram_data or self._key_info:
+            return True
+        return len(self) > 0  # triggers key check
 
     def __len__(self) -> int:
         return len(list(self.keys()))  # inefficient, but correct
@@ -178,9 +186,17 @@ class CacheDict(tp.Generic[X]):
         """Load current info files"""
         if self.folder is None:
             return
+        print("Reading info file")
         folder = Path(self.folder)
         # read all existing jsonl files
         find_cmd = 'find . -type f -name "*-info.jsonl"'
+        modified = folder.lstat().st_mtime
+        nothing_new = self._folder_modified == modified
+        self._folder_modified = modified
+        if nothing_new:
+            print("Nothing new")
+            logger.debug("Nothing new to read from info files")
+            return  # nothing new!
         try:
             out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
         except subprocess.CalledProcessError as e:
@@ -190,22 +206,47 @@ class CacheDict(tp.Generic[X]):
             fp = folder / name
             last = 0
             meta = {}
+            fail = ""
             with fp.open("rb") as f:
                 for k, line in enumerate(f):
+                    if fail:
+                        raise RuntimeError(
+                            f"Failed to read non-last line in {name}: {fail!r}"
+                        )
                     count = len(line)
                     last = last + count
                     line = line.strip()
                     if not line:
                         continue
-                    info = json.loads(line.decode("utf8"))
+                    strline = line.decode("utf8")
+                    print("line", strline)
+                    try:
+                        info = json.loads(strline)
+                    except json.JSONDecodeError:
+                        logger.debug(
+                            "Failed to read to line in %s in info file %s", name, strline
+                        )
+                        # last line could be currently being written?
+                        # (let's be robust to it)
+                        fail = line
+                        continue
                     if not k:  # metadata
                         meta = info
+                        preread = self._info_files_preread.get(name, 0)
+                        if preread:
+                            logger.debug(
+                                "Forwarding to byte %s in info file %s", preread, name
+                            )
+                            print("forwarding", name, preread)
+                            f.seek(preread)
                         continue
                     key = info.pop("#key")
                     dinfo = DumpInfo(
                         jsonl=fp, byte_range=(last - count, last), **meta, content=info
                     )
                     self._key_info[key] = dinfo
+                self._info_files_preread[name] = f.tell()
+                print("read", name, f.tell())
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -271,6 +312,7 @@ class CacheDict(tp.Generic[X]):
                 pass
 
     def __contains__(self, key: str) -> bool:
+        print("Checking", key)
         # in-memory cache
         if key in self._ram_data:
             return True
@@ -323,6 +365,8 @@ class CacheDictWriter:
             raise RuntimeError("Cannot write out of a writer context")
         cd = self.cache
         files: list[Path] = []
+        if not cd._folder_modified:
+            _ = cd.keys()  # at least 1 initial key check
         # figure out cache type
         if cd.cache_type is None:
             cls = DumperLoader.default_class(type(value))
@@ -332,6 +376,8 @@ class CacheDictWriter:
                 if not cache_file.exists():
                     cache_file.write_text(cd.cache_type)
                     files.append(cache_file)
+        if key in cd._ram_data or key in cd._key_info:
+            raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
         if cd._keep_in_ram and cd.folder is None:
             # if folder is not None,
             # ram_data will be loaded from cache for consistency
@@ -358,13 +404,17 @@ class CacheDictWriter:
             b = json.dumps(info).encode("utf8")
             current = self._info_handle.tell()
             self._info_handle.write(b + b"\n")
+            info.pop("#key")
             dinfo = DumpInfo(
                 jsonl=self._info_filepath,
                 byte_range=(current, current + len(b) + 1),
                 content=info,
                 **meta,
             )
-            info[key] = dinfo
+            # cd._key_info[key] = dinfo
+            # cd._info_files_preread[self._info_filepath.name] = self._info_handle.tell()
+
+            print("wrote", key, self._info_filepath.name, self._info_handle.tell())
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if cd.permissions is not None:
