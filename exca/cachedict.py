@@ -328,10 +328,11 @@ class CacheDictWriter:
         if cd.cache_type is None:
             cls = DumperLoader.default_class(type(value))
             cd.cache_type = cls.__name__
-            cache_file = cd.folder / ".cache_type"
-            if cd._write_legacy_key_files and not cache_file.exists():
-                cache_file.write_text(cd.cache_type)
-                files.append(cache_file)
+            if cd.folder is not None and cd._write_legacy_key_files:
+                cache_file = cd.folder / ".cache_type"
+                if not cache_file.exists():
+                    cache_file.write_text(cd.cache_type)
+                    files.append(cache_file)
         if cd._keep_in_ram and cd.folder is None:
             # if folder is not None,
             # ram_data will be loaded from cache for consistency
