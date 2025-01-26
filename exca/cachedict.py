@@ -105,7 +105,7 @@ class CacheDict(tp.Generic[X]):
         self._ram_data: dict[str, X] = {}
         self._key_info: dict[str, DumpInfo] = {}
         # json info file reading
-        self._folder_modified = 0
+        self._folder_modified = -1
         self._info_files_preread = {}
 
     def __repr__(self) -> str:
@@ -358,8 +358,8 @@ class CacheDictWriter:
             raise RuntimeError("Cannot write out of a writer context")
         cd = self.cache
         files: list[Path] = []
-        if not cd._folder_modified:
-            _ = cd.keys()  # at least 1 initial key check
+        if cd._folder_modified <= 0:
+            _ = cd.keys()  # force at least 1 initial key check
         # figure out cache type
         if cd.cache_type is None:
             cls = DumperLoader.default_class(type(value))
