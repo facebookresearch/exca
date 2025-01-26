@@ -62,18 +62,22 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
         pd.DataFrame([{"blu": 12}]),
     ),
 )
-def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
-    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+@pytest.mark.parametrize("write_key_files", (True, False))
+def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -> None:
+    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
+        folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=write_key_files
+    )
     with cache.writer() as writer:
         writer["blublu.tmp"] = data
     assert cache.cache_type not in [None, "Pickle"]
     names = [fp.name for fp in tmp_path.iterdir() if not fp.name.startswith(".")]
-    assert len(names) == 3
-    k_name = [n for n in names if n.endswith(".key")][0]
+    assert len(names) == 2 + write_key_files
     j_name = [n for n in names if n.endswith("-info.jsonl")][0]
     v_name = [n for n in names if not n.endswith((".key", "-info.jsonl"))][0]
-    num = len(k_name) - 4
-    assert k_name[:num] == k_name[:num], f"Non-matching names {k_name} and {v_name}"
+    if write_key_files:
+        k_name = [n for n in names if n.endswith(".key")][0]
+        num = len(k_name) - 4
+        assert k_name[:num] == k_name[:num], f"Non-matching names {k_name} and {v_name}"
     assert isinstance(cache["blublu.tmp"], type(data))
     assert (tmp_path / j_name).read_text().startswith("{")
 

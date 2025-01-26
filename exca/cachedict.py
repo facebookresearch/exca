@@ -84,7 +84,7 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram: bool = False,
         cache_type: None | str = None,
         permissions: int | None = 0o777,
-        _write_legacy_key_files: bool = True,
+        _write_legacy_key_files: bool = False,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
@@ -93,7 +93,6 @@ class CacheDict(tp.Generic[X]):
         self._loaders: dict[tuple[str, str], DumperLoader] = {}  # loaders are persistent
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
-
         if self.folder is not None:
             self.folder.mkdir(exist_ok=True)
             if self.permissions is not None:
