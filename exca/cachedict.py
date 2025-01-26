@@ -47,9 +47,10 @@ class CacheDict(tp.Generic[X]):
     keep_in_ram: bool
         if True, adds a cache in RAM of the data once loaded (similar to LRU cache)
     cache_type: str or None
-        type of cache dumper/loader to use (see dumperloader.py file to see existing
+        type of cache dumper to use (see dumperloader.py file to see existing
         options, this include "NumpyArray", "NumpyMemmapArray", "TorchTensor", "PandasDataframe".
         If `None`, the type will be deduced automatically and by default use a standard pickle dump.
+        Loading is handled using the cache_type specified in info files.
     permissions: optional int
         permissions for generated files
         use os.chmod / path.chmod compatible numbers, or None to deactivate
@@ -136,11 +137,13 @@ class CacheDict(tp.Generic[X]):
         if self.folder is None:
             return
         folder = Path(self.folder)
-        if self.cache_type is None:
+        cache_type = self.cache_type
+
+        if cache_type is None:
             fp = folder / ".cache_type"
             if not fp.exists():
                 return  # no key file if no .cache_type file
-            self.cache_type = fp.read_text()
+            cache_type = fp.read_text()
         # read all existing key files as fast as possible (pathlib.glob is slow)
         find_cmd = 'find . -type f -name "*.key"'
         try:
@@ -152,7 +155,7 @@ class CacheDict(tp.Generic[X]):
         if not names:
             return
         # parallelize content reading
-        loader = DumperLoader.CLASSES[self.cache_type](self.folder)
+        loader = DumperLoader.CLASSES[cache_type](self.folder)
         if not isinstance(loader, StaticDumperLoader):
             raise RuntimeError("Old key files with non legacy writer")
         with futures.ThreadPoolExecutor() as ex:
@@ -165,7 +168,7 @@ class CacheDict(tp.Generic[X]):
             j.result(): DumpInfo(
                 byte_range=(0, 0),
                 jsonl=folder / (name + ".key"),
-                cache_type=self.cache_type,  # type: ignore
+                cache_type=cache_type,  # type: ignore
                 content={"filename": name + loader.SUFFIX},
             )
             for name, j in jobs.items()
@@ -320,10 +323,15 @@ class CacheDictWriter:
         if self._exit_stack is None:
             raise RuntimeError("Cannot write out of a writer context")
         cd = self.cache
+        files: list[Path] = []
         # figure out cache type
         if cd.cache_type is None:
             cls = DumperLoader.default_class(type(value))
             cd.cache_type = cls.__name__
+            cache_file = cd.folder / ".cache_type"
+            if cd._write_legacy_key_files and not cache_file.exists():
+                cache_file.write_text(cd.cache_type)
+                files.append(cache_file)
         if cd._keep_in_ram and cd.folder is None:
             # if folder is not None,
             # ram_data will be loaded from cache for consistency
@@ -335,7 +343,7 @@ class CacheDictWriter:
                 self._dumper = DumperLoader.CLASSES[cd.cache_type](cd.folder)
                 self._exit_stack.enter_context(self._dumper.open())
             info = self._dumper.dump(key, value)
-            files = [cd.folder / info["filename"]]
+            files.append(cd.folder / info["filename"])
             if cd._write_legacy_key_files:  # legacy
                 if isinstance(self._dumper, StaticDumperLoader):
                     name = info["filename"][: -len(self._dumper.SUFFIX)] + ".key"
