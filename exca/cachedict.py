@@ -106,8 +106,8 @@ class CacheDict(tp.Generic[X]):
         self._ram_data: dict[str, X] = {}
         self._key_info: dict[str, DumpInfo] = {}
         # json info file reading
-        self._folder_modified = -1
-        self._info_files_preread = {}
+        self._folder_modified = -1.0
+        self._info_files_last: dict[str, int] = {}
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -230,11 +230,11 @@ class CacheDict(tp.Generic[X]):
                         )
                         # last line could be currently being written?
                         # (let's be robust to it)
-                        fail = line
+                        fail = strline
                         continue
                     if not k:  # metadata
                         meta = info
-                        last = self._info_files_preread.get(name, last)
+                        last = self._info_files_last.get(name, last)
                         if last:
                             msg = "Forwarding to byte %s in info file %s"
                             logger.debug(msg, last, name)
@@ -245,7 +245,7 @@ class CacheDict(tp.Generic[X]):
                         jsonl=fp, byte_range=(last - count, last), **meta, content=info
                     )
                     self._key_info[key] = dinfo
-                self._info_files_preread[fp.name] = f.tell()
+                self._info_files_last[fp.name] = f.tell()
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -411,7 +411,7 @@ class CacheDictWriter:
                 **meta,
             )
             cd._key_info[key] = dinfo
-            cd._info_files_preread[self._info_filepath.name] = self._info_handle.tell()
+            cd._info_files_last[self._info_filepath.name] = self._info_handle.tell()
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if cd.permissions is not None:
