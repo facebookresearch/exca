@@ -93,15 +93,28 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
         ([12, 12], "Pickle"),
         (pd.DataFrame([{"stuff": 12}]), "PandasDataFrame"),
         (np.array([12, 12]), "NumpyMemmapArray"),
+        (np.array([12, 12]), "MemmapArrayFile"),
     ],
 )
-def test_specialized_dump(tmp_path: Path, data: tp.Any, cache_type: str) -> None:
-    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
-        folder=tmp_path, keep_in_ram=False, cache_type=cache_type
+@pytest.mark.parametrize("legacy_write", (True, False))
+def test_specialized_dump(
+    tmp_path: Path, data: tp.Any, cache_type: str, legacy_write: bool
+) -> None:
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(
+        folder=tmp_path,
+        keep_in_ram=False,
+        cache_type=cache_type,
+        _write_legacy_key_files=legacy_write,
     )
     with cache.writer() as writer:
         writer["x"] = data
     assert isinstance(cache["x"], type(data))
+    # check permissions
+    octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
+    assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
+    for fp in tmp_path.iterdir():
+        octal_permissions = oct(fp.stat().st_mode)[-3:]
+        assert octal_permissions == "777", f"Wrong permissions for {fp}"
 
 
 def _setval(cache: cd.CacheDict[tp.Any], key: str, val: tp.Any) -> None:
