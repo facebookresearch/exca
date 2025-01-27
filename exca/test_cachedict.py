@@ -83,7 +83,7 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
         num = len(k_name) - 4
         assert k_name[:num] == k_name[:num], f"Non-matching names {k_name} and {v_name}"
     assert isinstance(cache["blublu.tmp"], type(data))
-    assert (tmp_path / j_name).read_text().startswith("{")
+    assert (tmp_path / j_name).read_text().startswith("metadata={")
 
 
 @pytest.mark.parametrize(

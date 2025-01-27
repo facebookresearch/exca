@@ -25,6 +25,7 @@ X = tp.TypeVar("X")
 Y = tp.TypeVar("Y")
 
 logger = logging.getLogger(__name__)
+METADATA_TAG = "metadata="
 
 
 @dataclasses.dataclass
@@ -217,6 +218,10 @@ class CacheDict(tp.Generic[X]):
                     if not line:
                         continue
                     strline = line.decode("utf8")
+                    if not k:
+                        if not strline.startswith(METADATA_TAG):
+                            raise RuntimeError("metadata missing in info file")
+                        strline = strline[len(METADATA_TAG) :]
                     try:
                         info = json.loads(strline)
                     except json.JSONDecodeError:
@@ -393,7 +398,8 @@ class CacheDictWriter:
             info["#key"] = key
             meta = {"cache_type": cd.cache_type}
             if not self._info_handle.tell():
-                self._info_handle.write(json.dumps(meta).encode("utf8") + b"\n")
+                meta_str = METADATA_TAG + json.dumps(meta) + "\n"
+                self._info_handle.write(meta_str.encode("utf8"))
             b = json.dumps(info).encode("utf8")
             current = self._info_handle.tell()
             self._info_handle.write(b + b"\n")
@@ -406,7 +412,6 @@ class CacheDictWriter:
             )
             cd._key_info[key] = dinfo
             cd._info_files_preread[self._info_filepath.name] = self._info_handle.tell()
-
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if cd.permissions is not None:
