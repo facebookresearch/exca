@@ -355,6 +355,8 @@ class CacheDictWriter:
             self._dumper = None
 
     def __setitem__(self, key: str, value: X) -> None:
+        if not isinstance(key, str):
+            raise TypeError(f"Non-string keys are not allowed (got {key!r})")
         if self._exit_stack is None:
             raise RuntimeError("Cannot write out of a writer context")
         cd = self.cache
