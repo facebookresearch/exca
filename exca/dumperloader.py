@@ -172,44 +172,46 @@ else:
                 value.save(tmp)
 
     DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray)] = MneRawFif
+    DumperLoader.CLASSES["MneRaw"] = MneRawFif  # for backwards compatibility
 
-    try:
-        # pylint: disable=unused-import
-        import pybv  # noqa
-        from mne.io.brainvision.brainvision import RawBrainVision
-    except ImportError:
-        pass
-    else:
+try:
+    # pylint: disable=unused-import
+    import mne
+    import pybv  # noqa
+    from mne.io.brainvision.brainvision import RawBrainVision
+except ImportError:
+    pass
+else:
 
-        Raw = mne.io.Raw | RawBrainVision
+    Raw = mne.io.Raw | RawBrainVision
 
-        class MneRawBrainVision(DumperLoader[Raw]):
-            SUFFIX = "-raw.vhdr"
+    class MneRawBrainVision(DumperLoader[Raw]):
+        SUFFIX = "-raw.vhdr"
 
-            @classmethod
-            def filepath(cls, basepath: str | Path) -> Path:
-                basepath = Path(basepath)
-                # Group BrainVision files into a separate folder
-                # XXX Permissions likely need to be set for the new folder as well
-                return basepath.parent / basepath.name / f"{basepath.name}{cls.SUFFIX}"
+        @classmethod
+        def filepath(cls, basepath: str | Path) -> Path:
+            basepath = Path(basepath)
+            # Group BrainVision files into a separate folder
+            # XXX Permissions likely need to be set for the new folder as well
+            return basepath.parent / basepath.name / f"{basepath.name}{cls.SUFFIX}"
 
-            @classmethod
-            def load(cls, basepath: Path) -> Raw:
-                fp = cls.filepath(basepath)
-                if fp.exists():
-                    return mne.io.read_raw_brainvision(fp, verbose=False)
-                # For backwards compatibility, try loading a .fif
-                if MneRawFif.filepath(basepath).exists():
-                    return MneRawFif.load(basepath)
-                raise FileNotFoundError(f"No Raw file found for {basepath}.")
+        @classmethod
+        def load(cls, basepath: Path) -> Raw:
+            fp = cls.filepath(basepath)
+            if fp.exists():
+                return mne.io.read_raw_brainvision(fp, verbose=False)
+            # For backwards compatibility, try loading a .fif
+            if MneRawFif.filepath(basepath).exists():
+                return MneRawFif.load(basepath)
+            raise FileNotFoundError(f"No Raw file found for {basepath}.")
 
-            @classmethod
-            def dump(cls, basepath: Path, value: Raw) -> None:
-                fp = cls.filepath(basepath)
-                with utils.temporary_save_path(fp) as tmp:
-                    mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
+        @classmethod
+        def dump(cls, basepath: Path, value: Raw) -> None:
+            fp = cls.filepath(basepath)
+            with utils.temporary_save_path(fp) as tmp:
+                mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
 
-        DumperLoader.DEFAULTS[RawBrainVision] = MneRawBrainVision
+    DumperLoader.DEFAULTS[RawBrainVision] = MneRawBrainVision
 
 
 try:

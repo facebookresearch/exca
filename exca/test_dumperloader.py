@@ -32,6 +32,7 @@ def make_mne_raw(ch_type: str) -> mne.io.RawArray:
         nib.Nifti1Image(np.ones(5), np.eye(4)),
         nib.Nifti2Image(np.ones(5), np.eye(4)),
         pd.DataFrame([{"blu": 12}]),
+        make_mne_raw("eeg"),
         "stuff",
     ),
 )
@@ -44,6 +45,8 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     dl.dump(tmp_path / "blublu.ext", data)
     reloaded = dl.load(tmp_path / "blublu.ext")
     ExpectedCls = type(data)
+    if ExpectedCls is mne.io.RawArray:
+        ExpectedCls = mne.io.Raw
     assert isinstance(reloaded, ExpectedCls)
 
 
@@ -74,6 +77,9 @@ def test_mne_raw(tmp_path: Path, ch_type: str, name: str) -> None:
         else mne.io.brainvision.brainvision.RawBrainVision
     )
     assert isinstance(reloaded, reload_type)
+    raw_data = raw.get_data()
+    reloaded_data = reloaded.get_data()
+    assert np.allclose(raw_data, reloaded_data, atol=1e-8)
 
 
 def test_mne_raw_brainvision_backwards_comp(tmp_path: Path) -> None:
