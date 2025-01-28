@@ -257,15 +257,14 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             name of the cache class to use (inferred by default)
             this can for instance be used to enforce eg a memmap instead of loading arrays
             The available options include:
-            - NumpyArray:  stores numpy arrays as npy files (default for np.ndarray)
-            - NumpyMemmapArray: similar to NumpyArray but reloads arrays as memmaps
-            - MemmapArrayFile: stores multiple np.ndarray into a unique memmap file
+            - :code:`NumpyArray`:  stores numpy arrays as npy files (default for np.ndarray)
+            - :code:`NumpyMemmapArray`: similar to NumpyArray but reloads arrays as memmaps
+            - :code:`MemmapArrayFile`: stores multiple np.ndarray into a unique memmap file
               (strongly adviced in case of many arrays)
-            - PandasDataFrame: stores pandas dataframes as csv
-            - PandasDataFrame: stores pandas dataframes as csv (default for dataframes)
-            - ParquetPandasDataFrame: stores pandas dataframes as parquet files
-            - TorchTensor: stores torch.Tensor as .pt file (default for tensors)
-            - Pickle: stores object as pickle file (fallback default)
+            - :code:`PandasDataFrame`: stores pandas dataframes as csv (default for dataframes)
+            - :code:`ParquetPandasDataFrame`: stores pandas dataframes as parquet files
+            - :code:`TorchTensor`: stores torch.Tensor as .pt file (default for tensors)
+            - :code:`Pickle`: stores object as pickle file (fallback default)
 
         Usage
         -----
