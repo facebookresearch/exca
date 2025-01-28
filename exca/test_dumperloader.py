@@ -17,9 +17,7 @@ import torch
 from . import dumperloader
 
 
-def make_meeg(
-    ch_type: tp.Literal["eeg", "ecog", "seeg", "mag", "grad", "ref_meg"]
-) -> mne.io.RawArray:
+def make_mne_raw(ch_type: str) -> mne.io.RawArray:
     n_channels, sfreq, duration = 4, 64, 60
     data = np.random.rand(n_channels, sfreq * duration)
     info = mne.create_info(n_channels, sfreq=sfreq, ch_types=[ch_type] * n_channels)
@@ -34,12 +32,6 @@ def make_meeg(
         nib.Nifti1Image(np.ones(5), np.eye(4)),
         nib.Nifti2Image(np.ones(5), np.eye(4)),
         pd.DataFrame([{"blu": 12}]),
-        make_meeg("eeg"),
-        make_meeg("ecog"),
-        make_meeg("seeg"),
-        make_meeg("mag"),
-        make_meeg("grad"),
-        make_meeg("ref_meg"),
         "stuff",
     ),
 )
@@ -52,12 +44,6 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     dl.dump(tmp_path / "blublu.ext", data)
     reloaded = dl.load(tmp_path / "blublu.ext")
     ExpectedCls = type(data)
-    if ExpectedCls is mne.io.RawArray:
-        ch_type = data.get_channel_types()[0]
-        if ch_type in ["mag", "grad", "ref_meg"]:
-            ExpectedCls = mne.io.Raw
-        else:
-            ExpectedCls = mne.io.brainvision.brainvision.RawBrainVision
     assert isinstance(reloaded, ExpectedCls)
 
 
@@ -73,6 +59,30 @@ def test_text_df(tmp_path: Path, name: str) -> None:
     assert pd.isna(reloaded.loc[1, "text"])  # type: ignore
     assert pd.isna(reloaded.loc[0, "number"])  # type: ignore
     assert not set(reloaded.columns).symmetric_difference(df.columns)
+
+
+@pytest.mark.parametrize("ch_type", ("eeg", "ecog", "seeg", "mag", "grad", "ref_meg"))
+@pytest.mark.parametrize("name", ("MneRawFif", "MneRawBrainVision"))
+def test_mne_raw(tmp_path: Path, ch_type: str, name: str) -> None:
+    raw = make_mne_raw(ch_type)
+    dl = dumperloader.DumperLoader.CLASSES[name]()
+    dl.dump(tmp_path / "blublu", raw)
+    reloaded = dl.load(tmp_path / "blublu")
+    reload_type = (
+        mne.io.Raw
+        if name == "MneRawFif"
+        else mne.io.brainvision.brainvision.RawBrainVision
+    )
+    assert isinstance(reloaded, reload_type)
+
+
+def test_mne_raw_brainvision_backwards_comp(tmp_path: Path) -> None:
+    raw = make_mne_raw("eeg")
+    dump_dl = dumperloader.MneRawFif()
+    dump_dl.dump(tmp_path / "blublu", raw)
+    load_dl = dumperloader.MneRawBrainVision()
+    reloaded = load_dl.load(tmp_path / "blublu")
+    assert isinstance(reloaded, mne.io.Raw)
 
 
 @pytest.mark.parametrize(

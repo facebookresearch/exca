@@ -147,59 +147,69 @@ else:
 
 try:
     import mne
-    from mne.io.brainvision.brainvision import RawBrainVision
 except ImportError:
     pass
 else:
 
-    Raw = mne.io.Raw | RawBrainVision
-    meg_channel_types = ("mag", "grad", "ref_meg")
-
-    class MneRaw(DumperLoader[Raw]):
-        """Use .fif format for MEG channel types, otherwise use BrainVision format."""
-
-        SUFFIXES: list[str] = ["-raw.fif", "-raw.vhdr"]
-
-        @staticmethod
-        def _get_suffix(ch_types: list[str]) -> tp.Literal["-raw.fif", "-raw.vhdr"]:
-            if any(ch_type in meg_channel_types for ch_type in ch_types):
-                return "-raw.fif"
-            return "-raw.vhdr"
+    class MneRawFif(DumperLoader[mne.io.Raw]):
+        SUFFIX = "-raw.fif"
 
         @classmethod
-        def filepath(cls, basepath: str | Path, suffix: str) -> Path:  # type: ignore[override]
-            basepath = Path(basepath)
-            if suffix == "-raw.vhdr":  # Group BrainVision files into a separate folder
-                return basepath.parent / basepath.stem / f"{basepath.name}{suffix}"
-            else:
-                return basepath.parent / f"{basepath.name}{suffix}"
+        def load(cls, basepath: Path) -> mne.io.Raw:
+            fp = cls.filepath(basepath)
+            try:
+                return mne.io.read_raw_fif(fp, verbose=False, allow_maxshield=False)
+            except ValueError:
+                raw = mne.io.read_raw_fif(fp, verbose=False, allow_maxshield=True)
+                msg = "MaxShield data detected, consider applying Maxwell filter and interpolating bad channels"
+                warnings.warn(msg)
+                return raw
 
         @classmethod
-        def load(cls, basepath: Path) -> Raw:
-            if (brainvision_fp := cls.filepath(basepath, "-raw.vhdr")).exists():
-                return mne.io.read_raw_brainvision(brainvision_fp, verbose=False)
-            else:
-                fp = cls.filepath(basepath, "-raw.fif")
-                try:
-                    return mne.io.read_raw_fif(fp, verbose=False, allow_maxshield=False)
-                except ValueError:
-                    raw = mne.io.read_raw_fif(fp, verbose=False, allow_maxshield=True)
-                    msg = "MaxShield data detected, consider applying Maxwell filter and interpolating bad channels"
-                    warnings.warn(msg)
-                    return raw
-
-        @classmethod
-        def dump(cls, basepath: Path, value: Raw) -> None:
-            ch_types = value.info.get_channel_types()
-            suffix = cls._get_suffix(ch_types)
-            fp = cls.filepath(basepath, suffix=suffix)
+        def dump(cls, basepath: Path, value: mne.io.Raw) -> None:
+            fp = cls.filepath(basepath)
             with utils.temporary_save_path(fp) as tmp:
-                if suffix == "-raw.vhdr":
-                    mne.export.export_raw(tmp, value, fmt="brainvision", verbose=False)
-                else:
-                    value.save(tmp)
+                value.save(tmp)
 
-    DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray, RawBrainVision)] = MneRaw
+    DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray)] = MneRawFif
+
+    try:
+        # pylint: disable=unused-import
+        import pybv  # noqa
+        from mne.io.brainvision.brainvision import RawBrainVision
+    except ImportError:
+        pass
+    else:
+
+        Raw = mne.io.Raw | RawBrainVision
+
+        class MneRawBrainVision(DumperLoader[Raw]):
+            SUFFIX = "-raw.vhdr"
+
+            @classmethod
+            def filepath(cls, basepath: str | Path) -> Path:
+                basepath = Path(basepath)
+                # Group BrainVision files into a separate folder
+                # XXX Permissions likely need to be set for the new folder as well
+                return basepath.parent / basepath.name / f"{basepath.name}{cls.SUFFIX}"
+
+            @classmethod
+            def load(cls, basepath: Path) -> Raw:
+                fp = cls.filepath(basepath)
+                if fp.exists():
+                    return mne.io.read_raw_brainvision(fp, verbose=False)
+                # For backwards compatibility, try loading a .fif
+                if MneRawFif.filepath(basepath).exists():
+                    return MneRawFif.load(basepath)
+                raise FileNotFoundError(f"No Raw file found for {basepath}.")
+
+            @classmethod
+            def dump(cls, basepath: Path, value: Raw) -> None:
+                fp = cls.filepath(basepath)
+                with utils.temporary_save_path(fp) as tmp:
+                    mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
+
+        DumperLoader.DEFAULTS[RawBrainVision] = MneRawBrainVision
 
 
 try:
