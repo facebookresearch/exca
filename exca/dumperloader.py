@@ -147,7 +147,6 @@ else:
 
 try:
     import mne
-    import pybv  # XXX Might not be needed if only caching MEG
     from mne.io.brainvision.brainvision import RawBrainVision
 except ImportError:
     pass
@@ -167,19 +166,21 @@ else:
         def _get_suffix(
             ch_types: list[mne_ch_types],
         ) -> tp.Literal["-raw.fif", "-raw.vhdr"]:
-            if any([ch_type in ["mag", "grad", "ref_meg"] for ch_type in ch_types]):
+            if any(ch_type in ["mag", "grad", "ref_meg"] for ch_type in ch_types):
                 return "-raw.fif"
             return "-raw.vhdr"
 
         @classmethod
-        def filepath(cls, basepath: str | Path, suffix: str) -> Path:
+        def filepath(cls, basepath: str | Path, suffix: str) -> Path:  # type: ignore[override]
             basepath = Path(basepath)
             return basepath.parent / f"{basepath.name}{suffix}"
 
         @classmethod
-        def _load_from_suffix(cls, basepath, suffix: str) -> Raw:
-            fp = cls.filepath(basepath, suffix)
-            if suffix == "-raw.fif":
+        def load(cls, basepath: Path) -> Raw:
+            if (brainvision_fp := cls.filepath(basepath, "-raw.vhdr")).exists():
+                return mne.io.read_raw_brainvision(brainvision_fp, verbose=False)
+            else:
+                fp = cls.filepath(basepath, "-raw.fif")
                 try:
                     return mne.io.read_raw_fif(fp, verbose=False, allow_maxshield=False)
                 except ValueError:
@@ -187,18 +188,6 @@ else:
                     msg = "MaxShield data detected, consider applying Maxwell filter and interpolating bad channels"
                     warnings.warn(msg)
                     return raw
-            else:
-                return mne.io.read_raw_brainvision(fp, verbose=False)
-
-        @classmethod
-        def load(cls, basepath: Path) -> Raw:
-            for (
-                suffix
-            ) in cls.SUFFIXES:  # We don't know yet what file format was used; try both
-                try:
-                    return cls._load_from_suffix(basepath, suffix)
-                except FileNotFoundError:
-                    pass
 
         @classmethod
         def dump(cls, basepath: Path, value: Raw) -> None:
