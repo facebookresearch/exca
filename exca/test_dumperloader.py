@@ -17,10 +17,10 @@ import torch
 from . import dumperloader
 
 
-def make_meg() -> mne.io.RawArray:
+def make_mne_raw(ch_type: str) -> mne.io.RawArray:
     n_channels, sfreq, duration = 4, 64, 60
     data = np.random.rand(n_channels, sfreq * duration)
-    info = mne.create_info(n_channels, sfreq=sfreq)
+    info = mne.create_info(n_channels, sfreq=sfreq, ch_types=[ch_type] * n_channels)
     return mne.io.RawArray(data, info=info)
 
 
@@ -32,7 +32,7 @@ def make_meg() -> mne.io.RawArray:
         nib.Nifti1Image(np.ones(5), np.eye(4)),
         nib.Nifti2Image(np.ones(5), np.eye(4)),
         pd.DataFrame([{"blu": 12}]),
-        make_meg(),
+        make_mne_raw("eeg"),
         "stuff",
     ),
 )
@@ -62,6 +62,33 @@ def test_text_df(tmp_path: Path, name: str) -> None:
     assert pd.isna(reloaded.loc[1, "text"])  # type: ignore
     assert pd.isna(reloaded.loc[0, "number"])  # type: ignore
     assert not set(reloaded.columns).symmetric_difference(df.columns)
+
+
+@pytest.mark.parametrize("ch_type", ("eeg", "ecog", "seeg", "mag", "grad", "ref_meg"))
+@pytest.mark.parametrize("name", ("MneRawFif", "MneRawBrainVision"))
+def test_mne_raw(tmp_path: Path, ch_type: str, name: str) -> None:
+    raw = make_mne_raw(ch_type)
+    dl = dumperloader.DumperLoader.CLASSES[name]()
+    dl.dump(tmp_path / "blublu", raw)
+    reloaded = dl.load(tmp_path / "blublu")
+    reload_type = (
+        mne.io.Raw
+        if name == "MneRawFif"
+        else mne.io.brainvision.brainvision.RawBrainVision
+    )
+    assert isinstance(reloaded, reload_type)
+    raw_data = raw.get_data()
+    reloaded_data = reloaded.get_data()
+    assert np.allclose(raw_data, reloaded_data, atol=1e-8)
+
+
+def test_mne_raw_brainvision_backwards_comp(tmp_path: Path) -> None:
+    raw = make_mne_raw("eeg")
+    dump_dl = dumperloader.MneRawFif()
+    dump_dl.dump(tmp_path / "blublu", raw)
+    load_dl = dumperloader.MneRawBrainVision()
+    reloaded = load_dl.load(tmp_path / "blublu")
+    assert isinstance(reloaded, mne.io.Raw)
 
 
 @pytest.mark.parametrize(
