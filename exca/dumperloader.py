@@ -153,20 +153,16 @@ except ImportError:
 else:
 
     Raw = mne.io.Raw | RawBrainVision
-    mne_ch_types = tp.Literal[
-        "eeg", "seeg", "ecog", "mag", "grad", "ref_meg"
-    ]  # XXX Actually a lot more of these, see mne/_fiff/meas_info.py
+    meg_channel_types = ("mag", "grad", "ref_meg")
 
     class MneRaw(DumperLoader[Raw]):
-        """Use .fif format for MEG channel types (mag, grad and ref_meg), otherwise use BrainVision format."""
+        """Use .fif format for MEG channel types, otherwise use BrainVision format."""
 
         SUFFIXES: list[str] = ["-raw.fif", "-raw.vhdr"]
 
         @staticmethod
-        def _get_suffix(
-            ch_types: list[mne_ch_types],
-        ) -> tp.Literal["-raw.fif", "-raw.vhdr"]:
-            if any(ch_type in ["mag", "grad", "ref_meg"] for ch_type in ch_types):
+        def _get_suffix(ch_types: list[str]) -> tp.Literal["-raw.fif", "-raw.vhdr"]:
+            if any(ch_type in meg_channel_types for ch_type in ch_types):
                 return "-raw.fif"
             return "-raw.vhdr"
 
@@ -212,7 +208,9 @@ except ImportError:
     pass
 else:
 
-    Nifti = nibabel.Nifti1Image | nibabel.Nifti2Image | nibabel.filebasedimages.FileBasedImage
+    Nifti = (
+        nibabel.Nifti1Image | nibabel.Nifti2Image | nibabel.filebasedimages.FileBasedImage
+    )
 
     class NibabelNifti(DumperLoader[Nifti]):
         SUFFIX = ".nii.gz"
