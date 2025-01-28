@@ -299,11 +299,11 @@ class CacheDict(tp.Generic[X]):
             with dinfo.jsonl.open("rb+") as f:
                 f.seek(brange[0])
                 f.write(b" " * (brange[1] - brange[0] - 1))
-        if (
-            len(dinfo.content) == 1
-        ):  # only filename -> we can remove it as it is not shared
+        if len(dinfo.content) == 1:
+            # only filename -> we can remove it as it is not shared
             # moves then delete to avoid weird effects
-            with utils.fast_unlink(Path(self.folder) / dinfo.content["filename"]):
+            fp = Path(self.folder) / dinfo.content["filename"]
+            with utils.fast_unlink(fp):
                 pass
 
     def __contains__(self, key: str) -> bool:
