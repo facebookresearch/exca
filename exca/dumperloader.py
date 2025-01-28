@@ -158,7 +158,7 @@ else:
     ]  # XXX Actually a lot more of these, see mne/_fiff/meas_info.py
 
     class MneRaw(DumperLoader[Raw]):
-        """Use .fif format for mag, grad and ref_meg data, otherwise use BrainVision format."""
+        """Use .fif format for MEG channel types (mag, grad and ref_meg), otherwise use BrainVision format."""
 
         SUFFIXES: list[str] = ["-raw.fif", "-raw.vhdr"]
 
@@ -173,7 +173,10 @@ else:
         @classmethod
         def filepath(cls, basepath: str | Path, suffix: str) -> Path:  # type: ignore[override]
             basepath = Path(basepath)
-            return basepath.parent / f"{basepath.name}{suffix}"
+            if suffix == "-raw.vhdr":  # Group BrainVision files into a separate folder
+                return basepath.parent / basepath.stem / f"{basepath.name}{suffix}"
+            else:
+                return basepath.parent / f"{basepath.name}{suffix}"
 
         @classmethod
         def load(cls, basepath: Path) -> Raw:
@@ -195,10 +198,10 @@ else:
             suffix = cls._get_suffix(ch_types)
             fp = cls.filepath(basepath, suffix=suffix)
             with utils.temporary_save_path(fp) as tmp:
-                if suffix == "-raw.fif":
-                    value.save(tmp)
-                else:
+                if suffix == "-raw.vhdr":
                     mne.export.export_raw(tmp, value, fmt="brainvision", verbose=False)
+                else:
+                    value.save(tmp)
 
     DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray, RawBrainVision)] = MneRaw
 
@@ -209,7 +212,7 @@ except ImportError:
     pass
 else:
 
-    Nifti = nibabel.Nifti1Image | nibabel.Nifti2Image
+    Nifti = nibabel.Nifti1Image | nibabel.Nifti2Image | nibabel.filebasedimages.FileBasedImage
 
     class NibabelNifti(DumperLoader[Nifti]):
         SUFFIX = ".nii.gz"
