@@ -174,6 +174,7 @@ else:
     DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray)] = MneRawFif
     DumperLoader.CLASSES["MneRaw"] = MneRawFif  # for backwards compatibility
 
+
 try:
     # pylint: disable=unused-import
     import mne
