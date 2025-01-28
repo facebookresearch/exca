@@ -113,7 +113,7 @@ def to_chunks(
     items_per_chunk = int(np.ceil(len(items) / splits))
     for k in range(splits):
         # select a batch/chunk of samples_per_job items to send to a job
-        yield items[k * items_per_chunk : (k + 1) * items_per_chunk]
+        yield items[k * items_per_chunk: (k + 1) * items_per_chunk]
 
 
 class MapInfra(base.BaseInfra, slurm.SubmititMixin):
@@ -256,6 +256,16 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         cache_type: str
             name of the cache class to use (inferred by default)
             this can for instance be used to enforce eg a memmap instead of loading arrays
+            The available options include:
+            - NumpyArray:  stores numpy arrays as npy files (default for np.ndarray)
+            - NumpyMemmapArray: similar to NumpyArray but reloads arrays as memmaps
+            - MemmapArrayFile: stores multiple np.ndarray into a unique memmap file
+              (strongly adviced in case of many arrays)
+            - PandasDataFrame: stores pandas dataframes as csv
+            - PandasDataFrame: stores pandas dataframes as csv (default for dataframes)
+            - ParquetPandasDataFrame: stores pandas dataframes as parquet files
+            - TorchTensor: stores torch.Tensor as .pt file (default for tensors)
+            - Pickle: stores object as pickle file (fallback default)
 
         Usage
         -----
