@@ -9,6 +9,7 @@ import contextlib
 import copy
 import logging
 import os
+import shutil
 import typing as tp
 import uuid
 from pathlib import Path
@@ -377,7 +378,10 @@ def fast_unlink(
         yield
     finally:
         if to_delete is not None:
-            to_delete.unlink()
+            if to_delete.is_dir():
+                shutil.rmtree(to_delete)
+            else:
+                to_delete.unlink()
 
 
 @contextlib.contextmanager

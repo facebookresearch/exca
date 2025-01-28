@@ -374,3 +374,20 @@ def test_find_models() -> None:
         "content.1._a",
     }
     assert all(isinstance(y, A) for y in out.values())
+
+
+def test_fast_unlink(tmp_path: Path) -> None:
+    # file
+    fp = tmp_path / "blublu.txt"
+    fp.touch()
+    assert fp.exists()
+    with utils.fast_unlink(fp):
+        pass
+    assert not fp.exists()
+    # folder
+    fp = tmp_path / "blublu"
+    fp.mkdir()
+    (fp / "stuff.txt").touch()
+    with utils.fast_unlink(fp):
+        pass
+    assert not fp.exists()
