@@ -235,11 +235,12 @@ except ImportError:
     pass
 else:
 
-    class MneRaw(StaticDumperLoader[mne.io.Raw]):
+    class MneRawFif(StaticDumperLoader[mne.io.Raw]):
         SUFFIX = "-raw.fif"
 
         @classmethod
         def static_load(cls, filepath: Path) -> mne.io.Raw:
+            print("1 reading from", filepath)
             try:
                 return mne.io.read_raw_fif(filepath, verbose=False, allow_maxshield=False)
             except ValueError:
@@ -250,10 +251,39 @@ else:
 
         @classmethod
         def static_dump(cls, filepath: Path, value: mne.io.Raw) -> None:
+            print("1 writting to", filepath)
             with utils.temporary_save_path(filepath) as tmp:
                 value.save(tmp)
 
-    DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray)] = MneRaw
+    DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray)] = MneRawFif
+    DumperLoader.CLASSES["MneRaw"] = MneRawFif  # for backwards compatibility
+
+
+try:
+    # pylint: disable=unused-import
+    import mne
+    import pybv  # noqa
+    from mne.io.brainvision.brainvision import RawBrainVision
+except ImportError:
+    pass
+else:
+
+    Raw = mne.io.Raw | RawBrainVision
+
+    class MneRawBrainVision(DumperLoader[Raw]):
+
+        def dump(self, key: str, value: X) -> dict[str, tp.Any]:
+            uid = _string_uid(key)
+            fp = self.folder / uid / f"{uid}-raw.vhdr"
+            with utils.temporary_save_path(fp) as tmp:
+                mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
+            return {"filename": uid}
+
+        def load(self, filename: str) -> Raw:
+            fp = self.folder / filename / f"{filename}-raw.vhdr"
+            return mne.io.read_raw_brainvision(fp, verbose=False)
+
+    DumperLoader.DEFAULTS[RawBrainVision] = MneRawBrainVision
 
 
 try:
@@ -262,13 +292,15 @@ except ImportError:
     pass
 else:
 
-    Nifti = nibabel.Nifti1Image | nibabel.Nifti2Image
+    Nifti = (
+        nibabel.Nifti1Image | nibabel.Nifti2Image | nibabel.filebasedimages.FileBasedImage
+    )
 
     class NibabelNifti(StaticDumperLoader[Nifti]):
         SUFFIX = ".nii.gz"
 
         @classmethod
-        def static_load(cls, filepath: Path) -> mne.io.Raw:
+        def static_load(cls, filepath: Path) -> Nifti:
             return nibabel.load(filepath, mmap=True)
 
         @classmethod
