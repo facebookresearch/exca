@@ -145,13 +145,10 @@ class CacheDict(tp.Generic[X]):
         if self.folder is None:
             return
         folder = Path(self.folder)
-        cache_type = self.cache_type
-
-        if cache_type is None:
-            fp = folder / ".cache_type"
-            if not fp.exists():
-                return  # no key file if no .cache_type file
-            cache_type = fp.read_text()
+        fp = folder / ".cache_type"  # legacy cache type detection
+        if not fp.exists():
+            return  # no key file if no .cache_type file
+        cache_type = fp.read_text()
         # read all existing key files as fast as possible (pathlib.glob is slow)
         find_cmd = 'find . -type f -name "*.key"'
         try:
@@ -209,9 +206,8 @@ class CacheDict(tp.Generic[X]):
             with fp.open("rb") as f:
                 for k, line in enumerate(f):
                     if fail:
-                        raise RuntimeError(
-                            f"Failed to read non-last line in {name}: {fail!r}"
-                        )
+                        msg = f"Failed to read non-last line in {name}: {fail!r}"
+                        raise RuntimeError(msg)
                     count = len(line)
                     last = last + count
                     line = line.strip()
@@ -220,7 +216,7 @@ class CacheDict(tp.Generic[X]):
                     strline = line.decode("utf8")
                     if not k:
                         if not strline.startswith(METADATA_TAG):
-                            raise RuntimeError("metadata missing in info file")
+                            raise RuntimeError(f"metadata missing in info file {fp}")
                         strline = strline[len(METADATA_TAG) :]
                     try:
                         info = json.loads(strline)
