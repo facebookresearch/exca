@@ -279,7 +279,7 @@ else:
                 mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
             return {"filename": uid}
 
-        def load(self, filename: str) -> Raw:
+        def load(self, filename: str) -> Raw:  # type: ignore
             fp = self.folder / filename / f"{filename}-raw.vhdr"
             return mne.io.read_raw_brainvision(fp, verbose=False)
 
