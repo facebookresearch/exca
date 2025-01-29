@@ -476,7 +476,7 @@ class CachedMethod:
 
 
 class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
-    """Processing infrastructure ready to be applied to a pydantic.BaseModel method.
+    """[Experimental] Processing infrastructure ready to be applied to a pydantic.BaseModel method.
     To use it, the configuration must be set as an attribute of a pydantic BaseModel,
     then :code:`@infra.apply` must be set on the method to process
     this will effectively replace the function with a remotely-computed version of itself.
