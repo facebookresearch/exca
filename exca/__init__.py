@@ -7,4 +7,5 @@
 from . import helpers as helpers
 from .confdict import ConfDict as ConfDict
 from .map import MapInfra as MapInfra
+from .task import SubmitInfra as SubmitInfra
 from .task import TaskInfra as TaskInfra

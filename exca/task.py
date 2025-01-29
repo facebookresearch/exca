@@ -43,10 +43,12 @@ class Log(tp.Generic[X]):
 class LocalJob:
     job_id: str = "#local#"
 
-    def __init__(self, func: tp.Callable[[], tp.Any]) -> None:
+    def __init__(
+        self, func: tp.Callable[..., tp.Any], *args: tp.Any, **kwargs: tp.Any
+    ) -> None:
         status: tp.Literal["success", "failure"] = "success"
         try:
-            out = func()
+            out = func(*args, **kwargs)
         except Exception as e:
             out = (e, traceback.format_exc())
             status = "failure"
@@ -90,9 +92,9 @@ class LocalJob:
 
 class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     """Processing/caching infrastructure ready to be applied to a pydantic.BaseModel method.
-    To use it, the configuration can be set as an attribute of a pydantic BaseModel,
-    then `@infra.apply` must be set on the method to process/cache
-    this will effectively replace the function with a cached/remotely-computed version of itself
+    To use it, the configuration must be set as an attribute of a pydantic BaseModel,
+    then :code:`@infra.apply` must be set on the parameter-free method to process/cache.
+    This will effectively replace the function with a cached/remotely-computed version of itself
 
     Parameters
     ----------
@@ -113,10 +115,20 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     -------------------------
     Check out :class:`exca.slurm.SubmititMixin`
 
-    Note
-    ----
-    - the method must take as input an iterable of items of a type X, and yield
-      one output of a type Y for each input.
+    Usage
+    -----
+    .. code-block:: python
+
+        class MyTask(pydantic.BaseModel):
+            x: int
+            infra: exca.TaskInfra = exca.TaskInfra()
+
+            @infra.apply
+            def compute(self) -> int:
+                return 2 * self.x
+
+        cfg = MyTask(12, infra={"folder": "tmp", "cluster": "slurm"})
+        assert cfg.compute() == 24  # "compute" runs on slurm and is cached
     """
 
     # running configuration
@@ -162,10 +174,6 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         logs = Path(str(logs).replace("{folder}", str(uid_folder.parent)))
         return logs
 
-    def xp_folder(self) -> None:
-        msg = "infra.xp_folder() is deprecated in favor of infra.uid_folder()"
-        raise RuntimeError(msg)
-
     def clear_job(self) -> None:
         """Clears and possibly cancels this task's job
         so that the computation is rerun at the next call
@@ -197,6 +205,11 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     def job_array(self, max_workers: int = 256) -> tp.Iterator[tp.List[tp.Any]]:
         """Creates a list object to populate
         The tasks in the list will be sent as a job array when exiting the context
+
+        Parameter
+        ---------
+        max_workers: int
+            maximum number of jobs in the array that can be running at a given time
         """
         executor = self.executor()
         tasks: tp.List[tp.Any] = []
@@ -431,7 +444,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
 
         Usage
         -----
-        either decorate with `@infra.apply` or `@infra.apply(exclude_from_cache_uid=<whatever>)`
+        either decorate with :code:`@infra.apply` or :code:`@infra.apply(exclude_from_cache_uid=<whatever>)`
         """
         params = locals()
         for name in ["method", "self"]:
@@ -457,3 +470,137 @@ class CachedMethod:
     def __call__(self) -> tp.Any:
         # this method replaces the decorated method
         return self.infra._infra_method()  # type: ignore
+
+
+## similar to TaskInfra but without cache
+
+
+class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
+    """[Experimental] Processing infrastructure ready to be applied to a pydantic.BaseModel method.
+    To use it, the configuration must be set as an attribute of a pydantic BaseModel,
+    then :code:`@infra.apply` must be set on the method to process
+    this will effectively replace the function with a remotely-computed version of itself.
+    Contrarily to TaskInfra, outputs of the method are not cached, and the method can take arguments
+
+    Parameters
+    ----------
+    folder: optional Path or str
+        Path to directory for dumping/loading the cache on disk, if provided
+
+    Slurm/submitit parameters
+    -------------------------
+    Check out :class:`exca.slurm.SubmititMixin`
+
+    Usage
+    -----
+    .. code-block:: python
+
+        class MyTask(pydantic.BaseModel):
+            x: int
+            infra: exca.TaskInfra = exca.TaskInfra()
+
+            @infra.apply
+            def compute(self, y: int) -> int:
+                return 2 * self.x
+
+        cfg = MyTask(12, infra={"folder": "tmp", "cluster": "slurm"})
+        assert cfg.compute(y=1) == 25  # "compute" runs on slurm but is not cached
+        job = cfg.infra.submit(y=1)  # runs the computation asynchronously
+        assert job.result() == 25
+
+    Note
+    ----
+    - The decorated method can be a staticmethod to avoid pickling the owner object
+      along with the other parameters.
+    - This is an experimental infra that is still evolving
+    """
+
+    _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
+
+    def _exclude_from_cls_uid(self) -> tp.List[str]:
+        return ["."]  # not taken into accound for uid
+
+    # pylint: disable=unused-argument
+    def apply(self, method: base.C) -> base.C:
+        """Applies the infra on a method taking no parameter (except `self`)
+
+        Parameter
+        ---------
+        method: callable
+            a method of a pydantic.BaseModel taking as input an iterable of items
+            of a type X, and yielding one output of a type Y for each input item.
+
+        Usage
+        -----
+        Decorate the method with :code:`@infra.apply`
+        """
+        if self._infra_method is not None:
+            raise RuntimeError("Infra was already applied")
+        self._infra_method = base.InfraMethod(method=method)
+        return property(self._infra_method)  # type: ignore
+
+    def submit(self, *args: tp.Any, **kwargs: tp.Any) -> submitit.Job[tp.Any] | LocalJob:
+        """Submit an asynchroneous job. This call is non-blocking and returns a
+        :code:`Job` instance that has a :code:`result()` method that awaits
+        for the computation to be over.
+
+        Parameters
+        ----------
+        *args, **kwargs: parameters of the decorated method
+
+        Note
+        ----
+        As a reminder, outputs are not cached so submitting several time will
+        run as many jobs.
+        """
+        if self._infra_method is None:
+            raise RuntimeError("Infra must be applied to a method.")
+        method = self._infra_method.method
+        if not isinstance(method, staticmethod):
+            method = functools.partial(self._infra_method.method, self._obj)
+        executor = self._array_executor
+        if executor is None:
+            executor = self.executor()
+        if executor is None:
+            return LocalJob(method, *args, **kwargs)
+        return executor.submit(method, *args, **kwargs)
+
+    @contextlib.contextmanager
+    def batch(self, max_workers: int = 256) -> tp.Iterator[None]:
+        """Context for batching submissions through infra.submit into a unique array job
+
+        Parameter
+        ---------
+        max_workers: int
+            maximum number of jobs in the array that can be running at a given time
+
+        Usage
+        -----
+        .. code-block:: python
+
+            with cfg.infra.batch():
+                job1 = cfg.infra.submit(y=1)
+                job2 = cfg.infra.submit(y=2)
+            # job1 and job2 are submitted together as a job array
+        """
+        executor = self.executor()
+        with contextlib.ExitStack() as estack:
+            self._array_executor = executor
+            if isinstance(executor, submitit.Executor):
+                executor.update_parameters(slurm_array_parallelism=max_workers)
+                estack.enter_context(executor.batch())
+            try:
+                yield
+            except Exception:
+                raise
+            finally:
+                self._array_executor = None
+
+    def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:  # type: ignore
+        # this method replaces the decorated method
+        job = self.submit(*args, **kwargs)
+        return job.results()[0]  # only first for multi-tasks
+
+    def uid(self) -> str:
+        # bypass any complicated check
+        return self._factory()
