@@ -8,3 +8,5 @@ from . import helpers as helpers
 from .confdict import ConfDict as ConfDict
 from .map import MapInfra as MapInfra
 from .task import TaskInfra as TaskInfra
+
+__version__ = "0.2.0"
