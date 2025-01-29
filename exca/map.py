@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import collections
+import contextlib
 import dataclasses
 import functools
 import inspect
@@ -255,6 +256,15 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         cache_type: str
             name of the cache class to use (inferred by default)
             this can for instance be used to enforce eg a memmap instead of loading arrays
+            The available options include:
+            - :code:`NumpyArray`:  stores numpy arrays as npy files (default for np.ndarray)
+            - :code:`NumpyMemmapArray`: similar to NumpyArray but reloads arrays as memmaps
+            - :code:`MemmapArrayFile`: stores multiple np.ndarray into a unique memmap file
+              (strongly adviced in case of many arrays)
+            - :code:`PandasDataFrame`: stores pandas dataframes as csv (default for dataframes)
+            - :code:`ParquetPandasDataFrame`: stores pandas dataframes as parquet files
+            - :code:`TorchTensor`: stores torch.Tensor as .pt file (default for tensors)
+            - :code:`Pickle`: stores object as pickle file (fallback default)
 
         Usage
         -----
@@ -290,7 +300,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         except ValueError:
             pass  # no caching
         else:
-            missing = {k: item for k, item in missing.items() if k not in cache}
+            keys = set(cache.keys())
+            missing = {k: item for k, item in missing.items() if k not in keys}
         self._check_configs(write=True)  # if there is a cache, check config or write it
         executor = self.executor()
         if not hasattr(self, "mode"):  # compatibility
@@ -406,6 +417,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             np.random.shuffle(missing)
             if pool is None:
                 # run locally
+                msg = "Computing %s missing items"
+                logger.debug(msg, len(missing))
                 cached = self.folder is not None
                 out = self._call_and_store(
                     [ki[1] for ki in missing], use_cache_dict=cached
@@ -452,8 +465,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         except ValueError:  # no caching
             return (out[k] for k, _ in uid_items)
         if out:  # keep in ram activated but no folder
-            for x, y in out.items():
-                cache_dict[x] = y
+            with cache_dict.writer() as writer:
+                for x, y in out.items():
+                    writer[x] = y
         msg = "Recovering %s items for %s from %s"
         # using factory because uid is too slow for here
         logger.debug(msg, len(uid_items), self._factory(), self.cache_dict)
@@ -461,8 +475,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
     def _call_and_store(
         self, items: tp.Sequence[tp.Any], use_cache_dict: bool = True
-    ) -> tp.Dict[str, tp.Any]:
-        d: tp.Dict[str, tp.Any] = self.cache_dict if use_cache_dict else {}  # type: ignore
+    ) -> dict[str, tp.Any]:
+        d: dict[str, tp.Any] = self.cache_dict if use_cache_dict else {}  # type: ignore
         imethod = self._infra_method
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
@@ -476,12 +490,16 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         method = functools.partial(imethod.method, self._obj)
         outputs = method(items)
         sentinel = base.Sentinel()
-        for item, output in itertools.zip_longest(items, outputs, fillvalue=sentinel):
-            if item is sentinel or output is sentinel:
-                raise RuntimeError(
-                    f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
-                )
-            d[item_uid(item)] = output
+        with contextlib.ExitStack() as estack:
+            writer = d
+            if isinstance(d, CacheDict):
+                writer = estack.enter_context(d.writer())  # type: ignore
+            for item, output in itertools.zip_longest(items, outputs, fillvalue=sentinel):
+                if item is sentinel or output is sentinel:
+                    raise RuntimeError(
+                        f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
+                    )
+                writer[item_uid(item)] = output
         # don't return the whole cache dict if data is cached
         return {} if use_cache_dict else d
 

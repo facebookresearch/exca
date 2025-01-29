@@ -4,7 +4,9 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import logging
 import typing as tp
+from concurrent import futures
 from pathlib import Path
 
 import nibabel as nib
@@ -15,6 +17,8 @@ import torch
 
 from . import cachedict as cd
 
+logging.getLogger("exca").setLevel(logging.DEBUG)
+
 
 @pytest.mark.parametrize("in_ram", (True, False))
 def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
@@ -24,7 +28,8 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
     assert not list(cache.keys())
     assert not len(cache)
     assert not cache
-    cache["blublu"] = x
+    with cache.writer() as writer:
+        writer["blublu"] = x
     assert "blublu" in cache
     assert cache
     np.testing.assert_almost_equal(cache["blublu"], x)
@@ -32,8 +37,10 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
     assert set(cache.keys()) == {"blublu"}
     assert bool(cache._ram_data) is in_ram
     cache2: cd.CacheDict[tp.Any] = cd.CacheDict(folder=folder)
-    cache2["blabla"] = 2 * x
+    with cache2.writer() as writer:
+        writer["blabla"] = 2 * x
     assert "blabla" in cache
+    assert "blabla2" not in cache
     assert set(cache.keys()) == {"blublu", "blabla"}
     d = dict(cache2.items())
     np.testing.assert_almost_equal(d["blabla"], 2 * d["blublu"])
@@ -51,26 +58,6 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
 
 
 @pytest.mark.parametrize(
-    "string,expected",
-    [
-        (
-            "whave\t-er I want/to\nput i^n there",
-            "whave--er-I-want-to-put-i^n-there-391137b5",
-        ),
-        (
-            "whave\t-er I want/to put i^n there",  # same but space instead of line return
-            "whave--er-I-want-to-put-i^n-there-cef06284",
-        ),
-        (50 * "a" + 50 * "b", 40 * "a" + "[.]" + 40 * "b" + "-932620a9"),
-        (51 * "a" + 50 * "b", 40 * "a" + "[.]" + 40 * "b" + "-86bb658a"),  # longer
-    ],
-)
-def test_string_uid(string: str, expected: str) -> None:
-    out = cd._string_uid(string)
-    assert out == expected
-
-
-@pytest.mark.parametrize(
     "data",
     (
         np.random.rand(2, 12),
@@ -79,16 +66,24 @@ def test_string_uid(string: str, expected: str) -> None:
         pd.DataFrame([{"blu": 12}]),
     ),
 )
-def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
-    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    cache["blublu.tmp"] = data
+@pytest.mark.parametrize("write_key_files", (True, False))
+def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -> None:
+    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
+        folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=write_key_files
+    )
+    with cache.writer() as writer:
+        writer["blublu.tmp"] = data
     assert cache.cache_type not in [None, "Pickle"]
-    name1, name2 = [fp.name for fp in tmp_path.iterdir() if not fp.name.startswith(".")]
-    if name2.endswith(".key"):
-        name1, name2 = name2, name1
-    num = len(name1) - 4
-    assert name1[:num] == name2[:num], f"Non-matching names {name1} and {name2}"
+    names = [fp.name for fp in tmp_path.iterdir() if not fp.name.startswith(".")]
+    assert len(names) == 2 + write_key_files
+    j_name = [n for n in names if n.endswith("-info.jsonl")][0]
+    v_name = [n for n in names if not n.endswith((".key", "-info.jsonl"))][0]
+    if write_key_files:
+        k_name = [n for n in names if n.endswith(".key")][0]
+        num = len(k_name) - 4
+        assert k_name[:num] == k_name[:num], f"Non-matching names {k_name} and {v_name}"
     assert isinstance(cache["blublu.tmp"], type(data))
+    assert (tmp_path / j_name).read_text().startswith("metadata={")
 
 
 @pytest.mark.parametrize(
@@ -98,11 +93,113 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
         ([12, 12], "Pickle"),
         (pd.DataFrame([{"stuff": 12}]), "PandasDataFrame"),
         (np.array([12, 12]), "NumpyMemmapArray"),
+        (np.array([12, 12]), "MemmapArrayFile"),
     ],
 )
-def test_specialized_dump(tmp_path: Path, data: tp.Any, cache_type: str) -> None:
-    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
-        folder=tmp_path, keep_in_ram=False, cache_type=cache_type
+@pytest.mark.parametrize("legacy_write", (True, False))
+def test_specialized_dump(
+    tmp_path: Path, data: tp.Any, cache_type: str, legacy_write: bool
+) -> None:
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(
+        folder=tmp_path,
+        keep_in_ram=False,
+        cache_type=cache_type,
+        _write_legacy_key_files=legacy_write,
     )
-    cache["x"] = data
+    with cache.writer() as writer:
+        writer["x"] = data
     assert isinstance(cache["x"], type(data))
+    # check permissions
+    octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
+    assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
+    for fp in tmp_path.iterdir():
+        octal_permissions = oct(fp.stat().st_mode)[-3:]
+        assert octal_permissions == "777", f"Wrong permissions for {fp}"
+
+
+def _setval(cache: cd.CacheDict[tp.Any], key: str, val: tp.Any) -> None:
+    with cache.writer() as writer:
+        writer[key] = val
+
+
+@pytest.mark.parametrize(
+    "legacy_write,remove_jsonl", ((True, True), (True, False), (False, False))
+)
+@pytest.mark.parametrize("process", (False,))  # add True for more (slower) tests
+def test_info_jsonl(
+    tmp_path: Path, legacy_write: bool, remove_jsonl: bool, process: bool
+) -> None:
+    cache: cd.CacheDict[int] = cd.CacheDict(
+        folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
+    )
+    Pool = futures.ProcessPoolExecutor if process else futures.ThreadPoolExecutor
+    jobs = []
+    with Pool(max_workers=2) as ex:
+        jobs.append(ex.submit(_setval, cache, "x", 12))
+        jobs.append(ex.submit(_setval, cache, "y", 3))
+        jobs.append(ex.submit(_setval, cache, "z", 24))
+    for j in jobs:
+        j.result()
+    # check files
+    fps = list(tmp_path.iterdir())
+    info_paths = [fp for fp in fps if fp.name.endswith("-info.jsonl")]
+    assert len(info_paths) == 2
+    if remove_jsonl:
+        for ipath in info_paths:
+            ipath.unlink()
+    # restore
+    cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert cache["x"] == 12
+    cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert "y" in cache
+    cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert len(cache) == 3
+    cache.clear()
+    assert not cache
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "legacy_write,remove_jsonl", ((True, True), (True, False), (False, False))
+)
+def test_info_jsonl_deletion(
+    tmp_path: Path, legacy_write: bool, remove_jsonl: bool
+) -> None:
+    keys = ("x", "blüblû", "stuff")
+    for k in keys:
+        cache: cd.CacheDict[int] = cd.CacheDict(
+            folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
+        )
+        with cache.writer() as writer:
+            writer[k] = 12 if k == "x" else 3
+    _ = cache.keys()  # listing
+    info = cache._key_info
+    cache = cd.CacheDict(
+        folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
+    )
+    _ = cache.keys()  # listing
+    print("key info", cache._key_info)
+    print("    info", info)
+    assert cache._key_info == info
+    for sub in info.values():
+        fp = sub.jsonl
+        r = sub.byte_range
+        with fp.open("rb") as f:
+            f.seek(r[0])
+            out = f.read(r[1] - r[0])
+            assert out.startswith(b"{") and out.endswith(b"}\n")
+
+    if remove_jsonl:
+        for ipath in tmp_path.glob("*.jsonl"):
+            ipath.unlink()
+        cache = cd.CacheDict(
+            folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
+        )
+    # remove one
+    chosen = np.random.choice(keys)
+    del cache[chosen]
+    assert len(cache) == 2
+    cache = cd.CacheDict(
+        folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
+    )
+    assert len(cache) == 2
