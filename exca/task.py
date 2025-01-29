@@ -510,8 +510,9 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
 
     Note
     ----
-    The decorated method can be a staticmethod to avoid pickling the owner object
-    along with the other parameters.
+    - The decorated method can be a staticmethod to avoid pickling the owner object
+      along with the other parameters.
+    - This is an experimental infra that is still evolving
     """
 
     _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
