@@ -40,10 +40,10 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     Cls = dumperloader.DumperLoader.default_class(type(data))
     if not isinstance(data, str):
         assert Cls is not dumperloader.Pickle
-    dl = Cls()
+    dl = Cls(tmp_path)
     # test with an extension, as it's easy to mess the new name with Path.with_suffix
-    dl.dump(tmp_path / "blublu.ext", data)
-    reloaded = dl.load(tmp_path / "blublu.ext")
+    info = dl.dump("blublu.ext", data)
+    reloaded = dl.load(**info)
     ExpectedCls = type(data)
     if ExpectedCls is mne.io.RawArray:
         ExpectedCls = mne.io.Raw
@@ -55,9 +55,9 @@ def test_text_df(tmp_path: Path, name: str) -> None:
     df = pd.DataFrame(
         [{"type": "Word", "text": "None"}, {"type": "Something", "number": 12}]
     )
-    dl = dumperloader.DumperLoader.CLASSES[name]()
-    dl.dump(tmp_path / "blublu", df)
-    reloaded = dl.load(tmp_path / "blublu")
+    dl = dumperloader.DumperLoader.CLASSES[name](tmp_path)
+    info = dl.dump("blublu", df)
+    reloaded = dl.load(**info)
     assert reloaded.loc[0, "text"] == "None"
     assert pd.isna(reloaded.loc[1, "text"])  # type: ignore
     assert pd.isna(reloaded.loc[0, "number"])  # type: ignore
@@ -68,9 +68,9 @@ def test_text_df(tmp_path: Path, name: str) -> None:
 @pytest.mark.parametrize("name", ("MneRawFif", "MneRawBrainVision"))
 def test_mne_raw(tmp_path: Path, ch_type: str, name: str) -> None:
     raw = make_mne_raw(ch_type)
-    dl = dumperloader.DumperLoader.CLASSES[name]()
-    dl.dump(tmp_path / "blublu", raw)
-    reloaded = dl.load(tmp_path / "blublu")
+    dl = dumperloader.DumperLoader.CLASSES[name](tmp_path)
+    info = dl.dump("blublu", raw)
+    reloaded = dl.load(**info)
     reload_type = (
         mne.io.Raw
         if name == "MneRawFif"
@@ -80,15 +80,6 @@ def test_mne_raw(tmp_path: Path, ch_type: str, name: str) -> None:
     raw_data = raw.get_data()
     reloaded_data = reloaded.get_data()
     assert np.allclose(raw_data, reloaded_data, atol=1e-8)
-
-
-def test_mne_raw_brainvision_backwards_comp(tmp_path: Path) -> None:
-    raw = make_mne_raw("eeg")
-    dump_dl = dumperloader.MneRawFif()
-    dump_dl.dump(tmp_path / "blublu", raw)
-    load_dl = dumperloader.MneRawBrainVision()
-    reloaded = load_dl.load(tmp_path / "blublu")
-    assert isinstance(reloaded, mne.io.Raw)
 
 
 @pytest.mark.parametrize(
@@ -110,12 +101,48 @@ def test_dump_torch_view(tmp_path: Path) -> None:
     data = torch.arange(8)[:2]
     assert dumperloader.is_view(data)
     # reloading it should not be a view as it was cloned
-    dl = dumperloader.TorchTensor()
-    dl.dump(tmp_path / "blublu", data)
-    reloaded = dl.load(tmp_path / "blublu")
+    dl = dumperloader.TorchTensor(tmp_path)
+    info = dl.dump("blublu", data)
+    reloaded = dl.load(**info)
     assert not dumperloader.is_view(reloaded)
 
 
 def test_default_class() -> None:
     out = dumperloader.DumperLoader.default_class(int | None)  # type: ignore
     assert out is dumperloader.Pickle
+
+
+@pytest.mark.parametrize(
+    "string,expected",
+    [
+        (
+            "whave\t-er I want/to\nput i^n there",
+            "whave--er-I-want-to-put-i^n-there-391137b5",
+        ),
+        (
+            "whave\t-er I want/to put i^n there",  # same but space instead of line return
+            "whave--er-I-want-to-put-i^n-there-cef06284",
+        ),
+        (50 * "a" + 50 * "b", 40 * "a" + "[.]" + 40 * "b" + "-932620a9"),
+        (51 * "a" + 50 * "b", 40 * "a" + "[.]" + 40 * "b" + "-86bb658a"),  # longer
+    ],
+)
+def test_string_uid(string: str, expected: str) -> None:
+    out = dumperloader._string_uid(string)
+    assert out == expected
+
+
+def test_memmap_array_file(tmp_path: Path) -> None:
+    dl = dumperloader.MemmapArrayFile(folder=tmp_path)
+    info = []
+    x = np.random.rand(2, 3)
+    with dl.open():
+        info.append(dl.dump("x", x))
+        info.append(dl.dump("y", np.random.rand(3, 3)))
+        info.append(dl.dump("z", np.random.rand(4, 3)))
+    assert info[0]["filename"] == info[1]["filename"]
+    x2 = dl.load(**info[0])
+    with dl.open():
+        info.append(dl.dump("w", np.random.rand(5, 3)))  # write in between reads
+    np.testing.assert_array_equal(x2, x)
+    assert dl.load(**info[1]).shape == (3, 3)

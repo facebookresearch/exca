@@ -64,8 +64,9 @@ def test_backward_compatibility(tmp_path: Path, uid_first: bool, fp: Path | None
     assert tuple(cfg.process_map([3])) == (39,)
 
 
-def test_legacy_key_files() -> None:
+@pytest.mark.parametrize("cache_type", (None, "MemmapArrayFile"))
+def test_legacy_key_files(cache_type: str | None) -> None:
     folder = DATA / "cachedict2501"
-    cd: CacheDict[np.ndarray] = CacheDict(folder=folder, cache_type="NumpyMemmapArray")
+    cd: CacheDict[np.ndarray] = CacheDict(folder=folder, cache_type=cache_type)
     assert "x" in cd
     assert set(cd.keys()) == {"x", "y"}
