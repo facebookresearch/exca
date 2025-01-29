@@ -486,14 +486,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         return {} if use_cache_dict else d
 
 
-class BatchInfra(MapInfra):
-
-    def model_post_init(self, log__: tp.Any) -> None:
-        super().model_post_init(log__)
-        # deprecated
-        raise RuntimeError("BatchInfra was renamed to MapInfra")
-
-
 def check_map_function_output(func: tp.Callable[..., tp.Any]) -> tp.Type[tp.Any]:
     annot = inspect.signature(func).return_annotation
     origin = tp.get_origin(annot)

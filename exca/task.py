@@ -162,10 +162,6 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         logs = Path(str(logs).replace("{folder}", str(uid_folder.parent)))
         return logs
 
-    def xp_folder(self) -> None:
-        msg = "infra.xp_folder() is deprecated in favor of infra.uid_folder()"
-        raise RuntimeError(msg)
-
     def clear_job(self) -> None:
         """Clears and possibly cancels this task's job
         so that the computation is rerun at the next call
@@ -187,11 +183,6 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         # remove files
         for name in ("job.pkl", "config.yaml", "submitit", "code"):
             (xpfolder / name).unlink(missing_ok=True)
-
-    # pylint: disable=unused-argument
-    def clone_task(self, *args: tp.Dict[str, tp.Any], **kwargs: tp.Any) -> None:
-        msg = "infra.clone_task is deprecated in favor of infra.clone_obj"
-        raise RuntimeError(msg)
 
     @contextlib.contextmanager
     def job_array(self, max_workers: int = 256) -> tp.Iterator[tp.List[tp.Any]]:
