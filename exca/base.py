@@ -163,18 +163,6 @@ class BaseInfra(pydantic.BaseModel):
         super().model_post_init(log__)
         self._set_permissions(None)  # set compatibility for permissions as string
 
-    def apply_on(
-        self,
-        method: tp.Callable[..., tp.Any],
-        *args: tp.Any,
-        **kwargs: tp.Any,
-    ) -> None:
-        msg = (
-            "infra.apply_on is deprecated, update your code with @infra.apply "
-            "(see how-to: https://facebookresearch.github.io/brainai/infra/howto.html#migrating-to-new-infra-api)"
-        )
-        raise RuntimeError(msg)
-
     def config(self, uid: bool = True, exclude_defaults: bool = False) -> ConfDict:
         """Exports the task configuration as a ConfigDict
         ConfDict are dict which split on "." with extra flatten,
