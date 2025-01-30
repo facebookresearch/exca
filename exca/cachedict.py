@@ -133,9 +133,18 @@ class CacheDict(tp.Generic[X]):
     def __len__(self) -> int:
         return len(list(self.keys()))  # inefficient, but correct
 
-    def keys(self) -> tp.Iterator[str]:
-        self._read_key_files()
-        self._read_info_files()
+    def keys(self, lazy: bool = False) -> tp.Iterator[str]:
+        """Returns the keys in the dictionary
+
+        Parameter
+        ---------
+        lazy: bool
+            if lazy, only returns the keys already loaded, if not, forces a key
+            update reading jsonl files in the folder.
+        """
+        if not lazy:
+            self._read_key_files()
+            self._read_info_files()
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
@@ -143,6 +152,9 @@ class CacheDict(tp.Generic[X]):
     def _read_key_files(self) -> None:
         """Legacy reader"""
         if self.folder is None:
+            return
+        if self._folder_modified > 0:
+            # already checked once so no need to check again (key files are legacy)
             return
         folder = Path(self.folder)
         fp = folder / ".cache_type"  # legacy cache type detection
