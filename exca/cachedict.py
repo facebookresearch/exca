@@ -265,7 +265,7 @@ class CacheDict(tp.Generic[X]):
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
         loader = DumperLoader.CLASSES[dinfo.cache_type](self.folder)
-        loaded = loader.load(**{x: y for x, y in dinfo.content.items()})
+        loaded = loader.load(**dinfo.content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
         return loaded  # type: ignore
