@@ -240,7 +240,6 @@ else:
 
         @classmethod
         def static_load(cls, filepath: Path) -> mne.io.Raw:
-            print("1 reading from", filepath)
             try:
                 return mne.io.read_raw_fif(filepath, verbose=False, allow_maxshield=False)
             except ValueError:
@@ -251,7 +250,6 @@ else:
 
         @classmethod
         def static_dump(cls, filepath: Path, value: mne.io.Raw) -> None:
-            print("1 writting to", filepath)
             with utils.temporary_save_path(filepath) as tmp:
                 value.save(tmp)
 
