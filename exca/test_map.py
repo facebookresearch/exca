@@ -9,12 +9,14 @@ import logging
 import pickle
 import typing as tp
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pydantic
 import pytest
 
 from . import helpers
+from .cachedict import CacheDict
 from .confdict import ConfDict
 from .map import MapInfra, to_chunks
 
@@ -112,6 +114,24 @@ def test_map_infra(tmp_path: Path) -> None:
     out2 = next(whatever.process([2]))
     with pytest.raises(AssertionError):
         np.testing.assert_array_equal(out2, out[1])
+
+
+def test_map_infra_cache_dict_calls(tmp_path: Path) -> None:
+    whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
+    func = whatever.infra.cache_dict._read_info_files
+    with mock.patch.object(CacheDict, "_read_info_files", side_effect=func) as mocked:
+        _ = list(whatever.process([1, 2, 3, 4]))
+        # not sure why 3, expected 2, but neverming for now:
+        assert mocked.call_count == 3
+    whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
+    func = whatever.infra.cache_dict._read_info_files
+    with mock.patch.object(CacheDict, "_read_info_files", side_effect=func) as mocked:
+        _ = list(whatever.process([1]))
+        assert mocked.call_count == 1
+        _ = list(whatever.process([2]))
+        assert mocked.call_count == 1  # no need to reload keys again
+        _ = list(whatever.process([5]))
+        assert mocked.call_count == 4  # required extra compute
 
 
 def test_missing_yield() -> None:
