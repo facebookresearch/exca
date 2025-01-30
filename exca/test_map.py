@@ -116,12 +116,11 @@ def test_map_infra(tmp_path: Path) -> None:
         np.testing.assert_array_equal(out2, out[1])
 
 
-# @mock.patch('exca.cachedict.CacheDict._read_info_files', side_effect=CacheDict._read_info_files)
-def test_map_infra_cache_calls(tmp_path: Path) -> None:
+def test_map_infra_cache_dict_calls(tmp_path: Path) -> None:
     whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
     func = whatever.infra.cache_dict._read_info_files
     with mock.patch.object(CacheDict, "_read_info_files", side_effect=func) as mocked:
-        out = list(whatever.process([1, 2, 3, 4]))
+        _ = list(whatever.process([1, 2, 3, 4]))
         # not sure why 3, expected 2, but neverming for now:
         assert mocked.call_count == 3
     whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
@@ -131,6 +130,8 @@ def test_map_infra_cache_calls(tmp_path: Path) -> None:
         assert mocked.call_count == 1
         _ = list(whatever.process([2]))
         assert mocked.call_count == 1  # no need to reload keys again
+        _ = list(whatever.process([5]))
+        assert mocked.call_count == 4  # required extra compute
 
 
 def test_missing_yield() -> None:
