@@ -12,6 +12,7 @@ import dataclasses
 import io
 import json
 import logging
+import os
 import shutil
 import subprocess
 import typing as tp
@@ -196,7 +197,6 @@ class CacheDict(tp.Generic[X]):
         """Load current info files"""
         if self.folder is None:
             return
-        print("reading info file")
         folder = Path(self.folder)
         # read all existing jsonl files
         find_cmd = 'find . -type f -name "*-info.jsonl"'
@@ -235,15 +235,15 @@ class CacheDict(tp.Generic[X]):
                         info = json.loads(strline)
                     except json.JSONDecodeError:
                         msg = "Failed to read to line in %s in info file %s"
-                        print("fail", strline)
                         logger.debug(msg, name, strline)
                         # last line could be currently being written?
                         # (let's be robust to it)
                         fail = strline
+                        last -= count  # move back for next read
                         continue
                     if not k:  # metadata
                         meta = info
-                        new_last = self._info_files_last.get(name, last)
+                        new_last = self._info_files_last.get(fp.name, last)
                         if new_last != last:
                             last = new_last
                             msg = "Forwarding to byte %s in info file %s"
@@ -255,8 +255,8 @@ class CacheDict(tp.Generic[X]):
                         jsonl=fp, byte_range=(last - count, last), **meta, content=info
                     )
                     self._key_info[key] = dinfo
-                self._info_files_last[fp.name] = f.tell()
-        print(self._key_info)
+
+                self._info_files_last[fp.name] = last  # f.tell()
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -433,3 +433,4 @@ class CacheDictWriter:
                         fp.chmod(cd.permissions)
                     except Exception:  # pylint: disable=broad-except
                         pass  # avoid issues in case of overlapping processes
+            os.utime(cd.folder)  # make sure the modified time is updated
