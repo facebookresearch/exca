@@ -309,7 +309,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 if not missing:
                     break
         self._check_configs(write=True)  # if there is a cache, check config or write it
-        executor = self.executor()
         if not hasattr(self, "mode"):  # compatibility
             self.mode = "cached"
         if self.mode == "force":
@@ -324,14 +323,16 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     del cache[uid]
             missing = {x: y for x, y in items.items() if x not in self._recomputed}
             self._recomputed = set(missing)
-        if missing and self.mode == "read-only":
-            raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
-        if missing and executor is not None:  # wait for items being computed
-            jcheck = JobChecker(folder=executor.folder)
-            jcheck.wait()
-            # update cache dict and recheck as actual checking for keys updates the dict
-            keys = set(self.cache_dict)  # update cache dict
-            missing = {k: item for k, item in missing.items() if k not in keys}
+        if missing:
+            if self.mode == "read-only":
+                raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
+            executor = self.executor()
+            if executor is not None:  # wait for items being computed
+                jcheck = JobChecker(folder=executor.folder)
+                jcheck.wait()
+                # update cache dict and recheck as actual checking for keys updates the dict
+                keys = set(self.cache_dict)  # update cache dict
+                missing = {k: item for k, item in missing.items() if k not in keys}
         if len(items) == 1 and len(missing) == 1 and self.forbid_single_item_computation:
             key, item = next(iter(missing.items()))
             raise RuntimeError(
