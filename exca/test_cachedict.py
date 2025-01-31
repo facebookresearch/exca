@@ -17,7 +17,8 @@ import torch
 
 from . import cachedict as cd
 
-logging.getLogger("exca").setLevel(logging.DEBUG)
+logger = logging.getLogger("exca")
+logger.setLevel(logging.DEBUG)
 
 
 @pytest.mark.parametrize("in_ram", (True, False))
@@ -203,3 +204,22 @@ def test_info_jsonl_deletion(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
     )
     assert len(cache) == 2
+
+
+def test_info_jsonl_partial_write(tmp_path: Path) -> None:
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    with cache.writer() as writer:
+        for val, k in enumerate("xyz"):
+            writer[k] = val
+    info_path = [fp for fp in tmp_path.iterdir() if fp.name.endswith("-info.jsonl")][0]
+    lines = info_path.read_bytes().splitlines()
+    partial_lines = [lines[0], lines[1][: len(lines[1]) // 2]]
+    print(partial_lines)
+    info_path.write_bytes(b"\n".join(partial_lines))
+    # reload cache
+    logger.debug("new file")
+    print("new file!")
+    cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert len(cache) == 1
+    print(lines)
+    raise

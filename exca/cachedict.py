@@ -196,6 +196,7 @@ class CacheDict(tp.Generic[X]):
         """Load current info files"""
         if self.folder is None:
             return
+        print("reading info file")
         folder = Path(self.folder)
         # read all existing jsonl files
         find_cmd = 'find . -type f -name "*-info.jsonl"'
@@ -233,17 +234,18 @@ class CacheDict(tp.Generic[X]):
                     try:
                         info = json.loads(strline)
                     except json.JSONDecodeError:
-                        logger.debug(
-                            "Failed to read to line in %s in info file %s", name, strline
-                        )
+                        msg = "Failed to read to line in %s in info file %s"
+                        print("fail", strline)
+                        logger.debug(msg, name, strline)
                         # last line could be currently being written?
                         # (let's be robust to it)
                         fail = strline
                         continue
                     if not k:  # metadata
                         meta = info
-                        last = self._info_files_last.get(name, last)
-                        if last:
+                        new_last = self._info_files_last.get(name, last)
+                        if new_last != last:
+                            last = new_last
                             msg = "Forwarding to byte %s in info file %s"
                             logger.debug(msg, last, name)
                             f.seek(last)
@@ -254,6 +256,7 @@ class CacheDict(tp.Generic[X]):
                     )
                     self._key_info[key] = dinfo
                 self._info_files_last[fp.name] = f.tell()
+        print(self._key_info)
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
