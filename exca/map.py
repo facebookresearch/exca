@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pydantic
+import submitit
 from submitit.core import utils
 
 from . import base, slurm
@@ -326,7 +327,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
-            executor = self.executor()
+            executor: submitit.Executor | None = self.executor()
             if executor is not None:  # wait for items being computed
                 jcheck = JobChecker(folder=executor.folder)
                 jcheck.wait()
