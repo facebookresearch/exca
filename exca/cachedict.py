@@ -12,6 +12,7 @@ import dataclasses
 import io
 import json
 import logging
+import os
 import shutil
 import subprocess
 import typing as tp
@@ -233,17 +234,18 @@ class CacheDict(tp.Generic[X]):
                     try:
                         info = json.loads(strline)
                     except json.JSONDecodeError:
-                        logger.debug(
-                            "Failed to read to line in %s in info file %s", name, strline
-                        )
+                        msg = "Failed to read to line in %s in info file %s"
+                        logger.debug(msg, name, strline)
                         # last line could be currently being written?
                         # (let's be robust to it)
                         fail = strline
+                        last -= count  # move back for next read
                         continue
                     if not k:  # metadata
                         meta = info
-                        last = self._info_files_last.get(name, last)
-                        if last:
+                        new_last = self._info_files_last.get(fp.name, last)
+                        if new_last != last:
+                            last = new_last
                             msg = "Forwarding to byte %s in info file %s"
                             logger.debug(msg, last, name)
                             f.seek(last)
@@ -253,7 +255,8 @@ class CacheDict(tp.Generic[X]):
                         jsonl=fp, byte_range=(last - count, last), **meta, content=info
                     )
                     self._key_info[key] = dinfo
-                self._info_files_last[fp.name] = f.tell()
+
+                self._info_files_last[fp.name] = last  # f.tell()
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -430,3 +433,4 @@ class CacheDictWriter:
                         fp.chmod(cd.permissions)
                     except Exception:  # pylint: disable=broad-except
                         pass  # avoid issues in case of overlapping processes
+            os.utime(cd.folder)  # make sure the modified time is updated

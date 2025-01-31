@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import logging
+import os
 import typing as tp
 from concurrent import futures
 from pathlib import Path
@@ -17,7 +18,8 @@ import torch
 
 from . import cachedict as cd
 
-logging.getLogger("exca").setLevel(logging.DEBUG)
+logger = logging.getLogger("exca")
+logger.setLevel(logging.DEBUG)
 
 
 @pytest.mark.parametrize("in_ram", (True, False))
@@ -178,8 +180,6 @@ def test_info_jsonl_deletion(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
     )
     _ = cache.keys()  # listing
-    print("key info", cache._key_info)
-    print("    info", info)
     assert cache._key_info == info
     for sub in info.values():
         fp = sub.jsonl
@@ -203,3 +203,22 @@ def test_info_jsonl_deletion(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=legacy_write
     )
     assert len(cache) == 2
+
+
+def test_info_jsonl_partial_write(tmp_path: Path) -> None:
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    with cache.writer() as writer:
+        for val, k in enumerate("xyz"):
+            writer[k] = val
+    info_path = [fp for fp in tmp_path.iterdir() if fp.name.endswith("-info.jsonl")][0]
+    lines = info_path.read_bytes().splitlines()
+    partial_lines = lines[:2] + [lines[2][: len(lines[2]) // 2]]
+    info_path.write_bytes(b"\n".join(partial_lines))
+    # reload cache
+    logger.debug("new file")
+    cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert len(cache) == 1
+    os.utime(tmp_path)
+    # now complete
+    info_path.write_bytes(b"\n".join(lines))
+    assert len(cache) == 3
