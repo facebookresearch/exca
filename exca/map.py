@@ -333,7 +333,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 # update cache dict and recheck as actual checking for keys updates the dict
                 keys = set(self.cache_dict)  # update cache dict
                 missing = {k: item for k, item in missing.items() if k not in keys}
-        if len(items) == 1 and len(missing) == 1 and self.forbid_single_item_computation:
+        if len(items) == len(missing) == 1 and self.forbid_single_item_computation:
             key, item = next(iter(missing.items()))
             raise RuntimeError(
                 f"Trying to compute single item {item!r} with key {key!r}\n"
