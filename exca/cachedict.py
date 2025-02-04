@@ -364,7 +364,8 @@ class CacheDictWriter:
                     self._info_handle = estack.enter_context(fp.open("ab"))
                 yield
         finally:
-            os.utime(cd.folder)  # make sure the modified time is updated
+            if cd.folder is not None:
+                os.utime(cd.folder)  # make sure the modified time is updated
             fp2 = self._info_filepath
             if cd.permissions is not None and fp2 is not None and fp2.exists():
                 fp2.chmod(cd.permissions)
