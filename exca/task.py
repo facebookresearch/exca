@@ -599,3 +599,10 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
     def uid(self) -> str:
         # bypass any complicated check
         return self._factory()
+
+    def _log_path(self) -> Path:
+        logs = super()._log_path()
+        if self.folder is None:
+            raise ValueError("A folder is required for SubmitInfra on {self._obj}")
+        logs = Path(str(logs).replace("{folder}", str(self.folder)))
+        return logs
