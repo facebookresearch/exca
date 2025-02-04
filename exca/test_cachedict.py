@@ -222,3 +222,13 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     # now complete
     info_path.write_bytes(b"\n".join(lines))
     assert len(cache) == 3
+
+
+def test_2_caches(tmp_path: Path) -> None:
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    with cache.writer() as writer:
+        cache2.keys()
+        writer["blublu"] = 12
+        cache2.keys()
+    assert "blublu" in cache2.keys()

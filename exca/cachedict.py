@@ -216,8 +216,10 @@ class CacheDict(tp.Generic[X]):
             last = 0
             meta = {}
             fail = ""
+            print(name)
             with fp.open("rb") as f:
                 for k, line in enumerate(f):
+                    print(k, line)
                     if fail:
                         msg = f"Failed to read non-last line #{k - 1} in {fp}:\n{fail!r}"
                         raise RuntimeError(msg)
@@ -362,6 +364,7 @@ class CacheDictWriter:
                     self._info_handle = estack.enter_context(fp.open("ab"))
                 yield
         finally:
+            os.utime(cd.folder)  # make sure the modified time is updated
             fp2 = self._info_filepath
             if cd.permissions is not None and fp2 is not None and fp2.exists():
                 fp2.chmod(cd.permissions)
@@ -434,4 +437,3 @@ class CacheDictWriter:
                         fp.chmod(cd.permissions)
                     except Exception:  # pylint: disable=broad-except
                         pass  # avoid issues in case of overlapping processes
-            os.utime(cd.folder)  # make sure the modified time is updated
