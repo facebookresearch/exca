@@ -219,7 +219,7 @@ class CacheDict(tp.Generic[X]):
             with fp.open("rb") as f:
                 for k, line in enumerate(f):
                     if fail:
-                        msg = f"Failed to read non-last line in {name}: {fail!r}"
+                        msg = f"Failed to read non-last line #{k - 1} in {fp}:\n{fail!r}"
                         raise RuntimeError(msg)
                     count = len(line)
                     last = last + count
@@ -234,8 +234,8 @@ class CacheDict(tp.Generic[X]):
                     try:
                         info = json.loads(strline)
                     except json.JSONDecodeError:
-                        msg = "Failed to read to line in %s in info file %s"
-                        logger.debug(msg, name, strline)
+                        msg = "Failed to read to line #%s in %s in info file %s"
+                        logger.warning(msg, k, name, strline)
                         # last line could be currently being written?
                         # (let's be robust to it)
                         fail = strline
