@@ -129,7 +129,6 @@ class SubmititMixin(pydantic.BaseModel):
         if cluster == "auto":
             cluster = None
         logpath = self._log_path()
-        print(logpath)
         executor = submitit.AutoExecutor(folder=logpath, cluster=cluster)
         non_submitit = {"cluster", "logs", "conda_env", "workdir", "folder"}
         fields = set(SubmititMixin.model_fields) - non_submitit  # type: ignore
