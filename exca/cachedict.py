@@ -216,10 +216,8 @@ class CacheDict(tp.Generic[X]):
             last = 0
             meta = {}
             fail = ""
-            print(name)
             with fp.open("rb") as f:
                 for k, line in enumerate(f):
-                    print(k, line)
                     if fail:
                         msg = f"Failed to read non-last line #{k - 1} in {fp}:\n{fail!r}"
                         raise RuntimeError(msg)
@@ -247,7 +245,7 @@ class CacheDict(tp.Generic[X]):
                     if not k:  # metadata
                         meta = info
                         new_last = self._info_files_last.get(fp.name, last)
-                        if new_last != last:
+                        if new_last > last:
                             last = new_last
                             msg = "Forwarding to byte %s in info file %s"
                             logger.debug(msg, last, name)
@@ -361,7 +359,6 @@ class CacheDictWriter:
                 if cd.folder is not None:
                     fp = Path(cd.folder) / f"{host_pid()}-info.jsonl"
                     self._info_filepath = fp
-                    self._info_handle = estack.enter_context(fp.open("ab"))
                 yield
         finally:
             if cd.folder is not None:
@@ -399,7 +396,7 @@ class CacheDictWriter:
             # ram_data will be loaded from cache for consistency
             cd._ram_data[key] = value
         if cd.folder is not None:
-            if self._info_filepath is None or self._info_handle is None:
+            if self._info_filepath is None:
                 raise RuntimeError("Cannot write out of a writer context")
             if self._dumper is None:
                 self._dumper = DumperLoader.CLASSES[cd.cache_type](cd.folder)
@@ -415,6 +412,10 @@ class CacheDictWriter:
             # new write
             info["#key"] = key
             meta = {"cache_type": cd.cache_type}
+            if self._info_handle is None:
+                # create the file only when required to avoid leaving empty files for some time
+                fp = self._info_filepath
+                self._info_handle = self._exit_stack.enter_context(fp.open("ab"))
             if not self._info_handle.tell():
                 meta_str = METADATA_TAG + json.dumps(meta) + "\n"
                 self._info_handle.write(meta_str.encode("utf8"))

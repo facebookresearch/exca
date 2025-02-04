@@ -230,6 +230,5 @@ def test_2_caches(tmp_path: Path) -> None:
     with cache.writer() as writer:
         writer["blublu"] = 12
         keys = list(cache2.keys())
-        print(keys)
     keys = list(cache2.keys())
     assert "blublu" in keys
