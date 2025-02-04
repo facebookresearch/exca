@@ -225,6 +225,7 @@ class CacheDict(tp.Generic[X]):
                     last = last + count
                     line = line.strip()
                     if not line:
+                        logger.debug("Skipping empty line #%s", k)
                         continue
                     strline = line.decode("utf8")
                     if not k:
