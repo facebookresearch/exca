@@ -439,3 +439,4 @@ class CacheDictWriter:
                         fp.chmod(cd.permissions)
                     except Exception:  # pylint: disable=broad-except
                         pass  # avoid issues in case of overlapping processes
+            os.utime(cd.folder)  # make sure the modified time is updated
