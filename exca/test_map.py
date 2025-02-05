@@ -17,7 +17,6 @@ import pytest
 
 from . import helpers
 from .cachedict import CacheDict
-from .confdict import ConfDict
 from .map import MapInfra, to_chunks
 
 PACKAGE = MapInfra.__module__.split(".", maxsplit=1)[0]
@@ -84,10 +83,7 @@ def test_map_infra(tmp_path: Path) -> None:
     out = list(whatever.process([1, 2, 2, 3]))
     assert [x.shape for x in out] == [(1, 13), (2, 13), (2, 13), (3, 13)]
     path = tmp_path
-    if ConfDict.UID_VERSION == 1:
-        uid = f"{__name__}.Whatever.process,1/param1=13-cbb76898"
-    else:
-        uid = f"{__name__}.Whatever.process,1/param1=13-c51ce410"
+    uid = f"{__name__}.Whatever.process,1/param1=13-c51ce410"
     assert whatever.infra.uid() == uid
     for name in uid.split("/"):
         path = path / name
@@ -100,10 +96,7 @@ def test_map_infra(tmp_path: Path) -> None:
     assert whatever.infra.job_name is None
     ex = whatever.infra.executor()
     assert ex is not None
-    if ConfDict.UID_VERSION == 1:
-        expected = "Whatever.process,1/param1=13-cbb76898"
-    else:
-        expected = "Whatever.process,1/param1=13-c51ce410"
+    expected = "Whatever.process,1/param1=13-c51ce410"
     assert ex._executor.parameters["name"] == expected
     assert "{folder}" not in str(whatever.infra._log_path())
     # recover cached objects
