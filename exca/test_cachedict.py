@@ -13,6 +13,7 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 import pandas as pd
+import psutil
 import pytest
 import torch
 
@@ -94,6 +95,7 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
         (torch.rand(2, 12), "TorchTensor"),
         ([12, 12], "Pickle"),
         (pd.DataFrame([{"stuff": 12}]), "PandasDataFrame"),
+        (pd.DataFrame([{"stuff": 12}]), "ParquetPandasDataFrame"),
         (np.array([12, 12]), "NumpyMemmapArray"),
         (np.array([12, 12]), "MemmapArrayFile"),
     ],
@@ -102,6 +104,7 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
 def test_specialized_dump(
     tmp_path: Path, data: tp.Any, cache_type: str, legacy_write: bool
 ) -> None:
+    proc = psutil.Process()
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path,
         keep_in_ram=False,
@@ -117,6 +120,9 @@ def test_specialized_dump(
     for fp in tmp_path.iterdir():
         octal_permissions = oct(fp.stat().st_mode)[-3:]
         assert octal_permissions == "777", f"Wrong permissions for {fp}"
+    assert isinstance(cache["x"], type(data))
+    files = proc.open_files()
+    assert not files, "No file should remain open"
 
 
 def _setval(cache: cd.CacheDict[tp.Any], key: str, val: tp.Any) -> None:
