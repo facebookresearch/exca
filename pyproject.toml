@@ -44,6 +44,7 @@ dependencies = [
         "types-PyYAML",
         "types-setuptools",
         "types-tqdm",
+        "types-psutil",
         # documentation
         "sphinx>=7.4.7",
         # "sphinx_rtd_theme>=2.0.0",
