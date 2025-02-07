@@ -109,7 +109,8 @@ class CacheDict(tp.Generic[X]):
         # json info file reading
         self._folder_modified = -1.0
         self._info_files_last: dict[str, int] = {}
-        self._no_key_reload = False
+        self._jsonl_readings = 0  # for perf
+        self._jsonl_reading_allowance = float("inf")
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -190,9 +191,10 @@ class CacheDict(tp.Generic[X]):
         """Load current info files"""
         if self.folder is None:
             return
-        if self._folder_modified > 0 and self._no_key_reload:
+        if self._jsonl_reading_allowance <= self._jsonl_readings:
             # bypass reloading info files
             return
+        self._jsonl_readings += 1
         folder = Path(self.folder)
         # read all existing jsonl files
         find_cmd = 'find . -type f -name "*-info.jsonl"'
@@ -320,6 +322,7 @@ class CacheDict(tp.Generic[X]):
 
     def __contains__(self, key: str) -> bool:
         # in-memory cache
+        print(key, self._ram_data.keys(), self._key_info.keys())
         if key in self._ram_data:
             return True
         if key in self._key_info:
@@ -330,16 +333,17 @@ class CacheDict(tp.Generic[X]):
         return key in self._key_info
 
     @contextlib.contextmanager
-    def no_key_reload(self) -> tp.Iterator[None]:
-        """Prevents reloading key/json files if already loaded once.
+    def frozen_cache_folder(self) -> tp.Iterator[None]:
+        """Considers the cache folder as frozen
+        to prevents reloading key/json files more than once from now.
         This is useful to speed up __contains__ statement with many missing
         items, which could trigger thousands of file rereads
         """
-        self._no_key_reload = True
+        self._jsonl_reading_allowance = self._jsonl_readings + 1
         try:
             yield
         finally:
-            self._no_key_reload = False
+            self._jsonl_reading_allowance = float("inf")
 
 
 class CacheDictWriter:

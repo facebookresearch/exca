@@ -303,7 +303,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         else:
             if not isinstance(cache, CacheDict):
                 raise TypeError(f"Unexpected type for cache: {cache}")
-            with cache.no_key_reload():
+            with cache.frozen_cache_folder():
                 # context: avoid reloading info files for each missing __contain__ check
                 missing = {k: item for k, item in missing.items() if k not in cache}
         self._check_configs(write=True)  # if there is a cache, check config or write it
