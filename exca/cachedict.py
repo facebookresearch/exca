@@ -323,7 +323,6 @@ class CacheDict(tp.Generic[X]):
 
     def __contains__(self, key: str) -> bool:
         # in-memory cache
-        print(key, self._ram_data.keys(), self._key_info.keys())
         if key in self._ram_data:
             return True
         if key in self._key_info:
