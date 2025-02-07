@@ -137,7 +137,8 @@ class CacheDict(tp.Generic[X]):
         return len(list(self.keys()))  # inefficient, but correct
 
     def keys(self) -> tp.Iterator[str]:
-        """Returns the keys in the dictionary"""
+        """Returns the keys in the dictionary
+        (triggers a cache folder reading if folder is not None)"""
         self._read_key_files()
         self._read_info_files()
         keys = set(self._ram_data) | set(self._key_info)
