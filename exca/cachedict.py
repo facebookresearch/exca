@@ -109,6 +109,7 @@ class CacheDict(tp.Generic[X]):
         # json info file reading
         self._folder_modified = -1.0
         self._info_files_last: dict[str, int] = {}
+        self._no_key_reload = False
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -134,18 +135,10 @@ class CacheDict(tp.Generic[X]):
     def __len__(self) -> int:
         return len(list(self.keys()))  # inefficient, but correct
 
-    def keys(self, lazy: bool = False) -> tp.Iterator[str]:
-        """Returns the keys in the dictionary
-
-        Parameter
-        ---------
-        lazy: bool
-            if lazy, only returns the keys already loaded, if not, forces a key
-            update reading jsonl files in the folder.
-        """
-        if not lazy:
-            self._read_key_files()
-            self._read_info_files()
+    def keys(self) -> tp.Iterator[str]:
+        """Returns the keys in the dictionary"""
+        self._read_key_files()
+        self._read_info_files()
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
@@ -196,6 +189,9 @@ class CacheDict(tp.Generic[X]):
     def _read_info_files(self) -> None:
         """Load current info files"""
         if self.folder is None:
+            return
+        if self._folder_modified > 0 and self._no_key_reload:
+            # bypass reloading info files
             return
         folder = Path(self.folder)
         # read all existing jsonl files
@@ -332,6 +328,18 @@ class CacheDict(tp.Generic[X]):
         self._read_key_files()
         self._read_info_files()
         return key in self._key_info
+
+    @contextlib.contextmanager
+    def no_key_reload(self) -> tp.Iterator[None]:
+        """Prevents reloading key/json files if already loaded once.
+        This is useful to speed up __contains__ statement with many missing
+        items, which could trigger thousands of file rereads
+        """
+        self._no_key_reload = True
+        try:
+            yield
+        finally:
+            self._no_key_reload = False
 
 
 class CacheDictWriter:
