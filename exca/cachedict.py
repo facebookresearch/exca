@@ -109,6 +109,8 @@ class CacheDict(tp.Generic[X]):
         # json info file reading
         self._folder_modified = -1.0
         self._info_files_last: dict[str, int] = {}
+        self._jsonl_readings = 0  # for perf
+        self._jsonl_reading_allowance = float("inf")
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -134,18 +136,11 @@ class CacheDict(tp.Generic[X]):
     def __len__(self) -> int:
         return len(list(self.keys()))  # inefficient, but correct
 
-    def keys(self, lazy: bool = False) -> tp.Iterator[str]:
+    def keys(self) -> tp.Iterator[str]:
         """Returns the keys in the dictionary
-
-        Parameter
-        ---------
-        lazy: bool
-            if lazy, only returns the keys already loaded, if not, forces a key
-            update reading jsonl files in the folder.
-        """
-        if not lazy:
-            self._read_key_files()
-            self._read_info_files()
+        (triggers a cache folder reading if folder is not None)"""
+        self._read_key_files()
+        self._read_info_files()
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
@@ -197,6 +192,10 @@ class CacheDict(tp.Generic[X]):
         """Load current info files"""
         if self.folder is None:
             return
+        if self._jsonl_reading_allowance <= self._jsonl_readings:
+            # bypass reloading info files
+            return
+        self._jsonl_readings += 1
         folder = Path(self.folder)
         # read all existing jsonl files
         find_cmd = 'find . -type f -name "*-info.jsonl"'
@@ -332,6 +331,19 @@ class CacheDict(tp.Generic[X]):
         self._read_key_files()
         self._read_info_files()
         return key in self._key_info
+
+    @contextlib.contextmanager
+    def frozen_cache_folder(self) -> tp.Iterator[None]:
+        """Considers the cache folder as frozen
+        to prevents reloading key/json files more than once from now.
+        This is useful to speed up __contains__ statement with many missing
+        items, which could trigger thousands of file rereads
+        """
+        self._jsonl_reading_allowance = self._jsonl_readings + 1
+        try:
+            yield
+        finally:
+            self._jsonl_reading_allowance = float("inf")
 
 
 class CacheDictWriter:
