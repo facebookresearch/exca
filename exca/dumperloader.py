@@ -173,7 +173,7 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
             # new data was added -> we need to force a reload and retry
             del self.FILES[path]
         memmap = memmap.view(dtype=dtype).reshape(shape)
-        return memmap  # type: ignore
+        return memmap
 
     def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:
         if self._f is None or self._name is None:

@@ -242,7 +242,9 @@ def test_2_caches(tmp_path: Path) -> None:
 
 
 def test_2_caches_memmap(tmp_path: Path) -> None:
-    params = dict(folder=tmp_path, keep_in_ram=True, cache_type="MemmapArrayFile")
+    params: dict[str, tp.Any] = dict(
+        folder=tmp_path, keep_in_ram=True, cache_type="MemmapArrayFile"
+    )
     cache: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
     cache2: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
     with cache.writer() as writer:
