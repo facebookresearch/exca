@@ -165,7 +165,6 @@ def test_info_jsonl(
     cache.clear()
     assert not cache
     assert not list(tmp_path.iterdir())
-    raise
 
 
 @pytest.mark.parametrize(
