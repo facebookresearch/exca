@@ -140,6 +140,7 @@ class NumpyMemmapArray(NumpyArray):
 
 
 class MemmapArrayFile(DumperLoader[np.ndarray]):
+    FILES: dict[Path, np.memmap] = {}
 
     def __init__(self, folder: str | Path = "") -> None:
         super().__init__(folder)
@@ -160,14 +161,19 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
                 self._name = None
 
     def load(self, filename: str, offset: int, shape: tp.Sequence[int], dtype: str) -> np.ndarray:  # type: ignore
-        return np.memmap(
-            self.folder / filename,
-            dtype=dtype,
-            mode="r",
-            offset=offset,
-            shape=tuple(shape),
-            order="C",
-        )
+        path = self.folder / filename
+        shape = tuple(shape)
+        length = np.prod(shape) * np.dtype(dtype).itemsize
+        for _ in range(2):
+            if path not in self.FILES:
+                self.FILES[path] = np.memmap(self.folder / filename, mode="r", order="C")
+            memmap = self.FILES[path][offset : offset + length]
+            if memmap.size:
+                break
+            # new data was added -> we need to force a reload and retry
+            del self.FILES[path]
+        memmap = memmap.view(dtype=dtype).reshape(shape)
+        return memmap  # type: ignore
 
     def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:
         if self._f is None or self._name is None:

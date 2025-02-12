@@ -165,6 +165,7 @@ def test_info_jsonl(
     cache.clear()
     assert not cache
     assert not list(tmp_path.iterdir())
+    raise
 
 
 @pytest.mark.parametrize(
@@ -238,3 +239,18 @@ def test_2_caches(tmp_path: Path) -> None:
         keys = list(cache2.keys())
     keys = list(cache2.keys())
     assert "blublu" in keys
+
+
+def test_2_caches_memmap(tmp_path: Path) -> None:
+    params = dict(folder=tmp_path, keep_in_ram=True, cache_type="MemmapArrayFile")
+    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
+    cache2: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
+    with cache.writer() as writer:
+        writer["blublu"] = np.random.rand(3, 12)
+    _ = cache2["blublu"]
+    with cache.writer() as writer:
+        writer["blublu2"] = np.random.rand(3, 12)
+    _ = cache2["blublu2"]
+    assert "blublu" in cache2._ram_data
+    _ = cache2["blublu"]
+    # raise
