@@ -111,7 +111,10 @@ class CacheDict(tp.Generic[X]):
         self._info_files_last: dict[str, int] = {}
         self._jsonl_readings = 0  # for perf
         self._jsonl_reading_allowance = float("inf")
-        self._loader_cache: dict[tp.Any, tp.Any] = {}  # hack for keeping data file open
+        # hack for keeping data file open
+        self._loader_cache: dict[tp.Any, tp.Any] | None = (
+            {} if self._keep_in_ram else None
+        )
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
