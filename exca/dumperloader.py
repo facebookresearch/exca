@@ -40,8 +40,13 @@ class DumperLoader(tp.Generic[X]):
     CLASSES: tp.MutableMapping[str, "tp.Type[DumperLoader[tp.Any]]"] = {}
     DEFAULTS: tp.MutableMapping[tp.Any, "tp.Type[DumperLoader[tp.Any]]"] = {}
 
-    def __init__(self, folder: str | Path = "") -> None:
+    def __init__(
+        self, folder: str | Path = "", cache: dict[tp.Any, tp.Any] | None = None
+    ) -> None:
         self.folder = Path(folder)
+        if cache is None:
+            cache = {}
+        self.cache = cache
 
     @contextlib.contextmanager
     def open(self) -> tp.Iterator[None]:
@@ -140,10 +145,11 @@ class NumpyMemmapArray(NumpyArray):
 
 
 class MemmapArrayFile(DumperLoader[np.ndarray]):
-    FILES: dict[Path, np.memmap] = {}
 
-    def __init__(self, folder: str | Path = "") -> None:
-        super().__init__(folder)
+    def __init__(
+        self, folder: str | Path = "", cache: dict[tp.Any, tp.Any] | None = None
+    ) -> None:
+        super().__init__(folder=folder, cache=cache)
         self._f: io.BufferedWriter | None = None
         self._name: str | None = None
 
@@ -165,13 +171,13 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
         shape = tuple(shape)
         length = np.prod(shape) * np.dtype(dtype).itemsize
         for _ in range(2):
-            if path not in self.FILES:
-                self.FILES[path] = np.memmap(self.folder / filename, mode="r", order="C")
-            memmap = self.FILES[path][offset : offset + length]
+            if path not in self.cache:
+                self.cache[path] = np.memmap(self.folder / filename, mode="r", order="C")
+            memmap = self.cache[path][offset : offset + length]
             if memmap.size:
                 break
             # new data was added -> we need to force a reload and retry
-            del self.FILES[path]
+            del self.cache[path]
         memmap = memmap.view(dtype=dtype).reshape(shape)
         return memmap
 
