@@ -7,6 +7,7 @@
 import contextlib
 import hashlib
 import io
+import math
 import pickle
 import socket
 import threading
@@ -169,15 +170,17 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
     def load(self, filename: str, offset: int, shape: tp.Sequence[int], dtype: str) -> np.ndarray:  # type: ignore
         path = self.folder / filename
         shape = tuple(shape)
-        length = np.prod(shape) * np.dtype(dtype).itemsize
+        length = math.prod(shape) * np.dtype(dtype).itemsize
         for _ in range(2):
-            if path not in self.cache:
-                self.cache[path] = np.memmap(self.folder / filename, mode="r", order="C")
-            memmap = self.cache[path][offset : offset + length]
+            if filename not in self.cache:
+                self.cache[filename] = np.memmap(
+                    self.folder / filename, mode="r", order="C"
+                )
+            memmap = self.cache[filename][offset : offset + length]
             if memmap.size:
                 break
             # new data was added -> we need to force a reload and retry
-            del self.cache[path]
+            del self.cache[filename]
         memmap = memmap.view(dtype=dtype).reshape(shape)
         return memmap
 

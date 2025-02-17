@@ -178,7 +178,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
     # internals
     _recomputed: tp.Set[str] = set()  # for mode="force"
-    _cache_dict: CacheDict[tp.Any] = pydantic.PrivateAttr()
+    _cache_dict: CacheDict[tp.Any] = pydantic.PrivateAttr(None)
     _infra_method: tp.Optional["MapInfraMethod"] = pydantic.PrivateAttr(None)
 
     def model_post_init(self, log__: tp.Any) -> None:
@@ -211,7 +211,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
     @property
     def cache_dict(self) -> CacheDict[tp.Any]:
-        if not hasattr(self, "_cache_dict"):
+        if self._cache_dict is None:
             imethod = self._infra_method
             if imethod is None:
                 raise RuntimeError(f"Infra was not applied: {self!r}")
@@ -400,8 +400,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             [j.result() for j in jobs]  # wait for processing to complete
             logger.info("Finished processing %s samples for %s", len(missing), uid)
         msg = "Recovering %s items for %s from %s"
-        # using factory because uid is too slow for here
-        logger.debug(msg, len(items), self._factory(), self.cache_dict)
+        logger.debug(msg, len(items), self._uid, self.cache_dict)
         return (self.cache_dict[k] for k, _ in uid_items)
 
     def _method_override_futures(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
