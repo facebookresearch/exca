@@ -160,7 +160,7 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
                 self._name = None
 
     def load(self, filename: str, offset: int, shape: tp.Sequence[int], dtype: str) -> np.ndarray:  # type: ignore
-        return np.memmap(
+        out = np.memmap(
             self.folder / filename,
             dtype=dtype,
             mode="r",
@@ -168,6 +168,7 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
             shape=tuple(shape),
             order="C",
         )
+        return np.array(out)
 
     def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:
         if self._f is None or self._name is None:
