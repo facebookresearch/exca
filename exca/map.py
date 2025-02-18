@@ -114,7 +114,7 @@ def to_chunks(
     items_per_chunk = int(np.ceil(len(items) / splits))
     for k in range(splits):
         # select a batch/chunk of samples_per_job items to send to a job
-        yield items[k * items_per_chunk : (k + 1) * items_per_chunk]
+        yield items[k * items_per_chunk: (k + 1) * items_per_chunk]
 
 
 class MapInfra(base.BaseInfra, slurm.SubmititMixin):
@@ -211,7 +211,10 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
     @property
     def cache_dict(self) -> CacheDict[tp.Any]:
-        if self._cache_dict is None:
+        cd = self._cache_dict
+        if cd is None:
+            if not hasattr(self, "mode"):  # compatibility
+                self.mode = "cached"
             imethod = self._infra_method
             if imethod is None:
                 raise RuntimeError(f"Infra was not applied: {self!r}")
@@ -227,12 +230,14 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 self._set_permissions(None)
             if isinstance(self.permissions, str):
                 raise RuntimeError("infra.permissions should have been an integer")
-            self._cache_dict = CacheDict(
+            cd = CacheDict(
                 folder=cache_path,
                 keep_in_ram=self.keep_in_ram,
                 cache_type=cache_type,
             )
-        return self._cache_dict
+            self._check_configs(write=True)  # if there is a cache, check config or write it
+            self._cache_dict = cd
+        return cd
 
     # pylint: disable=unused-argument
     def apply(
@@ -306,9 +311,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             with cache.frozen_cache_folder():
                 # context: avoid reloading info files for each missing __contain__ check
                 missing = {k: item for k, item in missing.items() if k not in cache}
-        self._check_configs(write=True)  # if there is a cache, check config or write it
-        if not hasattr(self, "mode"):  # compatibility
-            self.mode = "cached"
         if self.mode == "force":
             # remove any item already computed, but not items being computed
             # in another process (waited for by JobChecker)
@@ -329,7 +331,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 jcheck = JobChecker(folder=executor.folder)
                 jcheck.wait()
                 # update cache dict and recheck as actual checking for keys updates the dict
-                keys = set(self.cache_dict)  # update cache dict
+                keys = set(cache)  # update cache dict
                 missing = {k: item for k, item in missing.items() if k not in keys}
         if len(items) == len(missing) == 1 and self.forbid_single_item_computation:
             key, item = next(iter(missing.items()))
@@ -400,8 +402,11 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             [j.result() for j in jobs]  # wait for processing to complete
             logger.info("Finished processing %s samples for %s", len(missing), uid)
         msg = "Recovering %s items for %s from %s"
-        logger.debug(msg, len(items), self._uid, self.cache_dict)
-        return (self.cache_dict[k] for k, _ in uid_items)
+        cd = self._cache_dict
+        if cd is None:
+            raise RuntimeError("Something went wrong")
+        logger.debug(msg, len(items), self._uid, cd)
+        return (cd[k] for k, _ in uid_items)
 
     def _method_override_futures(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
         imethod = self._infra_method
@@ -474,7 +479,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     writer[x] = y
         msg = "Recovering %s items for %s from %s"
         # using factory because uid is too slow for here
-        logger.debug(msg, len(uid_items), self._factory(), self.cache_dict)
+        logger.debug(msg, len(uid_items), self._uid, cache_dict)
         return (cache_dict[k] for k, _ in uid_items)
 
     def _call_and_store(
