@@ -35,7 +35,8 @@ def test_identify_file(tmp_path: Path) -> None:
     assert out == fp
 
 
-def test_workdir(tmp_path: Path) -> None:
+@pytest.mark.parametrize("file_from_folder", (True, False))
+def test_workdir(tmp_path: Path, file_from_folder: bool) -> None:
     old = tmp_path / "old"
     old.mkdir()
     new = tmp_path / "new"
@@ -48,8 +49,11 @@ def test_workdir(tmp_path: Path) -> None:
     sub = folder / "__pycache__"
     sub.mkdir()
     (sub / "ignore.py").touch()
+    sub_string = folder.name
+    if file_from_folder:
+        sub_string = "folder/a_file.py"
     with workdir.chdir(old):
-        wdir = workdir.WorkDir(copied=[fp.name, folder.name])
+        wdir = workdir.WorkDir(copied=[fp.name, sub_string])
         wdir.folder = new
         with wdir.activate():
             assert Path(os.getcwd()).name == "new"

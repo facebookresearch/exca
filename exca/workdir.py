@@ -139,6 +139,7 @@ class WorkDir(pydantic.BaseModel):
                 if path.is_dir():
                     shutil.copytree(path, out, ignore=ignore)
                 else:
+                    out.parent.mkdir(exist_ok=True, parents=True)
                     shutil.copyfile(path, out, follow_symlinks=True)
                 logger.info("Copied %s to %s", path, out)
         if self._commits:
