@@ -8,7 +8,6 @@ import collections
 import contextlib
 import functools
 import logging
-import os
 import time
 import traceback
 import typing as tp
@@ -383,17 +382,6 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             if not (infra.uid_folder() / "job.pkl").exists():
                 continue  # no cache
             yield obj
-
-    def _run_method(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
-        """Method that runs in the job"""
-        if self.workdir is not None:
-            logger.info("Running function from %s", os.getcwd())
-        if self._infra_method is None:
-            raise RuntimeError("Infra not correctly applied to a method")
-        method = self._infra_method.method
-        if not isinstance(method, staticmethod):
-            method = functools.partial(self._infra_method.method, self._obj)
-        return method(*args, **kwargs)
 
     # pylint: disable=arguments-differ
     def _method_override(self) -> tp.Any:  # type: ignore
