@@ -249,7 +249,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 for infra in missing:
                     if infra._infra_method is None:
                         raise RuntimeError("Infra not correctly applied to a method")
-                    jobs.append(executor.submit(infra._wrapped_method))
+                    jobs.append(executor.submit(infra._run_method))
             logger.info(
                 "Submitted %s jobs (eg: %s) for %s through cluster '%s' "
                 "(%s already computed/ing in cache folder %s)",
@@ -336,7 +336,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         # submit job if it does not exist
         executor = self.executor()
         if executor is None:
-            job = LocalJob(self._wrapped_method)
+            job = LocalJob(self._run_method)
         else:
             executor.folder.mkdir(exist_ok=True, parents=True)
             logger.info(
@@ -345,7 +345,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 executor.cluster,
             )
             with self._work_env():
-                job = executor.submit(self._wrapped_method)
+                job = executor.submit(self._run_method)
         job = self._set_job(job)
         return job  # type: ignore
 
@@ -384,7 +384,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 continue  # no cache
             yield obj
 
-    def _wrapped_method(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
+    def _run_method(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
         """Method that runs in the job"""
         if self.workdir is not None:
             logger.info("Running function from %s", os.getcwd())
@@ -511,17 +511,6 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
     def _exclude_from_cls_uid(self) -> tp.List[str]:
         return ["."]  # not taken into accound for uid
 
-    def _wrapped_method(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
-        """Method that runs in the job"""
-        if self.workdir is not None:
-            logger.info("Running function from %s", os.getcwd())
-        if self._infra_method is None:
-            raise RuntimeError("Infra not correctly applied to a method")
-        method = self._infra_method.method
-        if not isinstance(method, staticmethod):
-            method = functools.partial(self._infra_method.method, self._obj)
-        return method(*args, **kwargs)
-
     # pylint: disable=unused-argument
     def apply(self, method: base.C) -> base.C:
         """Applies the infra on a method taking no parameter (except `self`)
@@ -561,8 +550,8 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         if executor is None:
             executor = self.executor()
         if executor is None:
-            return LocalJob(self._wrapped_method, *args, **kwargs)
-        return executor.submit(self._wrapped_method, *args, **kwargs)
+            return LocalJob(self._run_method, *args, **kwargs)
+        return executor.submit(self._run_method, *args, **kwargs)
 
     @contextlib.contextmanager
     def batch(self, max_workers: int = 256) -> tp.Iterator[None]:
