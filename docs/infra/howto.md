@@ -113,10 +113,10 @@ All `infra` parameters except `version` are ignored in such a way because cachin
 
 ```python continuation
 class UidTask2(UidTask):
-    _exclude_from_class_uid: tp.ClassVar[list[str]] = ["device"]
+    _exclude_from_cls_uid: tp.ClassVar[list[str]] = ["device"]
 
 task2 = UidTask2(device="cuda", coeff=3)
-assert task.infra.config(uid=True, exclude_defaults=True) == {'coeff': 3.0}
+assert task2.infra.config(uid=True, exclude_defaults=True) == {'coeff': 3.0}
 ```
 
 ### Cache uid
@@ -139,7 +139,7 @@ class UidTask(pydantic.BaseModel):
     coeff: float = 12.0
     device: str = "cpu"
     infra: TaskInfra = TaskInfra(version="1")
-    _exclude_from_cls_uid=("device",)
+    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] =("device",)
 
     @infra.apply(exclude_from_cache_uid=("coeff",))
     def _internal_cached_method(self) -> np.ndarray:
@@ -160,6 +160,9 @@ class UidTask(pydantic.BaseModel):
     coeff: float = 12.0
     device: str = "cpu"
     infra: TaskInfra = TaskInfra(version="1")
+
+    def _exclude_from_cls_uid(self) -> tuple[str, ...]
+        return ("device",)
 
     def _cache_exclusion(self) -> tp.List[str]:
         return ["coeff"]
