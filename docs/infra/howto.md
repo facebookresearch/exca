@@ -139,7 +139,7 @@ class UidTask(pydantic.BaseModel):
     coeff: float = 12.0
     device: str = "cpu"
     infra: TaskInfra = TaskInfra(version="1")
-    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] =("device",)
+    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("device",)
 
     @infra.apply(exclude_from_cache_uid=("coeff",))
     def _internal_cached_method(self) -> np.ndarray:
@@ -161,7 +161,7 @@ class UidTask(pydantic.BaseModel):
     device: str = "cpu"
     infra: TaskInfra = TaskInfra(version="1")
 
-    def _exclude_from_cls_uid(self) -> tuple[str, ...]
+    def _exclude_from_cls_uid(self) -> tuple[str, ...]:
         return ("device",)
 
     def _cache_exclusion(self) -> tp.List[str]:
