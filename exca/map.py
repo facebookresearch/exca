@@ -7,7 +7,6 @@
 import collections
 import contextlib
 import dataclasses
-import functools
 import inspect
 import itertools
 import logging
@@ -492,8 +491,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if isinstance(self, slurm.SubmititMixin):  # dependence to mixin
             if self.workdir is not None and self.cluster is not None and items:
                 logger.info("Running from working directory: %s", os.getcwd())
-        method = functools.partial(imethod.method, self._obj)
-        outputs = method(items)
+        outputs = self._run_method(items)
         sentinel = base.Sentinel()
         with contextlib.ExitStack() as estack:
             writer = d
