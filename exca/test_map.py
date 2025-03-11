@@ -238,8 +238,10 @@ def test_mode(tmp_path: Path) -> None:
         np.testing.assert_array_equal(out["cached"], out["force"])
     np.testing.assert_array_equal(out["force"], out["read-only"])
     # check not recomputed:
-    newcall = list(cfgs["force"].process([2]))[0]
-    np.testing.assert_array_equal(newcall, out["force"])
+    for k in range(2):
+        newcall = list(cfgs["force"].process([2]))[0]
+        msg = f"Recomputed on try #{k + 1}"
+        np.testing.assert_array_equal(newcall, out["force"], err_msg=msg)
 
 
 @pytest.mark.parametrize(
