@@ -107,9 +107,17 @@ assert task.infra.config(uid=True, exclude_defaults=True) == {
 ```
 In practice the `uid` is computed from the non-default parameters, so the `uid` will be something like `coeff=3,device=cuda-4f4ca7cb` in this case (the last part being a hash for security reasons).
 
-`device` however defines where the computation is performed but has no impact on the actual result, so it should not impact the uid of the class. This parameter should therefore be excluded from the cache, this can be done by either having a `_exclude_from_class_uid` method or class variable.
+`device` however defines where the computation is performed but has no impact on the actual result, so it should not impact the uid of the class. This parameter should therefore be excluded from the cache, this can be done by either having a `_exclude_from_cls_uid` method or class variable.
 
 All `infra` parameters except `version` are ignored in such a way because caching or the required resources for computation (number of cpus/gpus for instance) do not impact the actual result of the computation. `version` is therefore the only parameter of the `infra` that will appear in the config even when specifying caching or remote computation options.
+
+```python continuation
+class UidTask2(UidTask):
+    _exclude_from_cls_uid: tp.ClassVar[list[str]] = ["device"]
+
+task2 = UidTask2(device="cuda", coeff=3)
+assert task2.infra.config(uid=True, exclude_defaults=True) == {'coeff': 3.0}
+```
 
 ### Cache uid
 
@@ -131,7 +139,7 @@ class UidTask(pydantic.BaseModel):
     coeff: float = 12.0
     device: str = "cpu"
     infra: TaskInfra = TaskInfra(version="1")
-    _exclude_from_cache_uid=("device",)
+    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("device",)
 
     @infra.apply(exclude_from_cache_uid=("coeff",))
     def _internal_cached_method(self) -> np.ndarray:
@@ -153,8 +161,8 @@ class UidTask(pydantic.BaseModel):
     device: str = "cpu"
     infra: TaskInfra = TaskInfra(version="1")
 
-    def _exclude_from_cache_uid(self) -> tp.List[str]:
-        return ["device"]
+    def _exclude_from_cls_uid(self) -> tuple[str, ...]:
+        return ("device",)
 
     def _cache_exclusion(self) -> tp.List[str]:
         return ["coeff"]
