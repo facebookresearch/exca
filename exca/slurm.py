@@ -155,6 +155,8 @@ class SubmititMixin(pydantic.BaseModel):
                 f"conda activate {self.conda_env}",
             ]
             executor.update_parameters(**{f"{executor.cluster}_setup": cmds})
+            # use env's python
+            executor.python = "python"  # type: ignore
         if self.job_name is None and executor is not None:
             if isinstance(self, base.BaseInfra):
                 cname = self._obj.__class__.__name__
