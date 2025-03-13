@@ -89,14 +89,19 @@ def test_workdir_editable(tmp_path: Path) -> None:
 
 
 def test_ignore(tmp_path: Path) -> None:
-    ig = workdir.Ignore(includes=["*.py"], excludes=["stuff.py"])
     names = ["stuff.py", "something.py", "data.csv", "folder"]
+    ig = workdir.Ignore(includes=["*.py"], excludes=["stuff.py"])
     out = ig(tmp_path, names)
     assert out == {"stuff.py", "data.csv", "folder"}
     # now with a folder
     (tmp_path / "folder").mkdir()
     out = ig(tmp_path, names)
     assert out == {"stuff.py", "data.csv"}
+    # now multiple includes
+    ig = workdir.Ignore(includes=["*.py", "*.csv"], excludes=["stuff.py"])
+    out = ig(tmp_path, names)
+    assert out == {"stuff.py"}
+    # now with a path
     ig = workdir.Ignore(excludes=["stuff.py"])
     out = ig("somewhere", names)
     assert out == {"stuff.py"}
