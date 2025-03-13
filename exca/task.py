@@ -8,7 +8,6 @@ import collections
 import contextlib
 import functools
 import logging
-import os
 import time
 import traceback
 import typing as tp
@@ -27,17 +26,6 @@ C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
 Status = tp.Literal["not submitted", "running", "completed", "failed"]
 Mode = tp.Literal["cached", "retry", "force", "read-only"]
 logger = logging.getLogger(__name__)
-
-
-class Log(tp.Generic[X]):
-    """Add initial log to the function"""
-
-    def __init__(self, func: tp.Callable[..., X]) -> None:
-        self.func = func
-
-    def __call__(self, *args: tp.Any, **kwargs: tp.Any) -> X:
-        logger.info("Running function from %s", os.getcwd())
-        return self.func(*args, **kwargs)
 
 
 class LocalJob:
@@ -260,8 +248,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 for infra in missing:
                     if infra._infra_method is None:
                         raise RuntimeError("Infra not correctly applied to a method")
-                    method = functools.partial(infra._infra_method.method, infra._obj)
-                    jobs.append(executor.submit(Log(method)))
+                    jobs.append(executor.submit(infra._run_method))
             logger.info(
                 "Submitted %s jobs (eg: %s) for %s through cluster '%s' "
                 "(%s already computed/ing in cache folder %s)",
@@ -320,9 +307,6 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     def job(self) -> submitit.Job[tp.Any] | LocalJob:
         """Creates or reload the job corresponding to the task"""
         folder = self.uid_folder()
-        if self._infra_method is None:
-            raise RuntimeError("Infra not correctly applied to a method")
-        method = functools.partial(self._infra_method.method, self._obj)
         job: tp.Any = None
         if self._effective_mode == "force":
             self.clear_job()
@@ -351,7 +335,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         # submit job if it does not exist
         executor = self.executor()
         if executor is None:
-            job = LocalJob(method)
+            job = LocalJob(self._run_method)
         else:
             executor.folder.mkdir(exist_ok=True, parents=True)
             logger.info(
@@ -360,7 +344,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 executor.cluster,
             )
             with self._work_env():
-                job = executor.submit(Log(method))
+                job = executor.submit(self._run_method)
         job = self._set_job(job)
         return job  # type: ignore
 
@@ -550,15 +534,12 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         """
         if self._infra_method is None:
             raise RuntimeError("Infra must be applied to a method.")
-        method = self._infra_method.method
-        if not isinstance(method, staticmethod):
-            method = functools.partial(self._infra_method.method, self._obj)
         executor = self._array_executor
         if executor is None:
             executor = self.executor()
         if executor is None:
-            return LocalJob(method, *args, **kwargs)
-        return executor.submit(method, *args, **kwargs)
+            return LocalJob(self._run_method, *args, **kwargs)
+        return executor.submit(self._run_method, *args, **kwargs)
 
     @contextlib.contextmanager
     def batch(self, max_workers: int = 256) -> tp.Iterator[None]:

@@ -5,7 +5,10 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
+import functools
 import getpass
+import logging
+import os
 import subprocess
 import typing as tp
 import uuid
@@ -20,6 +23,7 @@ from .workdir import WorkDir
 
 submitit.Job._results_timeout_s = 4  # avoid too long a wait
 SUBMITIT_EXECUTORS = ("auto", "local", "slurm", "debug")
+logger = logging.getLogger(__name__)
 
 
 class SubmititMixin(pydantic.BaseModel):
@@ -187,3 +191,15 @@ class SubmititMixin(pydantic.BaseModel):
                     object.__setattr__(self.workdir, "folder", folder)
                 with self.workdir.activate():
                     yield
+
+    def _run_method(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
+        if not isinstance(self, base.BaseInfra):
+            raise RuntimeError("This can only run on BaseInfra subclasses")
+        if self.workdir is not None:
+            logger.info("Running function from %s", os.getcwd())
+        if self._infra_method is None:
+            raise RuntimeError("Infra not correctly applied to a method")
+        method = self._infra_method.method
+        if not isinstance(method, staticmethod):
+            method = functools.partial(self._infra_method.method, self._obj)
+        return method(*args, **kwargs)

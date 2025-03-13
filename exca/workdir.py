@@ -139,6 +139,7 @@ class WorkDir(pydantic.BaseModel):
                 if path.is_dir():
                     shutil.copytree(path, out, ignore=ignore)
                 else:
+                    out.parent.mkdir(exist_ok=True, parents=True)
                     shutil.copyfile(path, out, follow_symlinks=True)
                 logger.info("Copied %s to %s", path, out)
         if self._commits:
@@ -199,10 +200,13 @@ class Ignore:
         self.excludes = list(excludes)
 
     def __call__(self, path: str | Path, names: tp.List[str]) -> tp.Set[str]:
-        included = set(names)
-        for include in self.includes:
-            included = set(fnmatch.filter(included, include))
-        missing = set(names) - set(included)
+        if not self.includes:
+            included = set(names)
+        else:
+            included = set()
+            for include in self.includes:
+                included |= set(fnmatch.filter(set(names), include))
+        missing = set(names) - included
         path = Path(path)
         for excluded in missing:
             # always include subfolders except if explicitely excluded below
@@ -210,4 +214,4 @@ class Ignore:
                 included.add(excluded)
         for exclude in self.excludes:
             included -= set(fnmatch.filter(included, exclude))
-        return set(names) - set(included)
+        return set(names) - included

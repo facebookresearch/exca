@@ -7,7 +7,6 @@
 import collections
 import contextlib
 import dataclasses
-import functools
 import inspect
 import itertools
 import logging
@@ -320,7 +319,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 for uid in to_remove:
                     del cache[uid]
             missing = {x: y for x, y in items.items() if x not in self._recomputed}
-            self._recomputed = set(missing)
+            self._recomputed |= set(missing)
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
@@ -492,8 +491,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if isinstance(self, slurm.SubmititMixin):  # dependence to mixin
             if self.workdir is not None and self.cluster is not None and items:
                 logger.info("Running from working directory: %s", os.getcwd())
-        method = functools.partial(imethod.method, self._obj)
-        outputs = method(items)
+        outputs = self._run_method(items)
         sentinel = base.Sentinel()
         with contextlib.ExitStack() as estack:
             writer = d
