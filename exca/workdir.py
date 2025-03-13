@@ -200,10 +200,11 @@ class Ignore:
         self.excludes = list(excludes)
 
     def __call__(self, path: str | Path, names: tp.List[str]) -> tp.Set[str]:
-        included = set(names)
+        all = set(names)
+        included = set()
         for include in self.includes:
-            included = set(fnmatch.filter(included, include))
-        missing = set(names) - set(included)
+            included |= set(fnmatch.filter(all, include))
+        missing = all - included
         path = Path(path)
         for excluded in missing:
             # always include subfolders except if explicitely excluded below
@@ -211,4 +212,4 @@ class Ignore:
                 included.add(excluded)
         for exclude in self.excludes:
             included -= set(fnmatch.filter(included, exclude))
-        return set(names) - set(included)
+        return all - included
