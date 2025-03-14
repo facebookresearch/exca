@@ -168,7 +168,6 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
                 self._name = None
 
     def load(self, filename: str, offset: int, shape: tp.Sequence[int], dtype: str) -> np.ndarray:  # type: ignore
-        path = self.folder / filename
         shape = tuple(shape)
         length = math.prod(shape) * np.dtype(dtype).itemsize
         for _ in range(2):
@@ -176,7 +175,7 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
                 self.cache[filename] = np.memmap(
                     self.folder / filename, mode="r", order="C"
                 )
-            memmap = self.cache[filename][offset : offset + length]
+            memmap = self.cache[filename][offset: offset + length]
             if memmap.size:
                 break
             # new data was added -> we need to force a reload and retry

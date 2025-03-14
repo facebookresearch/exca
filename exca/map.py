@@ -190,7 +190,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
     def __getstate__(self) -> tp.Dict[str, tp.Any]:
         out = super().__getstate__()
-        out["__pydantic_private__"].pop("_cache_dict", None)
+        out["__pydantic_private__"]["_cache_dict"] = None
         return out
 
     @property
