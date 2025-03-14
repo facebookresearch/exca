@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
+import shutil
 import functools
 import getpass
 import logging
@@ -143,10 +144,10 @@ class SubmititMixin(pydantic.BaseModel):
         params = {name: val for name, val in params.items() if val is not None}
         executor.update_parameters(**params)
         if self.conda_env is not None:
-            string = subprocess.check_output(
-                "conda info --base".split(), shell=False
-            ).decode("utf8")
-            cfile = Path(string.strip()) / "etc/profile.d/conda.sh"
+            # source conda
+            string = subprocess.check_output("conda info --base".split(), shell=False)
+            condabase = Path(string.decode("utf8").strip())
+            cfile = condabase / "etc/profile.d/conda.sh"
             if not cfile.exists():
                 raise RuntimeError(f"conda file to source does not exist: {cfile}")
             cmds = [
@@ -155,6 +156,22 @@ class SubmititMixin(pydantic.BaseModel):
                 f"conda activate {self.conda_env}",
             ]
             executor.update_parameters(**{f"{executor.cluster}_setup": cmds})
+            # find correct python path
+            envpath = Path(self.conda_env)
+            if not envpath.exists():  # not absolute
+                current_python = Path(shutil.which("python"))
+                if current_python.parents[2].name != "envs":
+                    msg = f"Assumed running in a conda env but structure is weird {current_python=}"
+                    raise RuntimeError(msg)
+                envpath = current_python.parents[1]
+            pythonpath = envpath / "bin" / "python3"
+            # use env's python
+            sub = executor
+            if isinstance(sub, submitit.AutoExecutor):
+                sub = executor._executor
+            if not hasattr(sub, "python"):
+                raise RuntimeError(f"Cannot set python executable on {executor=}")
+            sub.python = str(pythonpath)  # type: ignore
         if self.job_name is None and executor is not None:
             if isinstance(self, base.BaseInfra):
                 cname = self._obj.__class__.__name__
@@ -167,7 +184,7 @@ class SubmititMixin(pydantic.BaseModel):
             raise RuntimeError("No log path provided")
         return Path(str(self.logs).replace("{user}", getpass.getuser()))
 
-    @contextlib.contextmanager
+    @ contextlib.contextmanager
     def _work_env(self) -> tp.Iterator[None]:
         """Clean slurm environment variable and create change to clean/copied workspace"""
         if not isinstance(self, base.BaseInfra):
