@@ -143,10 +143,9 @@ class SubmititMixin(pydantic.BaseModel):
         params = {name: val for name, val in params.items() if val is not None}
         executor.update_parameters(**params)
         if self.conda_env is not None:
-            string = subprocess.check_output(
-                "conda info --base".split(), shell=False
-            ).decode("utf8")
-            cfile = Path(string.strip()) / "etc/profile.d/conda.sh"
+            string = subprocess.check_output("conda info --base".split(), shell=False)
+            condabase = Path(string.decode("utf8").strip())
+            cfile = condabase / "etc/profile.d/conda.sh"
             if not cfile.exists():
                 raise RuntimeError(f"conda file to source does not exist: {cfile}")
             cmds = [
@@ -154,9 +153,17 @@ class SubmititMixin(pydantic.BaseModel):
                 "conda deactivate",
                 f"conda activate {self.conda_env}",
             ]
+            envpath = (
+                Path(conda_env)
+                if Path(conda_env).exists()
+                else condabase / self.conda_env
+            )
+            pythonpath = envpath / "bin" / "python3"
             executor.update_parameters(**{f"{executor.cluster}_setup": cmds})
             # use env's python
-            executor.python = "python"  # type: ignore
+            if not hasattr(executor, "python"):
+                raise RuntimeError(f"Cannot set python executable on {executor=}")
+            executor.python = str(pythonpath)  # type: ignore
         if self.job_name is None and executor is not None:
             if isinstance(self, base.BaseInfra):
                 cname = self._obj.__class__.__name__
