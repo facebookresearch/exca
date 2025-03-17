@@ -66,7 +66,7 @@ class LocalJob:
         out = self._result[1]
         if isinstance(out, tuple):
             e, tb = out
-            logger.warning(f"Cached computation failed with traceback:\n{tb}")
+            logger.warning(f"Computation failed with traceback:\n{tb}")
             return e  # type: ignore
         elif isinstance(out, Exception):
             return out  # legacy #1
