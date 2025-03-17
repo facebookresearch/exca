@@ -162,6 +162,16 @@ class SubmititMixin(pydantic.BaseModel):
                 sub = executor._executor  # type: ignore
             if not hasattr(sub, "python"):
                 raise RuntimeError(f"Cannot set python executable on {executor=}")
+            import pickle
+
+            from submitit.core import utils
+
+            def _cloudpickle_dump(obj: tp.Any, filename: str | Path) -> None:
+                with Path(filename).open("wb") as ofile:
+                    pickle.dump(obj, ofile, protocol=4)
+
+            utils.cloudpickle_dump = _cloudpickle_dump
+
             sub.python = str(pythonpath)  # type: ignore
         if self.job_name is None and executor is not None:
             if isinstance(self, base.BaseInfra):
