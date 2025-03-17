@@ -180,10 +180,9 @@ class SubmititMixin(pydantic.BaseModel):
         """Clean slurm environment variable and create change to clean/copied workspace"""
         if not isinstance(self, base.BaseInfra):
             raise RuntimeError("SubmititMixin should be set a BaseInfra mixin")
-        with submitit.helpers.clean_env():  # clean submitit state
-            if self.workdir is None:
-                yield
-            else:
+        with contextlib.ExitStack() as estack:
+            estack.enter_context(submitit.helpers.clean_env())
+            if self.workdir is not None:
                 if self.workdir.folder is None:
                     if self.folder is None:
                         raise ValueError("Workdir requires a folder")
@@ -197,8 +196,8 @@ class SubmititMixin(pydantic.BaseModel):
                     folder.parent.mkdir(parents=True, exist_ok=True)
                     # bypasses freezing checks:
                     object.__setattr__(self.workdir, "folder", folder)
-                with self.workdir.activate():
-                    yield
+                estack.enter_context(self.workdir.activate())
+            yield
 
     def _run_method(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
         if not isinstance(self, base.BaseInfra):
