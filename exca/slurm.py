@@ -175,7 +175,7 @@ class SubmititMixin(pydantic.BaseModel):
             raise RuntimeError("No log path provided")
         return Path(str(self.logs).replace("{user}", getpass.getuser()))
 
-    @ contextlib.contextmanager
+    @contextlib.contextmanager
     def _work_env(self) -> tp.Iterator[None]:
         """Clean slurm environment variable and create change to clean/copied workspace"""
         if not isinstance(self, base.BaseInfra):
