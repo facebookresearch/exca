@@ -5,12 +5,11 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
-import shutil
 import functools
 import getpass
 import logging
 import os
-import subprocess
+import shutil
 import typing as tp
 import uuid
 from datetime import datetime
@@ -150,7 +149,7 @@ class SubmititMixin(pydantic.BaseModel):
             # find python executable path
             envpath = Path(self.conda_env)
             if not envpath.exists():  # not absolute
-                current_python = Path(shutil.which("python"))
+                current_python = Path(shutil.which("python"))  # type: ignore
                 if current_python.parents[2].name != "envs":
                     msg = f"Assumed running in a conda env but structure is weird {current_python=}"
                     raise RuntimeError(msg)
@@ -159,7 +158,8 @@ class SubmititMixin(pydantic.BaseModel):
             # use env's python
             sub = executor
             if isinstance(sub, submitit.AutoExecutor):
-                sub = executor._executor  # pylint: disable=protected-access
+                # pylint: disable=protected-access
+                sub = executor._executor  # type: ignore
             if not hasattr(sub, "python"):
                 raise RuntimeError(f"Cannot set python executable on {executor=}")
             sub.python = str(pythonpath)  # type: ignore
