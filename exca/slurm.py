@@ -9,7 +9,7 @@ import functools
 import getpass
 import logging
 import os
-import subprocess
+import shutil
 import typing as tp
 import uuid
 from datetime import datetime
@@ -75,7 +75,10 @@ class SubmititMixin(pydantic.BaseModel):
     slurm_additional_parameters: optional dict
         additional parameters for slurm that are not first class parameters of this config
     conda_env: optional str/path
-        path or name of a conda environment to use in the job
+        path or name of a conda environment to use in the job. Note that as submitit uses a pickle
+        that needs to be loaded in the job with the new conda env, the pickle needs to be
+        compatible. This mostly means that if the env has a different python or pydantic
+        version, the job may fail to reload it.
     """
 
     folder: Path | str | None = None
@@ -143,18 +146,23 @@ class SubmititMixin(pydantic.BaseModel):
         params = {name: val for name, val in params.items() if val is not None}
         executor.update_parameters(**params)
         if self.conda_env is not None:
-            string = subprocess.check_output(
-                "conda info --base".split(), shell=False
-            ).decode("utf8")
-            cfile = Path(string.strip()) / "etc/profile.d/conda.sh"
-            if not cfile.exists():
-                raise RuntimeError(f"conda file to source does not exist: {cfile}")
-            cmds = [
-                f". {cfile.absolute()}",
-                "conda deactivate",
-                f"conda activate {self.conda_env}",
-            ]
-            executor.update_parameters(**{f"{executor.cluster}_setup": cmds})
+            # find python executable path
+            envpath = Path(self.conda_env)
+            if not envpath.exists():  # not absolute
+                current_python = Path(shutil.which("python"))  # type: ignore
+                if current_python.parents[2].name != "envs":
+                    msg = f"Assumed running in a conda env but structure is weird {current_python=}"
+                    raise RuntimeError(msg)
+                envpath = current_python.parents[2] / self.conda_env
+            pythonpath = envpath / "bin" / "python3"
+            # use env's python
+            sub = executor
+            if isinstance(sub, submitit.AutoExecutor):
+                # pylint: disable=protected-access
+                sub = executor._executor  # type: ignore
+            if not hasattr(sub, "python"):
+                raise RuntimeError(f"Cannot set python executable on {executor=}")
+            sub.python = str(pythonpath)  # type: ignore
         if self.job_name is None and executor is not None:
             if isinstance(self, base.BaseInfra):
                 cname = self._obj.__class__.__name__
