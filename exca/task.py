@@ -338,13 +338,14 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             job = LocalJob(self._run_method)
         else:
             executor.folder.mkdir(exist_ok=True, parents=True)
-            logger.info(
-                "Submitting 1 job for %s through cluster '%s'",
-                self.uid(),
-                executor.cluster,
-            )
             with self._work_env():
                 job = executor.submit(self._run_method)
+            logger.info(
+                "Submitted 1 job for %s through cluster '%s' (job_id=%s)",
+                self.uid(),
+                executor.cluster,
+                job.job_id,
+            )
         job = self._set_job(job)
         return job  # type: ignore
 
@@ -451,7 +452,7 @@ class CachedMethod:
         return self.infra._infra_method()  # type: ignore
 
 
-## similar to TaskInfra but without cache
+# similar to TaskInfra but without cache
 
 
 class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
