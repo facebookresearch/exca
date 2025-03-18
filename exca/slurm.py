@@ -9,7 +9,8 @@ import functools
 import getpass
 import logging
 import os
-import shutil
+import pickle
+import sys
 import typing as tp
 import uuid
 from datetime import datetime
@@ -17,6 +18,7 @@ from pathlib import Path
 
 import pydantic
 import submitit
+from submitit.core import utils as submitit_utils
 
 from . import base
 from .workdir import WorkDir
@@ -24,6 +26,13 @@ from .workdir import WorkDir
 submitit.Job._results_timeout_s = 4  # avoid too long a wait
 SUBMITIT_EXECUTORS = ("auto", "local", "slurm", "debug")
 logger = logging.getLogger(__name__)
+
+
+def _pickle_dump_override(obj: tp.Any, filename: str | Path) -> None:
+    """Override for submitit cloudpickle dump to be compatible
+    with other python version when using a different conda env"""
+    with Path(filename).open("wb") as ofile:
+        pickle.dump(obj, ofile, protocol=4)
 
 
 class SubmititMixin(pydantic.BaseModel):
@@ -77,8 +86,10 @@ class SubmititMixin(pydantic.BaseModel):
     conda_env: optional str/path
         path or name of a conda environment to use in the job. Note that as submitit uses a pickle
         that needs to be loaded in the job with the new conda env, the pickle needs to be
-        compatible. This mostly means that if the env has a different python or pydantic
-        version, the job may fail to reload it.
+        compatible. This mostly means that if the env has a different pydantic
+        version, the job may fail to reload it. Additionally, to allow for different python
+        versions, the job is dumped with pickle and not cloudpickle, so inline functions
+        (defined in main or in a notebook) will not be supported.
     """
 
     folder: Path | str | None = None
@@ -149,12 +160,12 @@ class SubmititMixin(pydantic.BaseModel):
             # find python executable path
             envpath = Path(self.conda_env)
             if not envpath.exists():  # not absolute
-                current_python = Path(shutil.which("python"))  # type: ignore
+                current_python = Path(sys.executable)
                 if current_python.parents[2].name != "envs":
                     msg = f"Assumed running in a conda env but structure is weird {current_python=}"
                     raise RuntimeError(msg)
                 envpath = current_python.parents[2] / self.conda_env
-            pythonpath = envpath / "bin" / "python3"
+            pythonpath = envpath / "bin" / "python"
             # use env's python
             sub = executor
             if isinstance(sub, submitit.AutoExecutor):
@@ -162,6 +173,7 @@ class SubmititMixin(pydantic.BaseModel):
                 sub = executor._executor  # type: ignore
             if not hasattr(sub, "python"):
                 raise RuntimeError(f"Cannot set python executable on {executor=}")
+
             sub.python = str(pythonpath)  # type: ignore
         if self.job_name is None and executor is not None:
             if isinstance(self, base.BaseInfra):
@@ -180,10 +192,9 @@ class SubmititMixin(pydantic.BaseModel):
         """Clean slurm environment variable and create change to clean/copied workspace"""
         if not isinstance(self, base.BaseInfra):
             raise RuntimeError("SubmititMixin should be set a BaseInfra mixin")
-        with submitit.helpers.clean_env():  # clean submitit state
-            if self.workdir is None:
-                yield
-            else:
+        with contextlib.ExitStack() as estack:
+            estack.enter_context(submitit.helpers.clean_env())
+            if self.workdir is not None:
                 if self.workdir.folder is None:
                     if self.folder is None:
                         raise ValueError("Workdir requires a folder")
@@ -197,8 +208,17 @@ class SubmititMixin(pydantic.BaseModel):
                     folder.parent.mkdir(parents=True, exist_ok=True)
                     # bypasses freezing checks:
                     object.__setattr__(self.workdir, "folder", folder)
-                with self.workdir.activate():
-                    yield
+                estack.enter_context(self.workdir.activate())
+            base_dump: tp.Any = None
+            if self.conda_env is not None:
+                base_dump = submitit_utils.cloudpickle_dump
+                # replace to allow for python inter-version compatibility
+                submitit_utils.cloudpickle_dump = _pickle_dump_override
+            try:
+                yield
+            finally:
+                if base_dump is not None:
+                    submitit_utils.cloudpickle_dump = base_dump
 
     def _run_method(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
         if not isinstance(self, base.BaseInfra):
