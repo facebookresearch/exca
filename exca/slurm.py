@@ -10,7 +10,7 @@ import getpass
 import logging
 import os
 import pickle
-import shutil
+import sys
 import typing as tp
 import uuid
 from datetime import datetime
@@ -158,12 +158,12 @@ class SubmititMixin(pydantic.BaseModel):
             # find python executable path
             envpath = Path(self.conda_env)
             if not envpath.exists():  # not absolute
-                current_python = Path(shutil.which("python"))  # type: ignore
+                current_python = Path(sys.executable)
                 if current_python.parents[2].name != "envs":
                     msg = f"Assumed running in a conda env but structure is weird {current_python=}"
                     raise RuntimeError(msg)
                 envpath = current_python.parents[2] / self.conda_env
-            pythonpath = envpath / "bin" / "python3"
+            pythonpath = envpath / "bin" / "python"
             # use env's python
             sub = executor
             if isinstance(sub, submitit.AutoExecutor):

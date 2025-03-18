@@ -7,6 +7,7 @@
 import importlib
 import logging
 import pickle
+import sys
 import typing as tp
 import uuid
 from pathlib import Path
@@ -452,9 +453,13 @@ def test_task_clone_extra_allow() -> None:
 
 
 def test_conda_env(tmp_path: Path) -> None:
+    py = Path(sys.executable)
+    if py.parents[2].name != "envs":
+        pytest.skip("Not a conda env")
+    env = py.parents[1].name
     whatever = Whatever(
         param1=13,
         param_cache_excluded="blublu",
-        infra1={"folder": tmp_path, "cluster": "local", "conda_env": "xk"},  # type: ignore
+        infra1={"folder": tmp_path, "cluster": "local", "conda_env": env},  # type: ignore
     )
     assert whatever.process() == 26
