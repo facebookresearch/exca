@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import typing as tp
 import contextlib
 import hashlib
 import io
@@ -40,7 +41,7 @@ class DumperLoader(tp.Generic[X]):
     CLASSES: tp.MutableMapping[str, "tp.Type[DumperLoader[tp.Any]]"] = {}
     DEFAULTS: tp.MutableMapping[tp.Any, "tp.Type[DumperLoader[tp.Any]]"] = {}
 
-    def __init__(self, folder: str | Path = "") -> None:
+    def __init__(self, folder: tp.Union[Path, str] = "") -> None:
         self.folder = Path(folder)
 
     @contextlib.contextmanager
@@ -55,7 +56,7 @@ class DumperLoader(tp.Generic[X]):
     def load(self, filename: str, **kwargs: tp.Any) -> X:
         raise NotImplementedError
 
-    def dump(self, key: str, value: X) -> dict[str, tp.Any]:
+    def dump(self, key: str, value: X) -> tp.Dict[str, tp.Any]:
         raise NotImplementedError
 
     @staticmethod
@@ -74,7 +75,7 @@ class DumperLoader(tp.Generic[X]):
     def check_valid_cache_type(cls, cache_type: str) -> None:
         if cache_type not in DumperLoader.CLASSES:
             avail = list(DumperLoader.CLASSES)
-            raise ValueError(f"Unknown {cache_type=}, use one of {avail}")
+            raise ValueError(f"Unknown cache_type={cache_type}, use one of {avail}")
 
 
 class StaticDumperLoader(DumperLoader[X]):
@@ -84,7 +85,7 @@ class StaticDumperLoader(DumperLoader[X]):
         filepath = self.folder / filename
         return self.static_load(filepath)
 
-    def dump(self, key: str, value: X) -> dict[str, tp.Any]:
+    def dump(self, key: str, value: X) -> tp.Dict[str, tp.Any]:
         uid = _string_uid(key)
         filename = uid + self.SUFFIX
         self.static_dump(filepath=self.folder / filename, value=value)
@@ -141,10 +142,10 @@ class NumpyMemmapArray(NumpyArray):
 
 class MemmapArrayFile(DumperLoader[np.ndarray]):
 
-    def __init__(self, folder: str | Path = "") -> None:
+    def __init__(self, folder: tp.Union[Path, str] = "") -> None:
         super().__init__(folder)
         self._f: io.BufferedWriter | None = None
-        self._name: str | None = None
+        self._name: tp.Optional[str] = None
 
     @contextlib.contextmanager
     def open(self) -> tp.Iterator[None]:
@@ -169,7 +170,7 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
             order="C",
         )
 
-    def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:
+    def dump(self, key: str, value: np.ndarray) -> tp.Dict[str, tp.Any]:
         if self._f is None or self._name is None:
             raise RuntimeError("Need a write_mode context")
         if not isinstance(value, np.ndarray):
@@ -270,7 +271,7 @@ else:
 
     class MneRawBrainVision(DumperLoader[Raw]):
 
-        def dump(self, key: str, value: X) -> dict[str, tp.Any]:
+        def dump(self, key: str, value: X) -> tp.Dict[str, tp.Any]:
             uid = _string_uid(key)
             fp = self.folder / uid / f"{uid}-raw.vhdr"
             with utils.temporary_save_path(fp) as tmp:

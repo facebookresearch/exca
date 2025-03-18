@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations  # python 3.7 compat
 import collections
 import dataclasses
 import difflib
@@ -26,7 +27,7 @@ from .workdir import WorkDir
 logger = logging.getLogger(__name__)
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
 ExcludeCallable = tp.Callable[[tp.Any], tp.Iterable[str]]
-Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tp.Tuple[str, tp.Any]]
+Mapping = tp.Union[tp.MutableMapping[str, tp.Any], tp.Iterable[tp.Tuple[str, tp.Any]]]
 # add functions here that return True if mismatch with cached config can be ignored, else False
 DEFAULT_CHECK_SKIPS: tp.List[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
 
@@ -99,14 +100,14 @@ def model_with_infra_validator_before(obj: tp.Any) -> tp.Any:
 
 
 class BaseInfra(pydantic.BaseModel):
-    folder: Path | str | None = None
+    folder: tp.Union[Path, str, None] = None
     # general permission for folders and files
     # use os.chmod / path.chmod compatible numbers, or None to deactivate
     # eg: 0o777 for all rights to all users
-    permissions: int | str | None = 0o777
+    permissions: tp.Union[int, str, None] = 0o777
     # {folder} will be replaced by the class folder
     # {user} by user id and %j by job id
-    logs: Path | str = "{folder}/logs/{user}/%j"
+    logs: tp.Union[Path, str] = "{folder}/logs/{user}/%j"
     # cache versioning
     version: str = "0"
 
@@ -115,7 +116,7 @@ class BaseInfra(pydantic.BaseModel):
     # {uid} by the owner class uid
     _uid_string: str = "{method},{version}/{uid}"
     # information stored for fast access after apply is called
-    _uid: str | None = None  # stored uid once computed (and once model is frozen)
+    _uid: tp.Union[str, None] = None  # stored uid once computed (and once model is frozen)
     _obj: tp.Any = pydantic.PrivateAttr()  # pydantic model the infra is an attribute of
     _checked_configs: bool = False  # only do it once
     _infra_name: str = ""

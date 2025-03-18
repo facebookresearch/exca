@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations  # python 3.7 compat
 import collections
 import contextlib
 import functools
@@ -23,9 +24,10 @@ from . import base, slurm, utils
 TaskFunc = tp.Callable[[], tp.Any]
 X = tp.TypeVar("X")
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
-Status = tp.Literal["not submitted", "running", "completed", "failed"]
-Mode = tp.Literal["cached", "retry", "force", "read-only"]
+Status = str  # tp.Literal["not submitted", "running", "completed", "failed"]
+Mode = str  # tp.Literal["cached", "retry", "force", "read-only"]
 logger = logging.getLogger(__name__)
+ExcaJob = tp.Union[submitit.Job[tp.Any], "LocalJob"]
 
 
 class LocalJob:
@@ -60,7 +62,7 @@ class LocalJob:
     def wait(self) -> None:
         pass
 
-    def exception(self) -> None | Exception:
+    def exception(self) -> tp.Optional[Exception]:
         if self._result[0] == "success":
             return None
         out = self._result[1]
@@ -120,12 +122,12 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     """
 
     # running configuration
-    folder: Path | str | None = None
+    folder: tp.Union[Path, str, None] = None
     # computation configuration inherited from ExecutorCfg, through submitit
     # cluster is None, the computation is performed locally
 
     # {user} by user id and %j by job id
-    logs: Path | str = "{folder}/logs/{user}/%j"
+    logs: tp.Union[Path, str] = "{folder}/logs/{user}/%j"
     # mode among:
     # - cached: cache is returned if available (error or not),
     #           otherwise computed (and cached)
@@ -262,9 +264,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             for infra, job in zip(missing, jobs):
                 infra._set_job(job)
 
-    def _set_job(
-        self, job: submitit.Job[tp.Any] | LocalJob
-    ) -> submitit.Job[tp.Any] | LocalJob:
+    def _set_job(self, job: ExcaJob) -> ExcaJob:
         self._computed = True  # to ignore mode retry and forced from now on
         xpfolder = self.uid_folder(create=True)
         if xpfolder is None:
@@ -304,7 +304,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         self._check_configs(write=True)
         return job
 
-    def job(self) -> submitit.Job[tp.Any] | LocalJob:
+    def job(self) -> ExcaJob:
         """Creates or reload the job corresponding to the task"""
         folder = self.uid_folder()
         job: tp.Any = None
@@ -370,9 +370,9 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             return "failed"
         return "completed"
 
-    def executor(self) -> None | submitit.AutoExecutor:
+    def executor(self) -> tp.Optional[submitit.AutoExecutor]:
         if self.mode == "read-only":
-            raise RuntimeError(f"{self.mode=} but job {self.uid()} not computed")
+            raise RuntimeError(f"mode={self.mode} but job {self.uid()} not computed")
         return super().executor()
 
     def iter_cached(self) -> tp.Iterable[pydantic.BaseModel]:
@@ -395,20 +395,21 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         return out
 
     @tp.overload
-    def apply(self, arg: C, /) -> C: ...  # noqa
+    def apply(self, arg: C) -> C: ...  # noqa  3.8
+    # def apply(self, arg: C, /) -> C: ...  # noqa
 
     @tp.overload
     def apply(  # noqa
         self,
-        exclude_from_cache_uid: tp.Iterable[str] | base.ExcludeCallable = (),
+        exclude_from_cache_uid: tp.Union[tp.Iterable[str], base.ExcludeCallable] = (),
     ) -> tp.Callable[[C], C]: ...
 
     # pylint: disable=unused-argument
     def apply(  # type: ignore
         self,
-        method: C | None = None,
+        method: tp.Optional[C] = None,
         *,
-        exclude_from_cache_uid: tp.Iterable[str] | base.ExcludeCallable = (),
+        exclude_from_cache_uid: tp.Union[tp.Iterable[str], base.ExcludeCallable] = (),
     ) -> C:
         """Applies the infra on a method taking no parameter (except `self`)
 
@@ -451,7 +452,7 @@ class CachedMethod:
         return self.infra._infra_method()  # type: ignore
 
 
-## similar to TaskInfra but without cache
+# similar to TaskInfra but without cache
 
 
 class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
@@ -494,7 +495,7 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
     - This is an experimental infra that is still evolving
     """
 
-    _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
+    _array_executor: tp.Optional[submitit.Executor] = pydantic.PrivateAttr(None)
 
     def _exclude_from_cls_uid(self) -> tp.List[str]:
         return ["."]  # not taken into accound for uid
@@ -518,7 +519,7 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         self._infra_method = base.InfraMethod(method=method)
         return property(self._infra_method)  # type: ignore
 
-    def submit(self, *args: tp.Any, **kwargs: tp.Any) -> submitit.Job[tp.Any] | LocalJob:
+    def submit(self, *args: tp.Any, **kwargs: tp.Any) -> ExcaJob:
         """Submit an asynchroneous job. This call is non-blocking and returns a
         :code:`Job` instance that has a :code:`result()` method that awaits
         for the computation to be over.

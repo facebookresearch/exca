@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations  # python 3.7 compat
 import collections
 import contextlib
 import dataclasses
@@ -31,7 +32,7 @@ X = tp.TypeVar("X")
 Y = tp.TypeVar("Y")
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
 logger = logging.getLogger(__name__)
-Mode = tp.Literal["cached", "force", "read-only"]
+Mode = str  # tp.Literal["cached", "force", "read-only"]
 
 
 # FOR COMPATIBILITY
@@ -56,7 +57,7 @@ class JobChecker:
     and enables waiting for them to complete.
     """
 
-    def __init__(self, folder: Path | str) -> None:
+    def __init__(self, folder: tp.Union[Path, str]) -> None:
         basefolder = utils.JobPaths.get_first_id_independent_folder(folder)
         self.folder = basefolder / "running-jobs"
 
@@ -91,7 +92,7 @@ class JobChecker:
 
 
 def to_chunks(
-    items: tp.List[X], *, max_chunks: int | None, min_items_per_chunk: int = 1
+    items: tp.List[X], *, max_chunks: tp.Optional[int], min_items_per_chunk: int = 1
 ) -> tp.Iterator[tp.List[X]]:
     """Split a list of items into several smaller list of items
 
@@ -113,7 +114,7 @@ def to_chunks(
     items_per_chunk = int(np.ceil(len(items) / splits))
     for k in range(splits):
         # select a batch/chunk of samples_per_job items to send to a job
-        yield items[k * items_per_chunk : (k + 1) * items_per_chunk]
+        yield items[k * items_per_chunk: (k + 1) * items_per_chunk]
 
 
 class MapInfra(base.BaseInfra, slurm.SubmititMixin):
@@ -164,10 +165,10 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     # caching configuration (in-memory cache + disk cache if a folder is provided)
     keep_in_ram: bool = True
     # job configuration
-    max_jobs: int | None = 128
+    max_jobs: tp.Optional[int] = 128
     min_samples_per_job: int = 2048
     forbid_single_item_computation: bool = False  # for local/slurm/auto
-    cluster: tp.Literal[None, "auto", "local", "slurm", "debug", "threadpool", "processpool"] = None  # type: ignore
+    cluster: tp.Optional[str] = None  # tp.Literal[None, "auto", "local", "slurm", "debug", "threadpool", "processpool"] = None  # type: ignore
     # mode among:
     # - cached: cache is returned if available (error or not),
     #           otherwise computed (and cached)
@@ -239,7 +240,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         *,
         item_uid: tp.Callable[[tp.Any], str],
         exclude_from_cache_uid: tp.Iterable[str] | base.ExcludeCallable = (),
-        cache_type: str | None = None,
+        cache_type: tp.Optional[str] = None,
     ) -> tp.Callable[[C], C]:
         """Applies the infra on a method taking an iterable of items as input
 
@@ -322,7 +323,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             self._recomputed |= set(missing)
         if missing:
             if self.mode == "read-only":
-                raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
+                raise RuntimeError(f"mode={self.mode} but found {len(missing)} missing items")
             executor: submitit.Executor | None = self.executor()
             if executor is not None:  # wait for items being computed
                 jcheck = JobChecker(folder=executor.folder)
@@ -348,7 +349,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             raise RuntimeError(f"Infra was not applied: {self!r}")
         if len(args) + len(kwargs) != 1:
             msg = (
-                f"Method {imethod.method} only takes 1 argument got {args=} and {kwargs=}"
+                f"Method {imethod.method} only takes 1 argument got args={args} and kwargs={kwargs}"
             )
             raise ValueError(msg)
         if len(args) == 1:
@@ -500,7 +501,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             for item, output in itertools.zip_longest(items, outputs, fillvalue=sentinel):
                 if item is sentinel or output is sentinel:
                     raise RuntimeError(
-                        f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
+                        f"Cached function did not yield exactly once per item: item={item!r}, output={output!r}"
                     )
                 writer[item_uid(item)] = output
         # don't return the whole cache dict if data is cached
@@ -525,7 +526,7 @@ def check_map_function_output(func: tp.Callable[..., tp.Any]) -> tp.Type[tp.Any]
 @dataclasses.dataclass
 class MapInfraMethod(base.InfraMethod):
     item_uid: tp.Callable[[tp.Any], str] = base.Sentinel()  # type: ignore
-    cache_type: str | None = None
+    cache_type: tp.Optional[str] = None
     params: tp.Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:

@@ -8,6 +8,7 @@
 Disk, RAM caches
 """
 import contextlib
+import typing as tp
 import dataclasses
 import io
 import json
@@ -35,8 +36,8 @@ class DumpInfo:
 
     cache_type: str
     jsonl: Path
-    byte_range: tuple[int, int]
-    content: dict[str, tp.Any]
+    byte_range: tp.Tuple[int, int]
+    content: tp.Dict[str, tp.Any]
 
 
 class CacheDict(tp.Generic[X]):
@@ -82,10 +83,10 @@ class CacheDict(tp.Generic[X]):
 
     def __init__(
         self,
-        folder: Path | str | None,
+        folder: tp.Union[Path, str, None],
         keep_in_ram: bool = False,
-        cache_type: None | str = None,
-        permissions: int | None = 0o777,
+        cache_type: tp.Optional[str] = None,
+        permissions: tp.Optional[int] = 0o777,
         _write_legacy_key_files: bool = False,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
@@ -104,18 +105,18 @@ class CacheDict(tp.Generic[X]):
                     msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
                     logger.warning(msg)
         # file cache access and RAM cache
-        self._ram_data: dict[str, X] = {}
-        self._key_info: dict[str, DumpInfo] = {}
+        self._ram_data: tp.Dict[str, X] = {}
+        self._key_info: tp.Dict[str, DumpInfo] = {}
         # json info file reading
         self._folder_modified = -1.0
-        self._info_files_last: dict[str, int] = {}
+        self._info_files_last: tp.Dict[str, int] = {}
         self._jsonl_readings = 0  # for perf
         self._jsonl_reading_allowance = float("inf")
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
         keep_in_ram = self._keep_in_ram
-        return f"{name}({self.folder},{keep_in_ram=})"
+        return f"{name}({self.folder},keep_in_ram={keep_in_ram})"
 
     def clear(self) -> None:
         self._ram_data.clear()
@@ -230,7 +231,7 @@ class CacheDict(tp.Generic[X]):
                     if not k:
                         if not strline.startswith(METADATA_TAG):
                             raise RuntimeError(f"metadata missing in info file {fp}")
-                        strline = strline[len(METADATA_TAG) :]
+                        strline = strline[len(METADATA_TAG):]
                     try:
                         info = json.loads(strline)
                     except json.JSONDecodeError:
@@ -265,7 +266,7 @@ class CacheDict(tp.Generic[X]):
     def __iter__(self) -> tp.Iterator[str]:
         return self.keys()
 
-    def items(self) -> tp.Iterator[tuple[str, X]]:
+    def items(self) -> tp.Iterator[tp.Tuple[str, X]]:
         for key in self:
             yield key, self[key]
 
@@ -402,7 +403,7 @@ class CacheDictWriter:
                     cache_file.write_text(cd.cache_type)
                     files.append(cache_file)
         if key in cd._ram_data or key in cd._key_info:
-            raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
+            raise ValueError(f"Overwritting a key is currently not implemented (key={key})")
         if cd._keep_in_ram and cd.folder is None:
             # if folder is not None,
             # ram_data will be loaded from cache for consistency

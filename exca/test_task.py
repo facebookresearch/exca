@@ -449,3 +449,12 @@ def test_task_clone_extra_allow() -> None:
     # pylint: disable=attribute-defined-outside-init
     what.stuff = 12  # type: ignore
     _ = what.infra1.clone_obj(param1=12)
+
+
+def test_conda_env(tmp_path: Path) -> None:
+    whatever = Whatever(
+        param1=13,
+        param_cache_excluded="blublu",
+        infra1={"folder": tmp_path, "cluster": "local", "conda_env": "xk"},  # type: ignore
+    )
+    assert whatever.process() == 26
