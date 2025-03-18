@@ -86,8 +86,10 @@ class SubmititMixin(pydantic.BaseModel):
     conda_env: optional str/path
         path or name of a conda environment to use in the job. Note that as submitit uses a pickle
         that needs to be loaded in the job with the new conda env, the pickle needs to be
-        compatible. This mostly means that if the env has a different python or pydantic
-        version, the job may fail to reload it.
+        compatible. This mostly means that if the env has a different pydantic
+        version, the job may fail to reload it. Additionally, to allow for different python
+        versions, the job is dumped with pickle and not cloudpickle, so inline functions
+        (defined in main or in a notebook) will not be supported.
     """
 
     folder: Path | str | None = None
