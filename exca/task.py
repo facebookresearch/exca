@@ -344,7 +344,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 "Submitted 1 job for %s through cluster '%s' (job_id=%s)",
                 self.uid(),
                 executor.cluster,
-                job.job_id
+                job.job_id,
             )
         job = self._set_job(job)
         return job  # type: ignore
