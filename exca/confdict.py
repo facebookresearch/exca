@@ -47,7 +47,7 @@ for t in (PosixPath, WindowsPath, np.float32, np.float64, np.int32, np.int64):
 
 
 # class ConfDict(dict[str, tp.Any]):
-class ConfDict(tp.MutableMapping[str, tp.Any]):
+class ConfDict(dict):
     """Dictionary which breaks into sub-dictionnaries on "." as in a config (see example)
     The data can be specified either through "." keywords or directly through sub-dicts
     or a mixture of both.
