@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations  # python 3.7 compat
 import dataclasses
 import hashlib
 import logging
@@ -27,7 +28,7 @@ else:
     TorchTensor = torch.Tensor
 
 logger = logging.getLogger(__name__)
-Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tp.Tuple[str, tp.Any]]
+Mapping = tp.Union[tp.MutableMapping[str, tp.Any], tp.Iterable[tp.Tuple[str, tp.Any]]]
 _sentinel = object()
 OVERRIDE = "=replace="
 
@@ -45,7 +46,8 @@ for t in (PosixPath, WindowsPath, np.float32, np.float64, np.int32, np.int64):
     _yaml.representer.SafeRepresenter.add_representer(t, _special_representer)
 
 
-class ConfDict(dict[str, tp.Any]):
+# class ConfDict(dict[str, tp.Any]):
+class ConfDict(tp.MutableMapping[str, tp.Any]):
     """Dictionary which breaks into sub-dictionnaries on "." as in a config (see example)
     The data can be specified either through "." keywords or directly through sub-dicts
     or a mixture of both.

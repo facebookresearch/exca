@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations  # python 3.7 compat
 import contextlib
 import fnmatch
 import json
@@ -13,7 +14,6 @@ import shutil
 import subprocess
 import sys
 import typing as tp
-from importlib import metadata
 from pathlib import Path
 
 import pydantic
@@ -85,8 +85,8 @@ class WorkDir(pydantic.BaseModel):
       this may not be at the very beginning of your execution.
     """
 
-    copied: tp.Sequence[str | Path] = []
-    folder: str | Path | None = None
+    copied: tp.Sequence[str] = []
+    folder: tp.Union[str, Path, None] = None
     log_commit: bool = False
     # include and exclude names (use "*.py" for only python)
     includes: tp.Sequence[str] = ()
@@ -167,6 +167,7 @@ def identify_path(name: str | Path) -> Path:
             return fp.absolute()
     # otherwise check for editable installations
     try:
+        from importlib import metadata
         pdistrib = metadata.Distribution.from_name(str(name))
     except Exception as e:  # pylint: disable=broad-except
         raise ValueError(
@@ -184,7 +185,7 @@ def identify_path(name: str | Path) -> Path:
     url = direct_url["url"]
     if not url.startswith(tag):
         raise ValueError("Package url {url} for {name} is not local")
-    fp = Path(url[len(tag) :]) / name
+    fp = Path(url[len(tag):]) / name
     if not fp.exists():
         raise ValueError(f"Expected to copy {fp} but there's nothing there")
     return fp

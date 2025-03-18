@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations  # python 3.7 compat
 import inspect
 import logging
 import subprocess
@@ -20,14 +21,15 @@ from .task import TaskInfra
 X = tp.TypeVar("X", covariant=True)
 logger = logging.getLogger(__name__)
 
+FuncCondifProtocal = tp.Any
 
-class FuncConfigProtocol(tp.Protocol[X]):
-    model_fields: tp.ClassVar[tp.Dict[str, pydantic.fields.FieldInfo]]
-    infra: TaskInfra
-
-    def __init__(self, *, infra: TaskInfra, **kwargs: tp.Any) -> None: ...
-
-    def build(self) -> X: ...
+# class FuncConfigProtocol(tp.Protocol[X]):
+#     model_fields: tp.ClassVar[tp.Dict[str, pydantic.fields.FieldInfo]]
+#     infra: TaskInfra
+#
+#     def __init__(self, *, infra: TaskInfra, **kwargs: tp.Any) -> None: ...
+#
+#     def build(self) -> X: ...
 
 
 class FuncConfig(pydantic.BaseModel):

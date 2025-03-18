@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations  # python 3.7 compat
 import contextlib
 import functools
 import getpass
@@ -81,29 +82,29 @@ class SubmititMixin(pydantic.BaseModel):
         version, the job may fail to reload it.
     """
 
-    folder: Path | str | None = None
-    cluster: tp.Literal[None, "auto", "local", "slurm", "debug"] = None
+    folder: tp.Union[Path, str, None] = None
+    cluster: tp.Optional[str] = None
     # {folder} will be replaced by the class instance folder
     # {user} by user id and %j by job id
-    logs: Path | str = "{folder}/logs/{user}/%j"
+    logs: tp.Union[Path, str] = "{folder}/logs/{user}/%j"
     # main params
-    job_name: str | None = None
-    timeout_min: int | None = None
-    nodes: int | None = 1
-    tasks_per_node: int | None = 1
-    cpus_per_task: int | None = None
-    gpus_per_node: int | None = None
-    mem_gb: float | None = None
+    job_name: tp.Optional[str] = None
+    timeout_min: tp.Optional[int] = None
+    nodes: tp.Optional[int] = 1
+    tasks_per_node: tp.Optional[int] = 1
+    cpus_per_task: tp.Optional[int] = None
+    gpus_per_node: tp.Optional[int] = None
+    mem_gb: tp.Optional[float] = None
     # slurm specifics
-    slurm_constraint: str | None = None
-    slurm_partition: str | None = None
-    slurm_account: str | None = None
-    slurm_qos: str | None = None
+    slurm_constraint: tp.Optional[str] = None
+    slurm_partition: tp.Optional[str] = None
+    slurm_account: tp.Optional[str] = None
+    slurm_qos: tp.Optional[str] = None
     slurm_use_srun: bool = False
-    slurm_additional_parameters: tp.Dict[str, int | str | float | bool] | None = None
+    slurm_additional_parameters: tp.Optional[tp.Dict[str, tp.Union[int, str, float, bool]]] = None
     # other
-    conda_env: Path | str | None = None  # conda env name or path
-    workdir: None | WorkDir = None
+    conda_env: tp.Union[Path, str, None] = None  # conda env name or path
+    workdir: tp.Optional[WorkDir] = None
 
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
@@ -129,10 +130,10 @@ class SubmititMixin(pydantic.BaseModel):
                 msg = f"Cannot specify a conda env for cluster {self.cluster}, acceptable: {acceptable}"
                 raise ValueError(msg)
 
-    def executor(self) -> None | submitit.AutoExecutor:
+    def executor(self) -> tp.Optional[submitit.AutoExecutor]:
         if self.cluster not in SUBMITIT_EXECUTORS:
             return None
-        cluster: str | None = "debug" if self.cluster is None else self.cluster
+        cluster: tp.Optional[str] = "debug" if self.cluster is None else self.cluster
         if cluster == "auto":
             cluster = None
         logpath = self._log_path()
@@ -151,7 +152,7 @@ class SubmititMixin(pydantic.BaseModel):
             if not envpath.exists():  # not absolute
                 current_python = Path(shutil.which("python"))  # type: ignore
                 if current_python.parents[2].name != "envs":
-                    msg = f"Assumed running in a conda env but structure is weird {current_python=}"
+                    msg = f"Assumed running in a conda env but structure is weird, python={current_python}"
                     raise RuntimeError(msg)
                 envpath = current_python.parents[2] / self.conda_env
             pythonpath = envpath / "bin" / "python3"
@@ -161,7 +162,7 @@ class SubmititMixin(pydantic.BaseModel):
                 # pylint: disable=protected-access
                 sub = executor._executor  # type: ignore
             if not hasattr(sub, "python"):
-                raise RuntimeError(f"Cannot set python executable on {executor=}")
+                raise RuntimeError(f"Cannot set python executable on executor={executor}")
             sub.python = str(pythonpath)  # type: ignore
         if self.job_name is None and executor is not None:
             if isinstance(self, base.BaseInfra):
@@ -175,7 +176,7 @@ class SubmititMixin(pydantic.BaseModel):
             raise RuntimeError("No log path provided")
         return Path(str(self.logs).replace("{user}", getpass.getuser()))
 
-    @contextlib.contextmanager
+    @ contextlib.contextmanager
     def _work_env(self) -> tp.Iterator[None]:
         """Clean slurm environment variable and create change to clean/copied workspace"""
         if not isinstance(self, base.BaseInfra):
