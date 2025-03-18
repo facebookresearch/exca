@@ -9,6 +9,7 @@ import functools
 import getpass
 import logging
 import os
+import pickle
 import shutil
 import typing as tp
 import uuid
@@ -17,6 +18,7 @@ from pathlib import Path
 
 import pydantic
 import submitit
+from submitit.core import utils as submitit_utils
 
 from . import base
 from .workdir import WorkDir
@@ -24,6 +26,13 @@ from .workdir import WorkDir
 submitit.Job._results_timeout_s = 4  # avoid too long a wait
 SUBMITIT_EXECUTORS = ("auto", "local", "slurm", "debug")
 logger = logging.getLogger(__name__)
+
+
+def _pickle_dump_override(obj: tp.Any, filename: str | Path) -> None:
+    """Override for submitit cloudpickle dump to be compatible
+    with other python version when using a different conda env"""
+    with Path(filename).open("wb") as ofile:
+        pickle.dump(obj, ofile, protocol=4)
 
 
 class SubmititMixin(pydantic.BaseModel):
@@ -162,15 +171,6 @@ class SubmititMixin(pydantic.BaseModel):
                 sub = executor._executor  # type: ignore
             if not hasattr(sub, "python"):
                 raise RuntimeError(f"Cannot set python executable on {executor=}")
-            import pickle
-
-            from submitit.core import utils
-
-            def _cloudpickle_dump(obj: tp.Any, filename: str | Path) -> None:
-                with Path(filename).open("wb") as ofile:
-                    pickle.dump(obj, ofile, protocol=4)
-
-            utils.cloudpickle_dump = _cloudpickle_dump
 
             sub.python = str(pythonpath)  # type: ignore
         if self.job_name is None and executor is not None:
@@ -207,7 +207,16 @@ class SubmititMixin(pydantic.BaseModel):
                     # bypasses freezing checks:
                     object.__setattr__(self.workdir, "folder", folder)
                 estack.enter_context(self.workdir.activate())
-            yield
+            base_dump: tp.Any = None
+            if self.conda_env is not None:
+                base_dump = submitit_utils.cloudpickle_dump
+                # replace to allow for python inter-version compatibility
+                submitit_utils.cloudpickle_dump = _pickle_dump_override
+            try:
+                yield
+            finally:
+                if base_dump is not None:
+                    submitit_utils.cloudpickle_dump = base_dump
 
     def _run_method(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
         if not isinstance(self, base.BaseInfra):
