@@ -82,7 +82,7 @@ def args_to_nested_dict(args: list[str]) -> tp.Dict[str, tp.Any]:
 
 if __name__ == "__main__":
     # Validate config
-    config = args_to_nested_dict(sys.argv[1:])
+    config = exca.ConfDict.from_args(sys.argv[1:])
     model = Model(**config)
     print(model.infra.config)
 
