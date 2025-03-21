@@ -24,7 +24,7 @@ class Dataset(pydantic.BaseModel):
     test_size: float = 0.2
     model_config = pydantic.ConfigDict(extra="forbid")
 
-    def get(self) -> tp.Tuple[np.ndarray]:
+    def get(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # Generate synthetic data
         X, y = make_regression(
             n_samples=self.n_samples,
