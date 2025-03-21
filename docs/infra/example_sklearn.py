@@ -63,23 +63,6 @@ class Model(pydantic.BaseModel):
         return mse
 
 
-def args_to_nested_dict(args: list[str]) -> tp.Dict[str, tp.Any]:
-    """
-    Parses a list of Bash-style arguments (e.g., --key=value) into a nested dict.
-    """
-    nested_dict = {}
-    for arg in args:
-        # Split argument into key and value
-        key, value = arg.lstrip("--").split("=", 1)
-        # Convert flat key into a nested dictionary
-        keys = key.split(".")
-        current_level = nested_dict
-        for k in keys[:-1]:
-            current_level = current_level.setdefault(k, {})
-        current_level[keys[-1]] = value
-    return nested_dict
-
-
 if __name__ == "__main__":
     # Validate config
     config = exca.ConfDict.from_args(sys.argv[1:])
