@@ -176,17 +176,23 @@ def test_optional_discriminator(caplog: tp.Any) -> None:
     assert out == expected
 
 
+@pytest.mark.parametrize("replace", (True, False))
 @pytest.mark.parametrize("existing_content", [None, "blublu"])
-def test_temporary_save_path(tmp_path: Path, existing_content: str | None) -> None:
+def test_temporary_save_path(
+    tmp_path: Path, existing_content: str | None, replace: bool
+) -> None:
     filepath = tmp_path / "save_and_move_test.txt"
     if existing_content:
         filepath.write_text(existing_content)
-    with utils.temporary_save_path(filepath) as tmp:
+    with utils.temporary_save_path(filepath, replace=replace) as tmp:
         assert str(tmp).endswith(".txt")
         tmp.write_text("12")
         if existing_content:
             assert filepath.read_text() == existing_content
-    assert filepath.read_text() == "12"
+    expected = "12"
+    if existing_content is not None and not replace:
+        expected = "blublu"
+    assert filepath.read_text() == expected
 
 
 def test_temporary_save_path_error() -> None:
@@ -374,3 +380,20 @@ def test_find_models() -> None:
         "content.1._a",
     }
     assert all(isinstance(y, A) for y in out.values())
+
+
+def test_fast_unlink(tmp_path: Path) -> None:
+    # file
+    fp = tmp_path / "blublu.txt"
+    fp.touch()
+    assert fp.exists()
+    with utils.fast_unlink(fp):
+        pass
+    assert not fp.exists()
+    # folder
+    fp = tmp_path / "blublu"
+    fp.mkdir()
+    (fp / "stuff.txt").touch()
+    with utils.fast_unlink(fp):
+        pass
+    assert not fp.exists()

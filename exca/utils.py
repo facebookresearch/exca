@@ -9,6 +9,7 @@ import contextlib
 import copy
 import logging
 import os
+import shutil
 import typing as tp
 import uuid
 from pathlib import Path
@@ -377,16 +378,34 @@ def fast_unlink(
         yield
     finally:
         if to_delete is not None:
-            to_delete.unlink()
+            if to_delete.is_dir():
+                shutil.rmtree(to_delete)
+            else:
+                to_delete.unlink()
 
 
 @contextlib.contextmanager
-def temporary_save_path(filepath: tp.Union[Path, str]) -> tp.Iterator[Path]:
+def temporary_save_path(filepath: Path | str, replace: bool = True) -> tp.Iterator[Path]:
     """Yields a path where to save a file and moves it
     afterward to the provided location (and replaces any
     existing file)
     This is useful to avoid processes monitoring the filepath
     to break if trying to read when the file is being written.
+
+
+    Parameters
+    ----------
+    filepath: str | Path
+        filepath where to save
+    replace: bool
+        if the final filepath already exists, replace it
+
+    Yields
+    ------
+    Path
+        a temporary path to save the data, that will be renamed to the
+        final filepath when leaving the context (except if filepath
+        already exists and no_override is True)
 
     Note
     ----
@@ -407,6 +426,10 @@ def temporary_save_path(filepath: tp.Union[Path, str]) -> tp.Iterator[Path]:
         raise
     if not tmppath.exists():
         raise FileNotFoundError(f"No file was saved at the temporary path {tmppath}.")
+    if not replace:
+        if filepath.exists():
+            os.remove(tmppath)
+            return
     with fast_unlink(filepath, missing_ok=True):
         try:
             os.rename(tmppath, filepath)

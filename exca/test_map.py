@@ -15,7 +15,6 @@ import pydantic
 import pytest
 
 from . import helpers
-from .confdict import ConfDict
 from .map import MapInfra, to_chunks
 
 PACKAGE = MapInfra.__module__.split(".", maxsplit=1)[0]
@@ -82,10 +81,7 @@ def test_map_infra(tmp_path: Path) -> None:
     out = list(whatever.process([1, 2, 2, 3]))
     assert [x.shape for x in out] == [(1, 13), (2, 13), (2, 13), (3, 13)]
     path = tmp_path
-    if ConfDict.UID_VERSION == 1:
-        uid = f"{__name__}.Whatever.process,1/param1=13-cbb76898"
-    else:
-        uid = f"{__name__}.Whatever.process,1/param1=13-c51ce410"
+    uid = f"{__name__}.Whatever.process,1/param1=13-c51ce410"
     assert whatever.infra.uid() == uid
     for name in uid.split("/"):
         path = path / name
@@ -98,10 +94,7 @@ def test_map_infra(tmp_path: Path) -> None:
     assert whatever.infra.job_name is None
     ex = whatever.infra.executor()
     assert ex is not None
-    if ConfDict.UID_VERSION == 1:
-        expected = "Whatever.process,1/param1=13-cbb76898"
-    else:
-        expected = "Whatever.process,1/param1=13-c51ce410"
+    expected = "Whatever.process,1/param1=13-c51ce410"
     assert ex._executor.parameters["name"] == expected
     assert "{folder}" not in str(whatever.infra._log_path())
     # recover cached objects
@@ -112,6 +105,21 @@ def test_map_infra(tmp_path: Path) -> None:
     out2 = next(whatever.process([2]))
     with pytest.raises(AssertionError):
         np.testing.assert_array_equal(out2, out[1])
+
+
+def test_map_infra_cache_dict_calls(tmp_path: Path) -> None:
+    whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
+    cd = whatever.infra.cache_dict
+    _ = list(whatever.process([1, 2, 3, 4]))
+    assert cd._jsonl_readings == 3
+    whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
+    cd = whatever.infra.cache_dict
+    _ = list(whatever.process([1]))
+    assert cd._jsonl_readings == 1
+    _ = list(whatever.process([2, 3, 4]))
+    assert cd._jsonl_readings == 1
+    _ = list(whatever.process([5]))
+    assert cd._jsonl_readings == 4
 
 
 def test_missing_yield() -> None:
@@ -230,8 +238,10 @@ def test_mode(tmp_path: Path) -> None:
         np.testing.assert_array_equal(out["cached"], out["force"])
     np.testing.assert_array_equal(out["force"], out["read-only"])
     # check not recomputed:
-    newcall = list(cfgs["force"].process([2]))[0]
-    np.testing.assert_array_equal(newcall, out["force"])
+    for k in range(2):
+        newcall = list(cfgs["force"].process([2]))[0]
+        msg = f"Recomputed on try #{k + 1}"
+        np.testing.assert_array_equal(newcall, out["force"], err_msg=msg)
 
 
 @pytest.mark.parametrize(

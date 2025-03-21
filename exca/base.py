@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
 ExcludeCallable = tp.Callable[[tp.Any], tp.Iterable[str]]
 Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tp.Tuple[str, tp.Any]]
+# add functions here that return True if mismatch with cached config can be ignored, else False
+DEFAULT_CHECK_SKIPS: tp.List[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
+
+
+class Sentinel:
+    pass
 
 
 @pydantic.model_validator(mode="after")
@@ -90,10 +96,6 @@ def model_with_infra_validator_before(obj: tp.Any) -> tp.Any:
             # applying same infra to multiple objects
             obj[name] = {x: getattr(val, x) for x in val.model_fields_set}
     return obj
-
-
-class Sentinel:
-    pass
 
 
 class BaseInfra(pydantic.BaseModel):
@@ -160,18 +162,6 @@ class BaseInfra(pydantic.BaseModel):
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
         self._set_permissions(None)  # set compatibility for permissions as string
-
-    def apply_on(
-        self,
-        method: tp.Callable[..., tp.Any],
-        *args: tp.Any,
-        **kwargs: tp.Any,
-    ) -> None:
-        msg = (
-            "infra.apply_on is deprecated, update your code with @infra.apply "
-            "(see how-to: https://facebookresearch.github.io/brainai/infra/howto.html#migrating-to-new-infra-api)"
-        )
-        raise RuntimeError(msg)
 
     def config(self, uid: bool = True, exclude_defaults: bool = False) -> ConfDict:
         """Exports the task configuration as a ConfigDict
@@ -260,10 +250,8 @@ class BaseInfra(pydantic.BaseModel):
                     if key not in prev:
                         continue  # new field, nevermind
                     if val != prev[key]:
-                        if val == "native" and "frequency" in key:
-                            continue  # TODO remove, this is a temporary hack
-                        if "permissions" in key:
-                            continue  # TODO remove, this is a temporary hack
+                        if any(skip(key, val, prev[key]) for skip in DEFAULT_CHECK_SKIPS):
+                            continue
                         msg = f"Default {val!r} for {key} of {self._factory()} "
                         msg += f"seems incompatible (used to be {prev[key]!r})"
                         msg += f"\n(to ignore, remove {fp})"

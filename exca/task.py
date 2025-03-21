@@ -8,7 +8,6 @@ import collections
 import contextlib
 import functools
 import logging
-import os
 import time
 import traceback
 import typing as tp
@@ -29,24 +28,15 @@ Mode = tp.Literal["cached", "retry", "force", "read-only"]
 logger = logging.getLogger(__name__)
 
 
-class Log(tp.Generic[X]):
-    """Add initial log to the function"""
-
-    def __init__(self, func: tp.Callable[..., X]) -> None:
-        self.func = func
-
-    def __call__(self, *args: tp.Any, **kwargs: tp.Any) -> X:
-        logger.info("Running function from %s", os.getcwd())
-        return self.func(*args, **kwargs)
-
-
 class LocalJob:
     job_id: str = "#local#"
 
-    def __init__(self, func: tp.Callable[[], tp.Any]) -> None:
+    def __init__(
+        self, func: tp.Callable[..., tp.Any], *args: tp.Any, **kwargs: tp.Any
+    ) -> None:
         status: tp.Literal["success", "failure"] = "success"
         try:
-            out = func()
+            out = func(*args, **kwargs)
         except Exception as e:
             out = (e, traceback.format_exc())
             status = "failure"
@@ -76,7 +66,7 @@ class LocalJob:
         out = self._result[1]
         if isinstance(out, tuple):
             e, tb = out
-            logger.warning(f"Cached computation failed with traceback:\n{tb}")
+            logger.warning(f"Computation failed with traceback:\n{tb}")
             return e  # type: ignore
         elif isinstance(out, Exception):
             return out  # legacy #1
@@ -90,9 +80,9 @@ class LocalJob:
 
 class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     """Processing/caching infrastructure ready to be applied to a pydantic.BaseModel method.
-    To use it, the configuration can be set as an attribute of a pydantic BaseModel,
-    then `@infra.apply` must be set on the method to process/cache
-    this will effectively replace the function with a cached/remotely-computed version of itself
+    To use it, the configuration must be set as an attribute of a pydantic BaseModel,
+    then :code:`@infra.apply` must be set on the parameter-free method to process/cache.
+    This will effectively replace the function with a cached/remotely-computed version of itself
 
     Parameters
     ----------
@@ -113,10 +103,20 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     -------------------------
     Check out :class:`exca.slurm.SubmititMixin`
 
-    Note
-    ----
-    - the method must take as input an iterable of items of a type X, and yield
-      one output of a type Y for each input.
+    Usage
+    -----
+    .. code-block:: python
+
+        class MyTask(pydantic.BaseModel):
+            x: int
+            infra: exca.TaskInfra = exca.TaskInfra()
+
+            @infra.apply
+            def compute(self) -> int:
+                return 2 * self.x
+
+        cfg = MyTask(12, infra={"folder": "tmp", "cluster": "slurm"})
+        assert cfg.compute() == 24  # "compute" runs on slurm and is cached
     """
 
     # running configuration
@@ -162,10 +162,6 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         logs = Path(str(logs).replace("{folder}", str(uid_folder.parent)))
         return logs
 
-    def xp_folder(self) -> None:
-        msg = "infra.xp_folder() is deprecated in favor of infra.uid_folder()"
-        raise RuntimeError(msg)
-
     def clear_job(self) -> None:
         """Clears and possibly cancels this task's job
         so that the computation is rerun at the next call
@@ -188,15 +184,15 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         for name in ("job.pkl", "config.yaml", "submitit", "code"):
             (xpfolder / name).unlink(missing_ok=True)
 
-    # pylint: disable=unused-argument
-    def clone_task(self, *args: tp.Dict[str, tp.Any], **kwargs: tp.Any) -> None:
-        msg = "infra.clone_task is deprecated in favor of infra.clone_obj"
-        raise RuntimeError(msg)
-
     @contextlib.contextmanager
     def job_array(self, max_workers: int = 256) -> tp.Iterator[tp.List[tp.Any]]:
         """Creates a list object to populate
         The tasks in the list will be sent as a job array when exiting the context
+
+        Parameter
+        ---------
+        max_workers: int
+            maximum number of jobs in the array that can be running at a given time
         """
         executor = self.executor()
         tasks: tp.List[tp.Any] = []
@@ -252,8 +248,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 for infra in missing:
                     if infra._infra_method is None:
                         raise RuntimeError("Infra not correctly applied to a method")
-                    method = functools.partial(infra._infra_method.method, infra._obj)
-                    jobs.append(executor.submit(Log(method)))
+                    jobs.append(executor.submit(infra._run_method))
             logger.info(
                 "Submitted %s jobs (eg: %s) for %s through cluster '%s' "
                 "(%s already computed/ing in cache folder %s)",
@@ -312,9 +307,6 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     def job(self) -> submitit.Job[tp.Any] | LocalJob:
         """Creates or reload the job corresponding to the task"""
         folder = self.uid_folder()
-        if self._infra_method is None:
-            raise RuntimeError("Infra not correctly applied to a method")
-        method = functools.partial(self._infra_method.method, self._obj)
         job: tp.Any = None
         if self._effective_mode == "force":
             self.clear_job()
@@ -343,16 +335,17 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         # submit job if it does not exist
         executor = self.executor()
         if executor is None:
-            job = LocalJob(method)
+            job = LocalJob(self._run_method)
         else:
             executor.folder.mkdir(exist_ok=True, parents=True)
+            with self._work_env():
+                job = executor.submit(self._run_method)
             logger.info(
-                "Submitting 1 job for %s through cluster '%s'",
+                "Submitted 1 job for %s through cluster '%s' (job_id=%s)",
                 self.uid(),
                 executor.cluster,
+                job.job_id,
             )
-            with self._work_env():
-                job = executor.submit(Log(method))
         job = self._set_job(job)
         return job  # type: ignore
 
@@ -431,7 +424,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
 
         Usage
         -----
-        either decorate with `@infra.apply` or `@infra.apply(exclude_from_cache_uid=<whatever>)`
+        either decorate with :code:`@infra.apply` or :code:`@infra.apply(exclude_from_cache_uid=<whatever>)`
         """
         params = locals()
         for name in ["method", "self"]:
@@ -457,3 +450,141 @@ class CachedMethod:
     def __call__(self) -> tp.Any:
         # this method replaces the decorated method
         return self.infra._infra_method()  # type: ignore
+
+
+# similar to TaskInfra but without cache
+
+
+class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
+    """[Experimental] Processing infrastructure ready to be applied to a pydantic.BaseModel method.
+    To use it, the configuration must be set as an attribute of a pydantic BaseModel,
+    then :code:`@infra.apply` must be set on the method to process
+    this will effectively replace the function with a remotely-computed version of itself.
+    Contrarily to TaskInfra, outputs of the method are not cached, and the method can take arguments
+
+    Parameters
+    ----------
+    folder: optional Path or str
+        Path to directory for dumping/loading the cache on disk, if provided
+
+    Slurm/submitit parameters
+    -------------------------
+    Check out :class:`exca.slurm.SubmititMixin`
+
+    Usage
+    -----
+    .. code-block:: python
+
+        class MyTask(pydantic.BaseModel):
+            x: int
+            infra: exca.TaskInfra = exca.TaskInfra()
+
+            @infra.apply
+            def compute(self, y: int) -> int:
+                return 2 * self.x
+
+        cfg = MyTask(12, infra={"folder": "tmp", "cluster": "slurm"})
+        assert cfg.compute(y=1) == 25  # "compute" runs on slurm but is not cached
+        job = cfg.infra.submit(y=1)  # runs the computation asynchronously
+        assert job.result() == 25
+
+    Note
+    ----
+    - The decorated method can be a staticmethod to avoid pickling the owner object
+      along with the other parameters.
+    - This is an experimental infra that is still evolving
+    """
+
+    _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
+
+    def _exclude_from_cls_uid(self) -> tp.List[str]:
+        return ["."]  # not taken into accound for uid
+
+    # pylint: disable=unused-argument
+    def apply(self, method: base.C) -> base.C:
+        """Applies the infra on a method taking no parameter (except `self`)
+
+        Parameter
+        ---------
+        method: callable
+            a method of a pydantic.BaseModel taking as input an iterable of items
+            of a type X, and yielding one output of a type Y for each input item.
+
+        Usage
+        -----
+        Decorate the method with :code:`@infra.apply`
+        """
+        if self._infra_method is not None:
+            raise RuntimeError("Infra was already applied")
+        self._infra_method = base.InfraMethod(method=method)
+        return property(self._infra_method)  # type: ignore
+
+    def submit(self, *args: tp.Any, **kwargs: tp.Any) -> submitit.Job[tp.Any] | LocalJob:
+        """Submit an asynchroneous job. This call is non-blocking and returns a
+        :code:`Job` instance that has a :code:`result()` method that awaits
+        for the computation to be over.
+
+        Parameters
+        ----------
+        *args, **kwargs: parameters of the decorated method
+
+        Note
+        ----
+        As a reminder, outputs are not cached so submitting several time will
+        run as many jobs.
+        """
+        if self._infra_method is None:
+            raise RuntimeError("Infra must be applied to a method.")
+        executor = self._array_executor
+        if executor is None:
+            executor = self.executor()
+        if executor is None:
+            return LocalJob(self._run_method, *args, **kwargs)
+        return executor.submit(self._run_method, *args, **kwargs)
+
+    @contextlib.contextmanager
+    def batch(self, max_workers: int = 256) -> tp.Iterator[None]:
+        """Context for batching submissions through infra.submit into a unique array job
+
+        Parameter
+        ---------
+        max_workers: int
+            maximum number of jobs in the array that can be running at a given time
+
+        Usage
+        -----
+        .. code-block:: python
+
+            with cfg.infra.batch():
+                job1 = cfg.infra.submit(y=1)
+                job2 = cfg.infra.submit(y=2)
+            # job1 and job2 are submitted together as a job array
+        """
+        executor = self.executor()
+        with contextlib.ExitStack() as estack:
+            self._array_executor = executor
+            if isinstance(executor, submitit.Executor):
+                executor.update_parameters(slurm_array_parallelism=max_workers)
+                estack.enter_context(executor.batch())
+            try:
+                yield
+            except Exception:
+                raise
+            finally:
+                self._array_executor = None
+
+    def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:  # type: ignore
+        # this method replaces the decorated method
+        job = self.submit(*args, **kwargs)
+        return job.results()[0]  # only first for multi-tasks
+
+    def uid(self) -> str:
+        # bypass any complicated check
+        return self._factory()
+
+    def _log_path(self) -> Path:
+        logs = super()._log_path()
+        if self.folder is None:
+            raise ValueError("A folder is required for SubmitInfra on {self._obj}")
+        logs = Path(str(logs).replace("{folder}", str(self.folder)))
+        return logs

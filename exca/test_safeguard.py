@@ -25,27 +25,16 @@ def test_uid_version() -> None:
     assert confdict.ConfDict.UID_VERSION == 2
 
 
+def test_package_version() -> None:
+    version = exca.__version__
+    pyproject = Path(exca.__file__).parent.with_name("pyproject.toml")
+    assert f'version = "{version}"' in pyproject.read_text()
+
+
 def test_logging() -> None:
     line = "from . import logconf  # noqa"
     fp = Path(__file__).with_name("base.py")
     assert line in fp.read_text()
-
-
-def test_no_neuralset() -> None:
-    bad = []
-    for fp in Path(__file__).parent.glob("*.py"):
-        text = fp.read_text()
-        if "test" not in fp.name and "neuralset" in text:
-            if "neuralset.infra." in text:
-                warnings.warn(f"Fixing {fp} locally")
-                fp.write_text(text.replace("neuralset.infra.", "exca."))
-            bad.append(fp.name)
-    docs = Path(__file__).parents[1] / "docs" / "infra"
-    assert docs.exists()
-    for fp in docs.iterdir():
-        if "neuralset" in fp.read_text():
-            bad.append(fp.name)
-    assert not bad
 
 
 def test_slurm_in_doc() -> None:
