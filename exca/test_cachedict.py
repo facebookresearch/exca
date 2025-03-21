@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import gc
 import logging
 import os
 import typing as tp
@@ -101,26 +102,34 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
     ],
 )
 @pytest.mark.parametrize("legacy_write", (True, False))
+@pytest.mark.parametrize("keep_in_ram", (True, False))
 def test_specialized_dump(
-    tmp_path: Path, data: tp.Any, cache_type: str, legacy_write: bool
+    tmp_path: Path, data: tp.Any, cache_type: str, legacy_write: bool, keep_in_ram: bool
 ) -> None:
     proc = psutil.Process()
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path,
-        keep_in_ram=False,
+        keep_in_ram=keep_in_ram,
         cache_type=cache_type,
         _write_legacy_key_files=legacy_write,
     )
     with cache.writer() as writer:
         writer["x"] = data
     assert isinstance(cache["x"], type(data))
+    del cache
+    gc.collect()
     # check permissions
     octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
     assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
     for fp in tmp_path.iterdir():
         octal_permissions = oct(fp.stat().st_mode)[-3:]
         assert octal_permissions == "777", f"Wrong permissions for {fp}"
-    assert isinstance(cache["x"], type(data))
+    # check file remaining open
+    if keep_in_ram and "Memmap" in cache_type:
+        # MemmapArrayFile keeps a cache with cache._loader_cache
+        # (and should not be kept through other tests)
+        # NumpyMemmapArray also ram cache keeps files open
+        return
     files = proc.open_files()
     assert not files, "No file should remain open"
 
@@ -238,3 +247,20 @@ def test_2_caches(tmp_path: Path) -> None:
         keys = list(cache2.keys())
     keys = list(cache2.keys())
     assert "blublu" in keys
+
+
+def test_2_caches_memmap(tmp_path: Path) -> None:
+    params: dict[str, tp.Any] = dict(
+        folder=tmp_path, keep_in_ram=True, cache_type="MemmapArrayFile"
+    )
+    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
+    cache2: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
+    with cache.writer() as writer:
+        writer["blublu"] = np.random.rand(3, 12)
+    _ = cache2["blublu"]
+    with cache.writer() as writer:
+        writer["blublu2"] = np.random.rand(3, 12)
+    _ = cache2["blublu2"]
+    assert "blublu" in cache2._ram_data
+    _ = cache2["blublu"]
+    # raise
