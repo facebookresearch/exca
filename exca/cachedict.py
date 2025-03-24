@@ -112,9 +112,9 @@ class CacheDict(tp.Generic[X]):
         self._jsonl_readings = 0  # for perf
         self._jsonl_reading_allowance = float("inf")
         # hack for keeping data file open
-        self._loader_cache: dict[tp.Any, tp.Any] | None = (
-            {} if self._keep_in_ram else None
-        )
+        self._loader_cache: dict[tp.Any, tp.Any] | None = None
+        if self._keep_in_ram:
+            self._loader_cache = {}
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -283,9 +283,8 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
-        loader = DumperLoader.CLASSES[dinfo.cache_type](
-            self.folder, cache=self._loader_cache
-        )
+        Cls = DumperLoader.CLASSES[dinfo.cache_type]
+        loader = Cls(self.folder, cache=self._loader_cache)
         loaded = loader.load(**dinfo.content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
