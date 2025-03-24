@@ -263,4 +263,3 @@ def test_2_caches_memmap(tmp_path: Path) -> None:
     _ = cache2["blublu2"]
     assert "blublu" in cache2._ram_data
     _ = cache2["blublu"]
-    # raise
