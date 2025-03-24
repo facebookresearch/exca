@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextlib
 import importlib
 import logging
 import pickle
@@ -16,7 +17,7 @@ import numpy as np
 import pydantic
 import pytest
 
-from . import base, helpers, utils
+from . import base, helpers, test_compat, utils
 from .confdict import ConfDict
 from .task import LocalJob, TaskInfra
 
@@ -463,3 +464,37 @@ def test_conda_env(tmp_path: Path) -> None:
         infra1={"folder": tmp_path, "cluster": "local", "conda_env": env},  # type: ignore
     )
     assert whatever.process() == 26
+
+
+@contextlib.contextmanager
+def tmp_autoreload_change() -> tp.Iterator[None]:
+    fp = Path(test_compat.__file__)
+    content = fp.read_text()
+    part = "return 2 * self.param"
+    if part not in content:
+        raise ValueError(f"{part!r} not in {fp}")
+    new = content.replace(part, part.replace("2", "12"))
+    try:
+        fp.write_text(new)
+        yield
+    finally:
+        fp.write_text(content)
+
+
+def test_autoreload(tmp_path: Path) -> None:
+    w = test_compat.Whatever(taski={"folder": tmp_path / "1"})  # type: ignore
+    out = w.process_task()
+    assert out == 24
+    with tmp_autoreload_change():
+        importlib.reload(test_compat)
+    # same instance
+    out = w.process_task()
+    assert out == 24  # still on cache
+    # new instance, same cache
+    w2 = test_compat.Whatever(taski={"folder": tmp_path / "1"})  # type: ignore
+    out2 = w2.process_task()
+    assert out2 == 24  # still on cache
+    # new instance, different cache
+    w3 = test_compat.Whatever(taski={"folder": tmp_path / "2"})  # type: ignore
+    out3 = w3.process_task()
+    assert out3 == 144  # new code
