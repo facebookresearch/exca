@@ -123,6 +123,8 @@ def test_specialized_dump(
         assert octal_permissions == "777", f"Wrong permissions for {fp}"
     assert isinstance(cache["x"], type(data))
     # check file remaining open
+    if keep_in_ram:
+        return  # keep in ram keeps files open
     files = proc.open_files()
     assert not files, "No file should remain open"
 
