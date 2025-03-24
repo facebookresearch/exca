@@ -85,9 +85,8 @@ def test_map_infra(tmp_path: Path) -> None:
     assert whatever.infra.uid() == uid
     for name in uid.split("/"):
         path = path / name
-        assert (
-            path.exists()
-        ), f"Missing folder, got {[f.name for f in path.parent.iterdir()]}"
+        msg = f"Missing folder, got {[f.name for f in path.parent.iterdir()]}"
+        assert path.exists(), msg
     out2 = next(whatever.process([2]))
     np.testing.assert_array_equal(out2, out[1])
     # check that a default name has been set without changing the config
