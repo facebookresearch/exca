@@ -481,9 +481,15 @@ def tmp_autoreload_change() -> tp.Iterator[None]:
         fp.write_text(content)
 
 
-def test_autoreload() -> None:
-    print(test_compat.Whatever.process_task)
+def test_autoreload(tmp_path: Path) -> None:
+    w = test_compat.Whatever(taski={"folder": tmp_path / "1"})  # type: ignore
+    out = w.process_task()
+    assert out == 24
+    print(w.process_task)
     with tmp_autoreload_change():
         importlib.reload(test_compat)
-        print(test_compat.Whatever.process_task)
-    raise
+    out = w.process_task()
+    assert out == 24  # still on cache
+    w2 = test_compat.Whatever(taski={"folder": tmp_path / "2"})  # type: ignore
+    out2 = w2.process_task()
+    assert out2 == 144  # new code
