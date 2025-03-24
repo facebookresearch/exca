@@ -485,7 +485,6 @@ def test_autoreload(tmp_path: Path) -> None:
     w = test_compat.Whatever(taski={"folder": tmp_path / "1"})  # type: ignore
     out = w.process_task()
     assert out == 24
-    print(w.process_task)
     with tmp_autoreload_change():
         importlib.reload(test_compat)
     out = w.process_task()
