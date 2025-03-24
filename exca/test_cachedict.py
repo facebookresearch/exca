@@ -101,13 +101,14 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
     ],
 )
 @pytest.mark.parametrize("legacy_write", (True, False))
+@pytest.mark.parametrize("keep_in_ram", (True, False))
 def test_specialized_dump(
-    tmp_path: Path, data: tp.Any, cache_type: str, legacy_write: bool
+    tmp_path: Path, data: tp.Any, cache_type: str, legacy_write: bool, keep_in_ram: bool
 ) -> None:
     proc = psutil.Process()
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path,
-        keep_in_ram=False,
+        keep_in_ram=keep_in_ram,
         cache_type=cache_type,
         _write_legacy_key_files=legacy_write,
     )
@@ -121,6 +122,7 @@ def test_specialized_dump(
         octal_permissions = oct(fp.stat().st_mode)[-3:]
         assert octal_permissions == "777", f"Wrong permissions for {fp}"
     assert isinstance(cache["x"], type(data))
+    # check file remaining open
     files = proc.open_files()
     assert not files, "No file should remain open"
 
