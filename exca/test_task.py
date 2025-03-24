@@ -487,8 +487,14 @@ def test_autoreload(tmp_path: Path) -> None:
     assert out == 24
     with tmp_autoreload_change():
         importlib.reload(test_compat)
+    # same instance
     out = w.process_task()
     assert out == 24  # still on cache
-    w2 = test_compat.Whatever(taski={"folder": tmp_path / "2"})  # type: ignore
+    # new instance, same cache
+    w2 = test_compat.Whatever(taski={"folder": tmp_path / "1"})  # type: ignore
     out2 = w2.process_task()
-    assert out2 == 144  # new code
+    assert out2 == 24  # still on cache
+    # new instance, different cache
+    w3 = test_compat.Whatever(taski={"folder": tmp_path / "2"})  # type: ignore
+    out3 = w3.process_task()
+    assert out3 == 144  # new code
