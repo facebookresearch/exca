@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import gc
 import logging
 import os
 import typing as tp
@@ -18,6 +19,8 @@ import pytest
 import torch
 
 from . import cachedict as cd
+from . import utils
+from .dumperloader import MEMMAP_ARRAY_FILE_MAX_CACHE
 
 logger = logging.getLogger("exca")
 logger.setLevel(logging.DEBUG)
@@ -100,6 +103,7 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
         (pd.DataFrame([{"stuff": 12}]), "ParquetPandasDataFrame"),
         (np.array([12, 12]), "NumpyMemmapArray"),
         (np.array([12, 12]), "MemmapArrayFile"),
+        (np.array([12, 12]), "MemmapArrayFile:0"),
     ],
 )
 @pytest.mark.parametrize("legacy_write", (True, False))
@@ -107,6 +111,10 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
 def test_specialized_dump(
     tmp_path: Path, data: tp.Any, cache_type: str, legacy_write: bool, keep_in_ram: bool
 ) -> None:
+    memmap_cache_size = 10
+    if cache_type.endswith(":0"):
+        cache_type = cache_type[:-2]
+        memmap_cache_size = 0
     proc = psutil.Process()
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path,
@@ -116,19 +124,26 @@ def test_specialized_dump(
     )
     with cache.writer() as writer:
         writer["x"] = data
-    assert isinstance(cache["x"], type(data))
+    with utils.environment_variables(**{MEMMAP_ARRAY_FILE_MAX_CACHE: memmap_cache_size}):
+        assert isinstance(cache["x"], type(data))
+    del cache
+    gc.collect()
     # check permissions
     octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
     assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
     for fp in tmp_path.iterdir():
         octal_permissions = oct(fp.stat().st_mode)[-3:]
         assert octal_permissions == "777", f"Wrong permissions for {fp}"
-    assert isinstance(cache["x"], type(data))
     # check file remaining open
-    if keep_in_ram:
-        return  # keep in ram keeps files open
+    keeps_memmap = cache_type == "MemmapArrayFile" and (
+        memmap_cache_size or keep_in_ram
+    )  # keeps internal cache
+    keeps_memmap |= cache_type == "NumpyMemmapArray" and keep_in_ram  # stays in ram
     files = proc.open_files()
-    assert not files, "No file should remain open"
+    if keeps_memmap:
+        assert files, "Some memmaps should stay open"
+    else:
+        assert not files, "No file should remain open"
 
 
 def _setval(cache: cd.CacheDict[tp.Any], key: str, val: tp.Any) -> None:
