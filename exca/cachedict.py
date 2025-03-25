@@ -51,15 +51,15 @@ class CacheDict(tp.Generic[X]):
     cache_type: str or None
         type of cache dumper to use (see dumperloader.py file to see existing
         options, this include:
-          - NumpyArray: one .npy file for each array, loaded in ram
-          - NumpyMemmapArray: one .npy file for each array, loaded as a memmap
-          - MemmapArrayFile: one bytes file per worker, loaded as a memmap, and keeping
-            an internal cache of the open memmap file (EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE env
+          - :code:`"NumpyArray"`: one .npy file for each array, loaded in ram
+          - :code:`"NumpyMemmapArray"`: one .npy file for each array, loaded as a memmap
+          - :code:`"MemmapArrayFile"`: one bytes file per worker, loaded as a memmap, and keeping
+            an internal cache of the open memmap file (:code:`EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE` env
             variable can be set to reset the cache at a given number of open files, defaults
             to 100 000)
-          - TorchTensor: one .pt file per tensor
-          - PandasDataframe: one .csv file per pandas dataframe
-          - ParquetPandasDataframe: one .parquet file per pandas dataframe (faster to dump and read)
+          - :code:`"TorchTensor"`: one .pt file per tensor
+          - :code:`"PandasDataframe"`: one .csv file per pandas dataframe
+          - :code:`"ParquetPandasDataframe"`: one .parquet file per pandas dataframe (faster to dump and read)
         If `None`, the type will be deduced automatically and by default use a standard pickle dump.
         Loading is handled using the cache_type specified in info files.
     permissions: optional int
