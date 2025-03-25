@@ -139,6 +139,8 @@ def test_memmap_array_file(tmp_path: Path) -> None:
     x = np.random.rand(2, 3)
     y = np.random.rand(3, 3).astype(np.float16)
     with dl.open():
+        with pytest.raises(ValueError):  # x array with no size not supported
+            info.append(dl.dump("t", np.random.rand(0, 3)))
         info.append(dl.dump("x", x))
         info.append(dl.dump("y", y))
         info.append(dl.dump("z", np.random.rand(4, 3)))
