@@ -415,3 +415,4 @@ y: PT1M
 z: exca.confdict.ConfDict
 """
     assert out.to_yaml() == expected
+    assert out.to_uid().startswith("x=-,y=PT1M,z=exca.confdict.ConfDict")
