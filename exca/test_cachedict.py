@@ -125,10 +125,9 @@ def test_specialized_dump(
         octal_permissions = oct(fp.stat().st_mode)[-3:]
         assert octal_permissions == "777", f"Wrong permissions for {fp}"
     # check file remaining open
-    if keep_in_ram and "Memmap" in cache_type:
-        # MemmapArrayFile keeps a cache with cache._loader_cache
-        # (and should not be kept through other tests)
-        # NumpyMemmapArray also ram cache keeps files open
+    keeps_memmap = cache_type == "MemmapArrayFile"  # keeps internal cache
+    keeps_memmap |= cache_type == "NumpyMemmapArray" and keep_in_ram  # stays in ram
+    if keeps_memmap:
         return
     files = proc.open_files()
     assert not files, "No file should remain open"

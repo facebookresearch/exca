@@ -111,10 +111,9 @@ class CacheDict(tp.Generic[X]):
         self._info_files_last: dict[str, int] = {}
         self._jsonl_readings = 0  # for perf
         self._jsonl_reading_allowance = float("inf")
-        # hack for keeping data file open
-        self._loader_cache: dict[tp.Any, tp.Any] | None = None
-        if self._keep_in_ram:
-            self._loader_cache = {}
+        # keep loaders live for optimized loading
+        # (instances are reinstantiated for dumping though,  to make sure they are unique)
+        self._loaders: dict[str, DumperLoader] = {}
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -283,8 +282,10 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
-        Cls = DumperLoader.CLASSES[dinfo.cache_type]
-        loader = Cls(self.folder, cache=self._loader_cache)
+        if dinfo.cache_type not in self._loaders:  # keep loaders in store
+            Cls = DumperLoader.CLASSES[dinfo.cache_type]
+            self._loaders[dinfo.cache_type] = Cls(self.folder)
+        loader = self._loaders[dinfo.cache_type]
         loaded = loader.load(**dinfo.content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
