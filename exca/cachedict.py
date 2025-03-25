@@ -50,7 +50,16 @@ class CacheDict(tp.Generic[X]):
         if True, adds a cache in RAM of the data once loaded (similar to LRU cache)
     cache_type: str or None
         type of cache dumper to use (see dumperloader.py file to see existing
-        options, this include "NumpyArray", "NumpyMemmapArray", "TorchTensor", "PandasDataframe".
+        options, this include:
+          - NumpyArray: one .npy file for each array, loaded in ram
+          - NumpyMemmapArray: one .npy file for each array, loaded as a memmap
+          - MemmapArrayFile: one bytes file per worker, loaded as a memmap, and keeping
+            an internal cache of the open memmap file (EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE env
+            variable can be set to reset the cache at a given number of open files, defaults
+            to 100 000)
+          - TorchTensor: one .pt file per tensor
+          - PandasDataframe: one .csv file per pandas dataframe
+          - ParquetPandasDataframe: one .parquet file per pandas dataframe (faster to dump and read)
         If `None`, the type will be deduced automatically and by default use a standard pickle dump.
         Loading is handled using the cache_type specified in info files.
     permissions: optional int
@@ -111,6 +120,9 @@ class CacheDict(tp.Generic[X]):
         self._info_files_last: dict[str, int] = {}
         self._jsonl_readings = 0  # for perf
         self._jsonl_reading_allowance = float("inf")
+        # keep loaders live for optimized loading
+        # (instances are reinstantiated for dumping though,  to make sure they are unique)
+        self._loaders: dict[str, DumperLoader] = {}
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -279,7 +291,10 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
-        loader = DumperLoader.CLASSES[dinfo.cache_type](self.folder)
+        if dinfo.cache_type not in self._loaders:  # keep loaders in store
+            Cls = DumperLoader.CLASSES[dinfo.cache_type]
+            self._loaders[dinfo.cache_type] = Cls(self.folder)
+        loader = self._loaders[dinfo.cache_type]
         loaded = loader.load(**dinfo.content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
