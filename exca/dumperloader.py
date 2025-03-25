@@ -7,6 +7,7 @@
 import contextlib
 import hashlib
 import io
+import os
 import pickle
 import socket
 import threading
@@ -22,6 +23,7 @@ X = tp.TypeVar("X")
 Y = tp.TypeVar("Y", bound=tp.Type[tp.Any])
 
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
+MEMMAP_ARRAY_FILE_MAX_CACHE = "EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE"
 
 
 def _string_uid(string: str) -> str:
@@ -141,11 +143,14 @@ class NumpyMemmapArray(NumpyArray):
 
 class MemmapArrayFile(DumperLoader[np.ndarray]):
 
-    def __init__(self, folder: str | Path = "", cached: bool = True) -> None:
+    def __init__(self, folder: str | Path = "", max_cache: int | None = None) -> None:
         super().__init__(folder=folder)
         self._cache: dict[str, np.memmap] = {}
         self._f: io.BufferedWriter | None = None
         self._name: str | None = None
+        if max_cache is None:
+            max_cache = int(os.environ.get(MEMMAP_ARRAY_FILE_MAX_CACHE, 100_000))
+        self._max_cache = max_cache
 
     @contextlib.contextmanager
     def open(self) -> tp.Iterator[None]:
@@ -173,6 +178,8 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
             # new data was added -> we need to force a reload and retry
             del self._cache[filename]
         memmap = memmap.view(dtype=dtype).reshape(shape)
+        if len(self._cache) > self._max_cache:
+            self._cache.clear()
         return memmap
 
     def dump(self, key: str, value: np.ndarray) -> dict[str, tp.Any]:
