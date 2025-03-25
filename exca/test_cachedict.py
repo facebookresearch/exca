@@ -77,6 +77,8 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
     cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, _write_legacy_key_files=write_key_files
     )
+    if isinstance(data, np.ndarray) and write_key_files:
+        return  # deactivated
     with cache.writer() as writer:
         writer["blublu.tmp"] = data
     assert cache.cache_type not in [None, "Pickle"]

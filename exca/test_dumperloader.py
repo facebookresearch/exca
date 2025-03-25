@@ -42,7 +42,8 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
         assert Cls is not dumperloader.Pickle
     dl = Cls(tmp_path)
     # test with an extension, as it's easy to mess the new name with Path.with_suffix
-    info = dl.dump("blublu.ext", data)
+    with dl.open():
+        info = dl.dump("blublu.ext", data)
     reloaded = dl.load(**info)
     ExpectedCls = type(data)
     if ExpectedCls is mne.io.RawArray:
@@ -138,6 +139,8 @@ def test_memmap_array_file(tmp_path: Path) -> None:
     x = np.random.rand(2, 3)
     y = np.random.rand(3, 3).astype(np.float16)
     with dl.open():
+        with pytest.raises(ValueError):  # x array with no size not supported
+            info.append(dl.dump("t", np.random.rand(0, 3)))
         info.append(dl.dump("x", x))
         info.append(dl.dump("y", y))
         info.append(dl.dump("z", np.random.rand(4, 3)))

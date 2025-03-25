@@ -131,9 +131,6 @@ class NumpyArray(StaticDumperLoader[np.ndarray]):
             np.save(tmp, value)
 
 
-DumperLoader.DEFAULTS[np.ndarray] = NumpyArray
-
-
 class NumpyMemmapArray(NumpyArray):
 
     @classmethod
@@ -187,6 +184,8 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
             raise RuntimeError("Need a write_mode context")
         if not isinstance(value, np.ndarray):
             raise TypeError(f"Expected numpy array but got {value} ({type(value)})")
+        if not value.size:
+            raise ValueError(f"Cannot dump data with no size: shape={value.shape}")
         offset = self._f.tell()
         self._f.write(np.ascontiguousarray(value).data)
         return {
@@ -195,6 +194,9 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
             "shape": tuple(value.shape),
             "dtype": str(value.dtype),
         }
+
+
+DumperLoader.DEFAULTS[np.ndarray] = MemmapArrayFile
 
 
 try:
