@@ -210,7 +210,7 @@ def test_multiple_cached(tmp_path: Path) -> None:
     for p in range(2):
         whatever = Whatever(
             param1=p + 1,
-            infra={"folder": tmp_path, "cluster": None},  # "local"},  # type: ignore
+            infra={"folder": tmp_path},  # type: ignore
         )
         _ = list(whatever.process([1, 2, 2, 3]))
     objs = list(whatever.infra.iter_cached())
