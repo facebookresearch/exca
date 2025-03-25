@@ -129,9 +129,6 @@ class NumpyArray(StaticDumperLoader[np.ndarray]):
             np.save(tmp, value)
 
 
-DumperLoader.DEFAULTS[np.ndarray] = NumpyArray
-
-
 class NumpyMemmapArray(NumpyArray):
 
     @classmethod
@@ -182,6 +179,9 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
             "shape": tuple(value.shape),
             "dtype": str(value.dtype),
         }
+
+
+DumperLoader.DEFAULTS[np.ndarray] = MemmapArrayFile
 
 
 try:

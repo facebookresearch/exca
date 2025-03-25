@@ -42,7 +42,8 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
         assert Cls is not dumperloader.Pickle
     dl = Cls(tmp_path)
     # test with an extension, as it's easy to mess the new name with Path.with_suffix
-    info = dl.dump("blublu.ext", data)
+    with dl.open():
+        info = dl.dump("blublu.ext", data)
     reloaded = dl.load(**info)
     ExpectedCls = type(data)
     if ExpectedCls is mne.io.RawArray:
