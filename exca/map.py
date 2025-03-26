@@ -398,6 +398,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             )
             [j.result() for j in jobs]  # wait for processing to complete
             logger.info("Finished processing %s samples for %s", len(missing), uid)
+            folder = self.uid_folder()
+            if folder is not None:
+                os.utime(folder)  # make sure the modified time is updated
         msg = "Recovering %s items for %s from %s"
         # using factory because uid is too slow for here
         logger.debug(msg, len(items), self._factory(), self.cache_dict)
