@@ -62,7 +62,7 @@ class JobChecker:
 
     def add(self, jobs: tp.Iterable[tp.Any]) -> None:
         """Add jobs to the list of running jobs"""
-        self.folder.mkdir(exist_ok=True)
+        self.folder.mkdir(exist_ok=True, parents=True)
         for job in jobs:
             if not job.done():
                 job_path = self.folder / (uuid.uuid4().hex[:8] + ".pkl")
