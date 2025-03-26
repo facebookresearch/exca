@@ -467,6 +467,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     for job in iterator:
                         out.update(job.result())  # raise asap
                 logger.info("Finished processing %s items for %s", len(missing), uid)
+            folder = self.uid_folder()
+            if folder is not None:
+                os.utime(folder)  # make sure the modified time is updated
         try:
             cache_dict = self.cache_dict
         except ValueError:  # no caching
