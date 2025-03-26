@@ -153,7 +153,7 @@ def test_find_slurm_job(tmp_path: Path) -> None:
     assert job.uid_config == {"param1": 13}
 
 
-def test_batch_infra_perm(tmp_path: Path) -> None:
+def test_map_infra_perm(tmp_path: Path) -> None:
     whatever = Whatever(infra={"folder": tmp_path, "permissions": 0o777})  # type: ignore
     xpfold = whatever.infra.uid_folder()
     assert xpfold is not None
@@ -162,6 +162,11 @@ def test_batch_infra_perm(tmp_path: Path) -> None:
     _ = list(whatever.process([1, 2, 2, 3]))
     after = xpfold.stat().st_mode
     assert after > before
+
+
+def test_map_infra_debug(tmp_path: Path) -> None:
+    whatever = Whatever(infra={"folder": tmp_path, "cluster": "debug"})  # type: ignore
+    _ = list(whatever.process([1, 2, 2, 3]))
 
 
 def test_batch_no_item(tmp_path: Path) -> None:
