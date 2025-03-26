@@ -165,7 +165,7 @@ def test_map_infra_perm(tmp_path: Path) -> None:
 
 
 def test_map_infra_debug(tmp_path: Path) -> None:
-    whatever = Whatever(infra={"folder": tmp_path, "cluster": "debug"})
+    whatever = Whatever(infra={"folder": tmp_path, "cluster": "debug"})  # type: ignore
     _ = list(whatever.process([1, 2, 2, 3]))
 
 
