@@ -46,7 +46,7 @@ for t in (PosixPath, WindowsPath, np.float32, np.float64, np.int32, np.int64):
 
 
 class ConfDict(dict[str, tp.Any]):
-    f"""Dictionary which breaks into sub-dictionnaries on "." as in a config (see example)
+    """Dictionary which breaks into sub-dictionnaries on "." as in a config (see example)
     The data can be specified either through "." keywords or directly through sub-dicts
     or a mixture of both.
     Lists of dictionaries are processed as list of ConfDict
@@ -59,8 +59,9 @@ class ConfDict(dict[str, tp.Any]):
     Note
     ----
     - This is designed for configurations, so it probably does not scale well to 100k+ keys
-    - dicts are merged expect if containing the key {OVERRIDE!r}, in which case they replace
-      the content. On the other hand, non-dicts always replace the content.
+    - dicts are merged expect if containing the key :code:`"=replace="`,
+      in which case they replace the content. On the other hand, non-dicts always
+      replace the content.
     """
 
     UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "2"))
