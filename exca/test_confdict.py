@@ -3,8 +3,8 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
-
 import dataclasses
+import typing as tp
 from pathlib import Path
 
 import pytest
@@ -41,6 +41,23 @@ def test_update() -> None:
     # with compressed key
     data.update(**{"a.b": {"e": 13, ConfDict.OVERRIDE: True}})
     assert data == {"a": {"b": {"e": 13}}}
+
+
+@pytest.mark.parametrize(
+    "update,expected",
+    [
+        ({"a.b.c": 12}, {"a.b.c": 12}),
+        ({"a.b.c.d": 12}, {"a.b.c.d": 12}),
+        ({"a.b": {"c.d": 12}}, {"a.b.c.d": 12}),
+        ({"a.c": None}, {"a.b": None, "a.c": None}),
+        ({"a.b": None}, {"a.b": None}),
+        ({"a": None}, {"a": None}),
+    ],
+)
+def test_update_on_none(update: tp.Any, expected: tp.Any) -> None:
+    data = ConfDict({"a": {"b": None}})
+    data.update(update)
+    assert data.flat() == expected
 
 
 def test_del() -> None:
