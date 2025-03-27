@@ -46,7 +46,7 @@ for t in (PosixPath, WindowsPath, np.float32, np.float64, np.int32, np.int64):
 
 
 class ConfDict(dict[str, tp.Any]):
-    """Dictionary which breaks into sub-dictionnaries on "." as in a config (see example)
+    f"""Dictionary which breaks into sub-dictionnaries on "." as in a config (see example)
     The data can be specified either through "." keywords or directly through sub-dicts
     or a mixture of both.
     Lists of dictionaries are processed as list of ConfDict
@@ -58,7 +58,9 @@ class ConfDict(dict[str, tp.Any]):
 
     Note
     ----
-    This is designed for configurations, so it probably does not scale well to 100k+ keys
+    - This is designed for configurations, so it probably does not scale well to 100k+ keys
+    - dicts are merged expect if containing the key {OVERRIDE!r}, in which case they replace
+      the content. On the other hand, non-dicts always replace the content.
     """
 
     UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "2"))
@@ -97,14 +99,14 @@ class ConfDict(dict[str, tp.Any]):
         parts = key.split(".")
         cls = self.__class__
         sub = self
-        for p in parts[:-1]:
-            sub2 = sub.setdefault(p, cls())
-            if not isinstance(sub2, dict):
-                del sub[p]  # non dict are replaced
-                sub2 = sub.setdefault(p, cls())
-            sub = sub2
+        for p in parts:
+            prev_sub = sub
+            sub = prev_sub.setdefault(p, cls())
+            if not isinstance(sub, dict):
+                del prev_sub[p]  # non-dict are replaced
+                sub = prev_sub.setdefault(p, cls())
         if isinstance(val, dict):
-            sub.setdefault(parts[-1], cls()).update(val)
+            sub.update(val)
         else:
             if isinstance(val, abc.Sequence) and not isinstance(val, str):
                 if cls.UID_VERSION == 1:
@@ -112,7 +114,7 @@ class ConfDict(dict[str, tp.Any]):
                 else:
                     Container = val.__class__
                     val = Container([cls(v) if isinstance(v, dict) else v for v in val])  # type: ignore
-            dict.__setitem__(sub, parts[-1], val)
+            dict.__setitem__(prev_sub, parts[-1], val)
 
     def __getitem__(self, key: str) -> tp.Any:
         parts = key.split(".")
