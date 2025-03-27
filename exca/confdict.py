@@ -98,7 +98,11 @@ class ConfDict(dict[str, tp.Any]):
         cls = self.__class__
         sub = self
         for p in parts[:-1]:
-            sub = sub.setdefault(p, cls())
+            sub2 = sub.setdefault(p, cls())
+            if not isinstance(sub2, dict):
+                del sub[p]  # non dict are replaced
+                sub2 = sub.setdefault(p, cls())
+            sub = sub2
         if isinstance(val, dict):
             sub.setdefault(parts[-1], cls()).update(val)
         else:
