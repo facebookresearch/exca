@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import datetime
 import os
 import typing as tp
 from pathlib import Path
@@ -397,3 +398,21 @@ def test_fast_unlink(tmp_path: Path) -> None:
     with utils.fast_unlink(fp):
         pass
     assert not fp.exists()
+
+
+class ComplexTypesConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    x: pydantic.DirectoryPath = Path("/")
+    y: datetime.timedelta = datetime.timedelta(minutes=1)
+    z: pydantic.ImportString = ConfDict
+
+
+def test_complex_types() -> None:
+    c = ComplexTypesConfig()
+    out = ConfDict.from_model(c, uid=True, exclude_defaults=False)
+    expected = """x: /
+y: PT1M
+z: exca.confdict.ConfDict
+"""
+    assert out.to_yaml() == expected
+    assert out.to_uid().startswith("x=-,y=PT1M,z=exca.confdict.ConfDict")
