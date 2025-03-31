@@ -73,7 +73,7 @@ class MyTask(pydantic.BaseModel):
         return self.param * np.random.rand()
 
 
-task = MyTask(param=1, infra={"folder": tmp_path, "cluster": "auto"})
+task = MyTask(param=1, infra={"folder": tmp_path, "cluster": None})
 out = task.process()  # runs on slurm if available
 # calling process again will load the cache and not a new random number
 assert out == task.process()
@@ -88,7 +88,7 @@ See the [API reference for all the details](https://facebookresearch.github.io/e
 | RAM cache                     | ✔         |       |           | ✔    |
 | file cache                    |           |       |           | ✔    |
 | remote compute                |           | ✔     |  ✔        | ✔    |
-| pure python (vs command line)  | ✔         |       |  ✔        | ✔    |
+| pure python (vs command line) | ✔         |       |  ✔        | ✔    |
 | hierarchical config           |           | ✔     |           | ✔    |
 
 ## Contributing

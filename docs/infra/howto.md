@@ -95,7 +95,7 @@ The uid of the class takes into account all parameters, you can check the parame
 task = UidTask(device="cuda", coeff=3)
 assert task.infra.config(uid=True) == {
     'seed': 12,
-    'shape': (3, 4),
+    'shape': [3, 4],
     'coeff': 3.0,
     'device': 'cuda',
     'infra': {'version': '1'}
