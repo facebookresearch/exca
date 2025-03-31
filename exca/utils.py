@@ -121,7 +121,7 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
         excluded = info[UID_EXCLUDED]
         forced = info[FORCE_INCLUDED]
         excluded -= forced  # forced taks over
-        fields = set(obj.model_fields)
+        fields = set(type(obj).model_fields)
         missing = (excluded | forced) - (fields | {"."})
         if cfg.uid and "." in excluded:
             dump.clear()
@@ -138,7 +138,9 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
             if name not in dump:
                 dump[name] = _dump(getattr(obj, name), cfg=cfg)
         # add required field to force ones, to make sure we don't remove them later on
-        reqs = {name for name, field in obj.model_fields.items() if field.is_required()}
+        reqs = {
+            name for name, field in type(obj).model_fields.items() if field.is_required()
+        }
         forced |= reqs
         obj = dict(obj)
     if isinstance(obj, dict):
@@ -158,7 +160,7 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
                 continue
             if not isinstance(bobj, pydantic.BaseModel):
                 continue
-            default = bobj.model_fields[name].default
+            default = type(bobj).model_fields[name].default
             if not isinstance(default, pydantic.BaseModel):
                 continue
             if set(sub_dump) - default.model_fields_set:
@@ -167,7 +169,7 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
             exc = subinfo[UID_EXCLUDED]
             #
             for f in default.model_fields_set - set(exc):
-                cls_default = default.model_fields[f].default
+                cls_default = type(default).model_fields[f].default
                 val = sub_dump.get(f, cls_default)
                 cfg_default = getattr(default, f)
                 if cfg_default != val:
@@ -262,7 +264,7 @@ def _set_discriminated_status(
         raise RuntimeError(msg)
     # propagate below
     schema: tp.Any = None
-    for name, field in obj.model_fields.items():
+    for name, field in type(obj).model_fields.items():
         discriminator: str = DiscrimStatus.NONE
         if schema is None and len(_pydantic_hints(field.annotation)) > 1:
             # compute schema only if finding a possible pydantic union, as it is slow

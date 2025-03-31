@@ -74,7 +74,7 @@ jobs:
         # update readmes to avoid running on slurm:
         sed -i 's/cluster: slurm/cluster: null/g' docs/infra/*.md
         sed -i 's/\"auto\"/None/g' README.md
-        # on Mac: sed -i '' 's/cluster: slurm/cluster: null/g' infra/*.md
+        # on Mac: sed -i '' 's/cluster: slurm/cluster: null/g' docs/infra/*.md
         # check readmes
         pytest --markdown-docs -m markdown-docs `**/*.md`
 

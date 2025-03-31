@@ -88,7 +88,7 @@ See the [API reference for all the details](https://facebookresearch.github.io/e
 | RAM cache                     | ✔         |       |           | ✔    |
 | file cache                    |           |       |           | ✔    |
 | remote compute                |           | ✔     |  ✔        | ✔    |
-| pure python (vs command line)  | ✔         |       |  ✔        | ✔    |
+| pure python (vs command line) | ✔         |       |  ✔        | ✔    |
 | hierarchical config           |           | ✔     |           | ✔    |
 
 ## Contributing
