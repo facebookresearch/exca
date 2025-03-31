@@ -94,7 +94,7 @@ def to_dict(
     if exclude_defaults:
         _set_discriminated_status(model)
     cfg = ExportCfg(uid=uid, exclude_defaults=exclude_defaults)
-    out = model.model_dump(exclude_defaults=exclude_defaults)
+    out = model.model_dump(exclude_defaults=exclude_defaults, mode="json")
     if uid or exclude_defaults:
         _apply_dump_tags(model, out, cfg=cfg)
     return out
