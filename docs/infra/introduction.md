@@ -106,7 +106,7 @@ config = f"""
 x: 12
 y: whatever
 infra:  # resource parameters
-  cluster: null
+  cluster: slurm
   folder: {tmp_path}
   cpus_per_task: 4
 """
@@ -287,7 +287,7 @@ infra:
   cpus_per_task: 80
   slurm_constraint: volta32gb
   folder: {tmp_path}
-  cluster: null
+  cluster: slurm
   slurm_partition: learnfair
   workdir:
     copied:
