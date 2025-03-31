@@ -73,7 +73,7 @@ class MyTask(pydantic.BaseModel):
         return self.param * np.random.rand()
 
 
-task = MyTask(param=1, infra={"folder": tmp_path, "cluster": None})
+task = MyTask(param=1, infra={"folder": tmp_path, "cluster": "auto"})
 out = task.process()  # runs on slurm if available
 # calling process again will load the cache and not a new random number
 assert out == task.process()
