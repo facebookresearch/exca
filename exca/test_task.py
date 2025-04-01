@@ -241,11 +241,12 @@ def test_task_uid_config_error(tmp_path: Path) -> None:
     whatever.param1 = 13
     assert whatever.process() == 26
     whatever.infra1.clear_job()
-    with pytest.raises(RuntimeError):
+    # ValidationError for pydantic <2.11 (legacy) then RuntimeError
+    with pytest.raises((RuntimeError, pydantic.ValidationError)):
         whatever.param1 = 14
     whatever2.param1 = 15  # freezing instance should not affect other instance
     assert whatever2.param1 == 15
-    with pytest.raises(RuntimeError):
+    with pytest.raises((RuntimeError, pydantic.ValidationError)):
         whatever.infra1.cpus_per_task = 12  # should not be allowed to change now
     xpfolder = whatever.infra1.uid_folder()
     assert xpfolder is not None

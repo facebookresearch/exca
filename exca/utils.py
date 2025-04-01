@@ -309,11 +309,15 @@ def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hierarchy"""
     models = find_models(obj, pydantic.BaseModel, include_private=False)
     for m in models.values():
-        m.__pydantic_setattr_handlers__.clear()  # type: ignore
-        m._setattr_handler = _FrozenSetattr(m)  # type: ignore
-        # legacy
-        mconfig = copy.deepcopy(m.model_config)
-        mconfig["frozen"] = True
+        if hasattr(m, "__pydantic_setattr_handlers__"):
+            # starting at pydantic 2.11
+            m.__pydantic_setattr_handlers__.clear()  # type: ignore
+            m._setattr_handler = _FrozenSetattr(m)  # type: ignore
+        else:
+            # legacy
+            mconfig = copy.deepcopy(m.model_config)
+            mconfig["frozen"] = True
+            object.__setattr__(m, "model_config", mconfig)
 
 
 def find_models(

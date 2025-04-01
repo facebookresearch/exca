@@ -1,4 +1,4 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
+# e Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the license found in the
@@ -257,7 +257,6 @@ class BaseInfra(pydantic.BaseModel):
                         msg += f"\n(to ignore, remove {fp})"
                         raise RuntimeError(msg)
         self._checked_configs = True
-        print("HERE", self._checked_configs)
         # dump configs
         if write:
             for name, cfg in configs.items():
