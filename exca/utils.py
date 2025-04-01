@@ -293,13 +293,31 @@ def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
             copy_discriminated_status(item_ref, item_new)
 
 
+class _FrozenSetattr:
+    def __init__(self, obj: tp.Any) -> None:
+        self.obj = obj
+        self._pydantic_setattr_handler = obj._setattr_handler
+
+    def __call__(self, name: str, value: tp.Any) -> tp.Any:
+        if name.startswith("_"):
+            return self._pydantic_setattr_handler(name, value)
+        msg = f"Cannot proceed to update {type(self)}.{name} = {value} as the instance was frozen"
+        raise RuntimeError(msg)
+
+
 def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hierarchy"""
     models = find_models(obj, pydantic.BaseModel, include_private=False)
     for m in models.values():
-        mconfig = copy.deepcopy(m.model_config)
-        mconfig["frozen"] = True
-        object.__setattr__(m, "model_config", mconfig)
+        if hasattr(m, "__pydantic_setattr_handlers__"):
+            # starting at pydantic 2.11
+            m.__pydantic_setattr_handlers__.clear()  # type: ignore
+            m._setattr_handler = _FrozenSetattr(m)  # type: ignore
+        else:
+            # legacy
+            mconfig = copy.deepcopy(m.model_config)
+            mconfig["frozen"] = True
+            object.__setattr__(m, "model_config", mconfig)
 
 
 def find_models(

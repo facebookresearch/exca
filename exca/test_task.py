@@ -231,20 +231,23 @@ def test_script_model(tmp_path: Path, cluster: None | str) -> None:
 
 
 def test_task_uid_config_error(tmp_path: Path) -> None:
-    whatever = Whatever(
-        param1=12,
-        infra1={"folder": tmp_path, "cluster": "debug"},  # type: ignore
-    )
+    whatever, whatever2 = [
+        Whatever(
+            param1=12,
+            infra1={"folder": tmp_path, "cluster": "debug"},  # type: ignore
+        )
+        for _ in range(2)
+    ]
     whatever.param1 = 13
     assert whatever.process() == 26
     whatever.infra1.clear_job()
-    # TODO REACTIVATE when possible (freezing does not seem to work anymore :( )
-    # with pytest.raises(pydantic.ValidationError):
-    #     whatever.param1 = 14
-    # with pytest.raises(pydantic.ValidationError):
-    #     whatever.infra1.cpus_per_task = 12  # should not be allowed to change now
-    assert whatever.model_config["frozen"]
-    assert "frozen" not in Whatever.model_config
+    # ValidationError for pydantic <2.11 (legacy) then RuntimeError
+    with pytest.raises((RuntimeError, pydantic.ValidationError)):
+        whatever.param1 = 14
+    whatever2.param1 = 15  # freezing instance should not affect other instance
+    assert whatever2.param1 == 15
+    with pytest.raises((RuntimeError, pydantic.ValidationError)):
+        whatever.infra1.cpus_per_task = 12  # should not be allowed to change now
     xpfolder = whatever.infra1.uid_folder()
     assert xpfolder is not None
     with (xpfolder / "uid.yaml").open("w") as f:

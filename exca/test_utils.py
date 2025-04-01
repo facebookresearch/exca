@@ -149,7 +149,7 @@ something_else: 12
     assert out == expected
 
 
-def test_get_discriminator() -> None:
+def test_recursive_freeze() -> None:
     d = Discrim(
         inst={"uid": "D2"},  # type: ignore
         inst2={"uid": "D1"},  # type: ignore
@@ -157,11 +157,16 @@ def test_get_discriminator() -> None:
         seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
     )
     sub = d.seq[0][0]
-    assert not D2.model_config.get("frozen", False)
-    assert not sub.model_config.get("frozen", False)
+    with pytest.raises(ValueError):
+        # not frozen but field does not exist
+        sub.blublu = 12  # type: ignore
     utils.recursive_freeze(d)
-    assert not D2.model_config.get("frozen", False)
-    assert sub.model_config.get("frozen", False)
+    if hasattr(sub, "_setattr_handler"):
+        with pytest.raises(RuntimeError):
+            # frozen, otherwise it would be a value error
+            sub.blublu = 12  # type: ignore
+    else:
+        assert sub.model_config["frozen"]
 
 
 class OptDiscrim(pydantic.BaseModel):
@@ -200,21 +205,6 @@ def test_temporary_save_path_error() -> None:
     with pytest.raises(FileNotFoundError):
         with utils.temporary_save_path("save_and_move_test"):
             pass
-
-
-def test_recursive_freeze() -> None:
-    d = Discrim(
-        inst={"uid": "D2"},  # type: ignore
-        inst2={"uid": "D1"},  # type: ignore
-        something_else=12,
-        seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
-    )
-    d2 = d.seq[0][0]
-    assert not d2.model_config.get("frozen", False)
-    assert not D2.model_config.get("frozen", False)
-    utils.recursive_freeze(d)
-    assert d2.model_config.get("frozen", False)
-    assert not D2.model_config.get("frozen", False)
 
 
 @pytest.mark.parametrize(
