@@ -4,7 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import types
 import collections
 import contextlib
 import copy
@@ -294,26 +293,27 @@ def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
             copy_discriminated_status(item_ref, item_new)
 
 
-def _frozen_setattr(self: pydantic.BaseModel, name: str, value: tp.Any) -> tp.Any:
-    if name.startswith("_"):
-        # set directly
-        object.__setattr__(self, name, value)
-        return None
-    msg = f"Cannot proceed to update {type(self)}.{name} = {value} as the instance was frozen"
-    raise RuntimeError(msg)
+class _FrozenSetattr:
+    def __init__(self, obj: tp.Any) -> None:
+        self.obj = obj
+        self._pydantic_setattr_handler = obj._setattr_handler
 
+    def __call__(self, name: str, value: tp.Any) -> tp.Any:
+        if name.startswith("_"):
+            return self._pydantic_setattr_handler(name, value)
+        msg = f"Cannot proceed to update {type(self)}.{name} = {value} as the instance was frozen"
+        raise RuntimeError(msg)
 
 
 def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hierarchy"""
     models = find_models(obj, pydantic.BaseModel, include_private=False)
     for m in models.values():
-        m.__pydantic_setattr_handlers__.clear()
-        m._setattr_handler = types.MethodType(_frozen_setattr, obj)  # type: ignore
+        m.__pydantic_setattr_handlers__.clear()  # type: ignore
+        m._setattr_handler = _FrozenSetattr(m)  # type: ignore
         # legacy
         mconfig = copy.deepcopy(m.model_config)
         mconfig["frozen"] = True
-
 
 
 def find_models(
