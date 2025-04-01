@@ -257,6 +257,7 @@ class BaseInfra(pydantic.BaseModel):
                         msg += f"\n(to ignore, remove {fp})"
                         raise RuntimeError(msg)
         self._checked_configs = True
+        print("HERE", self._checked_configs)
         # dump configs
         if write:
             for name, cfg in configs.items():
