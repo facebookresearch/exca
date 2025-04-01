@@ -161,7 +161,7 @@ def test_recursive_freeze() -> None:
         # not frozen but field does not exist
         sub.blublu = 12  # type: ignore
     utils.recursive_freeze(d)
-    if hasattr(sub, "_setattr_handlers"):
+    if hasattr(sub, "_setattr_handler"):
         with pytest.raises(RuntimeError):
             # frozen, otherwise it would be a value error
             sub.blublu = 12  # type: ignore
