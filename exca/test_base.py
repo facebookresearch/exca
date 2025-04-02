@@ -416,10 +416,10 @@ def test_recursive_model() -> None:
         infra: TaskInfra = TaskInfra()
 
     r = Recursive(submodels=[{}, {}], subd={"y": 3})  # type: ignore
-    print("Cfg", SubData.model_config)
+    print("Here Cfg", SubData.model_config)
     r = Recursive(submodels=[{}, {}], subd={"y": 3})  # type: ignore
-    r.subd.y = 13
-    print(r.subd.y)
+    # r.subd.y = 13
+    # print(r.subd.y)
     raise
 
 
