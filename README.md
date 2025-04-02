@@ -88,7 +88,7 @@ See the [API reference for all the details](https://facebookresearch.github.io/e
 | RAM cache                     | ✔         |       |           | ✔    |
 | file cache                    |           |       |           | ✔    |
 | remote compute                |           | ✔     |  ✔        | ✔    |
-| pure python (vs commandline)  | ✔         |       |  ✔        | ✔    |
+| pure python (vs command line) | ✔         |       |  ✔        | ✔    |
 | hierarchical config           |           | ✔     |           | ✔    |
 
 ## Contributing
@@ -109,4 +109,4 @@ See the [CONTRIBUTING](.github/CONTRIBUTING.md) file for how to help out.
 ## License
 
 `exca` is MIT licensed, as found in the LICENSE file.
-Also check-out Meto Open Source [Terms of Use](https://opensource.fb.com/legal/terms) and [Privacy Policy](https://opensource.fb.com/legal/privacy).
+Also check-out Meta Open Source [Terms of Use](https://opensource.fb.com/legal/terms) and [Privacy Policy](https://opensource.fb.com/legal/privacy).

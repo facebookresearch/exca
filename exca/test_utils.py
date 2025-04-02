@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import datetime
 import os
 import typing as tp
 from pathlib import Path
@@ -148,7 +149,7 @@ something_else: 12
     assert out == expected
 
 
-def test_get_discriminator() -> None:
+def test_recursive_freeze() -> None:
     d = Discrim(
         inst={"uid": "D2"},  # type: ignore
         inst2={"uid": "D1"},  # type: ignore
@@ -156,11 +157,16 @@ def test_get_discriminator() -> None:
         seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
     )
     sub = d.seq[0][0]
-    assert not D2.model_config.get("frozen", False)
-    assert not sub.model_config.get("frozen", False)
+    with pytest.raises(ValueError):
+        # not frozen but field does not exist
+        sub.blublu = 12  # type: ignore
     utils.recursive_freeze(d)
-    assert not D2.model_config.get("frozen", False)
-    assert sub.model_config.get("frozen", False)
+    if hasattr(sub, "_setattr_handler"):
+        with pytest.raises(RuntimeError):
+            # frozen, otherwise it would be a value error
+            sub.blublu = 12  # type: ignore
+    else:
+        assert sub.model_config["frozen"]
 
 
 class OptDiscrim(pydantic.BaseModel):
@@ -176,38 +182,29 @@ def test_optional_discriminator(caplog: tp.Any) -> None:
     assert out == expected
 
 
+@pytest.mark.parametrize("replace", (True, False))
 @pytest.mark.parametrize("existing_content", [None, "blublu"])
-def test_temporary_save_path(tmp_path: Path, existing_content: str | None) -> None:
+def test_temporary_save_path(
+    tmp_path: Path, existing_content: str | None, replace: bool
+) -> None:
     filepath = tmp_path / "save_and_move_test.txt"
     if existing_content:
         filepath.write_text(existing_content)
-    with utils.temporary_save_path(filepath) as tmp:
+    with utils.temporary_save_path(filepath, replace=replace) as tmp:
         assert str(tmp).endswith(".txt")
         tmp.write_text("12")
         if existing_content:
             assert filepath.read_text() == existing_content
-    assert filepath.read_text() == "12"
+    expected = "12"
+    if existing_content is not None and not replace:
+        expected = "blublu"
+    assert filepath.read_text() == expected
 
 
 def test_temporary_save_path_error() -> None:
     with pytest.raises(FileNotFoundError):
         with utils.temporary_save_path("save_and_move_test"):
             pass
-
-
-def test_recursive_freeze() -> None:
-    d = Discrim(
-        inst={"uid": "D2"},  # type: ignore
-        inst2={"uid": "D1"},  # type: ignore
-        something_else=12,
-        seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
-    )
-    d2 = d.seq[0][0]
-    assert not d2.model_config.get("frozen", False)
-    assert not D2.model_config.get("frozen", False)
-    utils.recursive_freeze(d)
-    assert d2.model_config.get("frozen", False)
-    assert not D2.model_config.get("frozen", False)
 
 
 @pytest.mark.parametrize(
@@ -374,3 +371,38 @@ def test_find_models() -> None:
         "content.1._a",
     }
     assert all(isinstance(y, A) for y in out.values())
+
+
+def test_fast_unlink(tmp_path: Path) -> None:
+    # file
+    fp = tmp_path / "blublu.txt"
+    fp.touch()
+    assert fp.exists()
+    with utils.fast_unlink(fp):
+        pass
+    assert not fp.exists()
+    # folder
+    fp = tmp_path / "blublu"
+    fp.mkdir()
+    (fp / "stuff.txt").touch()
+    with utils.fast_unlink(fp):
+        pass
+    assert not fp.exists()
+
+
+class ComplexTypesConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    x: pydantic.DirectoryPath = Path("/")
+    y: datetime.timedelta = datetime.timedelta(minutes=1)
+    z: pydantic.ImportString = ConfDict
+
+
+def test_complex_types() -> None:
+    c = ComplexTypesConfig()
+    out = ConfDict.from_model(c, uid=True, exclude_defaults=False)
+    expected = """x: /
+y: PT1M
+z: exca.confdict.ConfDict
+"""
+    assert out.to_yaml() == expected
+    assert out.to_uid().startswith("x=-,y=PT1M,z=exca.confdict.ConfDict")

@@ -4,9 +4,11 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextlib
 import importlib
 import logging
 import pickle
+import sys
 import typing as tp
 import uuid
 from pathlib import Path
@@ -15,7 +17,7 @@ import numpy as np
 import pydantic
 import pytest
 
-from . import base, helpers, utils
+from . import base, helpers, test_compat, utils
 from .confdict import ConfDict
 from .task import LocalJob, TaskInfra
 
@@ -82,10 +84,7 @@ def test_task_infra(tmp_path: Path) -> None:
     assert whatever.process() == 26
     assert xpfolder.exists(), "Result and folder structure should have been created"
 
-    if ConfDict.UID_VERSION == 1:
-        assert xpfolder.name == "param1=13-cbb76898"
-    else:
-        assert xpfolder.name == "param1=13-c51ce410"
+    assert xpfolder.name == "param1=13-c51ce410"
     assert {fp.name for fp in xpfolder.iterdir()} == {
         "uid.yaml",
         "full-uid.yaml",
@@ -232,19 +231,23 @@ def test_script_model(tmp_path: Path, cluster: None | str) -> None:
 
 
 def test_task_uid_config_error(tmp_path: Path) -> None:
-    whatever = Whatever(
-        param1=12,
-        infra1={"folder": tmp_path, "cluster": "debug"},  # type: ignore
-    )
+    whatever, whatever2 = [
+        Whatever(
+            param1=12,
+            infra1={"folder": tmp_path, "cluster": "debug"},  # type: ignore
+        )
+        for _ in range(2)
+    ]
     whatever.param1 = 13
     assert whatever.process() == 26
     whatever.infra1.clear_job()
-    with pytest.raises(pydantic.ValidationError):
+    # ValidationError for pydantic <2.11 (legacy) then RuntimeError
+    with pytest.raises((RuntimeError, pydantic.ValidationError)):
         whatever.param1 = 14
-    with pytest.raises(pydantic.ValidationError):
+    whatever2.param1 = 15  # freezing instance should not affect other instance
+    assert whatever2.param1 == 15
+    with pytest.raises((RuntimeError, pydantic.ValidationError)):
         whatever.infra1.cpus_per_task = 12  # should not be allowed to change now
-    assert whatever.model_config["frozen"]
-    assert "frozen" not in Whatever.model_config
     xpfolder = whatever.infra1.uid_folder()
     assert xpfolder is not None
     with (xpfolder / "uid.yaml").open("w") as f:
@@ -439,10 +442,7 @@ def test_task_clone_obj_discriminator(tmp_path: Path) -> None:
     # discriminator computed and copied to cloned object
     assert out.inst.__dict__[utils.DISCRIMINATOR_FIELD] == "uid"
     out.param1 = 13  # should not be frozen yet
-    if ConfDict.UID_VERSION == 1:
-        expected = "param1=13,inst.uid=D2-9f4e05b0"
-    else:
-        expected = "inst.uid=D2,param1=13-4f874e55"
+    expected = "inst.uid=D2,param1=13-4f874e55"
     assert out.infra1.uid().split("/")[-1] == expected
 
 
@@ -455,3 +455,50 @@ def test_task_clone_extra_allow() -> None:
     # pylint: disable=attribute-defined-outside-init
     what.stuff = 12  # type: ignore
     _ = what.infra1.clone_obj(param1=12)
+
+
+def test_conda_env(tmp_path: Path) -> None:
+    py = Path(sys.executable)
+    if py.parents[2].name != "envs":
+        pytest.skip("Not a conda env")
+    env = py.parents[1].name
+    whatever = Whatever(
+        param1=13,
+        param_cache_excluded="blublu",
+        infra1={"folder": tmp_path, "cluster": "local", "conda_env": env},  # type: ignore
+    )
+    assert whatever.process() == 26
+
+
+@contextlib.contextmanager
+def tmp_autoreload_change() -> tp.Iterator[None]:
+    fp = Path(test_compat.__file__)
+    content = fp.read_text()
+    part = "return 2 * self.param"
+    if part not in content:
+        raise ValueError(f"{part!r} not in {fp}")
+    new = content.replace(part, part.replace("2", "12"))
+    try:
+        fp.write_text(new)
+        yield
+    finally:
+        fp.write_text(content)
+
+
+def test_autoreload(tmp_path: Path) -> None:
+    w = test_compat.Whatever(taski={"folder": tmp_path / "1"})  # type: ignore
+    out = w.process_task()
+    assert out == 24
+    with tmp_autoreload_change():
+        importlib.reload(test_compat)
+    # same instance
+    out = w.process_task()
+    assert out == 24  # still on cache
+    # new instance, same cache
+    w2 = test_compat.Whatever(taski={"folder": tmp_path / "1"})  # type: ignore
+    out2 = w2.process_task()
+    assert out2 == 24  # still on cache
+    # new instance, different cache
+    w3 = test_compat.Whatever(taski={"folder": tmp_path / "2"})  # type: ignore
+    out3 = w3.process_task()
+    assert out3 == 144  # new code

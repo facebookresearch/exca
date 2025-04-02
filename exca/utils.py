@@ -9,6 +9,7 @@ import contextlib
 import copy
 import logging
 import os
+import shutil
 import typing as tp
 import uuid
 from pathlib import Path
@@ -93,7 +94,7 @@ def to_dict(
     if exclude_defaults:
         _set_discriminated_status(model)
     cfg = ExportCfg(uid=uid, exclude_defaults=exclude_defaults)
-    out = model.model_dump(exclude_defaults=exclude_defaults)
+    out = model.model_dump(exclude_defaults=exclude_defaults, mode="json")
     if uid or exclude_defaults:
         _apply_dump_tags(model, out, cfg=cfg)
     return out
@@ -120,7 +121,7 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
         excluded = info[UID_EXCLUDED]
         forced = info[FORCE_INCLUDED]
         excluded -= forced  # forced taks over
-        fields = set(obj.model_fields)
+        fields = set(type(obj).model_fields)
         missing = (excluded | forced) - (fields | {"."})
         if cfg.uid and "." in excluded:
             dump.clear()
@@ -137,7 +138,9 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
             if name not in dump:
                 dump[name] = _dump(getattr(obj, name), cfg=cfg)
         # add required field to force ones, to make sure we don't remove them later on
-        reqs = {name for name, field in obj.model_fields.items() if field.is_required()}
+        reqs = {
+            name for name, field in type(obj).model_fields.items() if field.is_required()
+        }
         forced |= reqs
         obj = dict(obj)
     if isinstance(obj, dict):
@@ -157,7 +160,7 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
                 continue
             if not isinstance(bobj, pydantic.BaseModel):
                 continue
-            default = bobj.model_fields[name].default
+            default = type(bobj).model_fields[name].default
             if not isinstance(default, pydantic.BaseModel):
                 continue
             if set(sub_dump) - default.model_fields_set:
@@ -166,7 +169,7 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
             exc = subinfo[UID_EXCLUDED]
             #
             for f in default.model_fields_set - set(exc):
-                cls_default = default.model_fields[f].default
+                cls_default = type(default).model_fields[f].default
                 val = sub_dump.get(f, cls_default)
                 cfg_default = getattr(default, f)
                 if cfg_default != val:
@@ -261,7 +264,7 @@ def _set_discriminated_status(
         raise RuntimeError(msg)
     # propagate below
     schema: tp.Any = None
-    for name, field in obj.model_fields.items():
+    for name, field in type(obj).model_fields.items():
         discriminator: str = DiscrimStatus.NONE
         if schema is None and len(_pydantic_hints(field.annotation)) > 1:
             # compute schema only if finding a possible pydantic union, as it is slow
@@ -290,13 +293,31 @@ def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
             copy_discriminated_status(item_ref, item_new)
 
 
+class _FrozenSetattr:
+    def __init__(self, obj: tp.Any) -> None:
+        self.obj = obj
+        self._pydantic_setattr_handler = obj._setattr_handler
+
+    def __call__(self, name: str, value: tp.Any) -> tp.Any:
+        if name.startswith("_"):
+            return self._pydantic_setattr_handler(name, value)
+        msg = f"Cannot proceed to update {type(self)}.{name} = {value} as the instance was frozen"
+        raise RuntimeError(msg)
+
+
 def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hierarchy"""
     models = find_models(obj, pydantic.BaseModel, include_private=False)
     for m in models.values():
-        mconfig = copy.deepcopy(m.model_config)
-        mconfig["frozen"] = True
-        object.__setattr__(m, "model_config", mconfig)
+        if hasattr(m, "__pydantic_setattr_handlers__"):
+            # starting at pydantic 2.11
+            m.__pydantic_setattr_handlers__.clear()  # type: ignore
+            m._setattr_handler = _FrozenSetattr(m)  # type: ignore
+        else:
+            # legacy
+            mconfig = copy.deepcopy(m.model_config)
+            mconfig["frozen"] = True
+            object.__setattr__(m, "model_config", mconfig)
 
 
 def find_models(
@@ -407,16 +428,34 @@ def fast_unlink(
         yield
     finally:
         if to_delete is not None:
-            to_delete.unlink()
+            if to_delete.is_dir():
+                shutil.rmtree(to_delete)
+            else:
+                to_delete.unlink()
 
 
 @contextlib.contextmanager
-def temporary_save_path(filepath: tp.Union[Path, str]) -> tp.Iterator[Path]:
+def temporary_save_path(filepath: Path | str, replace: bool = True) -> tp.Iterator[Path]:
     """Yields a path where to save a file and moves it
     afterward to the provided location (and replaces any
     existing file)
     This is useful to avoid processes monitoring the filepath
     to break if trying to read when the file is being written.
+
+
+    Parameters
+    ----------
+    filepath: str | Path
+        filepath where to save
+    replace: bool
+        if the final filepath already exists, replace it
+
+    Yields
+    ------
+    Path
+        a temporary path to save the data, that will be renamed to the
+        final filepath when leaving the context (except if filepath
+        already exists and no_override is True)
 
     Note
     ----
@@ -437,6 +476,10 @@ def temporary_save_path(filepath: tp.Union[Path, str]) -> tp.Iterator[Path]:
         raise
     if not tmppath.exists():
         raise FileNotFoundError(f"No file was saved at the temporary path {tmppath}.")
+    if not replace:
+        if filepath.exists():
+            os.remove(tmppath)
+            return
     with fast_unlink(filepath, missing_ok=True):
         try:
             os.rename(tmppath, filepath)

@@ -3,8 +3,8 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
-
 import dataclasses
+import typing as tp
 from pathlib import Path
 
 import pytest
@@ -19,10 +19,7 @@ def test_init() -> None:
     flat = out.flat()
     out2 = ConfDict(flat)
     assert out2 == out
-    if ConfDict.UID_VERSION == 1:
-        expected = "x=12,y={thing=12,stuff=13,what.hello=11}-57e3aa50"
-    else:
-        expected = "x=12,y={stuff=13,thing=12,what.hello=11}-4a9d3dba"
+    expected = "x=12,y={stuff=13,thing=12,what.hello=11}-4a9d3dba"
     assert out2.to_uid() == expected
 
 
@@ -44,6 +41,23 @@ def test_update() -> None:
     # with compressed key
     data.update(**{"a.b": {"e": 13, ConfDict.OVERRIDE: True}})
     assert data == {"a": {"b": {"e": 13}}}
+
+
+@pytest.mark.parametrize(
+    "update,expected",
+    [
+        ({"a.b.c": 12}, {"a.b.c": 12}),
+        ({"a.b.c.d": 12}, {"a.b.c.d": 12}),
+        ({"a.b": {"c.d": 12}}, {"a.b.c.d": 12}),
+        ({"a.c": None}, {"a.b": None, "a.c": None}),
+        ({"a.b": None}, {"a.b": None}),
+        ({"a": None}, {"a": None}),
+    ],
+)
+def test_update_on_none(update: tp.Any, expected: tp.Any) -> None:
+    data = ConfDict({"a": {"b": None}})
+    data.update(update)
+    assert data.flat() == expected
 
 
 def test_del() -> None:
@@ -104,10 +118,7 @@ data:
     out2 = ConfDict.from_yaml(y_str)
     assert out2 == exp
     # uid
-    if ConfDict.UID_VERSION == 1:
-        e = "data={default.stuff.duration=1,features=[{freq=2,other=None}]}-4ba86a55"
-    else:
-        e = "data={default.stuff.duration=1,features=[{freq=2,other=None}]}-eaa5aa9c"
+    e = "data={default.stuff.duration=1,features=[{freq=2,other=None}]}-eaa5aa9c"
     assert out2.to_uid() == e
 
 
@@ -118,10 +129,7 @@ def test_to_uid() -> None:
         "none": None,
         "t": torch.Tensor([1.2, 1.4]),
     }
-    if ConfDict.UID_VERSION == 1:
-        expected = "stuff=13,x=whatever-hello,none=None,t=tensor[1.2000,-1.4000]-694cbd2b"
-    else:
-        expected = "none=None,stuff=13,t=data-3ddaedfe,x=whatever-hello-d52be61d"
+    expected = "none=None,stuff=13,t=data-3ddaedfe,x=whatever-hello-d52be61d"
     assert confdict._to_uid(data) == expected
 
 
@@ -152,10 +160,7 @@ def test_flatten() -> None:
 def test_list_of_float() -> None:
     cfg = {"a": {"b": (1, 2, 3)}}
     flat = confdict.ConfDict(cfg).flat()
-    if ConfDict.UID_VERSION == 1:
-        assert flat == {"a.b": [1, 2, 3]}
-    else:
-        assert flat == {"a.b": (1, 2, 3)}
+    assert flat == {"a.b": (1, 2, 3)}
 
 
 def test_flat_types() -> None:

@@ -52,8 +52,8 @@ def _add_name(
             continue
         # pull default infra from model_fields
         # (or from private_attributes if private/has leading _)
-        if name in obj.model_fields:
-            default = obj.model_fields[name].default
+        if name in type(obj).model_fields:
+            default = type(obj).model_fields[name].default
         else:  # private!
             default = obj.__private_attributes__[name].default
         if not isinstance(default, BaseInfra):
@@ -160,23 +160,11 @@ class BaseInfra(pydantic.BaseModel):
     def _exclude_from_cls_uid(self) -> tp.List[str]:
         if getattr(self._infra_method, "version", None) is not None:
             return ["."]  # compatibility -> avoid uid change
-        return list(set(self.model_fields) - {"version"})
+        return list(set(type(self).model_fields) - {"version"})
 
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
         self._set_permissions(None)  # set compatibility for permissions as string
-
-    def apply_on(
-        self,
-        method: tp.Callable[..., tp.Any],
-        *args: tp.Any,
-        **kwargs: tp.Any,
-    ) -> None:
-        msg = (
-            "infra.apply_on is deprecated, update your code with @infra.apply "
-            "(see how-to: https://facebookresearch.github.io/brainai/infra/howto.html#migrating-to-new-infra-api)"
-        )
-        raise RuntimeError(msg)
 
     def config(self, uid: bool = True, exclude_defaults: bool = False) -> ConfDict:
         """Exports the task configuration as a ConfigDict
@@ -484,8 +472,8 @@ class InfraMethod(BaseInfraMethod):
         if not isinstance(obj, pydantic.BaseModel):
             raise TypeError("infra can only be added to pydantic.BaseModel")
         # get default
-        if infra_name in obj.model_fields:
-            default_imethod = obj.model_fields[infra_name].default._infra_method
+        if infra_name in type(obj).model_fields:
+            default_imethod = type(obj).model_fields[infra_name].default._infra_method
         elif infra_name.startswith("_"):
             default_imethod = obj.__private_attributes__[infra_name].default._infra_method  # type: ignore
         else:
