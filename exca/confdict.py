@@ -364,31 +364,6 @@ class UidMaker:
     def __repr__(self) -> str:
         return f"UidMaker(string={self.string!r}, hash={self.hash!r})"
 
-    @classmethod
-    def _update_uids(cls, folder: str | Path, dryrun: bool = True):
-        folder = Path(folder)
-        if any(x in folder.parts for x in ["code", "wandb", "logs"]):
-            return None
-        # if all these files are present, this is the cache folder:
-        if not all((folder / name).exists() for name in ["config.yaml", "uid.yaml"]):
-            # avoid checking the cache folder as this is extra slow
-            # task Vs batch
-            for sub in folder.iterdir():
-                if sub.is_dir():
-                    cls._update_uids(sub)
-            return None
-        cd = ConfDict.from_yaml(folder / "uid.yaml")
-        old = cd.to_uid(version=2)
-        new = cd.to_uid()
-        if folder.name != old:
-            if folder.name != "default":
-                print("weird", folder.name, old, new)
-            return
-        print(f"{old} -> {new}")
-        if not dryrun:
-            print(folder, folder.with_name(new)
-            shutil.move(folder, folder.with_name(new))
-
 
 # # single-line human-readable params
 # readable = compress_dict(config, 6)[:30]
