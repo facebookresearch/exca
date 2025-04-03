@@ -93,7 +93,7 @@ def test_map_infra(tmp_path: Path) -> None:
     assert whatever.infra.job_name is None
     ex = whatever.infra.executor()
     assert ex is not None
-    expected = "Whatever.process,1/param1=13-c51ce410"
+    expected = "Whatever.process,1/param1=13-16eb96a9"
     assert ex._executor.parameters["name"] == expected
     assert "{folder}" not in str(whatever.infra._log_path())
     # recover cached objects
