@@ -289,7 +289,7 @@ UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 def _to_uid(data: tp.Any) -> str:
     """Creates a uid based on the data"""
     if ConfDict.UID_VERSION > 1:
-        return UidMaker(data).format()
+        return UidMaker(data, version=ConfDict.UID_VERSION).format()
     out = _format_data(data)
     if out.startswith("{") and out.endswith("}"):
         out = out[1:-1]
@@ -328,9 +328,8 @@ def _format_data(data: tp.Any) -> str:
             msg = f"Unsupported type {type(data)} for {data}\n"
             msg += f"(bypass this error at your own risks by exporting {key}=1)"
             raise TypeError(msg)
-        logger.warning(
-            "Converting type %s to string for uid computation (%s)", type(data), key
-        )
+        msg = "Converting type %s to string for uid computation (%s)"
+        logger.warning(msg, type(data), key)
         data = str(data)
     if len(data) > 27:
         data = data[:12] + "[.]" + data[-12:]
@@ -343,7 +342,8 @@ class UidMaker:
     combines string and hash into the uid.
     """
 
-    def __init__(self, data: tp.Any) -> None:
+    def __init__(self, data: tp.Any, version: float) -> None:
+        print(f"{version=}")
         if isinstance(data, (np.ndarray, TorchTensor)):
             if isinstance(data, TorchTensor):
                 data = data.detach().cpu().numpy()
@@ -351,17 +351,17 @@ class UidMaker:
             self.string = "data-" + h[:8]
             self.hash = h
         elif isinstance(data, dict):
-            udata = {x: UidMaker(y) for x, y in data.items()}
+            udata = {x: UidMaker(y, version=version) for x, y in data.items()}
             keys = sorted(data)
             parts = [f"{key}={udata[key].string}" for key in keys]
             self.string = "{" + ",".join(parts) + "}"
-            if ConfDict.UID_VERSION > 2:
+            if version > 2:
                 self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
             else:
                 # incorrect (legacy) hash, can collide
                 self.hash = ",".join(udata[key].hash for key in keys)
         elif isinstance(data, (set, tuple, list)):
-            items = [UidMaker(val) for val in data]
+            items = [UidMaker(val, version=version) for val in data]
             self.string = "[" + ",".join(i.string for i in items) + "]"
             self.hash = ",".join(i.hash for i in items)
         elif isinstance(data, (float, np.float32)):

@@ -200,12 +200,14 @@ data:
     cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
     assert cds[0].to_uid() != cds[1].to_uid()
     # reason it was colliding, strings were the same, and hash was incorrectly the same
-    makers = [confdict.UidMaker(ConfDict.from_yaml(cfg)) for cfg in cfgs]
+    makers = [confdict.UidMaker(ConfDict.from_yaml(cfg), version=2) for cfg in cfgs]
     assert makers[0].string == makers[1].string
+    assert makers[0].hash == makers[1].hash
+    makers = [confdict.UidMaker(ConfDict.from_yaml(cfg), version=3) for cfg in cfgs]
     assert makers[0].hash != makers[1].hash
 
 
 def test_dict_hash() -> None:
-    maker1 = confdict.UidMaker({"x": 1, "y": 12})
-    maker2 = confdict.UidMaker({"x": 1, "z": 12})
+    maker1 = confdict.UidMaker({"x": 1, "y": 12}, version=3)
+    maker2 = confdict.UidMaker({"x": 1, "z": 12}, version=3)
     assert maker1.hash != maker2.hash
