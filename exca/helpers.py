@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import shutil
 import inspect
 import logging
 import subprocess
@@ -13,8 +14,8 @@ from pathlib import Path
 import pydantic
 import submitit
 
-from .confdict import ConfDict
-from .task import TaskInfra
+from exca.confdict import ConfDict, UidMaker, _to_simplified_dict
+from exca.task import TaskInfra
 
 # pylint: disable=typevar-name-incorrect-variance
 X = tp.TypeVar("X", covariant=True)
@@ -285,3 +286,33 @@ def find_slurm_job(
         if job is not None:
             return job
     return None
+
+
+def update_uids(folder: str | Path, dryrun: bool = True):
+    folder = Path(folder)
+    if any(x in folder.parts for x in ["code", "wandb", "logs"]):
+        return None
+    # if all these files are present, this is the cache folder:
+    if not all((folder / name).exists() for name in ["config.yaml", "uid.yaml"]):
+        # avoid checking the cache folder as this is extra slow
+        # task Vs batch
+        for sub in folder.iterdir():
+            if sub.is_dir():
+                update_uids(sub)
+        return None
+    cd = _to_simplified_dict(ConfDict.from_yaml(folder / "uid.yaml"))
+    old = UidMaker(cd, version=2).format()
+    new = UidMaker(cd, version=3).format()
+    if folder.name != old:
+        if folder.name != "default":
+            print("weird", folder.name, old, new)
+        return
+    print(f"{old} -> {new}")
+    if not dryrun:
+        pass
+        # print(folder, folder.with_name(new)
+        # shutil.move(folder, folder.with_name(new))
+
+
+# folder = "/checkpoint/jrapin/brainai/cache"
+# update_uids(folder)

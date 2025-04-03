@@ -343,7 +343,6 @@ class UidMaker:
     """
 
     def __init__(self, data: tp.Any, version: float) -> None:
-        print(f"{version=}")
         if isinstance(data, (np.ndarray, TorchTensor)):
             if isinstance(data, TorchTensor):
                 data = data.detach().cpu().numpy()
