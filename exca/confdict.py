@@ -355,7 +355,7 @@ class UidMaker:
             keys = sorted(data)
             parts = [f"{key}={udata[key].string}" for key in keys]
             self.string = "{" + ",".join(parts) + "}"
-            self.hash = ",".join(udata[key].hash for key in keys)
+            self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
         elif isinstance(data, (set, tuple, list)):
             items = [UidMaker(val) for val in data]
             self.string = "[" + ",".join(i.string for i in items) + "]"

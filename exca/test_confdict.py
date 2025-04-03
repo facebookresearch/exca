@@ -201,3 +201,9 @@ data:
 def test_collision() -> None:
     cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
     assert cds[0].to_uid() != cds[1].to_uid()
+
+
+def test_dict_hash() -> None:
+    maker1 = confdict.UidMaker({"x": 1, "y": 12})
+    maker2 = confdict.UidMaker({"x": 1, "z": 12})
+    assert maker1.hash != maker2.hash
