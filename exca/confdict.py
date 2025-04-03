@@ -64,7 +64,7 @@ class ConfDict(dict[str, tp.Any]):
       replace the content.
     """
 
-    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "2"))
+    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "3"))
     OVERRIDE = OVERRIDE  # convenient to have it here
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
@@ -355,7 +355,11 @@ class UidMaker:
             keys = sorted(data)
             parts = [f"{key}={udata[key].string}" for key in keys]
             self.string = "{" + ",".join(parts) + "}"
-            self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
+            if ConfDict.UID_VERSION > 2:
+                self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
+            else:
+                # incorrect (legacy) hash, can collide
+                self.hash = ",".join(udata[key].hash for key in keys)
         elif isinstance(data, (set, tuple, list)):
             items = [UidMaker(val) for val in data]
             self.string = "[" + ",".join(i.string for i in items) + "]"
