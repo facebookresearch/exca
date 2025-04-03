@@ -130,7 +130,7 @@ def test_to_uid() -> None:
         "t": torch.Tensor([1.2, 1.4]),
     }
     expected = "none=None,stuff=13,t=data-3ddaedfe,x=whatever-hello-5b1c4528"
-    assert confdict._to_uid(data) == expected
+    assert confdict.UidMaker(data).format() == expected
 
 
 def test_empty(tmp_path: Path) -> None:

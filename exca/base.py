@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import collections
+import shutil
 import dataclasses
 import difflib
 import functools
@@ -297,7 +298,8 @@ class BaseInfra(pydantic.BaseModel):
         if not hasattr(self, "_uid"):
             self._uid = None  # backward-compatibility
         if self._uid is None:
-            uid = self.config(uid=True, exclude_defaults=True).to_uid()
+            cfg = self.config(uid=True, exclude_defaults=True)
+            uid = cfg.to_uid()
             uid = uid if uid else "default"
             method = self._factory()
             parsed = string.Formatter().parse(self._uid_string)
@@ -313,6 +315,14 @@ class BaseInfra(pydantic.BaseModel):
             utils.recursive_freeze(self._obj)
             msg = "Froze instance %s after computing its uid: %s"
             logger.debug(msg, repr(self._obj), self._uid)
+            # compat
+            folder = Path(self.folder) / self._uid
+            if not folder.exists():
+                old = Path(self.folder) / self._uid_string.format(
+                    method=method, uid=cfg.to_uid(verson=2), version=self.version
+                )
+                if old.exists():
+                    shutil.move(old, folder)
         return self._uid
 
     def uid_folder(self, create: bool = False) -> Path | None:

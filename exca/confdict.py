@@ -209,9 +209,12 @@ class ConfDict(dict[str, tp.Any]):
             Path(filepath).write_text(out, encoding="utf8")
         return out
 
-    def to_uid(self) -> str:
+    def to_uid(self, version: None | int = None) -> str:
         """Provides a unique string for the config"""
-        return _to_uid(_to_simplified_dict(self))
+        if version is None:
+            version = ConfDict.UID_VERSION
+        data = _to_simplified_dict(self)
+        return UidMaker(data, version=version).format()
 
     @classmethod
     def from_args(cls, args: list[str]) -> "ConfDict":
@@ -286,63 +289,15 @@ def _flatten(data: tp.Any) -> tp.Any:
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 
 
-def _to_uid(data: tp.Any) -> str:
-    """Creates a uid based on the data"""
-    if ConfDict.UID_VERSION > 1:
-        return UidMaker(data, version=ConfDict.UID_VERSION).format()
-    out = _format_data(data)
-    if out.startswith("{") and out.endswith("}"):
-        out = out[1:-1]
-    if not out:
-        return out
-    hashbase = str(data)  # str data is unreliable
-    h = hashlib.md5(hashbase.encode("utf8")).hexdigest()[:8]
-    if len(out) > 83:
-        out = out[:40] + "[.]" + out[-40:]
-    out = out.translate(UNSAFE_TABLE)
-    out = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", out)
-    return f"{out}-{h}"
-
-
-def _format_data(data: tp.Any) -> str:
-    """format data into a string"""
-    if isinstance(data, (np.ndarray, TorchTensor)):
-        return str(data)
-    if isinstance(data, dict):
-        parts = [f"{key}={_format_data(val)}" for key, val in data.items()]
-        return "{" + ",".join(parts) + "}"
-    if isinstance(data, (set, tuple, list)):
-        parts = [_format_data(val) for val in data]
-        return "[" + ",".join(parts) + "]"
-    if isinstance(data, (float, np.float32)):
-        if data.is_integer():
-            return str(int(data))
-        if 1e-3 <= abs(data) <= 1e4:  # type: ignore
-            return f"{data:.2f}"
-        return f"{data:.2e}"
-    if isinstance(data, (Path, int, np.int32, np.int64)) or data is None:
-        data = str(data)
-    if not isinstance(data, str):
-        key = "CONFDICT_UID_TYPE_BYPASS"
-        if key not in os.environ:
-            msg = f"Unsupported type {type(data)} for {data}\n"
-            msg += f"(bypass this error at your own risks by exporting {key}=1)"
-            raise TypeError(msg)
-        msg = "Converting type %s to string for uid computation (%s)"
-        logger.warning(msg, type(data), key)
-        data = str(data)
-    if len(data) > 27:
-        data = data[:12] + "[.]" + data[-12:]
-    return data
-
-
 class UidMaker:
     """For all supported data types, provide a string for representing it,
     and a hash to avoid collisions of the representation. Format method that
     combines string and hash into the uid.
     """
 
-    def __init__(self, data: tp.Any, version: float) -> None:
+    def __init__(self, data: tp.Any, version: int | None = None) -> None:
+        if version is None:
+            version = ConfDict.UID_VERSION
         if isinstance(data, (np.ndarray, TorchTensor)):
             if isinstance(data, TorchTensor):
                 data = data.detach().cpu().numpy()
@@ -408,6 +363,31 @@ class UidMaker:
 
     def __repr__(self) -> str:
         return f"UidMaker(string={self.string!r}, hash={self.hash!r})"
+
+    @classmethod
+    def _update_uids(cls, folder: str | Path, dryrun: bool = True):
+        folder = Path(folder)
+        if any(x in folder.parts for x in ["code", "wandb", "logs"]):
+            return None
+        # if all these files are present, this is the cache folder:
+        if not all((folder / name).exists() for name in ["config.yaml", "uid.yaml"]):
+            # avoid checking the cache folder as this is extra slow
+            # task Vs batch
+            for sub in folder.iterdir():
+                if sub.is_dir():
+                    cls._update_uids(sub)
+            return None
+        cd = ConfDict.from_yaml(folder / "uid.yaml")
+        old = cd.to_uid(version=2)
+        new = cd.to_uid()
+        if folder.name != old:
+            if folder.name != "default":
+                print("weird", folder.name, old, new)
+            return
+        print(f"{old} -> {new}")
+        if not dryrun:
+            print(folder, folder.with_name(new)
+            shutil.move(folder, folder.with_name(new))
 
 
 # # single-line human-readable params
