@@ -173,3 +173,31 @@ def test_from_args() -> None:
     args = ["--name=stuff", "--optim.lr=0.01", "--optim.name=Adam"]
     confd = ConfDict.from_args(args)
     assert confd == {"name": "stuff", "optim": {"lr": "0.01", "name": "Adam"}}
+
+
+cfgs = [
+    """
+b_model_config:
+  layer_dim: 12
+  transformer:
+    stuff: true
+    r_p_emb: true
+data:
+  duration: 0.75
+  start: -0.25
+""",
+    """
+b_model_config:
+  layer_dim: 12
+  transformer.stuff: true
+  use_m_token: true
+data:
+  duration: 0.75
+  start: -0.25
+""",
+]
+
+
+def test_collision() -> None:
+    cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
+    assert cds[0].to_uid() != cds[1].to_uid()
