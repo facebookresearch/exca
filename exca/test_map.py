@@ -81,7 +81,7 @@ def test_map_infra(tmp_path: Path) -> None:
     out = list(whatever.process([1, 2, 2, 3]))
     assert [x.shape for x in out] == [(1, 13), (2, 13), (2, 13), (3, 13)]
     path = tmp_path
-    uid = f"{__name__}.Whatever.process,1/param1=13-c51ce410"
+    uid = f"{__name__}.Whatever.process,1/param1=13-16eb96a9"
     assert whatever.infra.uid() == uid
     for name in uid.split("/"):
         path = path / name

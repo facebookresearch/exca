@@ -19,7 +19,7 @@ def test_init() -> None:
     flat = out.flat()
     out2 = ConfDict(flat)
     assert out2 == out
-    expected = "x=12,y={stuff=13,thing=12,what.hello=11}-4a9d3dba"
+    expected = "x=12,y={stuff=13,thing=12,what.hello=11}-73565e1a"
     assert out2.to_uid() == expected
 
 
@@ -118,7 +118,7 @@ data:
     out2 = ConfDict.from_yaml(y_str)
     assert out2 == exp
     # uid
-    e = "data={default.stuff.duration=1,features=[{freq=2,other=None}]}-eaa5aa9c"
+    e = "data={default.stuff.duration=1,features=[{freq=2,other=None}]}-9284f826"
     assert out2.to_uid() == e
 
 
@@ -129,7 +129,7 @@ def test_to_uid() -> None:
         "none": None,
         "t": torch.Tensor([1.2, 1.4]),
     }
-    expected = "none=None,stuff=13,t=data-3ddaedfe,x=whatever-hello-d52be61d"
+    expected = "none=None,stuff=13,t=data-3ddaedfe,x=whatever-hello-5b1c4528"
     assert confdict._to_uid(data) == expected
 
 
