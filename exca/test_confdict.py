@@ -175,8 +175,9 @@ def test_from_args() -> None:
     assert confd == {"name": "stuff", "optim": {"lr": "0.01", "name": "Adam"}}
 
 
-cfgs = [
-    """
+def test_collision() -> None:
+    cfgs = [
+        """
 b_model_config:
   layer_dim: 12
   transformer:
@@ -186,7 +187,7 @@ data:
   duration: 0.75
   start: -0.25
 """,
-    """
+        """
 b_model_config:
   layer_dim: 12
   transformer.stuff: true
@@ -195,12 +196,13 @@ data:
   duration: 0.75
   start: -0.25
 """,
-]
-
-
-def test_collision() -> None:
+    ]
     cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
     assert cds[0].to_uid() != cds[1].to_uid()
+    # reason it was colliding, strings were the same, and hash was incorrectly the same
+    makers = [confdict.UidMaker(ConfDict.from_yaml(cfg)) for cfg in cfgs]
+    assert makers[0].string == makers[1].string
+    assert makers[0].hash != makers[1].hash
 
 
 def test_dict_hash() -> None:
