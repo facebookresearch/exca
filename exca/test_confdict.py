@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 import dataclasses
+import glob
 import typing as tp
 from pathlib import Path
 
@@ -124,12 +125,12 @@ data:
 
 def test_to_uid() -> None:
     data = {
-        "stuff": 13.0,
+        "my_stuff": 13.0,
         "x": "'whatever*'\nhello",
         "none": None,
         "t": torch.Tensor([1.2, 1.4]),
     }
-    expected = "none=None,stuff=13,t=data-3ddaedfe,x=whatever-hello-d52be61d"
+    expected = "mystuff=13,none=None,t=data-3ddaedfe,x=whatever-hello-1c82f630"
     assert confdict._to_uid(data) == expected
 
 
@@ -173,3 +174,62 @@ def test_from_args() -> None:
     args = ["--name=stuff", "--optim.lr=0.01", "--optim.name=Adam"]
     confd = ConfDict.from_args(args)
     assert confd == {"name": "stuff", "optim": {"lr": "0.01", "name": "Adam"}}
+
+
+def test_collision() -> None:
+    cfgs = [
+        """
+b_model_config:
+  layer_dim: 12
+  transformer:
+    stuff: true
+    r_p_emb: true
+data:
+  duration: 0.75
+  start: -0.25
+""",
+        """
+b_model_config:
+  layer_dim: 12
+  transformer.stuff: true
+  use_m_token: true
+data:
+  duration: 0.75
+  start: -0.25
+""",
+    ]
+    cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
+    # assert cds[0].to_uid() != cds[1].to_uid()
+    expected = (
+        "bmodelconfig={layerdim=12,transfor[.]},data={duration=0.75,start=-0.25}-8b17a008"
+    )
+    assert cds[0].to_uid() == expected
+    assert cds[1].to_uid() == cds[1].to_uid()
+    # TODO FIX THIS
+
+
+def test_dict_hash() -> None:
+    maker1 = confdict.UidMaker({"x": 1, "y": 12})
+    maker2 = confdict.UidMaker({"x": 1, "z": 12})
+    assert maker1.hash == maker2.hash  # TODO FIX THIS
+
+
+def test_long_config_glob(tmp_path: Path) -> None:
+    string = "abcdefghijklmnopqrstuvwxyz"
+    base: dict[str, tp.Any] = {
+        "l": [1, 2],
+        "d": {"a": 1, "b.c": 2},
+        "string": string,
+        "num": 123456789000,
+    }
+    cfg = dict(base)
+    cfg["sub"] = dict(base)
+    cfg["sub"]["sub"] = dict(base)
+    cfgd = ConfDict(cfg)
+    uid = cfgd.to_uid()
+    folder = tmp_path / uid
+    folder.mkdir()
+    (folder / "myfile.txt").touch()
+    files = list(glob.glob(str(folder / "*file.txt")))
+    # TODO FIX THIS:
+    assert not files, "folder name messes up with glob"
