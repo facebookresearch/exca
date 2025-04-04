@@ -295,6 +295,8 @@ class UidMaker:
     combines string and hash into the uid.
     """
 
+    # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
+
     def __init__(self, data: tp.Any, version: int | None = None) -> None:
         if version is None:
             version = ConfDict.UID_VERSION

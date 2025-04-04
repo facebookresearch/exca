@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 import dataclasses
+import glob
 import typing as tp
 from pathlib import Path
 
@@ -217,3 +218,22 @@ def test_dict_hash() -> None:
     maker1 = confdict.UidMaker({"x": 1, "y": 12}, version=3)
     maker2 = confdict.UidMaker({"x": 1, "z": 12}, version=3)
     assert maker1.hash != maker2.hash
+
+
+def test_long_config_glob(tmp_path: Path) -> None:
+    string = "abcdefghijklmnopqrstuvwxyz"
+    base = {"l": [1, 2], "d": {"a": 1, "b.c": 2}, "string": string, "num": 123456789000}
+    base = {"d": {"a": 1, "b.c": 2}, "string": string, "num": 123456789000}
+    cfg = dict(base)
+    cfg["sub"] = dict(base)
+    cfg["sub"]["sub"] = dict(base)
+    cfgd = ConfDict(cfg)
+    uid = cfgd.to_uid()
+    print(uid)
+    # expected = ""
+    # assert uid == expected
+    folder = tmp_path / uid
+    folder.mkdir()
+    (folder / "myfile.txt").touch()
+    files = list(glob.glob(str(folder / "*file.txt")))
+    assert files, "folder name messes up with glob"
