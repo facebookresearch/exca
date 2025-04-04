@@ -116,7 +116,6 @@ def test_task_infra_rename_cache_v2_to_v3(tmp_path: Path) -> None:
     # try reloading it
     whatever = Whatever(param1=1, infra1={"folder": tmp_path, "mode": "read-only"})  # type: ignore
     assert whatever.process() == 2
-    raise  # TODO default + log + other folders
 
 
 def test_task_infra_array(tmp_path: Path) -> None:
