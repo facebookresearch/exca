@@ -223,9 +223,6 @@ def test_long_config_glob(tmp_path: Path) -> None:
     cfg["sub"]["sub"] = dict(base)
     cfgd = ConfDict(cfg)
     uid = cfgd.to_uid()
-    print(uid)
-    # expected = ""
-    # assert uid == expected
     folder = tmp_path / uid
     folder.mkdir()
     (folder / "myfile.txt").touch()
