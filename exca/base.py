@@ -315,12 +315,21 @@ class BaseInfra(pydantic.BaseModel):
             msg = "Froze instance %s after computing its uid: %s"
             logger.debug(msg, repr(self._obj), self._uid)
             # compat
-            if self.folder is not None:
+            if self.folder is not None and uid != "default":
                 folder = Path(self.folder) / self._uid
                 if not folder.exists():
                     params["uid"] = cfg.to_uid(version=2)
                     old = Path(self.folder) / self._uid_string.format(**params)
                     if old.exists():
+                        # rename all folders in cache at once if possible
+                        from exca import helpers
+
+                        helpers.update_uids(self.folder, dryrun=True)
+                    if old.exists():
+                        # if this very cache was not updated
+                        # (eg: because of unexpected uid_string), then fix it manually
+                        msg = "Automatic update fail, manual update to new uid: '%s' -> '%s'"
+                        logger.warning(msg, old, folder)
                         shutil.move(old, folder)
         return self._uid
 

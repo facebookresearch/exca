@@ -8,6 +8,7 @@ import contextlib
 import importlib
 import logging
 import pickle
+import shutil
 import sys
 import typing as tp
 import uuid
@@ -102,6 +103,20 @@ def test_task_infra(tmp_path: Path) -> None:
     # check full config
     cdict = ConfDict.from_model(whatever)
     assert "param_cache_excluded" in cdict, "Shouldn't be excluded from task"
+
+
+def test_task_infra_rename_cache_v2_to_v3(tmp_path: Path) -> None:
+    whatever = Whatever(param1=1, infra1={"folder": tmp_path})  # type: ignore
+    assert whatever.process() == 2
+    # move cache to old name
+    xpfolder = whatever.infra1.uid_folder()
+    assert xpfolder is not None
+    new_name = whatever.infra1.config(uid=True, exclude_defaults=True).to_uid(version=2)
+    shutil.move(xpfolder, xpfolder.with_name(new_name))
+    # try reloading it
+    whatever = Whatever(param1=1, infra1={"folder": tmp_path, "mode": "read-only"})  # type: ignore
+    assert whatever.process() == 2
+    raise  # TODO default + log + other folders
 
 
 def test_task_infra_array(tmp_path: Path) -> None:

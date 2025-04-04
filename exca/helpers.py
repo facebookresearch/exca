@@ -6,6 +6,7 @@
 
 import inspect
 import logging
+import shutil
 import subprocess
 import typing as tp
 from pathlib import Path
@@ -287,7 +288,7 @@ def find_slurm_job(
     return None
 
 
-def update_uids(cls, folder: str | Path, dryrun: bool = True):
+def update_uids(folder: str | Path, dryrun: bool = True):
     folder = Path(folder)
     if any(x in folder.parts for x in ["code", "wandb", "logs"]):
         return None
@@ -297,19 +298,21 @@ def update_uids(cls, folder: str | Path, dryrun: bool = True):
         # task Vs batch
         for sub in folder.iterdir():
             if sub.is_dir():
-                cls._update_uids(sub)
+                update_uids(sub, dryrun=dryrun)
         return None
     cd = ConfDict.from_yaml(folder / "uid.yaml")
     old = cd.to_uid(version=2)
     new = cd.to_uid()
     if folder.name != old:
         if folder.name != "default":
-            print("weird", folder.name, old, new)
+            msg = "CAUTION: folder name %s does not match old uid pattern %s"
+            logger.warning(msg, folder.name, old)
         return
-    print(f"{old} -> {new}")
     if not dryrun:
-        print(folder, folder.with_name(new))
-        # shutil.move(folder, folder.with_name(new))
+        newfolder = folder.with_name(new)
+        msg = "Automatically updating folder name to new uid: '%s' -> '%s'"
+        logger.warning(msg, folder, newfolder)
+        shutil.move(folder, newfolder)
 
 
 # folder = "/checkpoint/jrapin/brainai/cache"
