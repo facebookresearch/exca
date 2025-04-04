@@ -127,13 +127,13 @@ data:
 
 def test_to_uid() -> None:
     data = {
-        "stuff": 13.0,
+        "my_stuff": 13.0,
         "x": "'whatever*'\nhello",
         "none": None,
         "t": torch.Tensor([1.2, 1.4]),
     }
-    expected = "none=None,stuff=13,t=data-3ddaedfe,x=whatever-hello-5b1c4528"
-    assert confdict.UidMaker(data).format() == expected
+    expected = "mystuff=13,none=None,t=data-3ddaedfe,x=whatever-hello-1c82f630"
+    assert confdict.ConfDict(data).to_uid(version=2) == expected
 
 
 def test_empty(tmp_path: Path) -> None:
@@ -208,7 +208,7 @@ data:
     # reason it was colliding, strings were the same, and hash was incorrectly the same
     # legacy check
     expected = (
-        "data={duration=0.75,start=-0.25},b[.]sformer={r_p_emb=True,stuff=True}}-987259e9"
+        "bmodelconfig={layerdim=12,transfor[.]},data={duration=0.75,start=-0.25}-8b17a008"
     )
     assert cds[0].to_uid(version=2) == expected
     assert cds[1].to_uid(version=2) == cds[1].to_uid(version=2)
@@ -222,16 +222,18 @@ def test_dict_hash() -> None:
 
 def test_long_config_glob(tmp_path: Path) -> None:
     string = "abcdefghijklmnopqrstuvwxyz"
-    base = {"l": [1, 2], "d": {"a": 1, "b.c": 2}, "string": string, "num": 123456789000}
-    base = {"d": {"a": 1, "b.c": 2}, "string": string, "num": 123456789000}
+    base: dict[str, tp.Any] = {
+        "l": [1, 2],
+        "d": {"a": 1, "b.c": 2},
+        "string": string,
+        "num": 123456789000,
+    }
     cfg = dict(base)
     cfg["sub"] = dict(base)
     cfg["sub"]["sub"] = dict(base)
     cfgd = ConfDict(cfg)
     uid = cfgd.to_uid()
     print(uid)
-    # expected = ""
-    # assert uid == expected
     folder = tmp_path / uid
     folder.mkdir()
     (folder / "myfile.txt").touch()

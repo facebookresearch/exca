@@ -308,11 +308,15 @@ class UidMaker:
             self.hash = h
         elif isinstance(data, dict):
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
-            # keys = sorted(data)
-            keys = [
-                xy[0]
-                for xy in sorted(udata.items(), key=lambda xy: (len(xy[1].string), xy[0]))
-            ]
+            if version > 2:
+                keys = [
+                    xy[0]
+                    for xy in sorted(
+                        udata.items(), key=lambda xy: (len(xy[1].string), xy[0])
+                    )
+                ]
+            else:
+                keys = sorted(data)
             parts = [f"{key}={udata[key].string}" for key in keys]
             self.string = "{" + ",".join(parts) + "}"
             if version > 2:
@@ -351,14 +355,15 @@ class UidMaker:
             except TypeError:
                 pass
         # clean string
-        s = self.string.translate(UNSAFE_TABLE)
-        self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.!]»«", "", s)
+        self.string = self.string.translate(UNSAFE_TABLE)
         # avoid big names
         # TODO 128 ? + cut at the end +
         if version > 2:
+            self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\._]", "", self.string)
             if len(self.string) > 128:
                 self.string = self.string[:35] + "[.]" + self.string[-35:]
         else:
+            self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", self.string)
             if len(self.string) > 82:
                 self.string = self.string[:35] + "[.]" + self.string[-35:]
 
