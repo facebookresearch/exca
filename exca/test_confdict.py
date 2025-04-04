@@ -19,8 +19,10 @@ def test_init() -> None:
     flat = out.flat()
     out2 = ConfDict(flat)
     assert out2 == out
+    expected = "x=12,y={stuff=13,thing=12,what.hello=11}-4a9d3dba"
+    assert out2.to_uid(version=2) == expected
     expected = "x=12,y={stuff=13,thing=12,what.hello=11}-73565e1a"
-    assert out2.to_uid() == expected
+    assert out2.to_uid(version=3) == expected
 
 
 def test_dot_access_and_to_simplied_dict() -> None:
