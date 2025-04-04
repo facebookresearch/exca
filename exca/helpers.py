@@ -4,7 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import shutil
 import inspect
 import logging
 import subprocess
@@ -14,7 +13,7 @@ from pathlib import Path
 import pydantic
 import submitit
 
-from exca.confdict import ConfDict, UidMaker, _to_simplified_dict
+from exca.confdict import ConfDict
 from exca.task import TaskInfra
 
 # pylint: disable=typevar-name-incorrect-variance
@@ -309,8 +308,9 @@ def update_uids(cls, folder: str | Path, dryrun: bool = True):
         return
     print(f"{old} -> {new}")
     if not dryrun:
-        print(folder, folder.with_name(new)
-        shutil.move(folder, folder.with_name(new))
+        print(folder, folder.with_name(new))
+        # shutil.move(folder, folder.with_name(new))
+
 
 # folder = "/checkpoint/jrapin/brainai/cache"
 # update_uids(folder)

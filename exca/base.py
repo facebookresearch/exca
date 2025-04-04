@@ -5,12 +5,12 @@
 # LICENSE file in the root directory of this source tree.
 
 import collections
-import shutil
 import dataclasses
 import difflib
 import functools
 import inspect
 import logging
+import shutil
 import string
 import typing as tp
 from pathlib import Path
@@ -319,7 +319,7 @@ class BaseInfra(pydantic.BaseModel):
             folder = Path(self.folder) / self._uid
             if not folder.exists():
                 old = Path(self.folder) / self._uid_string.format(
-                    method=method, uid=cfg.to_uid(verson=2), version=self.version
+                    method=method, uid=cfg.to_uid(version=2), version=self.version
                 )
                 if old.exists():
                     shutil.move(old, folder)

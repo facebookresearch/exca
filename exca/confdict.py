@@ -308,7 +308,7 @@ class UidMaker:
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
             keys = sorted(data)
             parts = [f"{key}={udata[key].string}" for key in keys]
-            self.string = "{" + ",".join(parts) + "}"
+            self.string = "-!" + ",".join(parts) + "!-"
             if version > 2:
                 self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
             else:
@@ -345,10 +345,15 @@ class UidMaker:
                 pass
         # clean string
         s = self.string.translate(UNSAFE_TABLE)
-        self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", s)
+        self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.!]", "", s)
         # avoid big names
-        if len(self.string) > 82:
-            self.string = self.string[:35] + "[.]" + self.string[-35:]
+        # TODO 128 ? + cut at the end +
+        if version > 2:
+            if len(self.string) > 128:
+                self.string = self.string[:35] + "[.]" + self.string[-35:]
+        else:
+            if len(self.string) > 82:
+                self.string = self.string[:35] + "[.]" + self.string[-35:]
 
     def format(self) -> str:
         s = self.string
