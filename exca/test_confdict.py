@@ -201,6 +201,9 @@ data:
     ]
     cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
     assert cds[0].to_uid() != cds[1].to_uid()
+    expected = "data={duration=0.75,start=-0.25},b_model_config={layer_dim=12,"
+    expected += "transformer={r_p_emb=True,stuff=True}}-b5e26957"
+    assert cds[0].to_uid() == expected
     # reason it was colliding, strings were the same, and hash was incorrectly the same
     # legacy check
     expected = (
