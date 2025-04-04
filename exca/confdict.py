@@ -307,12 +307,14 @@ class UidMaker:
         if version is None:
             version = ConfDict.UID_VERSION
         self.brackets: tuple[str, str] | None = None
+        typestr = ""
         if isinstance(data, (np.ndarray, TorchTensor)):
             if isinstance(data, TorchTensor):
                 data = data.detach().cpu().numpy()
             h = hashlib.md5(data.tobytes()).hexdigest()
             self.string = "data-" + h[:8]
             self.hash = h
+            typestr = "array"
         elif isinstance(data, dict):
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
             if version > 2:
@@ -322,6 +324,7 @@ class UidMaker:
             parts = [f"{key}={udata[key].string}" for key in keys]
             self.string = ",".join(parts)
             self.brackets = ("{", "}")
+            typestr = "dict"
             if version > 2:
                 self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
             else:
@@ -332,17 +335,21 @@ class UidMaker:
             self.string = ",".join(i.string for i in items)
             self.hash = ",".join(i.hash for i in items)
             self.brackets = ("(", ")") if version > 2 else ("[", "]")
+            typestr = "seq"
         elif isinstance(data, (float, np.float32)):
             self.hash = str(hash(data))
+            typestr = "float"
             if data.is_integer():
                 self.string = str(int(data))
-            elif 1e-3 <= abs(data) <= 1e4:  # type: ignore
+                typestr = "int"
+            elif 1e-3 <= abs(data) <= 1e4:
                 self.string = f"{data:.2f}"
             else:
                 self.string = f"{data:.2e}"
         elif isinstance(data, (str, Path, int, np.int32, np.int64)) or data is None:
             self.string = str(data)
             self.hash = self.string
+            typestr = "str" if isinstance(data, (str, Path)) else "int"
         else:  # unsupported case
             key = "CONFDICT_UID_TYPE_BYPASS"
             if key not in os.environ:
@@ -351,22 +358,26 @@ class UidMaker:
                 raise TypeError(msg)
             msg = "Converting type %s to string for uid computation (%s)"
             logger.warning(msg, type(data), key)
+            typestr = "unknown"
             self.string = str(data)
             self.hash = self.string
             try:
                 self.hash = str(hash(data))
             except TypeError:
                 pass
+        if not typestr:
+            raise RuntimeError("No type found (this should not happen)")
         # clean string
         self.string = self.string.translate(UNSAFE_TABLE)
         # avoid big names
-        # TODO 128 ? + cut at the end +
         if version > 2:
             self.string = re.sub(r"[^a-zA-Z0-9{}\-=,_\.\(\)]", "", self.string)
             if len(self.string) > 128:
                 self.string = self.string[:128] + f"...{len(self.string) - 128}"
             if self.brackets:
                 self.string = self.brackets[0] + self.string + self.brackets[1]
+                self.hash = self.brackets[0] + self.hash + self.brackets[1]
+            self.hash = f"{typestr}:{self.hash}"  # avoid hash type collision
         else:
             self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", self.string)
             if self.brackets:

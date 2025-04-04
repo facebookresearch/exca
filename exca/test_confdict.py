@@ -221,9 +221,10 @@ data:
 
 
 def test_dict_hash() -> None:
-    maker1 = confdict.UidMaker({"x": 1, "y": 12}, version=3)
-    maker2 = confdict.UidMaker({"x": 1, "z": 12}, version=3)
+    maker1 = confdict.UidMaker({"x": 1.2, "y": ("z", 12.0)}, version=3)
+    maker2 = confdict.UidMaker({"x": 1.2, "z": ("z", 12.0)}, version=3)
     assert maker1.hash != maker2.hash
+    assert maker1.hash == "dict:{x=float:461168601842738689,y=seq:(str:z,int:12)}"
 
 
 def test_long_config_glob(tmp_path: Path) -> None:
