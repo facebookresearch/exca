@@ -289,6 +289,12 @@ def _flatten(data: tp.Any) -> tp.Any:
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 
 
+def _dict_sort(item: tuple[str, "UidMaker"]) -> tuple[int, str]:
+    """sorting key for uid maker, smaller strings first"""
+    key, maker = item
+    return (len(maker.string + key), key)
+
+
 class UidMaker:
     """For all supported data types, provide a string for representing it,
     and a hash to avoid collisions of the representation. Format method that
@@ -300,6 +306,7 @@ class UidMaker:
     def __init__(self, data: tp.Any, version: int | None = None) -> None:
         if version is None:
             version = ConfDict.UID_VERSION
+        self.brackets: tuple[str, str] | None = None
         if isinstance(data, (np.ndarray, TorchTensor)):
             if isinstance(data, TorchTensor):
                 data = data.detach().cpu().numpy()
@@ -309,16 +316,12 @@ class UidMaker:
         elif isinstance(data, dict):
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
             if version > 2:
-                keys = [
-                    xy[0]
-                    for xy in sorted(
-                        udata.items(), key=lambda xy: (len(xy[1].string), xy[0])
-                    )
-                ]
+                keys = [xy[0] for xy in sorted(udata.items(), key=_dict_sort)]
             else:
                 keys = sorted(data)
             parts = [f"{key}={udata[key].string}" for key in keys]
-            self.string = "{" + ",".join(parts) + "}"
+            self.string = ",".join(parts)
+            self.brackets = ("{", "}")
             if version > 2:
                 self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
             else:
@@ -326,9 +329,9 @@ class UidMaker:
                 self.hash = ",".join(udata[key].hash for key in keys)
         elif isinstance(data, (set, tuple, list)):
             items = [UidMaker(val, version=version) for val in data]
-            self.string = "[" + ",".join(i.string for i in items) + "]"
-            # self.string = "«" + ",".join(i.string for i in items) + "»"
+            self.string = ",".join(i.string for i in items)
             self.hash = ",".join(i.hash for i in items)
+            self.brackets = ("(", ")") if version > 2 else ("[", "]")
         elif isinstance(data, (float, np.float32)):
             self.hash = str(hash(data))
             if data.is_integer():
@@ -359,20 +362,22 @@ class UidMaker:
         # avoid big names
         # TODO 128 ? + cut at the end +
         if version > 2:
-            self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\._]", "", self.string)
+            self.string = re.sub(r"[^a-zA-Z0-9{}\-=,_\.\(\)]", "", self.string)
             if len(self.string) > 128:
-                self.string = self.string[:35] + "[.]" + self.string[-35:]
+                self.string = self.string[:128] + f"...{len(self.string) - 128}"
+            if self.brackets:
+                self.string = self.brackets[0] + self.string + self.brackets[1]
         else:
             self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", self.string)
+            if self.brackets:
+                self.string = self.brackets[0] + self.string + self.brackets[1]
             if len(self.string) > 82:
                 self.string = self.string[:35] + "[.]" + self.string[-35:]
 
     def format(self) -> str:
         s = self.string
-        if (s.startswith("{") and s.endswith("}")) or (
-            s.startswith("[") and s.endswith("]")
-        ):
-            s = s[1:-1]
+        if self.brackets:
+            s = s[len(self.brackets[0]) : -len(self.brackets[1])]
         if not s:
             return ""
         h = hashlib.md5(self.hash.encode("utf8")).hexdigest()[:8]

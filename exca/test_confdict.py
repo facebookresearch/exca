@@ -121,19 +121,25 @@ data:
     out2 = ConfDict.from_yaml(y_str)
     assert out2 == exp
     # uid
-    e = "data={default.stuff.duration=1,features=[{freq=2,other=None}]}-9284f826"
+    e = "data={default.stuff.duration=1,features=({freq=2,other=None})}-9284f826"
     assert out2.to_uid() == e
 
 
-def test_to_uid() -> None:
+@pytest.mark.parametrize(
+    "version,expected",
+    [
+        (2, "mystuff=13,none=None,t=data-3ddaedfe,x=whatever-hello-1c82f630"),
+        (3, "none=None,my_stuff=13,t=data-3ddaedfe,x=whatever-hello-46914943"),
+    ],
+)
+def test_to_uid(version: int, expected: str) -> None:
     data = {
         "my_stuff": 13.0,
         "x": "'whatever*'\nhello",
         "none": None,
         "t": torch.Tensor([1.2, 1.4]),
     }
-    expected = "mystuff=13,none=None,t=data-3ddaedfe,x=whatever-hello-1c82f630"
-    assert confdict.ConfDict(data).to_uid(version=2) == expected
+    assert confdict.ConfDict(data).to_uid(version=version) == expected
 
 
 def test_empty(tmp_path: Path) -> None:
@@ -202,8 +208,8 @@ data:
     ]
     cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
     assert cds[0].to_uid() != cds[1].to_uid()
-    expected = "data={duration=0.75,start=-0.25},b_model_config={layer_dim=12,"
-    expected += "transformer={r_p_emb=True,stuff=True}}-b5e26957"
+    expected = "data={start=-0.25,duration=0.75},b_model_config="
+    expected += "{layer_dim=12,transformer={stuff=True,r_p_emb=True}}-eb8e292d"
     assert cds[0].to_uid() == expected
     # reason it was colliding, strings were the same, and hash was incorrectly the same
     # legacy check
@@ -233,7 +239,9 @@ def test_long_config_glob(tmp_path: Path) -> None:
     cfg["sub"]["sub"] = dict(base)
     cfgd = ConfDict(cfg)
     uid = cfgd.to_uid()
-    print(uid)
+    expected = "l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcdefghijklmnopqrstuvwxyz,"
+    expected += "sub={l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcd...84-b6f95d50"
+    assert uid == expected
     folder = tmp_path / uid
     folder.mkdir()
     (folder / "myfile.txt").touch()
