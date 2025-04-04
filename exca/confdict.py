@@ -306,9 +306,13 @@ class UidMaker:
             self.hash = h
         elif isinstance(data, dict):
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
-            keys = sorted(data)
+            # keys = sorted(data)
+            keys = [
+                xy[0]
+                for xy in sorted(udata.items(), key=lambda xy: (len(xy[1].string), xy[0]))
+            ]
             parts = [f"{key}={udata[key].string}" for key in keys]
-            self.string = "-!" + ",".join(parts) + "!-"
+            self.string = "«" + ",".join(parts) + "»"
             if version > 2:
                 self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
             else:
@@ -316,7 +320,8 @@ class UidMaker:
                 self.hash = ",".join(udata[key].hash for key in keys)
         elif isinstance(data, (set, tuple, list)):
             items = [UidMaker(val, version=version) for val in data]
-            self.string = "[" + ",".join(i.string for i in items) + "]"
+            # self.string = "[" + ",".join(i.string for i in items) + "]"
+            self.string = "«" + ",".join(i.string for i in items) + "»"
             self.hash = ",".join(i.hash for i in items)
         elif isinstance(data, (float, np.float32)):
             self.hash = str(hash(data))
@@ -345,7 +350,7 @@ class UidMaker:
                 pass
         # clean string
         s = self.string.translate(UNSAFE_TABLE)
-        self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.!]", "", s)
+        self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.!]»«", "", s)
         # avoid big names
         # TODO 128 ? + cut at the end +
         if version > 2:
