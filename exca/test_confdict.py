@@ -238,6 +238,11 @@ def test_long_config_glob(tmp_path: Path) -> None:
     cfg["sub"] = dict(base)
     cfg["sub"]["sub"] = dict(base)
     cfgd = ConfDict(cfg)
+    uid = cfgd.to_uid(2)
+    expected = (
+        "d={a=1,b.c=2},l=[1,2],num=12345678[.]tring=abcdefghijklmnopqrstuvwxyz}}-b7348341"
+    )
+    assert uid == expected
     uid = cfgd.to_uid()
     expected = "l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcdefghijklmnopqrstuvwxyz,"
     expected += "sub={l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcd...84-b6f95d50"
