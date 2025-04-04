@@ -324,7 +324,7 @@ class BaseInfra(pydantic.BaseModel):
                         # rename all folders in cache at once if possible
                         from exca import helpers
 
-                        helpers.update_uids(self.folder, dryrun=True)
+                        helpers.update_uids(self.folder, dryrun=False)
                     if old.exists():
                         # if this very cache was not updated
                         # (eg: because of unexpected uid_string), then fix it manually
