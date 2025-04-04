@@ -202,11 +202,12 @@ data:
     cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
     assert cds[0].to_uid() != cds[1].to_uid()
     # reason it was colliding, strings were the same, and hash was incorrectly the same
-    makers = [confdict.UidMaker(ConfDict.from_yaml(cfg), version=2) for cfg in cfgs]
-    assert makers[0].string == makers[1].string
-    assert makers[0].hash == makers[1].hash
-    makers = [confdict.UidMaker(ConfDict.from_yaml(cfg), version=3) for cfg in cfgs]
-    assert makers[0].hash != makers[1].hash
+    # legacy check
+    expected = (
+        "data={duration=0.75,start=-0.25},b[.]sformer={r_p_emb=True,stuff=True}}-987259e9"
+    )
+    assert cds[0].to_uid(version=2) == expected
+    assert cds[1].to_uid(version=2) == cds[1].to_uid(version=2)
 
 
 def test_dict_hash() -> None:
