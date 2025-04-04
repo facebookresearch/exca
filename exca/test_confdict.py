@@ -15,15 +15,19 @@ from . import confdict
 from .confdict import ConfDict
 
 
-def test_init() -> None:
+@pytest.mark.parametrize(
+    "version,expected",
+    [
+        (2, "x=12,y={stuff=13,thing=12,what.hello=11}-4a9d3dba"),
+        (None, "x=12,y={stuff=13,thing=12,what.hello=11}-3466db1c"),
+    ],
+)
+def test_init(version: int | None, expected: str) -> None:
     out = ConfDict({"y.thing": 12, "y.stuff": 13, "y": {"what.hello": 11}}, x=12)
     flat = out.flat()
     out2 = ConfDict(flat)
     assert out2 == out
-    expected = "x=12,y={stuff=13,thing=12,what.hello=11}-4a9d3dba"
-    assert out2.to_uid(version=2) == expected
-    expected = "x=12,y={stuff=13,thing=12,what.hello=11}-73565e1a"
-    assert out2.to_uid(version=3) == expected
+    assert out2.to_uid(version=version) == expected
 
 
 def test_dot_access_and_to_simplied_dict() -> None:
@@ -121,7 +125,7 @@ data:
     out2 = ConfDict.from_yaml(y_str)
     assert out2 == exp
     # uid
-    e = "data={default.stuff.duration=1,features=({freq=2,other=None})}-9284f826"
+    e = "data={default.stuff.duration=1,features=({freq=2,other=None})}-d7247912"
     assert out2.to_uid() == e
 
 
@@ -129,7 +133,8 @@ data:
     "version,expected",
     [
         (2, "mystuff=13,none=None,t=data-3ddaedfe,x=whatever-hello-1c82f630"),
-        (3, "none=None,my_stuff=13,t=data-3ddaedfe,x=whatever-hello-46914943"),
+        (3, "none=None,my_stuff=13,t=data-3ddaedfe,x=whatever-hello-7bf910d2"),
+        (None, "none=None,my_stuff=13,t=data-3ddaedfe,x=whatever-hello-7bf910d2"),
     ],
 )
 def test_to_uid(version: int, expected: str) -> None:
@@ -209,7 +214,7 @@ data:
     cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
     assert cds[0].to_uid() != cds[1].to_uid()
     expected = "data={start=-0.25,duration=0.75},b_model_config="
-    expected += "{layer_dim=12,transformer={stuff=True,r_p_emb=True}}-eb8e292d"
+    expected += "{layer_dim=12,transformer={stuff=True,r_p_emb=True}}-d1f629b3"
     assert cds[0].to_uid() == expected
     # reason it was colliding, strings were the same, and hash was incorrectly the same
     # legacy check
@@ -246,7 +251,7 @@ def test_long_config_glob(tmp_path: Path) -> None:
     assert uid == expected
     uid = cfgd.to_uid()
     expected = "l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcdefghijklmnopqrstuvwxyz,"
-    expected += "sub={l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcd...84-b6f95d50"
+    expected += "sub={l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcd...84-63bf871d"
     assert uid == expected
     folder = tmp_path / uid
     folder.mkdir()

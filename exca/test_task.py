@@ -85,7 +85,7 @@ def test_task_infra(tmp_path: Path) -> None:
     assert whatever.process() == 26
     assert xpfolder.exists(), "Result and folder structure should have been created"
 
-    assert xpfolder.name == "param1=13-16eb96a9"
+    assert xpfolder.name == "param1=13-4c541560"
     assert {fp.name for fp in xpfolder.iterdir()} == {
         "uid.yaml",
         "full-uid.yaml",
@@ -456,7 +456,7 @@ def test_task_clone_obj_discriminator(tmp_path: Path) -> None:
     # discriminator computed and copied to cloned object
     assert out.inst.__dict__[utils.DISCRIMINATOR_FIELD] == "uid"
     out.param1 = 13  # should not be frozen yet
-    expected = "param1=13,inst.uid=D2-f4ff517b"
+    expected = "param1=13,inst.uid=D2-b2a71d68"
     assert out.infra1.uid().split("/")[-1] == expected
 
 
