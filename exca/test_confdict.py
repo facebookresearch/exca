@@ -216,8 +216,12 @@ def test_dict_hash() -> None:
 
 def test_long_config_glob(tmp_path: Path) -> None:
     string = "abcdefghijklmnopqrstuvwxyz"
-    base = {"l": [1, 2], "d": {"a": 1, "b.c": 2}, "string": string, "num": 123456789000}
-    base = {"d": {"a": 1, "b.c": 2}, "string": string, "num": 123456789000}
+    base: dict[str, tp.Any] = {
+        "l": [1, 2],
+        "d": {"a": 1, "b.c": 2},
+        "string": string,
+        "num": 123456789000,
+    }
     cfg = dict(base)
     cfg["sub"] = dict(base)
     cfg["sub"]["sub"] = dict(base)
