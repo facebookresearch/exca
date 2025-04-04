@@ -313,7 +313,3 @@ def update_uids(folder: str | Path, dryrun: bool = True):
         msg = "Automatically updating folder name to new uid: '%s' -> '%s'"
         logger.warning(msg, folder, newfolder)
         shutil.move(folder, newfolder)
-
-
-# folder = "/checkpoint/jrapin/brainai/cache"
-# update_uids(folder)
