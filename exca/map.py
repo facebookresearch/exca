@@ -79,7 +79,7 @@ class JobChecker:
             except Exception:  # pylint: disable=broad-except
                 continue
             if not job.done():
-                msg = "Waiting for completion of pre-existing map job: %s\nin %s"
+                msg = "Waiting for completion of pre-existing map job: %s\nin '%s'"
                 logger.info(msg, job, self.folder)
                 job.wait()
                 waited = True
@@ -496,7 +496,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             items = [item for item in items if item_uid(item) not in keys]
         if isinstance(self, slurm.SubmititMixin):  # dependence to mixin
             if self.workdir is not None and self.cluster is not None and items:
-                logger.info("Running from working directory: %s", os.getcwd())
+                logger.info("Running from working directory: '%s'", os.getcwd())
         outputs = self._run_method(items)
         sentinel = base.Sentinel()
         with contextlib.ExitStack() as estack:
