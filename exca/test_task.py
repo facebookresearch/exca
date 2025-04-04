@@ -442,7 +442,7 @@ def test_task_clone_obj_discriminator(tmp_path: Path) -> None:
     # discriminator computed and copied to cloned object
     assert out.inst.__dict__[utils.DISCRIMINATOR_FIELD] == "uid"
     out.param1 = 13  # should not be frozen yet
-    expected = "inst.uid=D2,param1=13-9c991de6"
+    expected = "param1=13,inst.uid=D2-f4ff517b"
     assert out.infra1.uid().split("/")[-1] == expected
 
 
