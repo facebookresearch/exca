@@ -213,7 +213,7 @@ class BaseInfra(pydantic.BaseModel):
                 try:
                     ConfDict.from_yaml(fp)
                 except Exception as e:
-                    logger.warning("Deleting corrupted config %s: %s", fp, e)
+                    logger.warning("Deleting corrupted config '%s': %s", fp, e)
                     fp.unlink()
         # errors happening when multiple processes read/rewrite same file
         FileErrors = (OSError, FileNotFoundError)
@@ -228,7 +228,9 @@ class BaseInfra(pydantic.BaseModel):
             if current != expected:
                 diffs = difflib.ndiff(current.splitlines(), expected.splitlines())
                 diff = "\n".join(diffs)
-                msg = f"Inconsistent uid config for {configs['uid'].to_uid()} in {fp}:\n"
+                msg = (
+                    f"Inconsistent uid config for {configs['uid'].to_uid()} in '{fp}':\n"
+                )
                 msg += f"* got:\n{current!r}\n\n* but uid file contains:\n{expected!r}\n\n(see diff:\n{diff})"
                 msg += f"\n\n(this is for object: {self._obj!r})"
                 raise RuntimeError(msg)
@@ -354,7 +356,7 @@ class BaseInfra(pydantic.BaseModel):
             try:
                 Path(path).chmod(self.permissions)
             except Exception as e:
-                msg = f"Failed to set permission to {self.permissions} on {path}\n({e})"
+                msg = f"Failed to set permission to {self.permissions} on '{path}'\n({e})"
                 logger.warning(msg)
 
     def clone_obj(self, *args: tp.Dict[str, tp.Any], **kwargs: tp.Any) -> tp.Any:

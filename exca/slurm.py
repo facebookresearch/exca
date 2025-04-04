@@ -224,7 +224,7 @@ class SubmititMixin(pydantic.BaseModel):
         if not isinstance(self, base.BaseInfra):
             raise RuntimeError("This can only run on BaseInfra subclasses")
         if self.workdir is not None:
-            logger.info("Running function from %s", os.getcwd())
+            logger.info("Running function from '%s'", os.getcwd())
         if self._infra_method is None:
             raise RuntimeError("Infra not correctly applied to a method")
         method = self._infra_method.method

@@ -168,7 +168,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         """
         xpfolder = self.uid_folder()
         if xpfolder is None:
-            logger.debug("No job to clear at %s", xpfolder)
+            logger.debug("No job to clear at '%s'", xpfolder)
             return
         # cancel job if it exists
         jobfile = xpfolder / "job.pkl"
@@ -237,7 +237,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             self._computed = True  # to ignore mode retry and forced from now on
             if not missing:
                 logger.debug(
-                    "No job submitted for %s, all %s jobs already computed/ing in %s",
+                    "No job submitted for %s, all %s jobs already computed/ing in '%s'",
                     name,
                     computed,
                     folder.parent,  # type: ignore
@@ -251,7 +251,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                     jobs.append(executor.submit(infra._run_method))
             logger.info(
                 "Submitted %s jobs (eg: %s) for %s through cluster '%s' "
-                "(%s already computed/ing in cache folder %s)",
+                "(%s already computed/ing in cache folder '%s')",
                 len(missing),
                 jobs[0].job_id,
                 name,
@@ -313,7 +313,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         if folder is not None:
             job_path = folder / "job.pkl"
             if job_path.exists():
-                logger.debug("Reloading job from %s", job_path)
+                logger.debug("Reloading job from '%s'", job_path)
                 with job_path.open("rb") as f:
                     job = pickle.load(f)
                 if job.done() and self.status() == "failed":
