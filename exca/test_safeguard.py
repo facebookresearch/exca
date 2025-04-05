@@ -6,23 +6,9 @@
 
 import itertools
 import subprocess
-import warnings
 from pathlib import Path
 
 import exca
-
-from . import confdict
-
-
-def test_uid_version() -> None:
-    # make sure this does not get overriden when copying from other repo
-    if not confdict.ConfDict.UID_VERSION == 2:
-        warnings.warn("Fixing version locally")
-        fp = Path(confdict.__file__)
-        text = fp.read_text()
-        text = text.replace('VERSION", "1")', 'VERSION", "2")')
-        fp.write_text(text)
-    assert confdict.ConfDict.UID_VERSION == 2
 
 
 def test_package_version() -> None:

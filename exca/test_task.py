@@ -8,6 +8,7 @@ import contextlib
 import importlib
 import logging
 import pickle
+import shutil
 import sys
 import typing as tp
 import uuid
@@ -84,7 +85,7 @@ def test_task_infra(tmp_path: Path) -> None:
     assert whatever.process() == 26
     assert xpfolder.exists(), "Result and folder structure should have been created"
 
-    assert xpfolder.name == "param1=13-c51ce410"
+    assert xpfolder.name == "param1=13-4c541560"
     assert {fp.name for fp in xpfolder.iterdir()} == {
         "uid.yaml",
         "full-uid.yaml",
@@ -102,6 +103,19 @@ def test_task_infra(tmp_path: Path) -> None:
     # check full config
     cdict = ConfDict.from_model(whatever)
     assert "param_cache_excluded" in cdict, "Shouldn't be excluded from task"
+
+
+def test_task_infra_rename_cache_v2_to_v3(tmp_path: Path) -> None:
+    whatever = Whatever(param1=1, infra1={"folder": tmp_path})  # type: ignore
+    assert whatever.process() == 2
+    # move cache to old name
+    xpfolder = whatever.infra1.uid_folder()
+    assert xpfolder is not None
+    new_name = whatever.infra1.config(uid=True, exclude_defaults=True).to_uid(version=2)
+    shutil.move(xpfolder, xpfolder.with_name(new_name))
+    # try reloading it
+    whatever = Whatever(param1=1, infra1={"folder": tmp_path, "mode": "read-only"})  # type: ignore
+    assert whatever.process() == 2
 
 
 def test_task_infra_array(tmp_path: Path) -> None:
@@ -442,7 +456,7 @@ def test_task_clone_obj_discriminator(tmp_path: Path) -> None:
     # discriminator computed and copied to cloned object
     assert out.inst.__dict__[utils.DISCRIMINATOR_FIELD] == "uid"
     out.param1 = 13  # should not be frozen yet
-    expected = "inst.uid=D2,param1=13-4f874e55"
+    expected = "param1=13,inst.uid=D2-b2a71d68"
     assert out.infra1.uid().split("/")[-1] == expected
 
 

@@ -93,7 +93,7 @@ assert cfdict.flat() == {"training.optim.lr": 0.01}
 assert cfdict.to_yaml() == "training.optim.lr: 0.01\n"
 
 # uid computation
-assert cfdict.to_uid() == "training.optim.lr=0.01-346ce994"
+assert cfdict.to_uid() == "training.optim.lr=0.01-0f8936b4"
 ```
 
 Infra objects extensively use such dictionaries and have a `config` method for instantiating the `ConfDict` generated from an object:
