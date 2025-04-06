@@ -337,6 +337,7 @@ class UidMaker:
             self.brackets = ("(", ")") if version > 2 else ("[", "]")
             typestr = "seq"
         elif isinstance(data, (float, np.float32)):
+            # https://docs.python.org/3/library/stdtypes.html#hashing-of-numeric-types
             self.hash = str(hash(data))
             typestr = "float"
             if data.is_integer():
