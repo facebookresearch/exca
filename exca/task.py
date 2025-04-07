@@ -198,17 +198,18 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         tasks: tp.List[tp.Any] = []
         yield tasks
         # verify unicity
-        uids = set()
+        uid_index: dict[str, int] = {}
         infras: tp.List[TaskInfra] = [getattr(t, self._infra_name) for t in tasks]
         folder = self.uid_folder()
-        for infra in infras:
+        for k, infra in enumerate(infras):
             uid = infra.uid()
-            if uid in uids:
-                config = infra.config(uid=True, exclude_defaults=True)
-                msg = "The provided job array seems to contain duplicates\n"
-                msg += f"(repeated task config: {config})"
-                raise ValueError(msg)
-            uids.add(uid)
+            if uid in uid_index:
+                msg = "The provided job array seems to contain duplicates:\n\n"
+                for ind in [uid_index[uid], k]:
+                    config = infras[ind].config(uid=True, exclude_defaults=True)
+                    msg += f"* Config at index {ind}:\n{config.to_yaml()}\n\n"
+                raise ValueError(msg[:-2])
+            uid_index[uid] = k
         if executor is None:
             self._computed = True  # to ignore mode retry and forced from now on
             _ = [infra.job() for infra in infras]
