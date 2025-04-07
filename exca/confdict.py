@@ -5,6 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 
 import dataclasses
+import decimal
+import fractions
 import hashlib
 import logging
 import os
@@ -64,7 +66,7 @@ class ConfDict(dict[str, tp.Any]):
       replace the content.
     """
 
-    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "2"))
+    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "3"))
     OVERRIDE = OVERRIDE  # convenient to have it here
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
@@ -209,9 +211,12 @@ class ConfDict(dict[str, tp.Any]):
             Path(filepath).write_text(out, encoding="utf8")
         return out
 
-    def to_uid(self) -> str:
+    def to_uid(self, version: None | int = None) -> str:
         """Provides a unique string for the config"""
-        return _to_uid(_to_simplified_dict(self))
+        if version is None:
+            version = ConfDict.UID_VERSION
+        data = _to_simplified_dict(self)
+        return UidMaker(data, version=version).format()
 
     @classmethod
     def from_args(cls, args: list[str]) -> "ConfDict":
@@ -286,55 +291,10 @@ def _flatten(data: tp.Any) -> tp.Any:
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 
 
-def _to_uid(data: tp.Any) -> str:
-    """Creates a uid based on the data"""
-    if ConfDict.UID_VERSION > 1:
-        return UidMaker(data).format()
-    out = _format_data(data)
-    if out.startswith("{") and out.endswith("}"):
-        out = out[1:-1]
-    if not out:
-        return out
-    hashbase = str(data)  # str data is unreliable
-    h = hashlib.md5(hashbase.encode("utf8")).hexdigest()[:8]
-    if len(out) > 83:
-        out = out[:40] + "[.]" + out[-40:]
-    out = out.translate(UNSAFE_TABLE)
-    out = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", out)
-    return f"{out}-{h}"
-
-
-def _format_data(data: tp.Any) -> str:
-    """format data into a string"""
-    if isinstance(data, (np.ndarray, TorchTensor)):
-        return str(data)
-    if isinstance(data, dict):
-        parts = [f"{key}={_format_data(val)}" for key, val in data.items()]
-        return "{" + ",".join(parts) + "}"
-    if isinstance(data, (set, tuple, list)):
-        parts = [_format_data(val) for val in data]
-        return "[" + ",".join(parts) + "]"
-    if isinstance(data, (float, np.float32)):
-        if data.is_integer():
-            return str(int(data))
-        if 1e-3 <= abs(data) <= 1e4:  # type: ignore
-            return f"{data:.2f}"
-        return f"{data:.2e}"
-    if isinstance(data, (Path, int, np.int32, np.int64)) or data is None:
-        data = str(data)
-    if not isinstance(data, str):
-        key = "CONFDICT_UID_TYPE_BYPASS"
-        if key not in os.environ:
-            msg = f"Unsupported type {type(data)} for {data}\n"
-            msg += f"(bypass this error at your own risks by exporting {key}=1)"
-            raise TypeError(msg)
-        logger.warning(
-            "Converting type %s to string for uid computation (%s)", type(data), key
-        )
-        data = str(data)
-    if len(data) > 27:
-        data = data[:12] + "[.]" + data[-12:]
-    return data
+def _dict_sort(item: tuple[str, "UidMaker"]) -> tuple[int, str]:
+    """sorting key for uid maker, smaller strings first"""
+    key, maker = item
+    return (len(maker.string + key), key)
 
 
 class UidMaker:
@@ -343,34 +303,68 @@ class UidMaker:
     combines string and hash into the uid.
     """
 
-    def __init__(self, data: tp.Any) -> None:
-        if isinstance(data, (np.ndarray, TorchTensor)):
-            if isinstance(data, TorchTensor):
-                data = data.detach().cpu().numpy()
+    # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
+
+    def __init__(self, data: tp.Any, version: int | None = None) -> None:
+        if version is None:
+            version = ConfDict.UID_VERSION
+        self.brackets: tuple[str, str] | None = None
+        typestr = ""
+        # convert to simpler types
+        if isinstance(data, (float, np.float32)) and data.is_integer():
+            data = int(data)
+        elif isinstance(data, TorchTensor):
+            data = data.detach().cpu().numpy()
+        elif isinstance(data, Path):
+            data = str(data)
+        # handle base types
+        if isinstance(data, np.ndarray):
+            if version > 2:
+                data = np.ascontiguousarray(data)
             h = hashlib.md5(data.tobytes()).hexdigest()
-            self.string = "data-" + h[:8]
-            self.hash = h
+            if version > 2:
+                self.hash = f"{','.join(str(s) for s in data.shape)}-{h[:8]}"
+                self.string = f"data-{self.hash}"
+            else:
+                self.string = "data-" + h[:8]
+                self.hash = h
+            typestr = "array"
         elif isinstance(data, dict):
-            udata = {x: UidMaker(y) for x, y in data.items()}
-            keys = sorted(data)
+            udata = {x: UidMaker(y, version=version) for x, y in data.items()}
+            if version > 2:
+                keys = [xy[0] for xy in sorted(udata.items(), key=_dict_sort)]
+            else:
+                keys = sorted(data)
             parts = [f"{key}={udata[key].string}" for key in keys]
-            self.string = "{" + ",".join(parts) + "}"
-            self.hash = ",".join(udata[key].hash for key in keys)
+            self.string = ",".join(parts)
+            self.brackets = ("{", "}")
+            typestr = "dict"
+            if version > 2:
+                self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
+            else:
+                # incorrect (legacy) hash, can collide
+                self.hash = ",".join(udata[key].hash for key in keys)
         elif isinstance(data, (set, tuple, list)):
-            items = [UidMaker(val) for val in data]
-            self.string = "[" + ",".join(i.string for i in items) + "]"
+            items = [UidMaker(val, version=version) for val in data]
+            self.string = ",".join(i.string for i in items)
             self.hash = ",".join(i.hash for i in items)
-        elif isinstance(data, (float, np.float32)):
-            self.hash = str(hash(data))
-            if data.is_integer():
-                self.string = str(int(data))
-            elif 1e-3 <= abs(data) <= 1e4:  # type: ignore
+            self.brackets = ("(", ")") if version > 2 else ("[", "]")
+            typestr = "seq"
+        elif isinstance(data, (float, decimal.Decimal, fractions.Fraction)):
+            self.hash = str(hash(data))  # deterministic for numeric types:
+            # https://docs.python.org/3/library/stdtypes.html#hashing-of-numeric-types
+            data = float(data)  # to keep same string for decimal and fractions
+            typestr = "float"
+            if isinstance(data, (decimal.Decimal, fractions.Fraction)):
+                self.string = str(data)
+            elif 1e-3 <= abs(data) <= 1e4:
                 self.string = f"{data:.2f}"
             else:
                 self.string = f"{data:.2e}"
-        elif isinstance(data, (str, Path, int, np.int32, np.int64)) or data is None:
+        elif isinstance(data, (str, int, np.int32, np.int64)) or data is None:
             self.string = str(data)
             self.hash = self.string
+            typestr = "str" if isinstance(data, str) else "int"
         else:  # unsupported case
             key = "CONFDICT_UID_TYPE_BYPASS"
             if key not in os.environ:
@@ -379,25 +373,37 @@ class UidMaker:
                 raise TypeError(msg)
             msg = "Converting type %s to string for uid computation (%s)"
             logger.warning(msg, type(data), key)
+            typestr = "unknown"
             self.string = str(data)
             self.hash = self.string
             try:
                 self.hash = str(hash(data))
             except TypeError:
                 pass
+        if not typestr:
+            raise RuntimeError("No type found (this should not happen)")
         # clean string
-        s = self.string.translate(UNSAFE_TABLE)
-        self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", s)
+        self.string = self.string.translate(UNSAFE_TABLE)
         # avoid big names
-        if len(self.string) > 82:
-            self.string = self.string[:35] + "[.]" + self.string[-35:]
+        if version > 2:
+            self.string = re.sub(r"[^a-zA-Z0-9{}\-=,_\.\(\)]", "", self.string)
+            if len(self.string) > 128:
+                self.string = self.string[:128] + f"...{len(self.string) - 128}"
+            if self.brackets:
+                self.string = self.brackets[0] + self.string + self.brackets[1]
+                self.hash = self.brackets[0] + self.hash + self.brackets[1]
+            self.hash = f"{typestr}:{self.hash}"  # avoid hash type collision
+        else:
+            self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", self.string)
+            if self.brackets:
+                self.string = self.brackets[0] + self.string + self.brackets[1]
+            if len(self.string) > 82:
+                self.string = self.string[:35] + "[.]" + self.string[-35:]
 
     def format(self) -> str:
         s = self.string
-        if (s.startswith("{") and s.endswith("}")) or (
-            s.startswith("[") and s.endswith("]")
-        ):
-            s = s[1:-1]
+        if self.brackets:
+            s = s[len(self.brackets[0]) : -len(self.brackets[1])]
         if not s:
             return ""
         h = hashlib.md5(self.hash.encode("utf8")).hexdigest()[:8]

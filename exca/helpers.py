@@ -6,6 +6,7 @@
 
 import inspect
 import logging
+import shutil
 import subprocess
 import typing as tp
 from pathlib import Path
@@ -13,8 +14,8 @@ from pathlib import Path
 import pydantic
 import submitit
 
-from .confdict import ConfDict
-from .task import TaskInfra
+from exca.confdict import ConfDict
+from exca.task import TaskInfra
 
 # pylint: disable=typevar-name-incorrect-variance
 X = tp.TypeVar("X", covariant=True)
@@ -285,3 +286,34 @@ def find_slurm_job(
         if job is not None:
             return job
     return None
+
+
+def update_uids(folder: str | Path, dryrun: bool = True):
+    folder = Path(folder)
+    if any(x in folder.parts for x in ["code", "wandb", "logs"]):
+        return None
+    # if all these files are present, this is the cache folder:
+    if not all((folder / name).exists() for name in ["config.yaml", "uid.yaml"]):
+        # avoid checking the cache folder as this is extra slow
+        # task Vs batch
+        for sub in folder.iterdir():
+            if sub.is_dir():
+                update_uids(sub, dryrun=dryrun)
+        return None
+    cd = ConfDict.from_yaml(folder / "uid.yaml")
+    old = cd.to_uid(version=2)
+    new = cd.to_uid()
+    if new in str(folder):
+        return  # all good
+    if old not in str(folder):
+        if folder.name != "default":
+            msg = "CAUTION: folder name %s does not match old uid pattern %s"
+            logger.warning(msg, folder.name, old)
+        return
+    newfolder = Path(str(folder).replace(old, new))
+    msg = "Automatically updating folder name to new uid: '%s' -> '%s'"
+    if dryrun:
+        msg += " (dry run)"
+    logger.warning(msg, folder, newfolder)
+    if not dryrun:
+        shutil.move(folder, newfolder)

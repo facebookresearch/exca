@@ -10,6 +10,7 @@ import difflib
 import functools
 import inspect
 import logging
+import shutil
 import string
 import typing as tp
 from pathlib import Path
@@ -299,22 +300,37 @@ class BaseInfra(pydantic.BaseModel):
         if not hasattr(self, "_uid"):
             self._uid = None  # backward-compatibility
         if self._uid is None:
-            uid = self.config(uid=True, exclude_defaults=True).to_uid()
+            cfg = self.config(uid=True, exclude_defaults=True)
+            uid = cfg.to_uid()
             uid = uid if uid else "default"
-            method = self._factory()
+            params = dict(method=self._factory(), version=self.version, uid=uid)
             parsed = string.Formatter().parse(self._uid_string)
             names = {v[1] for v in parsed if v[1] is not None}
-            expected = {"method", "uid", "version"}
-            if names != expected:
-                msg = f"uid_string {self._uid_string!r} should contain exactly {expected}"
+            if names != set(params):
+                msg = f"uid_string {self._uid_string!r} should contain exactly {set(params)}"
                 msg += f"\nbut got {names} for infra applied on {self._obj!r}"
                 raise ValueError(msg)
-            self._uid = self._uid_string.format(
-                method=method, uid=uid, version=self.version
-            )
+            self._uid = self._uid_string.format(**params)
             utils.recursive_freeze(self._obj)
             msg = "Froze instance %s after computing its uid: %s"
             logger.debug(msg, repr(self._obj), self._uid)
+            # compat
+            if self.folder is not None and uid != "default":
+                folder = Path(self.folder) / self._uid
+                if not folder.exists():
+                    params["uid"] = cfg.to_uid(version=2)
+                    old = Path(self.folder) / self._uid_string.format(**params)
+                    if old.exists():
+                        # rename all folders in cache at once if possible
+                        from exca import helpers
+
+                        helpers.update_uids(self.folder, dryrun=False)
+                    if old.exists():
+                        # if this very cache was not updated
+                        # (eg: because of unexpected uid_string), then fix it manually
+                        msg = "Automatic update fail, manual update to new uid: '%s' -> '%s'"
+                        logger.warning(msg, old, folder)
+                        shutil.move(old, folder)
         return self._uid
 
     def uid_folder(self, create: bool = False) -> Path | None:

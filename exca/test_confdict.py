@@ -4,6 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 import dataclasses
+import decimal
+import fractions
 import glob
 import typing as tp
 from pathlib import Path
@@ -15,13 +17,19 @@ from . import confdict
 from .confdict import ConfDict
 
 
-def test_init() -> None:
+@pytest.mark.parametrize(
+    "version,expected",
+    [
+        (2, "x=12,y={stuff=13,thing=12,what.hello=11}-4a9d3dba"),
+        (None, "x=12,y={stuff=13,thing=12,what.hello=11}-3466db1c"),
+    ],
+)
+def test_init(version: int | None, expected: str) -> None:
     out = ConfDict({"y.thing": 12, "y.stuff": 13, "y": {"what.hello": 11}}, x=12)
     flat = out.flat()
     out2 = ConfDict(flat)
     assert out2 == out
-    expected = "x=12,y={stuff=13,thing=12,what.hello=11}-4a9d3dba"
-    assert out2.to_uid() == expected
+    assert out2.to_uid(version=version) == expected
 
 
 def test_dot_access_and_to_simplied_dict() -> None:
@@ -119,19 +127,26 @@ data:
     out2 = ConfDict.from_yaml(y_str)
     assert out2 == exp
     # uid
-    e = "data={default.stuff.duration=1,features=[{freq=2,other=None}]}-eaa5aa9c"
+    e = "data={default.stuff.duration=1,features=({freq=2,other=None})}-d7247912"
     assert out2.to_uid() == e
 
 
-def test_to_uid() -> None:
+@pytest.mark.parametrize(
+    "version,expected",
+    [
+        (2, "mystuff=13,none=None,t=data-3ddaedfe,x=whatever-hello-1c82f630"),
+        (3, "none=None,my_stuff=13,x=whatever-hello,t=data-2-3ddaedfe-48c04959"),
+        (None, "none=None,my_stuff=13,x=whatever-hello,t=data-2-3ddaedfe-48c04959"),
+    ],
+)
+def test_to_uid(version: int, expected: str) -> None:
     data = {
         "my_stuff": 13.0,
         "x": "'whatever*'\nhello",
         "none": None,
         "t": torch.Tensor([1.2, 1.4]),
     }
-    expected = "mystuff=13,none=None,t=data-3ddaedfe,x=whatever-hello-1c82f630"
-    assert confdict._to_uid(data) == expected
+    assert confdict.ConfDict(data).to_uid(version=version) == expected
 
 
 def test_empty(tmp_path: Path) -> None:
@@ -199,19 +214,33 @@ data:
 """,
     ]
     cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
-    # assert cds[0].to_uid() != cds[1].to_uid()
+    assert cds[0].to_uid() != cds[1].to_uid()
+    expected = "data={start=-0.25,duration=0.75},b_model_config="
+    expected += "{layer_dim=12,transformer={stuff=True,r_p_emb=True}}-d1f629b3"
+    assert cds[0].to_uid() == expected
+    # reason it was colliding, strings were the same, and hash was incorrectly the same
+    # legacy check
     expected = (
         "bmodelconfig={layerdim=12,transfor[.]},data={duration=0.75,start=-0.25}-8b17a008"
     )
-    assert cds[0].to_uid() == expected
-    assert cds[1].to_uid() == cds[1].to_uid()
-    # TODO FIX THIS
+    assert cds[0].to_uid(version=2) == expected
+    assert cds[1].to_uid(version=2) == cds[1].to_uid(version=2)
 
 
 def test_dict_hash() -> None:
-    maker1 = confdict.UidMaker({"x": 1, "y": 12})
-    maker2 = confdict.UidMaker({"x": 1, "z": 12})
-    assert maker1.hash == maker2.hash  # TODO FIX THIS
+    maker1 = confdict.UidMaker({"x": 1.2, "y": ("z", 12.0)}, version=3)
+    maker2 = confdict.UidMaker({"x": 1.2, "z": ("z", 12.0)}, version=3)
+    assert maker1.hash != maker2.hash
+    assert maker1.hash == "dict:{x=float:461168601842738689,y=seq:(str:z,int:12)}"
+
+
+def test_fractions_decimal() -> None:
+    d = {"f": 1.1, "d": decimal.Decimal("1.1"), "/": fractions.Fraction(11, 10)}
+    maker = confdict.UidMaker(d)
+    assert maker.string == "{-=1.10,d=1.10,f=1.10}"
+    # float is an approximation while decimal and fraction are exactly the same:
+    expec = "dict:{/=float:2075258708292324557,d=float:2075258708292324557,f=float:230584300921369601}"
+    assert maker.hash == expec
 
 
 def test_long_config_glob(tmp_path: Path) -> None:
@@ -226,10 +255,17 @@ def test_long_config_glob(tmp_path: Path) -> None:
     cfg["sub"] = dict(base)
     cfg["sub"]["sub"] = dict(base)
     cfgd = ConfDict(cfg)
+    uid = cfgd.to_uid(2)
+    expected = (
+        "d={a=1,b.c=2},l=[1,2],num=12345678[.]tring=abcdefghijklmnopqrstuvwxyz}}-b7348341"
+    )
+    assert uid == expected
     uid = cfgd.to_uid()
+    expected = "l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcdefghijklmnopqrstuvwxyz,"
+    expected += "sub={l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcd...84-63bf871d"
+    assert uid == expected
     folder = tmp_path / uid
     folder.mkdir()
     (folder / "myfile.txt").touch()
     files = list(glob.glob(str(folder / "*file.txt")))
-    # TODO FIX THIS:
-    assert not files, "folder name messes up with glob"
+    assert files, "folder name messes up with glob"
