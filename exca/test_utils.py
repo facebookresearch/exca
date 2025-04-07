@@ -139,7 +139,8 @@ something_else: 12
 """
     out = ConfDict.from_model(d, exclude_defaults=True).to_yaml()
     assert len(caplog.records) == 1
-    assert "Did not find a discriminator for inst2" in caplog.records[0].message
+    msg = "Did not find a discriminator for 'inst2' in 'Discrim'"
+    assert msg in caplog.records[0].message
     assert out == expected
     # check uid of subinstance again (should not have discriminators)
     sub_out = ConfDict.from_model(d.inst, exclude_defaults=True)
