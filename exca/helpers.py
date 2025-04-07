@@ -303,13 +303,13 @@ def update_uids(folder: str | Path, dryrun: bool = True):
     cd = ConfDict.from_yaml(folder / "uid.yaml")
     old = cd.to_uid(version=2)
     new = cd.to_uid()
-    if folder.name != old:
+    if old not in str(folder):
         if folder.name != "default":
             msg = "CAUTION: folder name %s does not match old uid pattern %s"
             logger.warning(msg, folder.name, old)
         return
     if not dryrun:
-        newfolder = folder.with_name(new)
+        newfolder = Path(str(folder).replace(old, new))
         msg = "Automatically updating folder name to new uid: '%s' -> '%s'"
         logger.warning(msg, folder, newfolder)
         shutil.move(folder, newfolder)
