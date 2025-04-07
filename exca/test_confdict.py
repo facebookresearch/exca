@@ -4,6 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 import dataclasses
+import decimal
+import fractions
 import glob
 import typing as tp
 from pathlib import Path
@@ -133,8 +135,8 @@ data:
     "version,expected",
     [
         (2, "mystuff=13,none=None,t=data-3ddaedfe,x=whatever-hello-1c82f630"),
-        (3, "none=None,my_stuff=13,t=data-3ddaedfe,x=whatever-hello-7bf910d2"),
-        (None, "none=None,my_stuff=13,t=data-3ddaedfe,x=whatever-hello-7bf910d2"),
+        (3, "none=None,my_stuff=13,x=whatever-hello,t=data-2-3ddaedfe-48c04959"),
+        (None, "none=None,my_stuff=13,x=whatever-hello,t=data-2-3ddaedfe-48c04959"),
     ],
 )
 def test_to_uid(version: int, expected: str) -> None:
@@ -230,6 +232,16 @@ def test_dict_hash() -> None:
     maker2 = confdict.UidMaker({"x": 1.2, "z": ("z", 12.0)}, version=3)
     assert maker1.hash != maker2.hash
     assert maker1.hash == "dict:{x=float:461168601842738689,y=seq:(str:z,int:12)}"
+
+
+def test_fractions_decimal() -> None:
+    d = {"f": 1.1, "d": decimal.Decimal("1.1"), "/": fractions.Fraction(11, 10)}
+    maker = confdict.UidMaker(d)
+    print(maker.string)
+    print(maker.hash)
+    assert maker.string == "{-=1.10,d=1.10,f=1.10}"
+    expec = "dict:{/=float:2075258708292324557,d=float:2075258708292324557,f=float:230584300921369601}"
+    assert maker.hash == expec
 
 
 def test_long_config_glob(tmp_path: Path) -> None:

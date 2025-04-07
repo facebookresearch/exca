@@ -5,6 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 
 import dataclasses
+import decimal
+import fractions
 import hashlib
 import logging
 import os
@@ -308,12 +310,24 @@ class UidMaker:
             version = ConfDict.UID_VERSION
         self.brackets: tuple[str, str] | None = None
         typestr = ""
-        if isinstance(data, (np.ndarray, TorchTensor)):
-            if isinstance(data, TorchTensor):
-                data = data.detach().cpu().numpy()
+        # convert to simpler types
+        if isinstance(data, (float, np.float32)) and data.is_integer():
+            data = int(data)
+        elif isinstance(data, TorchTensor):
+            data = data.detach().cpu().numpy()
+        elif isinstance(data, Path):
+            data = str(data)
+        # handle base types
+        if isinstance(data, np.ndarray):
+            if version > 2:
+                data = np.ascontiguousarray(data)
             h = hashlib.md5(data.tobytes()).hexdigest()
-            self.string = "data-" + h[:8]
-            self.hash = h
+            if version > 2:
+                self.hash = f"{','.join(str(s) for s in data.shape)}-{h[:8]}"
+                self.string = f"data-{self.hash}"
+            else:
+                self.string = "data-" + h[:8]
+                self.hash = h
             typestr = "array"
         elif isinstance(data, dict):
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
@@ -336,21 +350,21 @@ class UidMaker:
             self.hash = ",".join(i.hash for i in items)
             self.brackets = ("(", ")") if version > 2 else ("[", "]")
             typestr = "seq"
-        elif isinstance(data, (float, np.float32)):
+        elif isinstance(data, (float, decimal.Decimal, fractions.Fraction)):
+            self.hash = str(hash(data))  # deterministic for numeric types:
             # https://docs.python.org/3/library/stdtypes.html#hashing-of-numeric-types
-            self.hash = str(hash(data))
+            data = float(data)  # to keep same string for decimal and fractions
             typestr = "float"
-            if data.is_integer():
-                self.string = str(int(data))
-                typestr = "int"
+            if isinstance(data, (decimal.Decimal, fractions.Fraction)):
+                self.string = str(data)
             elif 1e-3 <= abs(data) <= 1e4:
                 self.string = f"{data:.2f}"
             else:
                 self.string = f"{data:.2e}"
-        elif isinstance(data, (str, Path, int, np.int32, np.int64)) or data is None:
+        elif isinstance(data, (str, int, np.int32, np.int64)) or data is None:
             self.string = str(data)
             self.hash = self.string
-            typestr = "str" if isinstance(data, (str, Path)) else "int"
+            typestr = "str" if isinstance(data, str) else "int"
         else:  # unsupported case
             key = "CONFDICT_UID_TYPE_BYPASS"
             if key not in os.environ:
