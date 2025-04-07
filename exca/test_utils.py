@@ -97,24 +97,26 @@ class D1(pydantic.BaseModel):
 class Discrim(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     inst: D1 | D2 = pydantic.Field(..., discriminator="uid")
-    inst2: D1 | D2
     something_else: tp.List[str] | int
     seq: tp.List[tp.List[tp.Annotated[D1 | D2, pydantic.Field(discriminator="uid")]]]
     stuff: tp.List[D1] = []
 
 
+def test_missing_discriminator() -> None:
+    class DiscrimD(pydantic.BaseModel):
+        model_config = pydantic.ConfigDict(extra="forbid")
+        instd: D1 | D2
+
+    _ = DiscrimD(instd={"uid": "D1"})  # type: ignore
+
+
 def test_discriminators(caplog: tp.Any) -> None:
     d = Discrim(
         inst={"uid": "D2"},  # type: ignore
-        inst2={"uid": "D1"},  # type: ignore
         something_else=12,
         seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
     )
     expected = """inst.uid: D2
-inst2:
-  anything: 12
-  sub.uid: D2
-  uid: D1
 seq:
 - - uid: D2
   - anything: 12
@@ -131,16 +133,13 @@ stuff: []
     out = ConfDict.from_model(d).to_yaml()
     assert out == expected
     expected = """inst.uid: D2
-inst2: {}
 seq:
 - - uid: D2
   - uid: D1
 something_else: 12
 """
     out = ConfDict.from_model(d, exclude_defaults=True).to_yaml()
-    assert len(caplog.records) == 1
-    msg = "Did not find a discriminator for 'inst2' in 'Discrim'"
-    assert msg in caplog.records[0].message
+    assert not caplog.records
     assert out == expected
     # check uid of subinstance again (should not have discriminators)
     sub_out = ConfDict.from_model(d.inst, exclude_defaults=True)
@@ -153,7 +152,6 @@ something_else: 12
 def test_recursive_freeze() -> None:
     d = Discrim(
         inst={"uid": "D2"},  # type: ignore
-        inst2={"uid": "D1"},  # type: ignore
         something_else=12,
         seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
     )

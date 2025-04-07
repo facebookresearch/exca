@@ -212,8 +212,8 @@ def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
         should_have_discrim = len(any_of) > 1
     if discriminator == DiscrimStatus.NONE and should_have_discrim:
         title = schema.get("title", "#UNKNOWN#")
-        msg = "Did not find a discriminator for '%s' in '%s' (uid may be inaccurate)"
-        logger.warning(msg, name, title)
+        msg = "Did not find a discriminator for '%s' in '%s' (uid would be inaccurate)"
+        raise RuntimeError(msg % (name, title))
     return discriminator
 
 
