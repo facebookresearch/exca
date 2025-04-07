@@ -303,6 +303,8 @@ def update_uids(folder: str | Path, dryrun: bool = True):
     cd = ConfDict.from_yaml(folder / "uid.yaml")
     old = cd.to_uid(version=2)
     new = cd.to_uid()
+    if new in str(folder):
+        return  # all good
     if old not in str(folder):
         if folder.name != "default":
             msg = "CAUTION: folder name %s does not match old uid pattern %s"
