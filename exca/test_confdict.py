@@ -237,8 +237,6 @@ def test_dict_hash() -> None:
 def test_fractions_decimal() -> None:
     d = {"f": 1.1, "d": decimal.Decimal("1.1"), "/": fractions.Fraction(11, 10)}
     maker = confdict.UidMaker(d)
-    print(maker.string)
-    print(maker.hash)
     assert maker.string == "{-=1.10,d=1.10,f=1.10}"
     expec = "dict:{/=float:2075258708292324557,d=float:2075258708292324557,f=float:230584300921369601}"
     assert maker.hash == expec
