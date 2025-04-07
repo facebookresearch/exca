@@ -212,7 +212,7 @@ def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
         should_have_discrim = len(any_of) > 1
     if discriminator == DiscrimStatus.NONE and should_have_discrim:
         title = schema.get("title", "#UNKNOWN#")
-        msg = "Did not find a discriminator for '%s' in '%s' (uid would be inaccurate)"
+        msg = "Did not find a discriminator for '%s' in '%s' (uid would be inaccurate).\nUse following pattern if you need defaults with discriminators: pydantic.Field(DefaultClass(), discriminator="your_discriminator")"
         raise RuntimeError(msg % (name, title))
     return discriminator
 
