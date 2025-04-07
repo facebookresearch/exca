@@ -205,9 +205,9 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             uid = infra.uid()
             if uid in uid_index:
                 msg = "The provided job array seems to contain duplicates:\n\n"
-                for i in [uid_index[uid], k]:
-                    config = infras[i].config(uid=True, exclude_defaults=True)
-                    msg += f"* Config at index {i}:\n{config.to_yaml()}\n\n"
+                for ind in [uid_index[uid], k]:
+                    config = infras[ind].config(uid=True, exclude_defaults=True)
+                    msg += f"* Config at index {ind}:\n{config.to_yaml()}\n\n"
                 raise ValueError(msg[:-2])
             uid_index[uid] = k
         if executor is None:
