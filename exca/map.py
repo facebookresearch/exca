@@ -125,7 +125,7 @@ def to_chunks(
     items_per_chunk = int(np.ceil(len(items) / splits))
     for k in range(splits):
         # select a batch/chunk of samples_per_job items to send to a job
-        yield items[k * items_per_chunk: (k + 1) * items_per_chunk]
+        yield items[k * items_per_chunk : (k + 1) * items_per_chunk]
 
 
 class MapInfra(base.BaseInfra, slurm.SubmititMixin):
@@ -510,7 +510,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             if isinstance(d, CacheDict):
                 writer = estack.enter_context(d.writer())  # type: ignore
 
-            for item, output in itertools.zip_longest(_set_tqdm(items), outputs, fillvalue=sentinel):
+            for item, output in itertools.zip_longest(
+                _set_tqdm(items), outputs, fillvalue=sentinel
+            ):
                 if item is sentinel or output is sentinel:
                     raise RuntimeError(
                         f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
