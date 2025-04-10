@@ -339,11 +339,11 @@ class UidMaker:
             self.string = ",".join(parts)
             self.brackets = ("{", "}")
             typestr = "dict"
-            if version == 3:
-                self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
-            elif version < 3:
+            if version < 3:
                 # incorrect (legacy) hash, can collide
                 self.hash = ",".join(udata[key].hash for key in keys)
+            elif version == 3:
+                self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
             else:  # keep ordering for hash, since ordering can matter
                 self.hash = ",".join(f"{key}={udata[key].hash}" for key in data)
         elif isinstance(data, (set, tuple, list)):
