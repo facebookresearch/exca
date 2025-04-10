@@ -405,7 +405,7 @@ class UidMaker:
     def format(self) -> str:
         s = self.string
         if self.brackets:
-            s = s[len(self.brackets[0]): -len(self.brackets[1])]
+            s = s[len(self.brackets[0]) : -len(self.brackets[1])]
         if not s:
             return ""
         h = hashlib.md5(self.hash.encode("utf8")).hexdigest()[:8]

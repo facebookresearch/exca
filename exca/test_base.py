@@ -4,10 +4,10 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections import OrderedDict
 import subprocess
 import tempfile
 import typing as tp
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +15,7 @@ import pydantic
 import pytest
 
 from exca import ConfDict
+
 from .task import TaskInfra
 from .workdir import WorkDir
 
@@ -427,7 +428,7 @@ def test_ordered_dict(tmp_path: Path) -> None:
     whatever2 = OrderedCfg(d=OrderedDict({k: 12 for k in keys2}), infra={"folder": tmp_path})  # type: ignore
     assert whatever2.build() == ",".join(keys2)
     # check yaml
-    fp: Path = whatever2.infra.uid_folder() / "config.yaml"   # type: ignore
+    fp: Path = whatever2.infra.uid_folder() / "config.yaml"  # type: ignore
     cfg = ConfDict.from_yaml(fp)
     cfg["infra.mode"] = "read-only"
     whatever3 = OrderedCfg(**cfg)
