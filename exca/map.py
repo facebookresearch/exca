@@ -34,6 +34,18 @@ logger = logging.getLogger(__name__)
 Mode = tp.Literal["cached", "force", "read-only"]
 
 
+def _set_tqdm(items: list[X]) -> list[X]:  # (incorrect typing but nevermind)
+    if len(items) <= 1:
+        return items
+    try:
+        import tqdm
+
+        items = tqdm.tqdm(items, total=len(items))  # type: ignore
+    except ImportError:
+        pass
+    return items
+
+
 # FOR COMPATIBILITY
 class CachedMethod:
     """Internal object that replaces the decorated method
@@ -113,7 +125,7 @@ def to_chunks(
     items_per_chunk = int(np.ceil(len(items) / splits))
     for k in range(splits):
         # select a batch/chunk of samples_per_job items to send to a job
-        yield items[k * items_per_chunk : (k + 1) * items_per_chunk]
+        yield items[k * items_per_chunk: (k + 1) * items_per_chunk]
 
 
 class MapInfra(base.BaseInfra, slurm.SubmititMixin):
@@ -457,13 +469,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     uid = self.uid()
                     msg = "Sent %s items for %s into a %s"
                     logger.info(msg, len(missing), uid, pool)
-                    iterator = futures.as_completed(jobs)
-                    try:
-                        import tqdm
-
-                        iterator = tqdm.tqdm(iterator, total=len(missing))  # type: ignore
-                    except ImportError:
-                        pass
+                    iterator = _set_tqdm(futures.as_completed(jobs))
                     for job in iterator:
                         out.update(job.result())  # raise asap
                 logger.info("Finished processing %s items for %s", len(missing), uid)
@@ -503,7 +509,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             writer = d
             if isinstance(d, CacheDict):
                 writer = estack.enter_context(d.writer())  # type: ignore
-            for item, output in itertools.zip_longest(items, outputs, fillvalue=sentinel):
+
+            for item, output in itertools.zip_longest(_set_tqdm(items), outputs, fillvalue=sentinel):
                 if item is sentinel or output is sentinel:
                     raise RuntimeError(
                         f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
