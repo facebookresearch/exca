@@ -413,12 +413,11 @@ class OrderedCfg(pydantic.BaseModel):
     infra: TaskInfra = TaskInfra()
 
     @infra.apply
-    def build(self) -> int:
+    def build(self) -> str:
         return ",".join(self.d)
 
 
 def test_ordered_dict(tmp_path: Path) -> None:
-    tmp_path = "tmp"
     keys = [str(k) for k in range(100)]
     whatever = OrderedCfg(d=OrderedDict({k: 12 for k in keys}), infra={"folder": tmp_path})  # type: ignore
     assert whatever.build() == ",".join(keys)
