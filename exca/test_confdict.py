@@ -21,7 +21,7 @@ from .confdict import ConfDict
     "version,expected",
     [
         (2, "x=12,y={stuff=13,thing=12,what.hello=11}-4a9d3dba"),
-        (None, "x=12,y={stuff=13,thing=12,what.hello=11}-3466db1c"),
+        (None, "x=12,y={stuff=13,thing=12,what.hello=11}-8b62aec5"),
     ],
 )
 def test_init(version: int | None, expected: str) -> None:
@@ -136,7 +136,8 @@ data:
     [
         (2, "mystuff=13,none=None,t=data-3ddaedfe,x=whatever-hello-1c82f630"),
         (3, "none=None,my_stuff=13,x=whatever-hello,t=data-2-3ddaedfe-48c04959"),
-        (None, "none=None,my_stuff=13,x=whatever-hello,t=data-2-3ddaedfe-48c04959"),
+        (4, "none=None,my_stuff=13,x=whatever-hello,t=data-2-3ddaedfe-d5ae7646"),
+        (None, "none=None,my_stuff=13,x=whatever-hello,t=data-2-3ddaedfe-d5ae7646"),
     ],
 )
 def test_to_uid(version: int, expected: str) -> None:
@@ -216,7 +217,7 @@ data:
     cds = [ConfDict.from_yaml(cfg) for cfg in cfgs]
     assert cds[0].to_uid() != cds[1].to_uid()
     expected = "data={start=-0.25,duration=0.75},b_model_config="
-    expected += "{layer_dim=12,transformer={stuff=True,r_p_emb=True}}-d1f629b3"
+    expected += "{layer_dim=12,transformer={stuff=True,r_p_emb=True}}-0064a714"
     assert cds[0].to_uid() == expected
     # reason it was colliding, strings were the same, and hash was incorrectly the same
     # legacy check
@@ -239,7 +240,7 @@ def test_fractions_decimal() -> None:
     maker = confdict.UidMaker(d)
     assert maker.string == "{-=1.10,d=1.10,f=1.10}"
     # float is an approximation while decimal and fraction are exactly the same:
-    expec = "dict:{/=float:2075258708292324557,d=float:2075258708292324557,f=float:230584300921369601}"
+    expec = "dict:{f=float:230584300921369601,d=float:2075258708292324557,/=float:2075258708292324557}"
     assert maker.hash == expec
 
 
@@ -262,7 +263,7 @@ def test_long_config_glob(tmp_path: Path) -> None:
     assert uid == expected
     uid = cfgd.to_uid()
     expected = "l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcdefghijklmnopqrstuvwxyz,"
-    expected += "sub={l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcd...84-63bf871d"
+    expected += "sub={l=(1,2),d={a=1,b.c=2},num=123456789000,string=abcd...84-24b866c6"
     assert uid == expected
     folder = tmp_path / uid
     folder.mkdir()

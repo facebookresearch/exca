@@ -117,13 +117,13 @@ def test_discriminators(caplog: tp.Any) -> None:
         seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
     )
     expected = """inst.uid: D2
+something_else: 12
 seq:
 - - uid: D2
-  - anything: 12
+  - uid: D1
+    anything: 12
     sub:
       uid: D2
-    uid: D1
-something_else: 12
 stuff: []
 """
     # check uid of subinstance (should not have discriminator)
@@ -133,10 +133,10 @@ stuff: []
     out = ConfDict.from_model(d).to_yaml()
     assert out == expected
     expected = """inst.uid: D2
+something_else: 12
 seq:
 - - uid: D2
   - uid: D1
-something_else: 12
 """
     out = ConfDict.from_model(d, exclude_defaults=True).to_yaml()
     assert not caplog.records
