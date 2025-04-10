@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections import OrderedDict
 import subprocess
 import tempfile
 import typing as tp
@@ -13,6 +14,7 @@ import numpy as np
 import pydantic
 import pytest
 
+from exca import ConfDict
 from .task import TaskInfra
 from .workdir import WorkDir
 
@@ -404,6 +406,34 @@ class WeirdTypes(pydantic.BaseModel):
 def test_weird_types(tmp_path: Path) -> None:
     whatever = WeirdTypes(infra={"folder": tmp_path})  # type: ignore
     whatever.build()
+
+
+class OrderedCfg(pydantic.BaseModel):
+    d: OrderedDict[str, tp.Any] = OrderedDict()
+    infra: TaskInfra = TaskInfra()
+
+    @infra.apply
+    def build(self) -> int:
+        return ",".join(self.d)
+
+
+def test_ordered_dict(tmp_path: Path) -> None:
+    tmp_path = "tmp"
+    keys = [str(k) for k in range(100)]
+    whatever = OrderedCfg(d=OrderedDict({k: 12 for k in keys}), infra={"folder": tmp_path})  # type: ignore
+    assert whatever.build() == ",".join(keys)
+    # new reorder
+    keys2 = list(keys)
+    np.random.shuffle(keys2)
+    whatever2 = OrderedCfg(d=OrderedDict({k: 12 for k in keys2}), infra={"folder": tmp_path})  # type: ignore
+    assert whatever2.build() == ",".join(keys2)
+    # check yaml
+    fp = whatever2.infra.uid_folder() / "config.yaml"
+    cfg = ConfDict.from_yaml(fp)
+    cfg["infra.mode"] = "read-only"
+    whatever3 = OrderedCfg(**cfg)
+    assert ",".join(whatever3.d) == ",".join(keys2)
+    assert whatever3.build() == ",".join(keys2)
 
 
 def test_defined_in_main() -> None:

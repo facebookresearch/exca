@@ -66,7 +66,7 @@ class ConfDict(dict[str, tp.Any]):
       replace the content.
     """
 
-    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "3"))
+    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "4"))
     OVERRIDE = OVERRIDE  # convenient to have it here
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
@@ -206,7 +206,7 @@ class ConfDict(dict[str, tp.Any]):
         """Exports the ConfDict to yaml string
         and optionnaly to a file if a filepath is provided
         """
-        out: str = _yaml.safe_dump(_to_simplified_dict(self), sort_keys=True)
+        out: str = _yaml.safe_dump(_to_simplified_dict(self), sort_keys=False)
         if filepath is not None:
             Path(filepath).write_text(out, encoding="utf8")
         return out
@@ -339,11 +339,13 @@ class UidMaker:
             self.string = ",".join(parts)
             self.brackets = ("{", "}")
             typestr = "dict"
-            if version > 2:
+            if version == 3:
                 self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
-            else:
+            elif version < 3:
                 # incorrect (legacy) hash, can collide
                 self.hash = ",".join(udata[key].hash for key in keys)
+            else:  # keep ordering for hash, since ordering can matter
+                self.hash = ",".join(f"{key}={udata[key].hash}" for key in data)
         elif isinstance(data, (set, tuple, list)):
             items = [UidMaker(val, version=version) for val in data]
             self.string = ",".join(i.string for i in items)
@@ -403,7 +405,7 @@ class UidMaker:
     def format(self) -> str:
         s = self.string
         if self.brackets:
-            s = s[len(self.brackets[0]) : -len(self.brackets[1])]
+            s = s[len(self.brackets[0]): -len(self.brackets[1])]
         if not s:
             return ""
         h = hashlib.md5(self.hash.encode("utf8")).hexdigest()[:8]

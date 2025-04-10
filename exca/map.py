@@ -113,7 +113,7 @@ def to_chunks(
     items_per_chunk = int(np.ceil(len(items) / splits))
     for k in range(splits):
         # select a batch/chunk of samples_per_job items to send to a job
-        yield items[k * items_per_chunk : (k + 1) * items_per_chunk]
+        yield items[k * items_per_chunk: (k + 1) * items_per_chunk]
 
 
 class MapInfra(base.BaseInfra, slurm.SubmititMixin):
@@ -551,13 +551,8 @@ class MapInfraMethod(base.InfraMethod):
         self.params = tuple(x for x in sig.parameters if x != "self")
         param = sig.parameters[self.params[0]]
         origin = tp.get_origin(param.annotation)
-        if origin not in [
-            list,
-            tuple,
-            collections.abc.Iterable,
-            collections.abc.Sequence,
-        ]:
-            raise TypeError(
-                "Decorated method single argument should be annnotated as List, Tuple, Sequence or Iterable "
-                f"(got {origin} from {param!r})"
-            )
+        accepted = [list, tuple, collections.abc.Iterable, collections.abc.Sequence]
+        if origin not in accepted:
+            msg = "Decorated method single argument should be annnotated as "
+            msg += f"List, Tuple, Sequence or Iterable (got {origin} from {param!r})"
+            raise TypeError(msg)
