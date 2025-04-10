@@ -427,7 +427,7 @@ def test_ordered_dict(tmp_path: Path) -> None:
     whatever2 = OrderedCfg(d=OrderedDict({k: 12 for k in keys2}), infra={"folder": tmp_path})  # type: ignore
     assert whatever2.build() == ",".join(keys2)
     # check yaml
-    fp = whatever2.infra.uid_folder() / "config.yaml"
+    fp: Path = whatever2.infra.uid_folder() / "config.yaml"   # type: ignore
     cfg = ConfDict.from_yaml(fp)
     cfg["infra.mode"] = "read-only"
     whatever3 = OrderedCfg(**cfg)
