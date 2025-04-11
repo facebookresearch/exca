@@ -34,12 +34,11 @@ logger = logging.getLogger(__name__)
 Mode = tp.Literal["cached", "force", "read-only"]
 
 
-def _set_tqdm(
-    items: X, total: int | None = None
-) -> X:  # (incorrect typing but nevermind)
+def _set_tqdm(items: X, total: int | None = None) -> X:
+    # (incorrect typing but nevermind)
     if total is None:
-        total == len(items)
-    if total <= 1:  # type: ignore
+        total == len(items)  # type: ignore
+    if total <= 1:
         return items
     try:
         import tqdm
