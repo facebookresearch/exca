@@ -50,6 +50,11 @@ def test_update() -> None:
     # with compressed key
     data.update(**{"a.b": {"e": 13, ConfDict.OVERRIDE: True}})
     assert data == {"a": {"b": {"e": 13}}}
+    # assignment
+    data["a"] = {"c": 1, "b": {"d": 12, ConfDict.OVERRIDE: True}}
+    assert data == {"a": {"b": {"d": 12}, "c": 1}}
+    data["a.b"] = {"e": 15, ConfDict.OVERRIDE: True}
+    assert data == {"a": {"b": {"e": 15}, "c": 1}}
 
 
 @pytest.mark.parametrize(
@@ -67,6 +72,21 @@ def test_update_on_none(update: tp.Any, expected: tp.Any) -> None:
     data = ConfDict({"a": {"b": None}})
     data.update(update)
     assert data.flat() == expected
+
+
+def test_update_on_list() -> None:
+    data = ConfDict({"a": [12, {"b": None}]})
+    data["a.0"] = 13
+    data["a.1.b"] = 12
+    with pytest.raises(TypeError):
+        data["a.c"] = 12
+    assert data == {"a": [13, {"b": 12}]}
+
+
+def test_get_on_list() -> None:
+    data = ConfDict({"a": [12, {"b": 13}]})
+    assert data["a.0"] == 12
+    assert data["a.1.b"] == 13
 
 
 def test_del() -> None:

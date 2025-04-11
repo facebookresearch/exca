@@ -47,6 +47,47 @@ for t in (PosixPath, WindowsPath, np.float32, np.float64, np.int32, np.int64):
     _yaml.representer.SafeRepresenter.add_representer(t, _special_representer)
 
 
+def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
+    return isinstance(val, abc.Sequence) and not isinstance(val, str)
+
+
+def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
+    """Internal recursive setitem on ConfDict/list"""
+    p, *rest = key.split(".", maxsplit=1)
+    if isinstance(obj, dict):
+        sub = obj.setdefault(p, ConfDict())
+    elif _is_seq(obj) and p.isdigit():
+        p = int(p)  # type: ignore
+        sub = obj[p]  # type: ignore
+    else:
+        raise TypeError(f"Cannot handle key {p!r} on existing container {obj!r}")
+    # replace sub by dict if not dict or sequence
+    if not _is_seq(sub) and not isinstance(sub, dict):
+        sub = ConfDict()
+        if _is_seq(obj):
+            obj[p] = sub  # type: ignore
+        else:
+            dict.__setitem__(obj, p, sub)
+    if rest:
+        _set_item(sub, rest[0], val)
+        return
+    # final part
+    if _is_seq(val):
+        if ConfDict.UID_VERSION == 1:
+            val = [ConfDict(v) if isinstance(v, dict) else v for v in val]
+        else:
+            Container = val.__class__
+            val = Container([ConfDict(v) if isinstance(v, dict) else v for v in val])  # type: ignore
+    # list case
+    if _is_seq(obj):
+        obj[p] = val  # type: ignore
+        return
+    if isinstance(val, dict):
+        obj[p].update(val)
+    else:
+        dict.__setitem__(obj, p, val)
+
+
 class ConfDict(dict[str, tp.Any]):
     """Dictionary which breaks into sub-dictionnaries on "." as in a config (see example)
     The data can be specified either through "." keywords or directly through sub-dicts
@@ -99,33 +140,20 @@ class ConfDict(dict[str, tp.Any]):
         return ConfDict(utils.to_dict(model, uid=uid, exclude_defaults=exclude_defaults))
 
     def __setitem__(self, key: str, val: tp.Any) -> None:
-        parts = key.split(".")
-        cls = self.__class__
-        sub = self
-        for p in parts:
-            prev_sub = sub
-            sub = prev_sub.setdefault(p, cls())
-            if not isinstance(sub, dict):
-                del prev_sub[p]  # non-dict are replaced
-                sub = prev_sub.setdefault(p, cls())
-        if isinstance(val, dict):
-            sub.update(val)
-        else:
-            if isinstance(val, abc.Sequence) and not isinstance(val, str):
-                if cls.UID_VERSION == 1:
-                    val = [cls(v) if isinstance(v, dict) else v for v in val]
-                else:
-                    Container = val.__class__
-                    val = Container([cls(v) if isinstance(v, dict) else v for v in val])  # type: ignore
-            dict.__setitem__(prev_sub, parts[-1], val)
+        if not isinstance(key, str):
+            raise TypeError("ConfDict only support str keys, got {key!r}")
+        _set_item(self, key, val)
 
     def __getitem__(self, key: str) -> tp.Any:
         parts = key.split(".")
         sub = self
         for p in parts:
-            if not isinstance(sub, dict):
-                raise KeyError(key)
-            sub = dict.__getitem__(sub, p)
+            if isinstance(sub, dict):
+                sub = dict.__getitem__(sub, p)
+            elif _is_seq(sub) and p.isdigit():
+                sub = sub[int(p)]
+            else:
+                raise KeyError(f"Invalid key {key!r} (no subkey {p!r} on {sub!r})")
         return sub
 
     def get(self, key: str, default: tp.Any = None) -> tp.Any:
