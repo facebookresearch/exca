@@ -433,11 +433,10 @@ def test_ordered_dict(tmp_path: Path) -> None:
     assert whatever3.build() == ",".join(keys2)
 
 
-def test_unordered_dict(tmp_path: Path) -> None:
-    ordered = OrderedCfg(d2=collections.OrderedDict({k: 12 for k in range(12)}))
-    assert not isinstance(
-        ordered.d2, collections.OrderedDict
-    ), "should be cast to standard dict"
+def test_unordered_dict() -> None:
+    ordered = OrderedCfg(d2=collections.OrderedDict({str(k): 12 for k in range(12)}))
+    if isinstance(ordered.d2, collections.OrderedDict):
+        raise AssertionError("OrderedDict should be cast to standard dict by pydantic")
 
 
 def test_weird_types(tmp_path: Path) -> None:
