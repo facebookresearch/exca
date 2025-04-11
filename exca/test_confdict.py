@@ -26,7 +26,6 @@ from .confdict import ConfDict
 )
 def test_init(version: int | None, expected: str) -> None:
     out = ConfDict({"y.thing": 12, "y.stuff": 13, "y": {"what.hello": 11}}, x=12)
-    print(out)
     flat = out.flat()
     out2 = ConfDict(flat)
     assert out2 == out
@@ -51,6 +50,11 @@ def test_update() -> None:
     # with compressed key
     data.update(**{"a.b": {"e": 13, ConfDict.OVERRIDE: True}})
     assert data == {"a": {"b": {"e": 13}}}
+    # assignment
+    data["a"] = {"c": 1, "b": {"d": 12, ConfDict.OVERRIDE: True}}
+    assert data == {"a": {"b": {"d": 12}, "c": 1}}
+    data["a.b"] = {"e": 15, ConfDict.OVERRIDE: True}
+    assert data == {"a": {"b": {"e": 15}, "c": 1}}
 
 
 @pytest.mark.parametrize(
