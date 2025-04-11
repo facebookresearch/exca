@@ -288,7 +288,7 @@ def find_slurm_job(
     return None
 
 
-def update_uids(folder: str | Path, dryrun: bool = True, old_version: int):
+def update_uids(folder: str | Path, old_version: int, dryrun: bool = True):
     folder = Path(folder)
     if any(x in folder.parts for x in ["code", "wandb", "logs"]):
         return None
