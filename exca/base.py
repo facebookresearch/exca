@@ -229,10 +229,9 @@ class BaseInfra(pydantic.BaseModel):
             if current != expected:
                 diffs = difflib.ndiff(current.splitlines(), expected.splitlines())
                 diff = "\n".join(diffs)
-                msg = (
-                    f"Inconsistent uid config for {configs['uid'].to_uid()} in '{fp}':\n"
-                )
-                msg += f"* got:\n{current!r}\n\n* but uid file contains:\n{expected!r}\n\n(see diff:\n{diff})"
+                msg = f"Inconsistent uid config for {configs['uid'].to_uid()} "
+                msg += f"in '{fp}':\n"
+                msg += f"* got:\n{current}\n\n* but uid file contains:\n{expected}\n\n(see diff:\n{diff})"
                 msg += f"\n\n(this is for object: {self._obj!r})"
                 raise RuntimeError(msg)
         fp = xpfolder / "full-uid.yaml"
