@@ -7,6 +7,7 @@
 import datetime
 import os
 import typing as tp
+from collections import OrderedDict
 from pathlib import Path
 
 import pydantic
@@ -349,6 +350,27 @@ def test_dump() -> None:
     dd = DiscrimDump(inst={"uid": "D2"})  # type: ignore
     out = ConfDict.from_model(dd, uid=True, exclude_defaults=True)
     assert out == {"inst": {"uid": "D2"}}
+
+
+D1D2 = tp.Annotated[D1 | D2, pydantic.Field(discriminator="uid")]
+
+
+class OrderedDump(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    insts: OrderedDict[str, D1D2] = OrderedDict()
+
+
+def test_ordered_dict() -> None:
+    od = OrderedDump(insts={"blublu": {"uid": "D1"}, "stuff": {"uid": "D2"}, "blublu2": {"uid": "D1"}})  # type: ignore
+    out = ConfDict.from_model(od, uid=True, exclude_defaults=True)
+    # check that nothing alters the order
+    assert isinstance(out["insts"], OrderedDict)
+    assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
+    out["inst.blublu.anything"] = 144
+    assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
+    out["inst.blublu2.anything"] = 144
+    assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
+    assert isinstance(out["insts"], OrderedDict)
 
 
 class HierarchicalCfg(pydantic.BaseModel):
