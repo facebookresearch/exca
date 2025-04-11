@@ -288,7 +288,7 @@ def find_slurm_job(
     return None
 
 
-def update_uids(folder: str | Path, dryrun: bool = True):
+def update_uids(folder: str | Path, dryrun: bool = True, old_version: int):
     folder = Path(folder)
     if any(x in folder.parts for x in ["code", "wandb", "logs"]):
         return None
@@ -301,7 +301,7 @@ def update_uids(folder: str | Path, dryrun: bool = True):
                 update_uids(sub, dryrun=dryrun)
         return None
     cd = ConfDict.from_yaml(folder / "uid.yaml")
-    old = cd.to_uid(version=2)
+    old = cd.to_uid(version=old_version)
     new = cd.to_uid()
     if new in str(folder):
         return  # all good

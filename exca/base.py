@@ -318,19 +318,20 @@ class BaseInfra(pydantic.BaseModel):
             if self.folder is not None and uid != "default":
                 folder = Path(self.folder) / self._uid
                 if not folder.exists():
-                    params["uid"] = cfg.to_uid(version=2)
-                    old = Path(self.folder) / self._uid_string.format(**params)
-                    if old.exists():
-                        # rename all folders in cache at once if possible
-                        from exca import helpers
+                    for old_version in (2, 3):
+                        params["uid"] = cfg.to_uid(version=old_version)
+                        old = Path(self.folder) / self._uid_string.format(**params)
+                        if old.exists():
+                            # rename all folders in cache at once if possible
+                            from exca import helpers
 
-                        helpers.update_uids(self.folder, dryrun=False)
-                    if old.exists():
-                        # if this very cache was not updated
-                        # (eg: because of unexpected uid_string), then fix it manually
-                        msg = "Automatic update fail, manual update to new uid: '%s' -> '%s'"
-                        logger.warning(msg, old, folder)
-                        shutil.move(old, folder)
+                            helpers.update_uids(self.folder, dryrun=False)
+                        if old.exists():
+                            # if this very cache was not updated
+                            # (eg: because of unexpected uid_string), then fix it manually
+                            msg = "Automatic update fail, manual update to new uid: '%s' -> '%s'"
+                            logger.warning(msg, old, folder)
+                            shutil.move(old, folder)
         return self._uid
 
     def uid_folder(self, create: bool = False) -> Path | None:
