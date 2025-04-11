@@ -26,6 +26,7 @@ from .confdict import ConfDict
 )
 def test_init(version: int | None, expected: str) -> None:
     out = ConfDict({"y.thing": 12, "y.stuff": 13, "y": {"what.hello": 11}}, x=12)
+    print(out)
     flat = out.flat()
     out2 = ConfDict(flat)
     assert out2 == out
@@ -67,6 +68,13 @@ def test_update_on_none(update: tp.Any, expected: tp.Any) -> None:
     data = ConfDict({"a": {"b": None}})
     data.update(update)
     assert data.flat() == expected
+
+
+def test_update_on_list() -> None:
+    data = ConfDict({"a": [12, {"b": None}]})
+    data["a.0"] = 13
+    data["a.1.b"] = 12
+    assert data == {"a": [13, {"b": 12}]}
 
 
 def test_del() -> None:
