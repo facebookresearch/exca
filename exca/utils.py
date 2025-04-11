@@ -90,13 +90,17 @@ def to_dict(
         some fields
     exclude_defaults: bool
         if True, values that are set to defaults are not included
+
+    Note
+    ----
+    OrderedDict are preserved as OrderedDict to allow for order specific
+    uids
     """
     if exclude_defaults:
         _set_discriminated_status(model)
     cfg = ExportCfg(uid=uid, exclude_defaults=exclude_defaults)
     out = model.model_dump(exclude_defaults=exclude_defaults, mode="json")
-    # if uid or exclude_defaults:
-    _apply_dump_tags(model, out, cfg=cfg)
+    _post_process_dump(model, out, cfg=cfg)
     return out
 
 
@@ -111,7 +115,8 @@ def _dump(obj: tp.Any, cfg: ExportCfg) -> tp.Any:
     return obj
 
 
-def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) -> bool:
+def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) -> bool:
+    # handles uid / defaults / discriminators / ordered dict
     forced = set()
     ignore_discriminator = cfg.ignore_first_discriminator
     cfg.ignore_first_discriminator = False  # don't ignore for sub-models
@@ -149,7 +154,7 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
                 # keep ordered dicts
                 dump[name] = collections.OrderedDict(sub_dump)
                 sub_dump = dump[name]
-            keep = _apply_dump_tags(obj[name], sub_dump, cfg=cfg)
+            keep = _post_process_dump(obj[name], sub_dump, cfg=cfg)
             if not keep:
                 del obj[name]
                 del dump[name]
@@ -184,7 +189,7 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
         if not isinstance(dump, list) or len(obj) != len(dump):
             raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
         for obj2, dump2 in zip(obj, dump):
-            _apply_dump_tags(obj2, dump2, cfg=cfg)
+            _post_process_dump(obj2, dump2, cfg=cfg)
     return True
 
 
