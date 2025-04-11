@@ -298,7 +298,7 @@ def update_uids(folder: str | Path, old_version: int, dryrun: bool = True):
         # task Vs batch
         for sub in folder.iterdir():
             if sub.is_dir():
-                update_uids(sub, dryrun=dryrun)
+                update_uids(sub, old_version=old_version, dryrun=dryrun)
         return None
     cd = ConfDict.from_yaml(folder / "uid.yaml")
     old = cd.to_uid(version=old_version)
