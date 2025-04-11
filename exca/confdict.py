@@ -60,7 +60,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         p = int(p)  # type: ignore
         sub = obj[p]  # type: ignore
     else:
-        raise TypeError(f"Cannot handle key {p!r} on type {obj!r}")
+        raise TypeError(f"Cannot handle key {p!r} on existing container {obj!r}")
     # replace sub by dict if not dict or sequence
     if not _is_seq(sub) and not isinstance(sub, dict):
         sub = ConfDict()
@@ -140,6 +140,8 @@ class ConfDict(dict[str, tp.Any]):
         return ConfDict(utils.to_dict(model, uid=uid, exclude_defaults=exclude_defaults))
 
     def __setitem__(self, key: str, val: tp.Any) -> None:
+        if not isinstance(key, str):
+            raise TypeError("ConfDict only support str keys, got {key!r}")
         _set_item(self, key, val)
 
     def __getitem__(self, key: str) -> tp.Any:

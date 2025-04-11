@@ -74,6 +74,8 @@ def test_update_on_list() -> None:
     data = ConfDict({"a": [12, {"b": None}]})
     data["a.0"] = 13
     data["a.1.b"] = 12
+    with pytest.raises(TypeError):
+        data["a.c"] = 12
     assert data == {"a": [13, {"b": 12}]}
 
 
