@@ -51,16 +51,14 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-def _set_item(
-    obj: dict[str, tp.Any] | tp.Sequence[tp.Any], key: str, val: tp.Any
-) -> None:
+def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
+    """Internal recursive setitem on ConfDict/list"""
     p, *rest = key.split(".", maxsplit=1)
-    print(key, val, obj)
     if isinstance(obj, dict):
         sub = obj.setdefault(p, ConfDict())
     elif _is_seq(obj) and p.isdigit():
         p = int(p)  # type: ignore
-        sub = obj[p]
+        sub = obj[p]  # type: ignore
     else:
         raise TypeError(f"Cannot handle key {p!r} on type {obj!r}")
     # replace sub by dict if not dict or sequence
