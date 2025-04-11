@@ -51,7 +51,9 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-def _set_item(obj, key, val) -> None:
+def _set_item(
+    obj: dict[str, tp.Any] | tp.Sequence[tp.Any], key: str, val: tp.Any
+) -> None:
     p, *rest = key.split(".", maxsplit=1)
     print(key, val, obj)
     if isinstance(obj, dict):
@@ -65,7 +67,7 @@ def _set_item(obj, key, val) -> None:
     if not _is_seq(sub) and not isinstance(sub, dict):
         sub = ConfDict()
         if _is_seq(obj):
-            obj[p] = sub
+            obj[p] = sub  # type: ignore
         else:
             dict.__setitem__(obj, p, sub)
     if rest:
@@ -80,7 +82,7 @@ def _set_item(obj, key, val) -> None:
             val = Container([ConfDict(v) if isinstance(v, dict) else v for v in val])  # type: ignore
     # list case
     if _is_seq(obj):
-        obj[p] = val
+        obj[p] = val  # type: ignore
         return
     if isinstance(val, dict):
         obj[p].update(val)
@@ -146,9 +148,12 @@ class ConfDict(dict[str, tp.Any]):
         parts = key.split(".")
         sub = self
         for p in parts:
-            if not isinstance(sub, dict):
-                raise KeyError(key)
-            sub = dict.__getitem__(sub, p)
+            if isinstance(sub, dict):
+                sub = dict.__getitem__(sub, p)
+            elif _is_seq(sub) and p.isdigit():
+                sub = sub[int(p)]
+            else:
+                raise KeyError(f"Invalid key {key!r} (no subkey {p!r} on {sub!r})")
         return sub
 
     def get(self, key: str, default: tp.Any = None) -> tp.Any:

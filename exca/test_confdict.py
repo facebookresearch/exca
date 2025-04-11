@@ -77,6 +77,12 @@ def test_update_on_list() -> None:
     assert data == {"a": [13, {"b": 12}]}
 
 
+def test_get_on_list() -> None:
+    data = ConfDict({"a": [12, {"b": 13}]})
+    assert data["a.0"] == 12
+    assert data["a.1.b"] == 13
+
+
 def test_del() -> None:
     data = ConfDict({"a": 1, "b": {"c": {"e": 12}, "d": 13}})
     del data["b.c.e"]
