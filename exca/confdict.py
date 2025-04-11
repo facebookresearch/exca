@@ -376,7 +376,10 @@ class UidMaker:
         elif isinstance(data, dict):
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
             if version > 2:
-                keys = [xy[0] for xy in sorted(udata.items(), key=_dict_sort)]
+                if isinstance(data, collections.OrderedDict):
+                    keys = list(data)  # keep order only for ordered-dict
+                else:
+                    keys = [xy[0] for xy in sorted(udata.items(), key=_dict_sort)]
             else:
                 keys = sorted(data)
             parts = [f"{key}={udata[key].string}" for key in keys]

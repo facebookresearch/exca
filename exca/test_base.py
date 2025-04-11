@@ -4,15 +4,17 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import collections
 import subprocess
 import tempfile
 import typing as tp
-from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
 import pydantic
 import pytest
+
+from exca import ConfDict
 
 from .task import TaskInfra
 from .workdir import WorkDir
@@ -403,7 +405,8 @@ class WeirdTypes(pydantic.BaseModel):
 
 
 class OrderedCfg(pydantic.BaseModel):
-    d: OrderedDict[str, tp.Any] = OrderedDict()
+    d: collections.OrderedDict[str, tp.Any] = collections.OrderedDict()
+    d2: dict[str, tp.Any] = {}
     infra: TaskInfra = TaskInfra()
 
     @infra.apply
@@ -412,11 +415,29 @@ class OrderedCfg(pydantic.BaseModel):
 
 
 def test_ordered_dict(tmp_path: Path) -> None:
-    keys = [str(k) for k in range(12)]
-    whatever = OrderedCfg(d=OrderedDict({k: 12 for k in keys}), infra={"folder": tmp_path})  # type: ignore
-    out2 = whatever.infra.config(uid=False)
-    print(out2.to_yaml())
-    raise
+    keys = [str(k) for k in range(100)]
+    whatever = OrderedCfg(d={k: 12 for k in keys}, infra={"folder": tmp_path})  # type: ignore
+    assert isinstance(whatever.d, collections.OrderedDict)
+    assert whatever.build() == ",".join(keys)
+    # new reorder
+    keys2 = list(keys)
+    np.random.shuffle(keys2)
+    whatever2 = OrderedCfg(d={k: 12 for k in keys2}, infra={"folder": tmp_path})  # type: ignore
+    assert whatever2.build() == ",".join(keys2)
+    # check yaml
+    fp: Path = whatever2.infra.uid_folder() / "config.yaml"  # type: ignore
+    cfg = ConfDict.from_yaml(fp)
+    cfg["infra.mode"] = "read-only"
+    whatever3 = OrderedCfg(**cfg)
+    assert ",".join(whatever3.d) == ",".join(keys2)
+    assert whatever3.build() == ",".join(keys2)
+
+
+def test_unordered_dict(tmp_path: Path) -> None:
+    ordered = OrderedCfg(d2=collections.OrderedDict({k: 12 for k in range(12)}))
+    assert not isinstance(
+        ordered.d2, collections.OrderedDict
+    ), "should be cast to standard dict"
 
 
 def test_weird_types(tmp_path: Path) -> None:
