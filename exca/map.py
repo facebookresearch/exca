@@ -516,9 +516,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             in_out = itertools.zip_longest(_set_tqdm(items), outputs, fillvalue=sentinel)
             for item, output in in_out:
                 if item is sentinel or output is sentinel:
-                    raise RuntimeError(
-                        f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
-                    )
+                    msg = f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
+                    raise RuntimeError(msg)
                 writer[item_uid(item)] = output
         # don't return the whole cache dict if data is cached
         return {} if use_cache_dict else d
