@@ -7,6 +7,7 @@
 import subprocess
 import tempfile
 import typing as tp
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -401,9 +402,26 @@ class WeirdTypes(pydantic.BaseModel):
         return 8
 
 
+class OrderedCfg(pydantic.BaseModel):
+    d: OrderedDict[str, tp.Any] = OrderedDict()
+    infra: TaskInfra = TaskInfra()
+
+    @infra.apply
+    def build(self) -> str:
+        return ",".join(self.d)
+
+
+def test_ordered_dict(tmp_path: Path) -> None:
+    keys = [str(k) for k in range(12)]
+    whatever = OrderedCfg(d=OrderedDict({k: 12 for k in keys}), infra={"folder": tmp_path})  # type: ignore
+    out2 = whatever.infra.config(uid=False)
+    print(out2.to_yaml())
+    raise
+
+
 def test_weird_types(tmp_path: Path) -> None:
     whatever = WeirdTypes(infra={"folder": tmp_path})  # type: ignore
-    whatever.build()
+    _ = whatever.build()
 
 
 def test_defined_in_main() -> None:

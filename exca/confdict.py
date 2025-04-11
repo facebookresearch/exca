@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import collections
 import dataclasses
 import decimal
 import fractions
@@ -40,10 +41,20 @@ def _special_representer(dumper: tp.Any, data: tp.Any) -> tp.Any:
         return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
     elif isinstance(data, (np.float64, np.int64, np.float32, np.int32)):
         return dumper.represent_scalar("tag:yaml.org,2002:float", str(float(data)))
+    elif isinstance(data, collections.OrderedDict):
+        return dumper.represent_mapping("tag:yaml.org,2002:map", data.items())
     raise NotImplementedError(f"Cannot represent data {data} of type {type(data)}")
 
 
-for t in (PosixPath, WindowsPath, np.float32, np.float64, np.int32, np.int64):
+for t in (
+    PosixPath,
+    WindowsPath,
+    np.float32,
+    np.float64,
+    np.int32,
+    np.int64,
+    collections.OrderedDict,
+):
     _yaml.representer.SafeRepresenter.add_representer(t, _special_representer)
 
 
@@ -78,11 +89,16 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         else:
             Container = val.__class__
             val = Container([ConfDict(v) if isinstance(v, dict) else v for v in val])  # type: ignore
+    if isinstance(val, collections.OrderedDict):
+        val2 = collections.OrderedDict()
+        for name, v in val.items():
+            val2[name] = ConfDict(v) if isinstance(v, dict) else v
+        val = val2
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore
         return
-    if isinstance(val, dict):
+    if isinstance(val, dict) and not isinstance(val, collections.OrderedDict):
         obj[p].update(val)
     else:
         dict.__setitem__(obj, p, val)

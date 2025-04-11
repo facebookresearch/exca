@@ -95,8 +95,8 @@ def to_dict(
         _set_discriminated_status(model)
     cfg = ExportCfg(uid=uid, exclude_defaults=exclude_defaults)
     out = model.model_dump(exclude_defaults=exclude_defaults, mode="json")
-    if uid or exclude_defaults:
-        _apply_dump_tags(model, out, cfg=cfg)
+    # if uid or exclude_defaults:
+    _apply_dump_tags(model, out, cfg=cfg)
     return out
 
 
@@ -145,6 +145,10 @@ def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) ->
         obj = dict(obj)
     if isinstance(obj, dict):
         for name, sub_dump in list(dump.items()):
+            if isinstance(obj[name], collections.OrderedDict):
+                # keep ordered dicts
+                dump[name] = collections.OrderedDict(sub_dump)
+                sub_dump = dump[name]
             keep = _apply_dump_tags(obj[name], sub_dump, cfg=cfg)
             if not keep:
                 del obj[name]
