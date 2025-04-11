@@ -34,13 +34,17 @@ logger = logging.getLogger(__name__)
 Mode = tp.Literal["cached", "force", "read-only"]
 
 
-def _set_tqdm(items: X) -> X:  # (incorrect typing but nevermind)
-    if len(items) <= 1:  # type: ignore
+def _set_tqdm(
+    items: X, total: int | None = None
+) -> X:  # (incorrect typing but nevermind)
+    if total is None:
+        total == len(items)
+    if total <= 1:  # type: ignore
         return items
     try:
         import tqdm
 
-        items = tqdm.tqdm(items, total=len(items))  # type: ignore
+        items = tqdm.tqdm(items, total=total)  # type: ignore
     except ImportError:
         pass
     return items
@@ -469,7 +473,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     uid = self.uid()
                     msg = "Sent %s items for %s into a %s"
                     logger.info(msg, len(missing), uid, pool)
-                    iterator = _set_tqdm(futures.as_completed(jobs))
+                    iterator = _set_tqdm(futures.as_completed(jobs), total=len(jobs))
                     for job in iterator:
                         out.update(job.result())  # raise asap
                 logger.info("Finished processing %s items for %s", len(missing), uid)
@@ -509,10 +513,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             writer = d
             if isinstance(d, CacheDict):
                 writer = estack.enter_context(d.writer())  # type: ignore
-
-            for item, output in itertools.zip_longest(
-                _set_tqdm(items), outputs, fillvalue=sentinel
-            ):
+            in_out = itertools.zip_longest(_set_tqdm(items), outputs, fillvalue=sentinel)
+            for item, output in in_out:
                 if item is sentinel or output is sentinel:
                     raise RuntimeError(
                         f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
