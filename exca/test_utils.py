@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import collections
 import datetime
 import os
 import typing as tp
@@ -349,6 +350,30 @@ def test_dump() -> None:
     dd = DiscrimDump(inst={"uid": "D2"})  # type: ignore
     out = ConfDict.from_model(dd, uid=True, exclude_defaults=True)
     assert out == {"inst": {"uid": "D2"}}
+
+
+D1D2 = tp.Annotated[D1 | D2, pydantic.Field(discriminator="uid")]
+
+
+class OrderedDump(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    insts: collections.OrderedDict[str, D1D2] = collections.OrderedDict()
+
+
+def test_ordered_dict() -> None:
+    od = OrderedDump(insts={"blublu": {"uid": "D1"}, "stuff": {"uid": "D2"}, "blublu2": {"uid": "D1"}})  # type: ignore
+    out = ConfDict.from_model(od, uid=True, exclude_defaults=True)
+    # check that nothing alters the order
+    assert isinstance(out["insts"], collections.OrderedDict)
+    assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
+    out["insts.blublu.anything"] = 144
+    assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
+    out["insts.blublu2.anything"] = 144
+    assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
+    assert isinstance(out["insts"], collections.OrderedDict)
+    # keys should be ordered in name and hash:
+    uid = "insts={blublu={uid=D1,anything=144},stuff={uid=D2},blublu2={uid=D1,anything=144}}-6b00c227"
+    assert out.to_uid() == uid
 
 
 class HierarchicalCfg(pydantic.BaseModel):
