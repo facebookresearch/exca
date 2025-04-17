@@ -24,6 +24,7 @@ from submitit.core import utils
 
 from . import base, slurm
 from .cachedict import CacheDict
+from .confdict import ConfDict
 from .dumperloader import DumperLoader
 
 MapFunc = tp.Callable[[tp.Sequence[tp.Any]], tp.Iterator[tp.Any]]
@@ -305,6 +306,23 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
         return applier
 
+    def apply_item(
+        self,
+        *,
+        exclude_from_cache_uid: tp.Iterable[str] | base.ExcludeCallable = (),
+        cache_type: str | None = None,
+    ) -> tp.Callable[[C], C]:
+        params = locals()
+        params.pop("self")
+
+        def applier(method):
+            imethod = ItemInfraMethod(method=_UnItemed(method), **params)
+            self._infra_method = imethod
+            out = property(imethod)
+            return out
+
+        return applier
+
     def _find_missing(self, items: tp.Dict[str, tp.Any]) -> tp.Dict[str, tp.Any]:
         missing = items
         # deduplicate and check in cache
@@ -535,6 +553,49 @@ def check_map_function_output(func: tp.Callable[..., tp.Any]) -> tp.Type[tp.Any]
         msg += "is not supported, use Iterator or Generator"
         raise TypeError(msg)
     return tp.get_args(annot)[0]  # type: ignore
+
+
+@dataclasses.dataclass
+class ItemInfraMethod(base.InfraMethod):
+    cache_type: str | None = None
+    params: tp.Tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if isinstance(self.item_uid, base.Sentinel):
+            raise ValueError("item_uid needs to be provided")
+        # self.method = method
+
+    @staticmethod
+    def item_uid(kwargs: tp.Any) -> str:
+        return ConfDict(kwargs).to_uid()
+
+    def __call__(self, obj: pydantic.BaseModel) -> tp.Any:
+        method_override = super().__call__(obj)
+        return _Itemed(method_override)
+
+
+class _UnItemed:
+
+    def __init__(self, func):
+        self.func = func
+        self.__name__ = self.func.__name__
+        self.__qualname__ = self.func.__qualname__
+
+    def __call__(self, obj, items):
+        for item in items:
+            yield self.func(obj, **item)
+
+
+class _Itemed:
+
+    def __init__(self, func):
+        self.func = func
+
+    def __call__(self, *args, **kwargs):
+        if args:
+            raise ValueError(f"Only keyword args are supported, got {args=}, {kwargs=}")
+        return next(iter(self.func([kwargs])))
 
 
 @dataclasses.dataclass

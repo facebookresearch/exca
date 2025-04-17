@@ -276,6 +276,25 @@ def test_max_workers() -> None:
         assert isinstance(t_ex._max_workers, int)
 
 
+class ApplyItem(pydantic.BaseModel):
+    infra: MapInfra = MapInfra()
+    param: int = 12
+    model_config = pydantic.ConfigDict(extra="forbid")  # safer to avoid extra params
+
+    @infra.apply_item(cache_type="MemmapArrayFile")
+    def process(self, num: int) -> np.ndarray:
+        print(num)
+        return np.random.rand(num, self.param)
+
+
+def test_apply_item(tmp_path: Path):
+    cfg = ApplyItem(infra={"folder": tmp_path})
+    out = cfg.process(num=3)
+    out2 = cfg.process(num=3)
+    assert out.shape == (3, 12)
+    np.testing.assert_equal(out, out2)
+
+
 def test_missing_item_uid() -> None:
     # pylint: disable=unused-variable
     with pytest.raises(TypeError):
