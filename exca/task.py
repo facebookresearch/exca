@@ -16,7 +16,6 @@ from pathlib import Path
 import cloudpickle as pickle
 import pydantic
 import submitit
-from submitit.core.utils import FailedJobError
 
 from . import base, slurm, utils
 
@@ -35,6 +34,8 @@ class LocalJob:
         self, func: tp.Callable[..., tp.Any], *args: tp.Any, **kwargs: tp.Any
     ) -> None:
         status: tp.Literal["success", "failure"] = "success"
+        self._name = getattr(func, "__name__", "")  # for logs
+
         try:
             out = func(*args, **kwargs)
         except Exception as e:
@@ -66,16 +67,10 @@ class LocalJob:
         out = self._result[1]
         if isinstance(out, tuple):
             e, tb = out
-            logger.warning(f"Computation failed with traceback:\n{tb}")
+            logger.warning(f"Computation failed for {self._name} with traceback:\n{tb}")
             return e  # type: ignore
-        elif isinstance(out, Exception):
-            return out  # legacy #1
-        elif isinstance(out, str):
-            return FailedJobError(f"Local job failed with traceback:\n{out}")  # legacy #2
-        else:
-            raise NotImplementedError(
-                f"Weird cached result, something's wrong with infra: {out}"
-            )
+        msg = f"Weird cached result for {self._name}, something's wrong with infra: {out}"
+        raise NotImplementedError(msg)
 
 
 class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
@@ -337,6 +332,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         executor = self.executor()
         if executor is None:
             job = LocalJob(self._run_method)
+            job._name = self._factory()  # for better logging message
         else:
             executor.folder.mkdir(exist_ok=True, parents=True)
             with self._work_env():
@@ -540,7 +536,9 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         if executor is None:
             executor = self.executor()
         if executor is None:
-            return LocalJob(self._run_method, *args, **kwargs)
+            job = LocalJob(self._run_method, *args, **kwargs)
+            job._name = self._factory()  # for better logging message
+            return job
         return executor.submit(self._run_method, *args, **kwargs)
 
     @contextlib.contextmanager
