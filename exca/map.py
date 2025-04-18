@@ -24,7 +24,6 @@ from submitit.core import utils
 
 from . import base, slurm
 from .cachedict import CacheDict
-from .dumperloader import DumperLoader
 
 MapFunc = tp.Callable[[tp.Sequence[tp.Any]], tp.Iterator[tp.Any]]
 X = tp.TypeVar("X")
@@ -231,12 +230,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 raise RuntimeError(f"Infra was not applied: {self!r}")
             cache_type = imethod.cache_type
             cache_path = self.uid_folder(create=True)
-            # TODO can be removed?
-            if cache_type is None:
-                Cls = DumperLoader.default_class(
-                    check_map_function_output(imethod.method)
-                )
-                cache_type = Cls.__name__
             if isinstance(self.permissions, str):
                 self._set_permissions(None)
             if isinstance(self.permissions, str):
@@ -520,21 +513,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 writer[item_uid(item)] = output
         # don't return the whole cache dict if data is cached
         return {} if use_cache_dict else d
-
-
-def check_map_function_output(func: tp.Callable[..., tp.Any]) -> tp.Type[tp.Any]:
-    annot = inspect.signature(func).return_annotation
-    origin = tp.get_origin(annot)
-    allowed = (
-        collections.abc.Generator,
-        collections.abc.Iterator,
-        collections.abc.Iterable,
-    )
-    if origin not in allowed:
-        msg = f"Origin {origin} of return type hint {annot} for function {func.__qualname__!r} "
-        msg += "is not supported, use Iterator or Generator"
-        raise TypeError(msg)
-    return tp.get_args(annot)[0]  # type: ignore
 
 
 @dataclasses.dataclass
