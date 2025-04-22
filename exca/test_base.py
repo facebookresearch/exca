@@ -454,10 +454,10 @@ class OrderedNumCfg(pydantic.BaseModel):
 
 
 def test_ordered_dict_with_subcfg(tmp_path: Path) -> None:
-    nums = OrderedNumCfg(
-        d={str(k): {"k": k} for k in range(12)}, infra={"folder": tmp_path}  # type: ignore
-    )
+    nums = OrderedNumCfg(d={"a": {"k": 12}}, infra={"folder": tmp_path})  # type: ignore
     _ = nums.build()
+    uid = nums.infra.uid()
+    assert "d={a.k=12}" in uid
 
 
 def test_weird_types(tmp_path: Path) -> None:

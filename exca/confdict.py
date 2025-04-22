@@ -286,7 +286,7 @@ def _to_simplified_dict(data: tp.Any) -> tp.Any:
         out = {}
         for x, y in data.items():
             y = _to_simplified_dict(y)
-            if isinstance(y, dict) and len(y) == 1 and isinstance(y, OrderedDict):
+            if isinstance(y, dict) and len(y) == 1 and not isinstance(y, OrderedDict):
                 # note: keep structure for ordered dicts
                 x2, y2 = next(iter(y.items()))
                 x = f"{x}.{x2}"
