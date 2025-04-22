@@ -213,6 +213,11 @@ def test_to_yaml_with_ordered_dict(ordered: bool) -> None:
     out = confdict.ConfDict(cfg).to_yaml().strip()
     expected = "a:\n  0.k: 0\n  1.k: 1"
     assert out == expected
+    # dict with len == 1
+    cfg = {"a": Dict({"b": {"c": 12}})}
+    expected = "a:\n  b.c: 12" if ordered else "a.b.c: 12"
+    out = confdict.ConfDict(cfg).to_yaml().strip()
+    assert out == expected
 
 
 def test_from_args() -> None:

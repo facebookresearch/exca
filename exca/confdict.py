@@ -4,7 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import collections
 import dataclasses
 import decimal
 import fractions
@@ -13,7 +12,7 @@ import logging
 import os
 import re
 import typing as tp
-from collections import abc
+from collections import OrderedDict, abc
 from pathlib import Path, PosixPath, WindowsPath
 
 import numpy as np
@@ -41,7 +40,7 @@ def _special_representer(dumper: tp.Any, data: tp.Any) -> tp.Any:
         return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
     elif isinstance(data, (np.float64, np.int64, np.float32, np.int32)):
         return dumper.represent_scalar("tag:yaml.org,2002:float", str(float(data)))
-    elif isinstance(data, collections.OrderedDict):
+    elif isinstance(data, OrderedDict):
         return dumper.represent_mapping("tag:yaml.org,2002:map", data.items())
     raise NotImplementedError(f"Cannot represent data {data} of type {type(data)}")
 
@@ -53,7 +52,7 @@ for t in (
     np.float64,
     np.int32,
     np.int64,
-    collections.OrderedDict,
+    OrderedDict,
 ):
     _yaml.representer.SafeRepresenter.add_representer(t, _special_representer)
 
@@ -89,8 +88,8 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         else:
             Container = val.__class__
             val = Container([ConfDict(v) if isinstance(v, dict) else v for v in val])  # type: ignore
-    if isinstance(val, collections.OrderedDict):
-        val2 = collections.OrderedDict()
+    if isinstance(val, OrderedDict):
+        val2 = OrderedDict()
         for name, v in val.items():
             val2[name] = ConfDict(v) if isinstance(v, dict) else v
         val = val2
@@ -98,7 +97,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     if _is_seq(obj):
         obj[p] = val  # type: ignore
         return
-    if isinstance(val, dict) and not isinstance(val, collections.OrderedDict):
+    if isinstance(val, dict) and not isinstance(val, OrderedDict):
         obj[p].update(val)
     else:
         dict.__setitem__(obj, p, val)
@@ -287,11 +286,14 @@ def _to_simplified_dict(data: tp.Any) -> tp.Any:
         out = {}
         for x, y in data.items():
             y = _to_simplified_dict(y)
-            if isinstance(y, dict) and len(y) == 1:
+            if isinstance(y, dict) and len(y) == 1 and isinstance(y, OrderedDict):
+                # note: keep structure for ordered dicts
                 x2, y2 = next(iter(y.items()))
                 x = f"{x}.{x2}"
                 y = y2
             out[x] = y
+        if isinstance(data, OrderedDict):
+            out = OrderedDict(out)
         return out
     if isinstance(data, list):
         return [_to_simplified_dict(x) for x in data]
@@ -376,7 +378,7 @@ class UidMaker:
         elif isinstance(data, dict):
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
             if version > 2:
-                if isinstance(data, collections.OrderedDict):
+                if isinstance(data, OrderedDict):
                     keys = list(data)  # keep order only for ordered-dict
                 else:
                     keys = [xy[0] for xy in sorted(udata.items(), key=_dict_sort)]
