@@ -8,6 +8,7 @@ import decimal
 import fractions
 import glob
 import typing as tp
+from collections import OrderedDict
 from pathlib import Path
 
 import pytest
@@ -203,6 +204,20 @@ def test_flat_types() -> None:
     cfg = {"a": {"b": Path("blublu")}}
     flat = confdict.ConfDict(cfg).flat()
     assert flat == {"a.b": Path("blublu")}
+
+
+@pytest.mark.parametrize("ordered", (True, False))
+def test_to_yaml_with_ordered_dict(ordered: bool) -> None:
+    Dict = OrderedDict if ordered else dict
+    cfg = {"a": Dict({str(k): {"k": k} for k in range(2)})}
+    out = confdict.ConfDict(cfg).to_yaml().strip()
+    expected = "a:\n  0.k: 0\n  1.k: 1"
+    assert out == expected
+    # avoid packing ordered dict with len == 1
+    cfg = {"a": Dict({"b": {"c": 12}})}
+    expected = "a:\n  b.c: 12" if ordered else "a.b.c: 12"
+    out = confdict.ConfDict(cfg).to_yaml().strip()
+    assert out == expected
 
 
 def test_from_args() -> None:

@@ -439,6 +439,27 @@ def test_unordered_dict() -> None:
         raise AssertionError("OrderedDict should be cast to standard dict by pydantic")
 
 
+class Num(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    k: int
+
+
+class OrderedNumCfg(pydantic.BaseModel):
+    d: collections.OrderedDict[str, Num] = collections.OrderedDict()
+    infra: TaskInfra = TaskInfra()
+
+    @infra.apply
+    def build(self) -> str:
+        return ",".join(self.d)
+
+
+def test_ordered_dict_with_subcfg(tmp_path: Path) -> None:
+    nums = OrderedNumCfg(d={"a": {"k": 12}}, infra={"folder": tmp_path})  # type: ignore
+    _ = nums.build()
+    uid = nums.infra.uid()
+    assert "d={a.k=12}" in uid
+
+
 def test_weird_types(tmp_path: Path) -> None:
     whatever = WeirdTypes(infra={"folder": tmp_path})  # type: ignore
     _ = whatever.build()
