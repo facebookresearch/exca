@@ -445,7 +445,7 @@ class Num(pydantic.BaseModel):
 
 
 class OrderedNumCfg(pydantic.BaseModel):
-    d: collections.OrderedDict[str, Num] = {}
+    d: collections.OrderedDict[str, Num] = collections.OrderedDict({})
     infra: TaskInfra = TaskInfra()
 
     @infra.apply
@@ -455,7 +455,7 @@ class OrderedNumCfg(pydantic.BaseModel):
 
 def test_ordered_dict_with_subcfg(tmp_path: Path) -> None:
     nums = OrderedNumCfg(
-        d={str(k): {"k": k} for k in range(12)}, infra={"folder": tmp_path}
+        d={str(k): {"k": k} for k in range(12)}, infra={"folder": tmp_path}  # type: ignore
     )
     _ = nums.build()
 
