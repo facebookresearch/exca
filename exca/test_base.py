@@ -445,7 +445,7 @@ class Num(pydantic.BaseModel):
 
 
 class OrderedNumCfg(pydantic.BaseModel):
-    d: collections.OrderedDict[str, Num] = collections.OrderedDict({})
+    d: collections.OrderedDict[str, Num] = collections.OrderedDict()
     infra: TaskInfra = TaskInfra()
 
     @infra.apply

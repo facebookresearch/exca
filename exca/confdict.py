@@ -282,7 +282,7 @@ def _to_simplified_dict(data: tp.Any) -> tp.Any:
     Eg:
     :code:`{"a": 1, "b": {"c": 12}} -> {"a": 1, "b.c": 12}`
     """
-    if isinstance(data, dict):
+    if isinstance(data, (OrderedDict, ConfDict)):  # TODO fix to dict in next version
         out = {}
         for x, y in data.items():
             y = _to_simplified_dict(y)

@@ -372,7 +372,7 @@ def test_ordered_dict() -> None:
     assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
     assert isinstance(out["insts"], collections.OrderedDict)
     # keys should be ordered in name and hash:
-    uid = "insts={blublu={uid=D1,anything=144},stuff={uid=D2},blublu2={uid=D1,anything=144}}-6b00c227"
+    uid = "insts={blublu={uid=D1,anything=144},stuff.uid=D2,blublu2={uid=D1,anything=144}}-46863fcc"
     assert out.to_uid() == uid
 
 
