@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pydantic
 import pytest
+import submitit
 
 from . import base, helpers, test_compat, utils
 from .confdict import ConfDict
@@ -57,7 +58,8 @@ def test_max_pickle_size(tmp_path: Path) -> None:
     infra1: tp.Any = {"folder": tmp_path, "cluster": "local", "max_pickle_size_gb": 0.12}
     whatever = Whatever(infra1=infra1)
     ex = whatever.infra1.executor()
-    assert ex._executor.max_pickle_size_gb == 0.12  # type: ignore
+    if tuple(int(n) for n in submitit.__version__.split(".")) >= (1, 5, 3):
+        assert ex._executor.max_pickle_size_gb == 0.12  # type: ignore
 
 
 def test_task_infra_keep_in_ram() -> None:
