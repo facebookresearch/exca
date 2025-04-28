@@ -53,6 +53,13 @@ def test_task_infra_with_no_folder() -> None:
         _ = Whatever(param1=13, infra1={"cluster": "debug"})  # type: ignore
 
 
+def test_max_pickle_size(tmp_path: Path) -> None:
+    infra1: tp.Any = {"folder": tmp_path, "cluster": "local", "max_pickle_size_gb": 0.12}
+    whatever = Whatever(infra1=infra1)
+    ex = whatever.infra1.executor()
+    assert ex._executor.max_pickle_size_gb == 0.12
+
+
 def test_task_infra_keep_in_ram() -> None:
     whatever = Whatever(param1=13, infra1={"keep_in_ram": True})  # type: ignore
     assert whatever.process() == 26
