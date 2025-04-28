@@ -105,6 +105,7 @@ class SubmititMixin(pydantic.BaseModel):
     cpus_per_task: int | None = None
     gpus_per_node: int | None = None
     mem_gb: float | None = None
+    max_pickle_size_gb: float | None = None
     # slurm specifics
     slurm_constraint: str | None = None
     slurm_partition: str | None = None
@@ -148,7 +149,18 @@ class SubmititMixin(pydantic.BaseModel):
             cluster = None
         logpath = self._log_path()
         executor = submitit.AutoExecutor(folder=logpath, cluster=cluster)
-        non_submitit = {"cluster", "logs", "conda_env", "workdir", "folder"}
+        if self.max_pickle_size_gb is not None:
+            sub = executor._executor
+            if hasattr(sub, "max_pickle_size_gb"):
+                sub.max_pickle_size_gb = self.max_pickle_size_gb  # type: ignore
+        non_submitit = {
+            "cluster",
+            "logs",
+            "conda_env",
+            "workdir",
+            "folder",
+            "max_pickle_size_gb",
+        }
         fields = set(SubmititMixin.model_fields) - non_submitit  # type: ignore
         _missing = base.Sentinel()  # for backward compatibility when adding a new param
         params = {name: getattr(self, name, _missing) for name in fields}
