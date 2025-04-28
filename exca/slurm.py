@@ -152,7 +152,7 @@ class SubmititMixin(pydantic.BaseModel):
         if self.max_pickle_size_gb is not None:
             sub = executor._executor
             if hasattr(sub, "max_pickle_size_gb"):
-                sub.max_pickle_size_gb = self.max_pickle_size_gb
+                sub.max_pickle_size_gb = self.max_pickle_size_gb  # type: ignore
         non_submitit = {
             "cluster",
             "logs",
