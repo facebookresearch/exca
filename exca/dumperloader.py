@@ -200,6 +200,8 @@ DumperLoader.DEFAULTS[np.ndarray] = MemmapArrayFile
 
 
 class MultiDict(DumperLoader[dict[str, tp.Any]]):
+    """Dumps the first level of values using the default dumper for
+    their type"""
 
     def __init__(self, folder: str | Path = "") -> None:
         super().__init__(folder=folder)
