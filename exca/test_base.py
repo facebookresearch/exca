@@ -467,7 +467,6 @@ def test_ordered_dict_with_subcfg_flat(tmp_path: Path) -> None:
     np.random.shuffle(keys)
     nums = OrderedNumCfg(d={f"{k}": {"k": k, "other": 0} for k in keys}, infra=infra)  # type: ignore
     flat = nums.infra.config().flat()
-    print("flat", flat)
     flat["d.5.k"] = 12
     nums2 = OrderedNumCfg(**ConfDict(flat))
     keys2 = [v.k for v in nums2.d.values()]
