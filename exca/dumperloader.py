@@ -205,7 +205,7 @@ class MultiDict(DumperLoader[dict[str, tp.Any]]):
 
     def __init__(self, folder: str | Path = "") -> None:
         super().__init__(folder=folder)
-        self._sub: dict[tp.Any, DumperLoader] = {}
+        self._subs: dict[tp.Any, DumperLoader] = {}
         self._exit_stack: contextlib.ExitStack | None = None
 
     @contextlib.contextmanager
@@ -217,32 +217,46 @@ class MultiDict(DumperLoader[dict[str, tp.Any]]):
             try:
                 yield
             finally:
-                self._sub.clear()
+                self._subs.clear()
                 self._exit_stack = None
 
-    def load(self, **kwargs: dict[str, tp.Any]) -> dict[str, tp.Any]:  # type: ignore
+    def load(self, optimized: dict[str, tp.Any], pickled: dict[str, tp.Any]) -> dict[str, tp.Any]:  # type: ignore
         output = {}
-        for key, info in kwargs.items():
+        for key, info in optimized.items():
             loader = self.CLASSES[info["cls"]](self.folder)
             output[key] = loader.load(**info["info"])
+        if pickled:
+            loader = Pickle(self.folder)
+            output.update(loader.load(**pickled))
         return output
 
     def dump(self, key: str, value: dict[str, tp.Any]) -> dict[str, tp.Any]:
-        output = {}
+        output = {"optimized": {}, "pickled": {}}
         if self._exit_stack is None:
             raise RuntimeError("Dict dumper is not in open context")
+        pickled: dict[str, tp.Any] = {}
         for skey, val in value.items():
-            if type(val) not in self._sub:
-                sub = self.default_class(type(val))(self.folder)
+            default = self.default_class(type(val))
+            if default.__name__ not in self._subs:
+                sub = default(self.folder)
                 self._exit_stack.enter_context(sub.open())
-                self._sub[type(val)] = sub
-            sub = self._sub[type(val)]
-            output[skey] = {
-                "cls": sub.__class__.__name__,
-                "info": sub.dump(f"{key}-{skey}", val),
-            }
+                self._subs[default.__name__] = sub
+            sub = self._subs[default.__name__]
+            if default.__name__ != "Pickle":
+                output["optimized"][skey] = {
+                    "cls": sub.__class__.__name__,
+                    "info": sub.dump(f"{key}(dict){skey}", val),
+                }
+            else:
+                pickled[skey] = val
+        if pickled:
+            sub = self._subs["Pickle"]
+            output["pickled"] = sub.dump(key, pickled)
         return output
 
+
+# making MultiDict the default for dicts could generate a lot of small files for heavily nested dicts
+# DumperLoader.DEFAULTS[dict] = MultiDict
 
 try:
     import pandas as pd

@@ -113,7 +113,9 @@ def test_dump_dict(tmp_path: Path) -> None:
     dl = dumperloader.MultiDict(tmp_path)
     with dl.open():
         info = dl.dump("blublu", data)
+    assert set(info["optimized"]) == {"blublu", "blabla"}
     reloaded = dl.load(**info)
+    assert set(reloaded) == {"blublu", "blabla", "blu"}
     np.testing.assert_array_equal(reloaded["blublu"], [12, 12])
 
 
