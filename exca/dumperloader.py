@@ -199,6 +199,56 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
 DumperLoader.DEFAULTS[np.ndarray] = MemmapArrayFile
 
 
+class MultiDict(DumperLoader[dict[str, tp.Any]]):
+
+    def __init__(self, folder: str | Path = "") -> None:
+        super().__init__(folder=folder)
+        self._sub: dict[tp.Any, DumperLoader] = {}
+        self._exit_stack: contextlib.ExitStack | None = None
+
+    @contextlib.contextmanager
+    def open(self) -> tp.Iterator[None]:
+        if self._exit_stack is not None:
+            raise RuntimeError("Cannot reopen DumperLoader context")
+        with contextlib.ExitStack() as estack:
+            self._exit_stack = estack
+            try:
+                yield
+            finally:
+                self._sub.clear()
+                self._exit_stack = None
+
+    def load(
+        self, **kwargs: dict[str, tuple[str, dict[str, tp.Any]]]
+    ) -> dict[str, tp.Any]:
+        output = {}
+        for key, info in kwargs.items():
+            loader = self.CLASSES[info["cls"]](self.folder)
+            output[key] = loader.load(**info["info"])
+        return output
+
+    def dump(
+        self, key: str, value: dict[str, tp.Any]
+    ) -> dict[str, tuple[str, dict[str, tp.Any]]]:
+        output = {}
+        if self._exit_stack is None:
+            raise RuntimeError("Dict dumper is not in open context")
+        for skey, val in value.items():
+            if type(val) not in self._sub:
+                sub = self.default_class(type(val))(self.folder)
+                self._exit_stack.enter_context(sub.open())
+                self._sub[type(val)] = sub
+            sub = self._sub[type(val)]
+            output[skey] = {
+                "cls": sub.__class__.__name__,
+                "info": sub.dump(f"{key}-{skey}", val),
+            }
+        return output
+
+
+DumperLoader.DEFAULTS[dict] = MultiDict
+
+
 try:
     import pandas as pd
 except ImportError:

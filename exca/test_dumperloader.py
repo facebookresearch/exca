@@ -108,6 +108,15 @@ def test_dump_torch_view(tmp_path: Path) -> None:
     assert not dumperloader.is_view(reloaded)
 
 
+def test_dump_dict(tmp_path: Path) -> None:
+    data = {"blu": 12, "blublu": np.array([12, 12]), "blabla": np.array([24.0])}
+    dl = dumperloader.MultiDict(tmp_path)
+    with dl.open():
+        info = dl.dump("blublu", data)
+    reloaded = dl.load(**info)
+    np.testing.assert_array_equal(reloaded["blublu"], [12, 12])
+
+
 def test_default_class() -> None:
     out = dumperloader.DumperLoader.default_class(int | None)  # type: ignore
     assert out is dumperloader.Pickle
