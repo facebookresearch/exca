@@ -442,6 +442,7 @@ def test_unordered_dict() -> None:
 class Num(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     k: int
+    other: int = 12
 
 
 class OrderedNumCfg(pydantic.BaseModel):
@@ -458,6 +459,19 @@ def test_ordered_dict_with_subcfg(tmp_path: Path) -> None:
     _ = nums.build()
     uid = nums.infra.uid()
     assert "d={a.k=12}" in uid
+
+
+def test_ordered_dict_with_subcfg_flat(tmp_path: Path) -> None:
+    infra = {"folder": tmp_path}
+    keys = list(range(10))
+    np.random.shuffle(keys)
+    nums = OrderedNumCfg(d={f"{k}": {"k": k, "other": 0} for k in keys}, infra=infra)  # type: ignore
+    flat = nums.infra.config().flat()
+    print("flat", flat)
+    flat["d.5.k"] = 12
+    nums2 = OrderedNumCfg(**ConfDict(flat))
+    keys2 = [v.k for v in nums2.d.values()]
+    np.testing.assert_equal([k if k != 5 else 12 for k in keys], keys2)
 
 
 def test_weird_types(tmp_path: Path) -> None:
