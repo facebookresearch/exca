@@ -307,8 +307,8 @@ def update_uids(folder: str | Path, dryrun: bool = True):
         return  # all good
     if old not in str(folder):
         if folder.name != "default":
-            msg = "CAUTION: folder name %s does not match old uid pattern %s"
-            logger.warning(msg, folder.name, old)
+            msg = "CAUTION: folder name %s does not match old uid pattern %s nor new %s"
+            logger.warning(msg, folder.name, old, new)
         return
     newfolder = Path(str(folder).replace(old, new))
     msg = "Automatically updating folder name to new uid: '%s' -> '%s'"
