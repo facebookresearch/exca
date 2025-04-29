@@ -218,18 +218,14 @@ class MultiDict(DumperLoader[dict[str, tp.Any]]):
                 self._sub.clear()
                 self._exit_stack = None
 
-    def load(
-        self, **kwargs: dict[str, dict[str, dict[str, tp.Any]]]
-    ) -> dict[str, tp.Any]:
+    def load(self, **kwargs: dict[str, tp.Any]) -> dict[str, tp.Any]:  # type: ignore
         output = {}
         for key, info in kwargs.items():
             loader = self.CLASSES[info["cls"]](self.folder)
             output[key] = loader.load(**info["info"])
         return output
 
-    def dump(
-        self, key: str, value: dict[str, tp.Any]
-    ) -> dict[str, dict[str, dict[str, tp.Any]]]:
+    def dump(self, key: str, value: dict[str, tp.Any]) -> dict[str, tp.Any]:
         output = {}
         if self._exit_stack is None:
             raise RuntimeError("Dict dumper is not in open context")
@@ -244,9 +240,6 @@ class MultiDict(DumperLoader[dict[str, tp.Any]]):
                 "info": sub.dump(f"{key}-{skey}", val),
             }
         return output
-
-
-DumperLoader.DEFAULTS[dict] = MultiDict
 
 
 try:
