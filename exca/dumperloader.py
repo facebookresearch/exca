@@ -219,7 +219,7 @@ class MultiDict(DumperLoader[dict[str, tp.Any]]):
                 self._exit_stack = None
 
     def load(
-        self, **kwargs: dict[str, tuple[str, dict[str, tp.Any]]]
+        self, **kwargs: dict[str, dict[str, dict[str, tp.Any]]]
     ) -> dict[str, tp.Any]:
         output = {}
         for key, info in kwargs.items():
@@ -229,7 +229,7 @@ class MultiDict(DumperLoader[dict[str, tp.Any]]):
 
     def dump(
         self, key: str, value: dict[str, tp.Any]
-    ) -> dict[str, tuple[str, dict[str, tp.Any]]]:
+    ) -> dict[str, dict[str, dict[str, tp.Any]]]:
         output = {}
         if self._exit_stack is None:
             raise RuntimeError("Dict dumper is not in open context")
