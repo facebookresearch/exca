@@ -231,10 +231,10 @@ class MultiDict(DumperLoader[dict[str, tp.Any]]):
         return output
 
     def dump(self, key: str, value: dict[str, tp.Any]) -> dict[str, tp.Any]:
-        output = {"optimized": {}, "pickled": {}}
+        output: dict[str, dict[str, tp.Any]] = {"optimized": {}, "pickled": {}}
         if self._exit_stack is None:
             raise RuntimeError("Dict dumper is not in open context")
-        pickled: dict[str, tp.Any] = {}
+        pickled: tp.Any = {}
         for skey, val in value.items():
             default = self.default_class(type(val))
             if default.__name__ not in self._subs:
