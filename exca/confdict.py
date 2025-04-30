@@ -66,9 +66,8 @@ def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
     # Note: avoid replacing native dicts as they may contain OVERRIDE tag
     # which needs to be processed later on
     if isinstance(obj, OrderedDict):
-        return OrderedDict(
-            {x: _propagate_confdict(y, replace_dicts=True) for x, y in obj.items()}
-        )
+        sub = {x: _propagate_confdict(y, replace_dicts=True) for x, y in obj.items()}
+        return OrderedDict(sub)
     if replace_dicts and isinstance(obj, dict):
         return ConfDict(obj)
     if _is_seq(obj):
