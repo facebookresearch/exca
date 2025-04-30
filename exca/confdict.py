@@ -61,15 +61,23 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-def _propagate_confdict(obj: tp.Any) -> tp.Any:
-    """Recursively cast dicts to confdicts"""
+def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
+    """Recursively cast content of list and ordered dict to to confdicts"""
+    # Note: avoid replacing native dicts as they may contain OVERRIDE tag
+    # which needs to be processed later on
     if isinstance(obj, OrderedDict):
-        return OrderedDict({x: _propagate_confdict(y) for x, y in obj.items()})
-    if isinstance(obj, dict):
+        return OrderedDict(
+            {x: _propagate_confdict(y, replace_dicts=True) for x, y in obj.items()}
+        )
+    if replace_dicts and isinstance(obj, dict):
         return ConfDict(obj)
     if _is_seq(obj):
         Container = obj.__class__
-        return Container([_propagate_confdict(v) for v in obj])  # type: ignore
+        return Container([_propagate_confdict(v, replace_dicts=True) for v in obj])  # type: ignore
+    if isinstance(obj, dict):
+        return obj
+    if isinstance(obj, ConfDict):
+        return obj
     return obj
 
 
@@ -94,7 +102,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         _set_item(sub, rest[0], val)
         return
     # final part
-    val = _propagate_confdict(val)
+    val = _propagate_confdict(val, replace_dicts=False)
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore
@@ -215,9 +223,11 @@ class ConfDict(dict[str, tp.Any]):
         in this case the existing keys in the sub-dictionary are wiped
         """
         if mapping is not None:
-            if isinstance(mapping, abc.Mapping):
-                mapping = mapping.items()
-            kwargs.update(dict(mapping))
+            if not isinstance(mapping, abc.Mapping):
+                mapping = dict(mapping)
+            kwargs.update(mapping)
+        if not kwargs:
+            return
         if kwargs.pop(OVERRIDE, False):
             self.clear()
         for key, val in kwargs.items():

@@ -47,6 +47,12 @@ def test_simplied_dict_2() -> None:
     assert sub == {"uid": "D1", "sub.uid": "D2"}
 
 
+def test_update_override() -> None:
+    data = ConfDict({"a": 12, "b": 12})
+    data.update({ConfDict.OVERRIDE: True, "d": 13})
+    assert data == {"d": 13}
+
+
 def test_update() -> None:
     data = ConfDict({"a": {"c": 12}, "b": {"c": 12}})
     data.update(a={ConfDict.OVERRIDE: True, "d": 13}, b={"d": 13})
