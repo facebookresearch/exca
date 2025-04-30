@@ -121,8 +121,7 @@ def test_discriminators(caplog: tp.Any) -> None:
 seq:
 - - uid: D2
   - anything: 12
-    sub:
-      uid: D2
+    sub.uid: D2
     uid: D1
 something_else: 12
 stuff: []
