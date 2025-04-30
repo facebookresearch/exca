@@ -61,6 +61,18 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
+def _propagate_confdict(obj: tp.Any) -> tp.Any:
+    """Recursively cast dicts to confdicts"""
+    if isinstance(obj, OrderedDict):
+        return OrderedDict({x: _propagate_confdict(y) for x, y in obj.items()})
+    if isinstance(obj, dict):
+        return ConfDict(obj)
+    if _is_seq(obj):
+        Container = obj.__class__
+        return Container([_propagate_confdict(v) for v in obj])  # type: ignore
+    return obj
+
+
 def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     """Internal recursive setitem on ConfDict/list"""
     p, *rest = key.split(".", maxsplit=1)
@@ -82,17 +94,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         _set_item(sub, rest[0], val)
         return
     # final part
-    if _is_seq(val):
-        if ConfDict.UID_VERSION == 1:
-            val = [ConfDict(v) if isinstance(v, dict) else v for v in val]
-        else:
-            Container = val.__class__
-            val = Container([ConfDict(v) if isinstance(v, dict) else v for v in val])  # type: ignore
-    if isinstance(val, OrderedDict):
-        val2 = OrderedDict()
-        for name, v in val.items():
-            val2[name] = ConfDict(v) if isinstance(v, dict) else v
-        val = val2
+    val = _propagate_confdict(val)
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore

@@ -40,6 +40,13 @@ def test_dot_access_and_to_simplied_dict() -> None:
     assert confdict._to_simplified_dict(data) == expected
 
 
+def test_simplied_dict_2() -> None:
+    data = ConfDict({"seq": [[{"uid": "D2"}, {"uid": "D1", "sub": {"uid": "D2"}}]]})
+    assert isinstance(data["seq.0.0"], ConfDict)
+    sub = data["seq.0.1"].flat()
+    assert sub == {"uid": "D1", "sub.uid": "D2"}
+
+
 def test_update() -> None:
     data = ConfDict({"a": {"c": 12}, "b": {"c": 12}})
     data.update(a={ConfDict.OVERRIDE: True, "d": 13}, b={"d": 13})
