@@ -495,11 +495,11 @@ def test_large_model(tmp_path: Path) -> None:
 
         @infra.apply
         def process(self) -> dict[str, tp.Any]:
-            return dh.infra.config().flat()
+            return self.infra.config().flat()
 
-    dh = DeepH(infra={"folder": tmp_path, "cluster": "local"})
+    dh = DeepH(infra={"folder": tmp_path, "cluster": "debug"})  # type: ignore
     with dh.infra.job_array() as array:
-        array = [dh.infra.clone_obj({"x.int0": k}) for k in range(10)]
+        array = [dh.infra.clone_obj({"x.int0": k}) for k in range(500)]
     out = array[0].process()
     assert len(out) > 10000
     assert isinstance(out, dict)
