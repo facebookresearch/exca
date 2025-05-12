@@ -478,6 +478,33 @@ def test_weird_types(tmp_path: Path) -> None:
     _ = whatever.build()
 
 
+class BaseModel(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+
+def test_large_model(tmp_path: Path) -> None:
+    fields: dict[str, tp.Any] = {f"int{k}": (int, k) for k in range(5)}
+    fields.update({f"str{k}": (str, str(k)) for k in range(5)})
+    for level in range(12):
+        Level = pydantic.create_model(f"Level{level}", **fields, __base__=BaseModel)
+        fields[f"level{level}"] = (Level, Level())
+
+    class DeepH(BaseModel):
+        x: Level = Level()
+        infra: TaskInfra = TaskInfra()
+
+        @infra.apply
+        def process(self) -> dict[str, tp.Any]:
+            return dh.infra.config().flat()
+
+    dh = DeepH(infra={"folder": tmp_path, "cluster": "local"})
+    with dh.infra.job_array() as array:
+        array = [dh.infra.clone_obj({"x.int0": k}) for k in range(10)]
+    out = array[0].process()
+    assert len(out) > 10000
+    assert isinstance(out, dict)
+
+
 def test_defined_in_main() -> None:
     try:
         import neuralset as ns
