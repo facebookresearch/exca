@@ -192,6 +192,8 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         executor = self.executor()
         tasks: tp.List[tp.Any] = []
         yield tasks
+        if not tasks:
+            raise ValueError("Nothing submited in job array context")
         # verify unicity
         uid_index: dict[str, int] = {}
         infras: tp.List[TaskInfra] = [getattr(t, self._infra_name) for t in tasks]
