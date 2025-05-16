@@ -498,7 +498,7 @@ def test_large_model(tmp_path: Path) -> None:
         def process(self) -> dict[str, tp.Any]:
             return self.infra.config().flat()
 
-    dh = DeepH(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
+    dh = DeepH(infra={"folder": tmp_path, "cluster": "local", "tasks_per_node": 2})  # type: ignore
     with dh.infra.job_array() as array:
         array.extend([dh.infra.clone_obj({"x.int0": k}) for k in range(50)])
     # out = array[0].process()
