@@ -7,6 +7,7 @@
 import contextlib
 import hashlib
 import io
+import logging
 import os
 import pickle
 import socket
@@ -21,6 +22,7 @@ from . import utils
 
 X = tp.TypeVar("X")
 Y = tp.TypeVar("Y", bound=tp.Type[tp.Any])
+logger = logging.getLogger(__name__)
 
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 MEMMAP_ARRAY_FILE_MAX_CACHE = "EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE"
@@ -173,6 +175,8 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
             if memmap.size:
                 break
             # new data was added -> we need to force a reload and retry
+            msg = "Reloading memmap file %s as offset %s is out of bound for size %s (file was updated?)"
+            logger.debug(msg, filename, offset, self._cache[filename].size)
             del self._cache[filename]
         memmap = memmap.view(dtype=dtype).reshape(shape)
         if len(self._cache) > self._max_cache:
