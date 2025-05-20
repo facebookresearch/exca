@@ -57,6 +57,9 @@ class WorkDir(pydantic.BaseModel):
     copied: Sequence[str]
         list/tuple of names of files, or folders, or packages installed in editable mode
         to copy to the new working directory folder.
+        Relative paths will be moved to the relative equivalent in the new folder, while for
+        absolute path, the folder/file pointed by the path will be moved directly to the new
+        folder.
     folder: Path/str
         folder to use as working directory,
         if not specified, infra will create one automatically :code:`<infra_uid_folder>/code/<date>-<random_uid>/`.
