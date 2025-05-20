@@ -134,6 +134,9 @@ class WorkDir(pydantic.BaseModel):
         folder.mkdir(exist_ok=True)
         ignore = Ignore(includes=self.includes, excludes=self.excludes)
         for name, path in zip(self.copied, self._paths):
+            if Path(name).is_absolute():
+                # for local folder we keep the structures, for absolute we copy the last item
+                name = Path(name).name
             out = folder / name
             if not out.exists():
                 if path.is_dir():
@@ -161,10 +164,13 @@ def identify_path(name: str | Path) -> Path:
     """
     # local files or folder get precedence
     folders = ["."] + os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    print("ckpt1")
     for folder in folders:
         fp = Path(folder) / name
         if fp.exists():
+            print("Exists", fp)
             return fp.absolute()
+    print("ckpt1")
     # otherwise check for editable installations
     try:
         pdistrib = metadata.Distribution.from_name(str(name))
@@ -176,6 +182,7 @@ def identify_path(name: str | Path) -> Path:
     direct_url_json = pdistrib.read_text("direct_url.json")
     if direct_url_json is None:  # folder
         raise ValueError(f"Package {name} has not been installed from source")
+    print("ckpt2")
     direct_url = json.loads(direct_url_json)
     pkg_is_editable = direct_url.get("dir_info", {}).get("editable", False)
     if not pkg_is_editable:
@@ -184,6 +191,7 @@ def identify_path(name: str | Path) -> Path:
     url = direct_url["url"]
     if not url.startswith(tag):
         raise ValueError("Package url {url} for {name} is not local")
+    print("ckpt3")
     fp = Path(url[len(tag) :]) / name
     if not fp.exists():
         raise ValueError(f"Expected to copy {fp} but there's nothing there")
