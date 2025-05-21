@@ -61,6 +61,16 @@ def test_workdir(tmp_path: Path, file_from_folder: bool) -> None:
             assert not Path("folder/__pycache__").exists()
 
 
+def test_workdir_absolute(tmp_path: Path) -> None:
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "a_file.py").touch()
+    wdir = workdir.WorkDir(folder=tmp_path / "new", copied=[folder])
+    with wdir.activate():
+        assert Path(os.getcwd()).name == "new"
+        assert Path("folder/a_file.py").exists()
+
+
 def test_workdir_clean_repo(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     # raises if not clean:
     wd = workdir.WorkDir(folder=tmp_path, log_commit=True, copied=[Path(__file__).parent])

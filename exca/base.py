@@ -331,6 +331,13 @@ class BaseInfra(pydantic.BaseModel):
                         msg = "Automatic update fail, manual update to new uid: '%s' -> '%s'"
                         logger.warning(msg, old, folder)
                         shutil.move(old, folder)
+            latest = ConfDict.LATEST_UID_VERSION
+            # warn for mixture of versioning
+            if self.folder is not None and ConfDict.UID_VERSION != latest:
+                new = Path(self.folder) / cfg.to_uid(version=latest)
+                if new.exists():
+                    msg = "Found folder with latest version %s but currently using %s"
+                    logger.warning(msg, latest, ConfDict.UID_VERSION)
         return self._uid
 
     def uid_folder(self, create: bool = False) -> Path | None:

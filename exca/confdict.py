@@ -61,6 +61,25 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
+def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
+    """Recursively cast content of list and ordered dict to to confdicts"""
+    # Note: avoid replacing native dicts as they may contain OVERRIDE tag
+    # which needs to be processed later on
+    if isinstance(obj, OrderedDict):
+        sub = {x: _propagate_confdict(y, replace_dicts=True) for x, y in obj.items()}
+        return OrderedDict(sub)
+    if replace_dicts and isinstance(obj, dict):
+        return ConfDict(obj)
+    if _is_seq(obj):
+        Container = obj.__class__
+        return Container([_propagate_confdict(v, replace_dicts=True) for v in obj])  # type: ignore
+    if isinstance(obj, dict):
+        return obj
+    if isinstance(obj, ConfDict):
+        return obj
+    return obj
+
+
 def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     """Internal recursive setitem on ConfDict/list"""
     p, *rest = key.split(".", maxsplit=1)
@@ -82,17 +101,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         _set_item(sub, rest[0], val)
         return
     # final part
-    if _is_seq(val):
-        if ConfDict.UID_VERSION == 1:
-            val = [ConfDict(v) if isinstance(v, dict) else v for v in val]
-        else:
-            Container = val.__class__
-            val = Container([ConfDict(v) if isinstance(v, dict) else v for v in val])  # type: ignore
-    if isinstance(val, OrderedDict):
-        val2 = OrderedDict()
-        for name, v in val.items():
-            val2[name] = ConfDict(v) if isinstance(v, dict) else v
-        val = val2
+    val = _propagate_confdict(val, replace_dicts=False)
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore
@@ -122,7 +131,8 @@ class ConfDict(dict[str, tp.Any]):
       replace the content.
     """
 
-    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "3"))
+    LATEST_UID_VERSION = 3
+    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", LATEST_UID_VERSION))
     OVERRIDE = OVERRIDE  # convenient to have it here
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
@@ -212,9 +222,11 @@ class ConfDict(dict[str, tp.Any]):
         in this case the existing keys in the sub-dictionary are wiped
         """
         if mapping is not None:
-            if isinstance(mapping, abc.Mapping):
-                mapping = mapping.items()
-            kwargs.update(dict(mapping))
+            if not isinstance(mapping, abc.Mapping):
+                mapping = dict(mapping)
+            kwargs.update(mapping)
+        if not kwargs:
+            return
         if kwargs.pop(OVERRIDE, False):
             self.clear()
         for key, val in kwargs.items():
