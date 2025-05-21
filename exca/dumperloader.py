@@ -199,7 +199,7 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
 DumperLoader.DEFAULTS[np.ndarray] = MemmapArrayFile
 
 
-class MultiDict(DumperLoader[dict[str, tp.Any]]):
+class DataDict(DumperLoader[dict[str, tp.Any]]):
     """Dumps the first level of values using the default dumper for
     their type"""
 
@@ -255,8 +255,8 @@ class MultiDict(DumperLoader[dict[str, tp.Any]]):
         return output
 
 
-# making MultiDict the default for dicts could generate a lot of small files for heavily nested dicts
-# DumperLoader.DEFAULTS[dict] = MultiDict
+# making DataDict the default for dicts could generate a lot of small files for heavily nested dicts
+# DumperLoader.DEFAULTS[dict] = DataDict
 
 try:
     import pandas as pd

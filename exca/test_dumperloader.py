@@ -110,7 +110,7 @@ def test_dump_torch_view(tmp_path: Path) -> None:
 
 def test_dump_dict(tmp_path: Path) -> None:
     data = {"blu": 12, "blublu": np.array([12, 12]), "blabla": np.array([24.0])}
-    dl = dumperloader.MultiDict(tmp_path)
+    dl = dumperloader.DataDict(tmp_path)
     with dl.open():
         info = dl.dump("blublu", data)
     assert set(info["optimized"]) == {"blublu", "blabla"}
