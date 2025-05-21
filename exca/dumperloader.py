@@ -203,6 +203,65 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
 DumperLoader.DEFAULTS[np.ndarray] = MemmapArrayFile
 
 
+class DataDict(DumperLoader[dict[str, tp.Any]]):
+    """Dumps the first level of values using the default dumper for
+    their type"""
+
+    def __init__(self, folder: str | Path = "") -> None:
+        super().__init__(folder=folder)
+        self._subs: dict[tp.Any, DumperLoader] = {}
+        self._exit_stack: contextlib.ExitStack | None = None
+
+    @contextlib.contextmanager
+    def open(self) -> tp.Iterator[None]:
+        if self._exit_stack is not None:
+            raise RuntimeError("Cannot reopen DumperLoader context")
+        with contextlib.ExitStack() as estack:
+            self._exit_stack = estack
+            try:
+                yield
+            finally:
+                self._subs.clear()
+                self._exit_stack = None
+
+    def load(self, optimized: dict[str, tp.Any], pickled: dict[str, tp.Any]) -> dict[str, tp.Any]:  # type: ignore
+        output = {}
+        for key, info in optimized.items():
+            loader = self.CLASSES[info["cls"]](self.folder)
+            output[key] = loader.load(**info["info"])
+        if pickled:
+            loader = Pickle(self.folder)
+            output.update(loader.load(**pickled))
+        return output
+
+    def dump(self, key: str, value: dict[str, tp.Any]) -> dict[str, tp.Any]:
+        output: dict[str, dict[str, tp.Any]] = {"optimized": {}, "pickled": {}}
+        if self._exit_stack is None:
+            raise RuntimeError("Dict dumper is not in open context")
+        pickled: tp.Any = {}
+        for skey, val in value.items():
+            default = self.default_class(type(val))
+            if default.__name__ not in self._subs:
+                sub = default(self.folder)
+                self._exit_stack.enter_context(sub.open())
+                self._subs[default.__name__] = sub
+            sub = self._subs[default.__name__]
+            if default.__name__ != "Pickle":
+                output["optimized"][skey] = {
+                    "cls": sub.__class__.__name__,
+                    "info": sub.dump(f"{key}(dict){skey}", val),
+                }
+            else:
+                pickled[skey] = val
+        if pickled:
+            sub = self._subs["Pickle"]
+            output["pickled"] = sub.dump(key, pickled)
+        return output
+
+
+# making DataDict the default for dicts could generate a lot of small files for heavily nested dicts
+# DumperLoader.DEFAULTS[dict] = DataDict
+
 try:
     import pandas as pd
 except ImportError:
