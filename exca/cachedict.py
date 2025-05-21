@@ -60,6 +60,9 @@ class CacheDict(tp.Generic[X]):
           - :code:`"TorchTensor"`: one .pt file per tensor
           - :code:`"PandasDataframe"`: one .csv file per pandas dataframe
           - :code:`"ParquetPandasDataframe"`: one .parquet file per pandas dataframe (faster to dump and read)
+          - :code:`"DataDict"`: a dict for which (first-level) fields are dumped using the default
+            dumper. This is particularly useful to store dict of arrays which would be then loaded
+            as dict of memmaps.
         If `None`, the type will be deduced automatically and by default use a standard pickle dump.
         Loading is handled using the cache_type specified in info files.
     permissions: optional int
