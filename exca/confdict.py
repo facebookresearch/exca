@@ -407,6 +407,8 @@ class UidMaker:
                 self.hash = ",".join(udata[key].hash for key in keys)
         elif isinstance(data, (set, tuple, list)):
             items = [UidMaker(val, version=version) for val in data]
+            if isinstance(data, set):
+                items.sort(key=lambda i: i.string)
             self.string = ",".join(i.string for i in items)
             self.hash = ",".join(i.hash for i in items)
             self.brackets = ("(", ")") if version > 2 else ("[", "]")
