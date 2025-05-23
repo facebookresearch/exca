@@ -11,6 +11,7 @@ import typing as tp
 from collections import OrderedDict
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 
@@ -282,6 +283,13 @@ def test_dict_hash() -> None:
     maker2 = confdict.UidMaker({"x": 1.2, "z": ("z", 12.0)}, version=3)
     assert maker1.hash != maker2.hash
     assert maker1.hash == "dict:{x=float:461168601842738689,y=seq:(str:z,int:12)}"
+
+
+def test_set_hash() -> None:
+    data = [str(k) for k in range(6)]
+    np.random.shuffle(data)
+    maker = confdict.UidMaker(set(data))
+    assert maker.format() == "0,1,2,3,4,5-06b9e6d9"
 
 
 def test_fractions_decimal() -> None:
