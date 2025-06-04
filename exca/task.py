@@ -137,7 +137,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     # _method: TaskFunc = pydantic.PrivateAttr()
     _cache: tp.Any = pydantic.PrivateAttr(base.Sentinel())
 
-    def __getstate__(self) -> tp.Dict[str, tp.Any]:
+    def __getstate__(self) -> dict[str, tp.Any]:
         out = super().__getstate__()
         out["__pydantic_private__"]["_cache"] = base.Sentinel()
         return out
@@ -180,7 +180,9 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             (xpfolder / name).unlink(missing_ok=True)
 
     @contextlib.contextmanager
-    def job_array(self, max_workers: int = 256) -> tp.Iterator[tp.List[tp.Any]]:
+    def job_array(
+        self, max_workers: int = 256, allow_empty: bool = False
+    ) -> tp.Iterator[list[tp.Any]]:
         """Creates a list object to populate
         The tasks in the list will be sent as a job array when exiting the context
 
@@ -188,15 +190,17 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         ---------
         max_workers: int
             maximum number of jobs in the array that can be running at a given time
+        allow_empty: bool
+            if False, an exception will be raised when exiting the context if the array is still empty
         """
         executor = self.executor()
-        tasks: tp.List[tp.Any] = []
+        tasks: list[tp.Any] = []
         yield tasks
-        if not tasks:
+        if not tasks and not allow_empty:
             raise RuntimeError(f"Nothing added to job array for {self.uid()}")
         # verify unicity
         uid_index: dict[str, int] = {}
-        infras: tp.List[TaskInfra] = [getattr(t, self._infra_name) for t in tasks]
+        infras: list[TaskInfra] = [getattr(t, self._infra_name) for t in tasks]
         folder = self.uid_folder()
         for k, infra in enumerate(infras):
             uid = infra.uid()
@@ -216,12 +220,12 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             self._set_permissions(executor.folder)
             name = self.uid().split("/", maxsplit=1)[0]
             # select jobs to run
-            statuses: tp.Dict[Status, tp.List[TaskInfra]] = collections.defaultdict(list)
+            statuses: dict[Status, list[TaskInfra]] = collections.defaultdict(list)
             for i in infras:
                 statuses[i.status()].append(i)
                 i._computed = True
             missing = list(statuses["not submitted"])
-            to_clear: tp.List[Status] = []
+            to_clear: list[Status] = []
             if self._effective_mode != "cached":
                 to_clear.append("failed")
             if self._effective_mode == "force":
@@ -496,7 +500,7 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
 
     _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
 
-    def _exclude_from_cls_uid(self) -> tp.List[str]:
+    def _exclude_from_cls_uid(self) -> list[str]:
         return ["."]  # not taken into accound for uid
 
     # pylint: disable=unused-argument
