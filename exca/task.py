@@ -191,7 +191,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         max_workers: int
             maximum number of jobs in the array that can be running at a given time
         allow_empty: bool
-            if False, an exeption will be raised at the end of the context if the array is still empty
+            if False, an exception will be raised when exiting the context if the array is still empty
         """
         executor = self.executor()
         tasks: list[tp.Any] = []
