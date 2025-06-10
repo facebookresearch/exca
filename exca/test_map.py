@@ -286,3 +286,11 @@ def test_missing_item_uid() -> None:
             @infra.apply  # type: ignore
             def func(self, items: tp.List[int]) -> tp.Iterator[int]:
                 yield from items
+
+
+def test_map_infra_recompute_with_no_cache() -> None:
+    whatever = Whatever(infra={"keep_in_ram": False, "mode": "force"})
+    out = list(whatever.process([2]))[0]
+    assert out.shape == (2, 12)
+    out = list(whatever.process([2]))[0]
+    assert out.shape == (2, 12)
