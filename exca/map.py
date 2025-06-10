@@ -327,7 +327,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 for uid in to_remove:
                     del cache[uid]
             missing = {x: y for x, y in items.items() if x not in self._recomputed}
-            self._recomputed |= set(missing)
+            if isinstance(cache, CacheDict):
+                # dont record computed items if no cache
+                self._recomputed |= set(missing)
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
