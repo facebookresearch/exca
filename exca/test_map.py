@@ -290,7 +290,6 @@ def test_missing_item_uid() -> None:
 
 def test_map_infra_recompute_with_no_cache() -> None:
     whatever = Whatever(infra={"keep_in_ram": False, "mode": "force"})  # type: ignore
-    out = list(whatever.process([2]))[0]
-    assert out.shape == (2, 12)
-    out = list(whatever.process([2]))[0]
-    assert out.shape == (2, 12)
+    for _ in range(2):
+        out = list(whatever.process([2]))[0]
+        assert out.shape == (2, 12)
