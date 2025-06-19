@@ -454,6 +454,18 @@ class Discrim(Whatever):
     inst: D1 | D2 = pydantic.Field(D1(), discriminator="uid")
 
 
+D1D2 = tp.Annotated[D1 | D2, pydantic.Field(discriminator="uid")]
+
+
+class ComplexDiscrim(Whatever):
+    inst: dict[str, tuple[D1D2, bool]] | None = None
+
+
+def test_complex_discrim() -> None:
+    d = ComplexDiscrim(inst={"stuff": ({"uid": "D1"}, True)})  # type: ignore
+    assert "D1" in d.infra1.uid()
+
+
 def test_task_clone_obj_discriminator(tmp_path: Path) -> None:
     d = Discrim(
         inst={"uid": "D2"},  # type: ignore
