@@ -52,7 +52,6 @@ def _get_uid_info(
         discriminator = model.__dict__.get(DISCRIMINATOR_FIELD, DiscrimStatus.NONE)
         if DiscrimStatus.is_discriminator(discriminator):
             uid_info[FORCE_INCLUDED].add(discriminator)
-
     return uid_info  # type: ignore
 
 
@@ -185,8 +184,8 @@ def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) 
                     break  # val is different from cfg default -> keep in cfg
             else:
                 dump.pop(name)  # all equal to default, let's remove it
-    if isinstance(obj, list):
-        if not isinstance(dump, list) or len(obj) != len(dump):
+    if isinstance(obj, (tuple, list, set)):
+        if not isinstance(dump, (tuple, list, set)) or len(obj) != len(dump):
             raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
         for obj2, dump2 in zip(obj, dump):
             _post_process_dump(obj2, dump2, cfg=cfg)
