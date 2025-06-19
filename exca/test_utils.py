@@ -375,6 +375,17 @@ def test_ordered_dict() -> None:
     assert out.to_uid() == uid
 
 
+class ComplexDiscrim(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    inst: dict[str, tuple[D1D2, bool]] | None = None
+
+
+def test_complex_discrim() -> None:
+    d = ComplexDiscrim(inst={"stuff": ({"uid": "D1"}, True)})  # type: ignore
+    out = ConfDict.from_model(d, uid=True, exclude_defaults=True)
+    assert "D1" in out.to_uid()
+
+
 class HierarchicalCfg(pydantic.BaseModel):
     a: A = A()
     _a: A = A()
