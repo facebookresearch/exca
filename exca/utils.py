@@ -286,10 +286,8 @@ def _set_discriminated_status(
                 from .confdict import ConfDict
 
                 msg = "Failed to extract schema for type %s:\n%s\nFull yaml:\n%s"
-                yaml = ConfDict.from_model(
-                    obj, uid=False, exclude_defaults=False
-                ).to_yaml()
-                logger.warning(msg, obj.__class__.__name__, repr(obj), yaml)
+                cfg = ConfDict.from_model(obj, uid=False, exclude_defaults=False)
+                logger.warning(msg, obj.__class__.__name__, repr(obj), cfg.to_yaml())
                 raise
         if schema is not None:
             discriminator = _get_discriminator(schema, name)
