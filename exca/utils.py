@@ -280,7 +280,12 @@ def _set_discriminated_status(
         discriminator: str = DiscrimStatus.NONE
         if schema is None and len(_pydantic_hints(field.annotation)) > 1:
             # compute schema only if finding a possible pydantic union, as it is slow
-            schema = obj.model_json_schema()
+            try:
+                schema = obj.model_json_schema()
+            except Exception:
+                msg = "Failed to extract schema for type %s:\n%s"
+                logger.warning(msg, obj.__class__.__name__, repr(obj))
+                raise
         if schema is not None:
             discriminator = _get_discriminator(schema, name)
         value = getattr(obj, name, _default)  # use _default for backward compat
