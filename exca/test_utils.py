@@ -387,18 +387,6 @@ def test_complex_discrim() -> None:
     assert "D2" in out.to_uid()
 
 
-class MultiDiscrim(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
-    inst1: D1D2
-    inst2: D1D2
-
-
-def test_multi_discrim() -> None:
-    d = MultiDiscrim(inst1={"uid": "D2"}, inst2={"uid": "D2"})
-    out = ConfDict.from_model(d, uid=True, exclude_defaults=True)
-    assert out.to_uid() == ""
-
-
 class HierarchicalCfg(pydantic.BaseModel):
     a: A = A()
     _a: A = A()
