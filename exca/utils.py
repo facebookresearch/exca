@@ -290,6 +290,7 @@ def _set_discriminated_status(
                     obj, uid=False, exclude_defaults=False
                 ).to_yaml()
                 logger.warning(msg, obj.__class__.__name__, repr(obj), yaml)
+                raise
         if schema is not None:
             discriminator = _get_discriminator(schema, name)
         value = getattr(obj, name, _default)  # use _default for backward compat
