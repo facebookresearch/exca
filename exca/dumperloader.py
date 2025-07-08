@@ -21,10 +21,7 @@ import numpy as np
 
 from . import utils
 
-# X = tp.TypeVar("X")
-# Y = tp.TypeVar("Y", bound=tp.Type[tp.Any])
 logger = logging.getLogger(__name__)
-
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 MEMMAP_ARRAY_FILE_MAX_CACHE = "EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE"
 
