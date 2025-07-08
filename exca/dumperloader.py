@@ -11,6 +11,7 @@ import logging
 import os
 import pickle
 import socket
+import sys
 import threading
 import typing as tp
 import warnings
@@ -66,10 +67,34 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
     def default_class(type_: tp.Type[tp.Any]) -> tp.Type["DumperLoader"]:
         Cls: tp.Any = Pickle  # default
         try:
+            # external implementations first
             for supported, DL in DumperLoader.DEFAULTS.items():
                 if issubclass(type_, supported):
                     Cls = DL
                     break
+            # internal defaults
+            if issubclass(type_, np.ndarray):
+                return MemmapArrayFile
+            if "pandas" in sys.modules:
+                import pandas as pd
+
+                if issubclass(type_, pd.DataFrame):
+                    return PandasDataFrame
+            if "torch" in sys.modules:
+                import torch
+
+                if issubclass(type_, torch.Tensor):
+                    return TorchTensor
+            if "nibabel" in sys.modules:
+                import nibabel
+
+                if issubclass(type_, (nibabel.Nifti1Image, nibabel.Nifti2Image)):
+                    return NibabelNifti
+            if "mne" in sys.modules:
+                import mne
+
+                if issubclass(type_, (mne.io.Raw, mne.io.RawArray)):
+                    return MneRawFif
         except TypeError:
             pass
         return Cls  # type: ignore
@@ -79,19 +104,6 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
         if cache_type not in DumperLoader.CLASSES:
             avail = list(DumperLoader.CLASSES)
             raise ValueError(f"Unknown {cache_type=}, use one of {avail}")
-
-
-# Nifti = (
-#     nibabel.Nifti1Image | nibabel.Nifti2Image | nibabel.filebasedimages.FileBasedImage
-# )
-# DumperLoader.DEFAULTS[(nibabel.Nifti1Image, nibabel.Nifti2Image)] = NibabelNifti
-# DumperLoader.DEFAULTS[torch.Tensor] = TorchTensor
-# # DumperLoader.DEFAULTS[dict] = DataDict
-# # DumperLoader.DEFAULTS[pd.DataFrame] = PandasDataFrame
-#     DumperLoader.DEFAULTS[] = MneRawFif
-#     DumperLoader.CLASSES["MneRaw"] = MneRawFif  # for backwards compatibility
-#     DumperLoader.DEFAULTS[RawBrainVision] = MneRawBrainVision
-# DumperLoader.DEFAULTS[np.ndarray] = MemmapArrayFile
 
 
 class StaticDumperLoader(DumperLoader):
