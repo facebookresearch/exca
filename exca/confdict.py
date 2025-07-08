@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import re
+import sys
 import typing as tp
 from collections import OrderedDict, abc
 from pathlib import Path, PosixPath, WindowsPath
@@ -20,13 +21,6 @@ import pydantic
 import yaml as _yaml
 
 from . import utils
-
-try:
-    import torch
-except ImportError:
-    TorchTensor: tp.Any = np.ndarray
-else:
-    TorchTensor = torch.Tensor
 
 logger = logging.getLogger(__name__)
 Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tp.Tuple[str, tp.Any]]
@@ -369,10 +363,13 @@ class UidMaker:
         self.brackets: tuple[str, str] | None = None
         typestr = ""
         # convert to simpler types
+        if "torch" in sys.modules:
+            import torch
+
+            if isinstance(data, torch.Tensor):
+                data = data.detach().cpu().numpy()
         if isinstance(data, (float, np.float32)) and data.is_integer():
             data = int(data)
-        elif isinstance(data, TorchTensor):
-            data = data.detach().cpu().numpy()
         elif isinstance(data, Path):
             data = str(data)
         # handle base types
