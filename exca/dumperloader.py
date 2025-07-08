@@ -275,7 +275,7 @@ class PandasDataFrame(StaticDumperLoader):
     SUFFIX = ".csv"
 
     @classmethod
-    def static_load(cls, filepath: Path) -> pd.DataFrame:
+    def static_load(cls, filepath: Path) -> tp.Any:
         import pandas as pd
 
         return pd.read_csv(filepath, index_col=0, keep_default_na=False, na_values=[""])
@@ -290,11 +290,11 @@ class PandasDataFrame(StaticDumperLoader):
             value.to_csv(tmp, index=True)
 
 
-class ParquetPandasDataFrame(StaticDumperLoader[pd.DataFrame]):
+class ParquetPandasDataFrame(StaticDumperLoader):
     SUFFIX = ".parquet"
 
     @classmethod
-    def static_load(cls, filepath: Path) -> pd.DataFrame:
+    def static_load(cls, filepath: Path) -> tp.Any:
         import pandas as pd
 
         if not filepath.exists():
@@ -303,7 +303,7 @@ class ParquetPandasDataFrame(StaticDumperLoader[pd.DataFrame]):
         return pd.read_parquet(filepath, dtype_backend="numpy_nullable")
 
     @classmethod
-    def static_dump(cls, filepath: Path, value: pd.DataFrame) -> None:
+    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
         import pandas as pd
 
         if not isinstance(value, pd.DataFrame):
@@ -337,10 +337,10 @@ class MneRawFif(StaticDumperLoader):
             value.save(tmp)
 
 
-class MneRawBrainVision(DumperLoader[Raw]):
+class MneRawBrainVision(DumperLoader):
 
     # Raw = mne.io.Raw | RawBrainVision
-    def dump(self, key: str, value: X) -> dict[str, tp.Any]:
+    def dump(self, key: str, value: tp.Any) -> dict[str, tp.Any]:
         # pylint: disable=unused-import
         import mne
         import pybv  # noqa
@@ -351,7 +351,7 @@ class MneRawBrainVision(DumperLoader[Raw]):
             mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
         return {"filename": uid}
 
-    def load(self, filename: str) -> Raw:  # type: ignore
+    def load(self, filename: str) -> tp.Any:  # type: ignore
         # pylint: disable=unused-import
         import mne
         import pybv  # noqa
@@ -360,12 +360,12 @@ class MneRawBrainVision(DumperLoader[Raw]):
         return mne.io.read_raw_brainvision(fp, verbose=False)
 
 
-class NibabelNifti(StaticDumperLoader[Nifti]):
+class NibabelNifti(StaticDumperLoader):
     SUFFIX = ".nii.gz"
 
     # nibabel.Nifti1Image | nibabel.Nifti2Image | nibabel.filebasedimages.FileBasedImage
     @classmethod
-    def static_load(cls, filepath: Path) -> Nifti:
+    def static_load(cls, filepath: Path) -> tp.Any:
         import nibabel
 
         return nibabel.load(filepath, mmap=True)
@@ -395,7 +395,7 @@ def is_view(x: tp.Any) -> bool:
     return storage_size != x.numel() or not x.is_contiguous()
 
 
-class TorchTensor(StaticDumperLoader[tp.Any]):
+class TorchTensor(StaticDumperLoader):
     SUFFIX = ".pt"
 
     @classmethod
