@@ -10,19 +10,13 @@ import copy
 import logging
 import os
 import shutil
+import sys
 import typing as tp
 import uuid
 from pathlib import Path
 
 import numpy as np
 import pydantic
-
-try:
-    import torch
-except ImportError:
-    TorchTensor: tp.Any = np.ndarray
-else:
-    TorchTensor = torch.Tensor
 
 _default = object()  # sentinel
 EXCLUDE_FIELD = "_exclude_from_cls_uid"
@@ -360,7 +354,12 @@ def find_models(
         stop the search when reaching the searched type
     """
     out: dict[str, T] = {}
-    if isinstance(obj, (str, int, float, np.ndarray, TorchTensor)):
+    base: tp.Tuple[tp.Type[tp.Any], ...] = (str, int, float, np.ndarray)
+    if "torch" in sys.modules:
+        import torch
+
+        base = base + (torch.Tensor,)
+    if isinstance(obj, base):
         return out
     if isinstance(obj, pydantic.BaseModel):
         # copy and set to avoid modifying class attribute instead of instance attribute

@@ -6,6 +6,8 @@
 
 import itertools
 import subprocess
+import sys
+import typing as tp
 from pathlib import Path
 
 import exca
@@ -58,3 +60,14 @@ def test_header() -> None:
         raise AssertionError(
             f"Following files are/were missing standard header (see other files):\n - {missing_str}"
         )
+
+
+if __name__ == "__main__":
+    # run this test independantly to make sure only base exca is loaded
+    _: tp.Any = exca.MapInfra()
+    _ = exca.TaskInfra()
+    modules = ["torch", "mne", "pandas", "nibabel"]  # numpy is loaded
+    modules = [x for x in modules if x in sys.modules]
+    if modules:
+        msg = f"Cache specific modules should not be loaded by default: {modules}"
+        raise RuntimeError(msg)
