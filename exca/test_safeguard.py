@@ -6,9 +6,18 @@
 
 import itertools
 import subprocess
+import sys
 from pathlib import Path
 
 import exca
+
+
+def test_imports() -> None:
+    _ = exca.MapInfra()
+    _ = exca.TaskInfra()
+    modules = ["torch", "mne", "pandas", "nibabel"]  # numpy is loaded
+    modules = [x for x in modules if x in sys.modules]
+    assert not modules, "Cache specific modules should not be loaded by default"
 
 
 def test_package_version() -> None:
