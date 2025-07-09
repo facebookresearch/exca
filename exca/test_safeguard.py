@@ -7,6 +7,7 @@
 import itertools
 import subprocess
 import sys
+import typing as tp
 from pathlib import Path
 
 import exca
@@ -63,7 +64,7 @@ def test_header() -> None:
 
 if __name__ == "__main__":
     # run this test independantly to make sure only base exca is loaded
-    _ = exca.MapInfra()
+    _: tp.Any = exca.MapInfra()
     _ = exca.TaskInfra()
     modules = ["torch", "mne", "pandas", "nibabel", "numpy"]  # numpy is loaded
     modules = [x for x in modules if x in sys.modules]
