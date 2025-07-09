@@ -354,7 +354,7 @@ def find_models(
         stop the search when reaching the searched type
     """
     out: dict[str, T] = {}
-    base = (str, int, float, np.ndarray)
+    base: tp.Tuple[tp.Type[tp.Any], ...] = (str, int, float, np.ndarray)
     if "torch" in sys.modules:
         import torch
 
