@@ -106,11 +106,11 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
 class StaticDumperLoader(DumperLoader):
     SUFFIX = ""
 
-    def load(self, filename: str) -> tp.Any:
+    def load(self, filename: str) -> tp.Any:  # type: ignore
         filepath = self.folder / filename
         return self.static_load(filepath)
 
-    def dump(self, key: str, value: tp.Any) -> dict[str, tp.Any]:  # type: ignore
+    def dump(self, key: str, value: tp.Any) -> dict[str, tp.Any]:
         uid = _string_uid(key)
         filename = uid + self.SUFFIX
         self.static_dump(filepath=self.folder / filename, value=value)
