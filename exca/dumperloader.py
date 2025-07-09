@@ -110,7 +110,7 @@ class StaticDumperLoader(DumperLoader):
         filepath = self.folder / filename
         return self.static_load(filepath)
 
-    def dump(self, key: str, value: tp.Any) -> dict[str, tp.Any]:
+    def dump(self, key: str, value: tp.Any) -> dict[str, tp.Any]:  # type: ignore
         uid = _string_uid(key)
         filename = uid + self.SUFFIX
         self.static_dump(filepath=self.folder / filename, value=value)
