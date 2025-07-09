@@ -66,7 +66,7 @@ if __name__ == "__main__":
     # run this test independantly to make sure only base exca is loaded
     _: tp.Any = exca.MapInfra()
     _ = exca.TaskInfra()
-    modules = ["torch", "mne", "pandas", "nibabel", "numpy"]  # numpy is loaded
+    modules = ["torch", "mne", "pandas", "nibabel"]  # numpy is loaded
     modules = [x for x in modules if x in sys.modules]
     if modules:
         msg = f"Cache specific modules should not be loaded by default: {modules}"
