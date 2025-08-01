@@ -295,6 +295,8 @@ def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
         val = ref.__dict__.get(DISCRIMINATOR_FIELD, None)
         if val is None:
             return  # not checked
+        if new is None:
+            return  # no more present
         new.__dict__[DISCRIMINATOR_FIELD] = val
         ref = dict(ref)
         new = dict(new)
