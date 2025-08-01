@@ -487,10 +487,12 @@ class OptCfg(OrderedNumCfg):
 
 def test_clone_obj_with_optional_subconfig() -> None:
     cfg = OptCfg()
+    assert cfg.num is not None
     assert cfg.num.k == 12
     nonecfg = cfg.infra.clone_obj({"num": None})
     assert nonecfg.num is None
     cfg2 = nonecfg.infra.clone_obj({"num": {"k": 10}})
+    assert cfg2.num is not None
     assert cfg2.num.k == 10
 
 
