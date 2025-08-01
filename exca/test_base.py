@@ -439,6 +439,14 @@ def test_unordered_dict() -> None:
         raise AssertionError("OrderedDict should be cast to standard dict by pydantic")
 
 
+def test_clone_obj_with_dict(tmp_path: Path) -> None:
+    keys = [str(k) for k in range(10)]
+    w = OrderedCfg(d={k: 12 for k in keys}, infra={"folder": tmp_path})  # type: ignore
+    w2 = w.infra.clone_obj()
+    w2.d["0"] = 12
+    assert not w.d["0"]
+
+
 class Num(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     k: int
