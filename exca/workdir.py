@@ -192,7 +192,9 @@ def identify_path(name: str | Path) -> Path:
         raise ValueError("Package url {url} for {name} is not local")
     fp = Path(url[len(tag) :]) / name
     if not fp.exists():
-        raise ValueError(f"Expected to copy {fp} but there's nothing there")
+        if not fp.with_name("__init__.py").exists():
+            raise ValueError(f"Expected to copy {fp} but there's nothing there")
+        fp = fp.parent  # setup/pyproject within the package?
     return fp
 
 

@@ -473,6 +473,29 @@ def test_ordered_dict_with_subcfg_flat(tmp_path: Path) -> None:
     np.testing.assert_equal([k if k != 5 else 12 for k in keys], keys2)
 
 
+def test_clone_obj_with_dict(tmp_path: Path) -> None:
+    keys = [str(k) for k in range(10)]
+    w = OrderedCfg(d={k: [1] for k in keys}, infra={"folder": tmp_path})  # type: ignore
+    w2 = w.infra.clone_obj()
+    w2.d["0"][0] = 12
+    assert w.d["0"][0] == 1
+
+
+class OptCfg(OrderedNumCfg):
+    num: Num | None = Num(k=12)
+
+
+def test_clone_obj_with_optional_subconfig() -> None:
+    cfg = OptCfg()
+    assert cfg.num is not None
+    assert cfg.num.k == 12
+    nonecfg = cfg.infra.clone_obj({"num": None})
+    assert nonecfg.num is None
+    cfg2 = nonecfg.infra.clone_obj({"num": {"k": 10}})
+    assert cfg2.num is not None
+    assert cfg2.num.k == 10
+
+
 def test_weird_types(tmp_path: Path) -> None:
     whatever = WeirdTypes(infra={"folder": tmp_path})  # type: ignore
     _ = whatever.build()
