@@ -336,7 +336,7 @@ class CacheDict(tp.Generic[X]):
             # only filename -> we can remove it as it is not shared
             # moves then delete to avoid weird effects
             fp = Path(self.folder) / dinfo.content["filename"]
-            with utils.fast_unlink(fp):
+            with utils.fast_unlink(fp, missing_ok=True):
                 pass
 
     def __contains__(self, key: str) -> bool:
