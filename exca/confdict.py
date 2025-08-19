@@ -336,8 +336,7 @@ def _flatten(data: tp.Any) -> tp.Any:
         return output
     if isinstance(data, abc.Sequence):
         return data.__class__([_flatten(y) for y in data])  # type: ignore
-    logger.warning("Replacing unsupported data type by None: %s (%s)", type(data), data)
-    return None
+    return data
 
 
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
