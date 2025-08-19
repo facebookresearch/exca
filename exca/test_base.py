@@ -396,6 +396,8 @@ def test_workdir_no_cache(tmp_path: Path) -> None:
     }
     xp = Base(infra=infra)
     assert xp.func() == 24
+    folders = [x.name for x in tmp_path.iterdir()]
+    assert folders == ["exca"]
 
 
 def test_missing_base_model() -> None:
