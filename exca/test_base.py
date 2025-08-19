@@ -388,6 +388,16 @@ def test_tricky_update(tmp_path: Path) -> None:
     assert isinstance(wxp.infra.workdir, WorkDir)
 
 
+def test_workdir_no_cache(tmp_path: Path) -> None:
+    # pb in confdict for subconfig
+    infra: tp.Any = {
+        "folder": None,
+        "workdir": {"folder": tmp_path, "copied": [Path(__file__).parent]},
+    }
+    xp = Base(infra=infra)
+    assert xp.func() == 24
+
+
 def test_missing_base_model() -> None:
     with pytest.raises(RuntimeError):
 
