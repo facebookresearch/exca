@@ -256,10 +256,11 @@ class Strings(DumperLoader):
             raise RuntimeError("Need a write_mode context")
         if not isinstance(value, str):
             raise TypeError(f"Expected string but got {value} ({type(value)})")
+        prefix = "\n<value>".encode("utf8")
         offset = self._f.tell()
         b = value.encode("utf8")
-        self._f.write(b + b"\n")
-        return {"filename": self._name, "offset": offset, "length": len(b)}
+        self._f.write(prefix + b)
+        return {"filename": self._name, "offset": offset + len(prefix), "length": len(b)}
 
 
 class DataDict(DumperLoader):
