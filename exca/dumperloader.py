@@ -72,6 +72,8 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
             # internal defaults
             if issubclass(type_, np.ndarray):
                 return MemmapArrayFile
+            if issubclass(type_, str):
+                return String
             if "pandas" in sys.modules:
                 import pandas as pd
 
