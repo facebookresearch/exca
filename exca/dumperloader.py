@@ -72,6 +72,8 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
             # internal defaults
             if issubclass(type_, np.ndarray):
                 return MemmapArrayFile
+            if issubclass(type_, str):
+                return Strings
             if "pandas" in sys.modules:
                 import pandas as pd
 
@@ -220,6 +222,44 @@ class MemmapArrayFile(DumperLoader):
             "shape": tuple(value.shape),
             "dtype": str(value.dtype),
         }
+
+
+class Strings(DumperLoader):
+
+    def __init__(self, folder: str | Path = "") -> None:
+        super().__init__(folder=folder)
+        self._f: io.BufferedWriter | None = None
+        self._name: str | None = None
+
+    @contextlib.contextmanager
+    def open(self) -> tp.Iterator[None]:
+        if self._name is not None:
+            raise RuntimeError("Cannot reopen DumperLoader context")
+        self._name = f"{host_pid()}.data"
+        with (self.folder / self._name).open("ab") as f:
+            self._f = f
+            try:
+                yield
+            finally:
+                self._f = None
+                self._name = None
+
+    def load(self, filename: str, offset: int, length: int) -> str:  # type: ignore
+        path = self.folder / filename
+        with path.open("rb") as f:
+            f.seek(offset)
+            out = f.read(length).decode("utf8")
+        return out
+
+    def dump(self, key: str, value: str) -> dict[str, tp.Any]:
+        if self._f is None or self._name is None:
+            raise RuntimeError("Need a write_mode context")
+        if not isinstance(value, str):
+            raise TypeError(f"Expected string but got {value} ({type(value)})")
+        offset = self._f.tell()
+        b = value.encode("utf8")
+        self._f.write(b)
+        return {"filename": self._name, "offset": offset, "length": len(b)}
 
 
 class DataDict(DumperLoader):
