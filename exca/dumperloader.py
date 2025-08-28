@@ -73,7 +73,7 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
             if issubclass(type_, np.ndarray):
                 return MemmapArrayFile
             if issubclass(type_, str):
-                return Strings
+                return String
             if "pandas" in sys.modules:
                 import pandas as pd
 
@@ -224,7 +224,7 @@ class MemmapArrayFile(DumperLoader):
         }
 
 
-class Strings(DumperLoader):
+class String(DumperLoader):
 
     def __init__(self, folder: str | Path = "") -> None:
         super().__init__(folder=folder)
@@ -235,7 +235,7 @@ class Strings(DumperLoader):
     def open(self) -> tp.Iterator[None]:
         if self._name is not None:
             raise RuntimeError("Cannot reopen DumperLoader context")
-        self._name = f"{host_pid()}.data"
+        self._name = f"{host_pid()}.txt"
         with (self.folder / self._name).open("ab") as f:
             self._f = f
             try:
