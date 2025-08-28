@@ -34,11 +34,12 @@ def make_mne_raw(ch_type: str) -> mne.io.RawArray:
         pd.DataFrame([{"blu": 12}]),
         make_mne_raw("eeg"),
         "stuff",
+        12,
     ),
 )
 def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     Cls = dumperloader.DumperLoader.default_class(type(data))
-    if not isinstance(data, str):
+    if not isinstance(data, int):
         assert Cls is not dumperloader.Pickle
     dl = Cls(tmp_path)
     # test with an extension, as it's easy to mess the new name with Path.with_suffix
@@ -117,6 +118,15 @@ def test_dump_dict(tmp_path: Path) -> None:
     reloaded = dl.load(**info)
     assert set(reloaded) == {"blublu", "blabla", "blu"}
     np.testing.assert_array_equal(reloaded["blublu"], [12, 12])
+
+
+def test_string_dump(tmp_path: Path) -> None:
+    data = ["hello world\nblublu\n", "stuff"]
+    dl = dumperloader.Strings(tmp_path)
+    with dl.open():
+        info = [dl.dump(str(len(d)), d) for d in data]
+    reloaded = [dl.load(**i) for i in info]
+    assert reloaded == data
 
 
 def test_default_class() -> None:
