@@ -121,11 +121,11 @@ def test_dump_dict(tmp_path: Path) -> None:
 
 
 def test_string_dump(tmp_path: Path) -> None:
-    data = "hello world\nblublu\n"
+    data = ["hello world\nblublu\n", "stuff"]
     dl = dumperloader.Strings(tmp_path)
     with dl.open():
-        info = dl.dump("blublu", data)
-    reloaded = dl.load(**info)
+        info = [dl.dump(str(len(d)), d) for d in data]
+    reloaded = [dl.load(**i) for i in info]
     assert reloaded == data
 
 

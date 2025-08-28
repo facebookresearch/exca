@@ -258,7 +258,7 @@ class Strings(DumperLoader):
             raise TypeError(f"Expected string but got {value} ({type(value)})")
         offset = self._f.tell()
         b = value.encode("utf8")
-        self._f.write(b)
+        self._f.write(b + b"\n")
         return {"filename": self._name, "offset": offset, "length": len(b)}
 
 
