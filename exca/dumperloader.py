@@ -222,6 +222,45 @@ class MemmapArrayFile(DumperLoader):
         }
 
 
+class String(DumperLoader):
+
+    def __init__(self, folder: str | Path = "") -> None:
+        super().__init__(folder=folder)
+        self._f: io.BufferedWriter | None = None
+        self._name: str | None = None
+
+    @contextlib.contextmanager
+    def open(self) -> tp.Iterator[None]:
+        if self._name is not None:
+            raise RuntimeError("Cannot reopen DumperLoader context")
+        self._name = f"{host_pid()}.txt"
+        with (self.folder / self._name).open("ab") as f:
+            self._f = f
+            try:
+                yield
+            finally:
+                self._f = None
+                self._name = None
+
+    def load(self, filename: str, offset: int, length: int) -> str:  # type: ignore
+        path = self.folder / filename
+        with path.open("rb") as f:
+            f.seek(offset)
+            out = f.read(length).decode("utf8")
+        return out
+
+    def dump(self, key: str, value: str) -> dict[str, tp.Any]:
+        if self._f is None or self._name is None:
+            raise RuntimeError("Need a write_mode context")
+        if not isinstance(value, str):
+            raise TypeError(f"Expected string but got {value} ({type(value)})")
+        prefix = "\n<value>".encode("utf8")
+        offset = self._f.tell()
+        b = value.encode("utf8")
+        self._f.write(prefix + b)
+        return {"filename": self._name, "offset": offset + len(prefix), "length": len(b)}
+
+
 class DataDict(DumperLoader):
     """Dumps the first level of values using the default dumper for
     their type"""
