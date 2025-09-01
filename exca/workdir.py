@@ -167,8 +167,7 @@ def identify_path(name: str | Path) -> Path:
     """
     # local files or folder get precedence
     folders = ["."] + os.environ.get("PYTHONPATH", "").split(os.pathsep)
-    folders.extend([x for x in sys.path if sys.base_prefix not in Path(x).parents])
-    print([x for x in sys.path if not Path(x).is_relative_to(sys.base_prefix)])
+    folders.extend([x for x in sys.path if not Path(x).is_relative_to(sys.base_prefix)])
     for folder in folders:
         fp = Path(folder) / name
         if fp.exists():

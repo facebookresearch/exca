@@ -21,8 +21,6 @@ def test_identify_bad_package() -> None:
     with pytest.raises(ValueError) as exc_info:
         workdir.identify_path("blublu12")
     assert "failed to import it" in str(exc_info.value)
-    out = workdir.identify_path("pytest")
-    print(out)
     with pytest.raises(ValueError) as exc_info:
         workdir.identify_path("pytest")
     assert "not been installed from source" in str(exc_info.value)
