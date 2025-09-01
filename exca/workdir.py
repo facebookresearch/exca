@@ -91,8 +91,7 @@ class WorkDir(pydantic.BaseModel):
     copied: tp.Sequence[str | Path] = []
     folder: str | Path | None = None
     log_commit: bool = False
-    # include and exclude names (use "*.py" for only python)
-    includes: tp.Sequence[str] = ()
+    includes: tp.Sequence[str] = ("*.py",)  # default to only python files
     excludes: tp.Sequence[str] = ("__pycache__", ".git")
 
     # internals
