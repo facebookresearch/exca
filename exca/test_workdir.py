@@ -6,6 +6,7 @@
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -115,3 +116,18 @@ def test_ignore(tmp_path: Path) -> None:
     ig = workdir.Ignore(excludes=["stuff.py"])
     out = ig("somewhere", names)
     assert out == {"stuff.py"}
+
+
+def test_sys_path(tmp_path: Path) -> None:
+    # create a module in sys.path
+    sys.path.append(str(tmp_path / "stuff"))
+    fp = tmp_path / "stuff" / "mymodule.py"
+    fp.parent.mkdir()
+    fp.write_text("VALUE = 12")
+    # activate workdir
+    wdir = workdir.WorkDir(copied=["mymodule.py"])
+    folder = tmp_path / "code"
+    wdir.folder = folder
+    with wdir.activate():
+        expected = wdir.folder / "mymodule.py"
+        assert expected.exists()

@@ -162,10 +162,12 @@ def identify_path(name: str | Path) -> Path:
     - a local folder/file in the current working directory
     - a folder/file with an absolute path
     - a folder in the PYTHONPATH
+    - a folder in sys.path (and not in the base install)
     - a package installed in editable mode
     """
     # local files or folder get precedence
     folders = ["."] + os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    folders.extend([x for x in sys.path if not Path(x).is_relative_to(sys.base_prefix)])
     for folder in folders:
         fp = Path(folder) / name
         if fp.exists():
