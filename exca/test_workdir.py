@@ -120,7 +120,7 @@ def test_ignore(tmp_path: Path) -> None:
 
 def test_sys_path(tmp_path: Path) -> None:
     # create a module in sys.path
-    sys.path.append(tmp_path / "stuff")
+    sys.path.append(str(tmp_path / "stuff"))
     fp = tmp_path / "stuff" / "mymodule.py"
     fp.parent.mkdir()
     fp.write_text("VALUE = 12")
