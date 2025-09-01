@@ -20,6 +20,7 @@ from concurrent import futures
 from pathlib import Path
 
 from . import utils
+from .confdict import ConfDict
 from .dumperloader import DumperLoader, StaticDumperLoader, host_pid
 
 X = tp.TypeVar("X")
@@ -432,7 +433,9 @@ class CacheDictWriter:
                 self._dumper = DumperLoader.CLASSES[cd.cache_type](cd.folder)
                 self._exit_stack.enter_context(self._dumper.open())
             info = self._dumper.dump(key, value)
-            files.append(cd.folder / info["filename"])
+            for x, y in ConfDict(info).flat().items():
+                if x.endswith("filename"):
+                    files.append(cd.folder / y)
             if cd._write_legacy_key_files:  # legacy
                 if isinstance(self._dumper, StaticDumperLoader):
                     name = info["filename"][: -len(self._dumper.SUFFIX)] + ".key"
