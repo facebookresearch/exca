@@ -6,6 +6,7 @@
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,8 @@ def test_identify_bad_package() -> None:
     with pytest.raises(ValueError) as exc_info:
         workdir.identify_path("blublu12")
     assert "failed to import it" in str(exc_info.value)
+    out = workdir.identify_path("pytest")
+    print(out)
     with pytest.raises(ValueError) as exc_info:
         workdir.identify_path("pytest")
     assert "not been installed from source" in str(exc_info.value)
@@ -115,3 +118,18 @@ def test_ignore(tmp_path: Path) -> None:
     ig = workdir.Ignore(excludes=["stuff.py"])
     out = ig("somewhere", names)
     assert out == {"stuff.py"}
+
+
+def test_sys_path(tmp_path: Path) -> None:
+    # create a module in sys.path
+    sys.path.append(tmp_path / "stuff")
+    fp = tmp_path / "stuff" / "mymodule.py"
+    fp.parent.mkdir()
+    fp.write_text("VALUE = 12")
+    # activate workdir
+    wdir = workdir.WorkDir(copied=["mymodule.py"])
+    folder = tmp_path / "code"
+    wdir.folder = folder
+    with wdir.activate():
+        expected = wdir.folder / "mymodule.py"
+        assert expected.exists()
