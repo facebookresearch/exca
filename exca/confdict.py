@@ -225,6 +225,7 @@ class ConfDict(dict[str, tp.Any]):
             self.clear()
         for key, val in kwargs.items():
             self[key] = val
+        return self
 
     def flat(self) -> tp.Dict[str, tp.Any]:
         """Returns a flat dictionary such as
