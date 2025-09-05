@@ -379,12 +379,12 @@ class MneRawFif(StaticDumperLoader):
 
     @classmethod
     def static_dump(cls, filepath: Path, value: tp.Any) -> None:
-        import mne
-
-        if not isinstance(value, (mne.io.Raw, mne.io.RawArray)):
-            raise TypeError(f"Only supports mne Raw/RawArray (got {type(value)})")
-        with utils.temporary_save_path(filepath) as tmp:
-            value.save(tmp)
+        try:
+            with utils.temporary_save_path(filepath) as tmp:
+                value.save(tmp)
+        except Exception as e:
+            msg = f"Failed to save object of type {type(value)} through MneRawFif dumper"
+            raise TypeError(msg) from e
 
 
 class MneRawBrainVision(DumperLoader):
