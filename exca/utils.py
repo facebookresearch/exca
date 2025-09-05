@@ -291,15 +291,19 @@ def _set_discriminated_status(
 
 
 def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
+    if isinstance(new, (int, str, Path, float)):
+        return  # nothing to do
     if isinstance(ref, pydantic.BaseModel):
+        copy_discriminated_status(
+            dict(ref), dict(new)
+        )  # depth first in case something goes wrong
         val = ref.__dict__.get(DISCRIMINATOR_FIELD, None)
         if val is None:
             return  # not checked
         if new is None:
             return  # no more present
         new.__dict__[DISCRIMINATOR_FIELD] = val
-        ref = dict(ref)
-        new = dict(new)
+        return
     if isinstance(ref, collections.abc.Mapping):
         keys = list(set(ref) & set(new))  # only check shared ones (in case of extra)
         ref = [ref[k] for k in keys]

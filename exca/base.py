@@ -395,7 +395,12 @@ class BaseInfra(pydantic.BaseModel):
         cdict.update(kwargs)
         out = self._obj.model_validate(cdict)
         _ = self.uid()  # trigger uid computation (to propagate dicriminated status)
-        utils.copy_discriminated_status(self._obj, out)
+        try:
+            utils.copy_discriminated_status(self._obj, out)
+        except Exception as e:
+            logger.warning(
+                f"Failed to copy discriminated status, cloning may be slow:\n{e!r}"
+            )
         return out
 
     def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
