@@ -335,7 +335,7 @@ class PandasDataFrame(StaticDumperLoader):
         import pandas as pd
 
         if not isinstance(value, pd.DataFrame):
-            raise TypeError("Only supports pd.DataFrame")
+            raise TypeError(f"Only supports pd.DataFrame (got {type(value)})")
         with utils.temporary_save_path(filepath) as tmp:
             value.to_csv(tmp, index=True)
 
@@ -357,7 +357,7 @@ class ParquetPandasDataFrame(StaticDumperLoader):
         import pandas as pd
 
         if not isinstance(value, pd.DataFrame):
-            raise TypeError("Only supports pd.DataFrame")
+            raise TypeError(f"Only supports pd.DataFrame (got {type(value)})")
         with utils.temporary_save_path(filepath) as tmp:
             value.to_parquet(tmp)
 
@@ -382,7 +382,7 @@ class MneRawFif(StaticDumperLoader):
         import mne
 
         if not isinstance(value, (mne.io.Raw, mne.io.RawArray)):
-            raise TypeError("Only supports mne Raw/RawArray")
+            raise TypeError(f"Only supports mne Raw/RawArray (got {type(value)})")
         with utils.temporary_save_path(filepath) as tmp:
             value.save(tmp)
 
