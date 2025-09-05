@@ -294,9 +294,8 @@ def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
     if isinstance(new, (int, str, Path, float)):
         return  # nothing to do
     if isinstance(ref, pydantic.BaseModel):
-        copy_discriminated_status(
-            dict(ref), dict(new)
-        )  # depth first in case something goes wrong
+        # depth first in case something goes wrong
+        copy_discriminated_status(dict(ref), dict(new))  
         val = ref.__dict__.get(DISCRIMINATOR_FIELD, None)
         if val is None:
             return  # not checked
