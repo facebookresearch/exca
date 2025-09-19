@@ -546,7 +546,7 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
                 job = LocalJob(self._run_method, *args, **kwargs)
                 job._name = self._factory()  # for better logging message
             else:
-                job = executor.submit(self._run_method, *args, **kwargs)
+                job = executor.submit(self._run_method, *args, **kwargs)  # type: ignore
         return job
 
     @contextlib.contextmanager
