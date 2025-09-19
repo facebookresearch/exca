@@ -398,9 +398,8 @@ class BaseInfra(pydantic.BaseModel):
         try:
             utils.copy_discriminated_status(self._obj, out)
         except Exception as e:
-            logger.warning(
-                f"Failed to copy discriminated status, cloning may be slow:\n{e!r}"
-            )
+            msg = f"Failed to copy discriminated status, cloning may be slow:\n{e!r}"
+            logger.warning(msg)
         return out
 
     def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
