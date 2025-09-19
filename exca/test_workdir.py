@@ -72,6 +72,20 @@ def test_workdir_absolute(tmp_path: Path) -> None:
         assert Path("folder/a_file.py").exists()
 
 
+def test_double_workdir(tmp_path: Path) -> None:
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "a_file.py").touch()
+    wdir = workdir.WorkDir(folder=tmp_path / "new", copied=[folder])
+    with wdir.activate():
+        fp = Path("folder/a_file.py").absolute()
+        assert fp.exists()
+        with wdir.activate():
+            fp2 = Path("folder/a_file.py").absolute()
+            assert fp2.exists()
+    assert fp == fp2
+
+
 def test_workdir_clean_repo(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     # raises if not clean:
     wd = workdir.WorkDir(folder=tmp_path, log_commit=True, copied=[Path(__file__).parent])

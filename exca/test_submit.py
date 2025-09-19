@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,7 @@ class Whatever(pydantic.BaseModel):
 
     @infra.apply
     def process(self, coeff: float = 1) -> float:
+        print("Working directory:", os.getcwd())
         return np.random.rand() * coeff + self.param
 
 
@@ -44,6 +46,32 @@ def test_submit_infra(tmp_path: Path) -> None:
         assert 15 < out < 20
     assert outs[0] != outs[1]
     assert outs[1] != outs[2]
+
+
+@pytest.mark.parametrize("batch", (True, False))
+def test_workdir(tmp_path: Path, batch: bool) -> None:
+    # probably does not work with cluster=None
+    tmp_path = tmp_path / "blublu"
+    tmp_path.mkdir()
+    package = SubmitInfra.__module__.split(".", maxsplit=1)[0]
+    workdir = {"workdir": {"copied": [package]}}
+    what = Whatever(
+        infra={"folder": tmp_path, "cluster": "local", **workdir},  # type: ignore
+    )
+    if batch:
+        with what.infra.batch():
+            job = what.infra.submit(4)
+    else:
+        job = what.infra.submit(4)
+    assert job.result() > 0
+    lines = job.stdout().splitlines()  # type: ignore
+    lines = [x for x in lines if "Working directory" in x]
+    folder_part = f"/blublu/{what.infra._factory()}"
+    assert folder_part in lines[0], "SubmitInfra not loaded from copy workdir"
+    # check symlink
+    uid_folder = what.infra.uid_folder()
+    assert uid_folder is not None
+    assert (uid_folder / "code").exists()
 
 
 def test_submit_infra_array(tmp_path: Path) -> None:

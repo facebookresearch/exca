@@ -541,11 +541,13 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         executor = self._array_executor
         if executor is None:
             executor = self.executor()
-        if executor is None:
-            job = LocalJob(self._run_method, *args, **kwargs)
-            job._name = self._factory()  # for better logging message
-            return job
-        return executor.submit(self._run_method, *args, **kwargs)
+        with self._work_env():
+            if executor is None:
+                job = LocalJob(self._run_method, *args, **kwargs)
+                job._name = self._factory()  # for better logging message
+            else:
+                job = executor.submit(self._run_method, *args, **kwargs)
+        return job
 
     @contextlib.contextmanager
     def batch(self, max_workers: int = 256) -> tp.Iterator[None]:
@@ -567,6 +569,7 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         """
         executor = self.executor()
         with contextlib.ExitStack() as estack:
+            estack.enter_context(self._work_env())
             self._array_executor = executor
             if isinstance(executor, submitit.Executor):
                 executor.update_parameters(slurm_array_parallelism=max_workers)

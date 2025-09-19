@@ -378,7 +378,10 @@ class WrappedBase(pydantic.BaseModel):
 
 def test_tricky_update(tmp_path: Path) -> None:
     # pb in confdict for subconfig
-    infra: tp.Any = {"folder": tmp_path, "workdir": {"copied": [Path(__file__).parent]}}
+    infra: tp.Any = {
+        "folder": tmp_path,
+        "workdir": {"copied": [Path(__file__).parent], "includes": ("*.py",)},
+    }
     xp = Base().infra.clone_obj(infra=infra)
     wxp = WrappedBase(xp=xp)
     wxp.infra._update(dict(xp.infra))
