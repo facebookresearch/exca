@@ -504,6 +504,20 @@ def test_weird_types(tmp_path: Path) -> None:
     _ = whatever.build()
 
 
+class Ambiguous(pydantic.BaseModel):
+    float_or_list: float | list[float] = [0.0, 1.0]
+    infra: TaskInfra = TaskInfra(version="12")
+
+    @infra.apply
+    def func(self) -> tp.Any:
+        return self.float_or_list
+
+
+def test_ambiguous_clone() -> None:
+    a = Ambiguous()
+    a.infra.clone_obj({"float_or_list": 12})
+
+
 def test_defined_in_main() -> None:
     try:
         import neuralset as ns
