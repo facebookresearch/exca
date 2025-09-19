@@ -284,7 +284,7 @@ def test_missing_item_uid() -> None:
             infra: MapInfra = MapInfra(version="12")
 
             @infra.apply  # type: ignore
-            def func(self, items: tp.List[int]) -> tp.Iterator[int]:
+            def func(self, items: tp.List[int]) -> tp.Iterator[int]:  # type: ignore
                 yield from items
 
 

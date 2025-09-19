@@ -86,6 +86,7 @@ class WorkDir(pydantic.BaseModel):
     - The change of working directory (and possibly the copy) only happens when the
       infra is called for submitting the decorated function. Depending on your code,
       this may not be at the very beginning of your execution.
+    - The context is reentrant, upon the second entrance nothing will be updated.
     """
 
     copied: tp.Sequence[str | Path] = []
@@ -97,6 +98,7 @@ class WorkDir(pydantic.BaseModel):
     # internals
     _paths: tp.List[Path]
     _commits: tp.Dict[str, str] = {}
+    _active: bool = False
     model_config = pydantic.ConfigDict(extra="forbid")
 
     def model_post_init(self, log__: tp.Any) -> None:
@@ -130,6 +132,9 @@ class WorkDir(pydantic.BaseModel):
 
     @contextlib.contextmanager
     def activate(self) -> tp.Iterator[None]:
+        if self._active:
+            yield
+            return
         if self.folder is None:
             raise RuntimeError("folder field must be filled before activation")
         folder = Path(self.folder)
@@ -153,7 +158,11 @@ class WorkDir(pydantic.BaseModel):
             logger.info("Git hashes are dumped to %s", fp)
             fp.write_text(string, encoding="utf8")
         with chdir(folder):
-            yield
+            self._active = True
+            try:
+                yield
+            finally:
+                self._active = False
 
 
 def identify_path(name: str | Path) -> Path:
