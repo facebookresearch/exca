@@ -16,6 +16,7 @@ import pytest
 
 from exca import ConfDict
 
+from .map import MapInfra
 from .task import TaskInfra
 from .workdir import WorkDir
 
@@ -60,11 +61,29 @@ class SubBase(Base):
     pass
 
 
-def test_subclass_infra(tmp_path: Path) -> None:
-    whatever = SubInfra(param=13, tag="hello", infra={"folder": tmp_path})  # type: ignore
+# with map infra
+class BaseMap(pydantic.BaseModel):
+    infra: MapInfra = MapInfra(version="12")
+    tag: str = "whatever"
+
+    @infra.apply(item_uid=str)
+    def func(self, inds: tp.Sequence[int]) -> tp.Iterator[float]:
+        for ind in inds:
+            yield ind * np.random.rand()
+
+
+class SubMapInfra(BaseMap):
+    infra: MapInfra = MapInfra(version="24")
+
+
+def test_subclass_map_infra(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError):
-        # infra is not connected
-        _ = whatever.func()
+        _ = SubMapInfra(tag="hello", infra={"folder": tmp_path})  # type: ignore
+
+
+def test_subclass_infra(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError):
+        _ = SubInfra(param=13, tag="hello", infra={"folder": tmp_path})  # type: ignore
 
 
 def test_subclass_func(tmp_path: Path) -> None:
@@ -355,16 +374,6 @@ def test_obj_in_obj() -> None:
     # triggered model_with_infra_validator_after error because obj already set
     base = Base()
     _ = Xp(base=base)
-
-
-class InfraNotApplied(pydantic.BaseModel):
-    infra: TaskInfra = TaskInfra()
-
-
-def test_infra_not_applied() -> None:
-    model = InfraNotApplied()
-    excluded = model.infra._exclude_from_cls_uid()
-    assert len(excluded) > 1
 
 
 class WrappedBase(pydantic.BaseModel):
