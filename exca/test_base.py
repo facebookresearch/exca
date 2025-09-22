@@ -67,7 +67,7 @@ class BaseMap(pydantic.BaseModel):
     tag: str = "whatever"
 
     @infra.apply(item_uid=str)
-    def func(self, inds: tp.Sequence[int]) -> int:
+    def func(self, inds: tp.Sequence[int]) -> tp.Iterator[float]:
         for ind in inds:
             yield ind * np.random.rand()
 
