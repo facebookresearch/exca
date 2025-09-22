@@ -16,6 +16,7 @@ import pytest
 
 from exca import ConfDict
 
+from .map import MapInfra
 from .task import TaskInfra
 from .workdir import WorkDir
 
@@ -128,6 +129,28 @@ def test_cache_names(cls: tp.Type[Base], name: str, tmp_path: Path) -> None:
     base = Base.__module__ + "."  # <...>.test_base
     whatever = cls(infra={"folder": tmp_path})  # type: ignore
     assert whatever.infra.uid() == base + name + "/default"
+
+
+# with map infra
+class BaseMap(pydantic.BaseModel):
+    infra: MapInfra = MapInfra(version="12")
+    tag: str = "whatever"
+
+    @infra.apply(item_uid=str)
+    def func(self, inds: tp.Sequence[int]) -> int:
+        for ind in inds:
+            yield ind * np.random.rand()
+
+
+class SubMapInfra(BaseMap):
+    infra: MapInfra = MapInfra(version="24")
+
+
+def test_subclass_map_infra(tmp_path: Path) -> None:
+    whatever = SubMapInfra(tag="hello", infra={"folder": tmp_path})  # type: ignore
+    with pytest.raises(RuntimeError):
+        # infra is not connected
+        _ = whatever.func([1])
 
 
 # END OF SUBCLASSING TEST
