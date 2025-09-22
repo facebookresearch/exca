@@ -60,7 +60,8 @@ def _add_name(
             continue  # unspecified default
         imethod = default._infra_method
         if imethod is None:
-            continue
+            cls = type(obj).__name__
+            raise RuntimeError(f"Infra {name!r} on {cls} was not applied to a method.")
         imethod.infra_name = name
         if getattr(val, "_infra_name", "") not in (name, ""):
             msg = f"Cannot set name of infra to {name!r}"
