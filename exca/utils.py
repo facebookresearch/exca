@@ -264,11 +264,9 @@ def _set_discriminated_status(
     if "extra" not in obj.model_config:  # SAFETY MEASURE
         cls = obj.__class__
         if cls is pydantic.BaseModel:
-            msg = "A raw/empty BaseModel was instantiated. "
-            msg += (
-                "You must have set a BaseModel type hint so all parameters were ignored. "
-            )
-            msg += "You probably want to use a pydantic discriminated union instead:\n"
+            msg = "A raw/empty BaseModel was instantiated. You must have set a "
+            msg += "BaseModel type hint so all parameters were ignored. You probably "
+            msg += "want to use a pydantic discriminated union instead:\n"
             msg += (
                 "https://docs.pydantic.dev/latest/concepts/unions/#discriminated-unions"
             )
