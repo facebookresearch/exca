@@ -13,6 +13,8 @@ from pathlib import Path
 import pydantic
 import pytest
 
+import exca
+
 from . import utils
 from .confdict import ConfDict
 from .utils import to_dict
@@ -441,3 +443,19 @@ z: exca.confdict.ConfDict
 """
     assert out.to_yaml() == expected
     assert out.to_uid().startswith("x=-,y=PT1M,z=exca.confdict.ConfDict")
+
+
+class BasicP(pydantic.BaseModel):
+    b: pydantic.BaseModel | None = None
+    infra: exca.TaskInfra = exca.TaskInfra(version="12")
+
+    @infra.apply
+    def func(self) -> int:
+        return 12
+
+
+def test_basic_pydantic(tmp_path: Path) -> None:
+    b = BasicP(b={"uid": "D2"})
+    with pytest.raises(RuntimeError) as e:
+        b.infra.clone_obj()
+    assert "discriminated union" in e.value.args[0]

@@ -513,6 +513,19 @@ def test_weird_types(tmp_path: Path) -> None:
     _ = whatever.build()
 
 
+class BasicP(pydantic.BaseModel):
+    b: pydantic.BaseModel | None = None
+    infra: TaskInfra = TaskInfra(version="12")
+
+    @infra.apply
+    def func(self) -> int:
+        return 12
+
+
+def test_basic_pydantic(tmp_path: Path) -> None:
+    _ = BasicP()
+
+
 class Ambiguous(pydantic.BaseModel):
     float_or_list: float | list[float] = [0.0, 1.0]
     infra: TaskInfra = TaskInfra(version="12")
