@@ -454,8 +454,8 @@ class BasicP(pydantic.BaseModel):
         return 12
 
 
-def test_basic_pydantic(tmp_path: Path) -> None:
-    b = BasicP(b={"uid": "D2"})
+def test_basic_pydantic() -> None:
+    b = BasicP(b={"uid": "D2"})  # type: ignore
     with pytest.raises(RuntimeError) as e:
         b.infra.clone_obj()
     assert "discriminated union" in e.value.args[0]
