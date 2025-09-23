@@ -263,6 +263,14 @@ def _set_discriminated_status(
         return  # avoid sub-checks if we already went though it
     if "extra" not in obj.model_config:  # SAFETY MEASURE
         cls = obj.__class__
+        if cls is pydantic.BaseModel:
+            msg = "A raw/empty BaseModel was instantiated. You must have set a "
+            msg += "BaseModel type hint so all parameters were ignored. You probably "
+            msg += "want to use a pydantic discriminated union instead:\n"
+            msg += (
+                "https://docs.pydantic.dev/latest/concepts/unions/#discriminated-unions"
+            )
+            raise RuntimeError(msg)
         name = f"{cls.__module__}.{cls.__qualname__}"
         msg = f"It is strongly advised to forbid extra parameters to {name} by adding to its def:\n"
         msg += 'model_config = pydantic.ConfigDict(extra="forbid")\n'
