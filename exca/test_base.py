@@ -443,6 +443,9 @@ def test_ordered_dict(tmp_path: Path) -> None:
     whatever3 = OrderedCfg(**cfg)
     assert ",".join(whatever3.d) == ",".join(keys2)
     assert whatever3.build() == ",".join(keys2)
+    # check modeldump/cloneobj
+    whatever4 = whatever3.infra.clone_obj()
+    assert ",".join(whatever4.d) == ",".join(whatever3.d)
 
 
 def test_unordered_dict() -> None:
