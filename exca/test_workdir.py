@@ -4,8 +4,10 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import importlib
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -98,19 +100,29 @@ def test_workdir_clean_repo(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
 
 
 def test_workdir_editable(tmp_path: Path) -> None:
+    pkgname = "excatest"
+    foldername = pkgname
+    (tmp_path / foldername).mkdir()
+    pyproject = (Path(__file__).with_name("data") / "fake-pyproject.toml").read_text()
+    pyproject = pyproject.format(name=pkgname)
+    (tmp_path / foldername / "pyproject.toml").write_text(pyproject)
+    (tmp_path / foldername / pkgname).mkdir()
+    (tmp_path / foldername / pkgname / "__init__.py").write_text("hello = 12")
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=tmp_path / foldername
+    )
     try:
-        wdir = workdir.WorkDir(copied=["autoconf"])
-    except:
-        pytest.skip("autoconf not installed in editable mode")
-    folder = tmp_path / "code"
-    wdir.folder = folder
-    with wdir.activate():
-        expected = folder / "autoconf/__init__.py"
-        assert expected.exists()
-        # pylint: disable=import-outside-toplevel
-        import autoconf  # type: ignore
-
-        assert autoconf.__file__ == str(expected)
+        # testing
+        folder = tmp_path / "code"
+        wdir = workdir.WorkDir(copied=[pkgname])
+        wdir.folder = folder
+        with wdir.activate():
+            expected = folder / pkgname / "__init__.py"
+            assert expected.exists()
+            pkg = importlib.import_module(pkgname)
+            assert pkg.__file__ == str(expected)
+    finally:
+        subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", pkgname])
 
 
 def test_ignore(tmp_path: Path) -> None:
