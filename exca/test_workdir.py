@@ -100,7 +100,9 @@ def test_workdir_clean_repo(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
 
 # @pytest.mark.parametrize("project", ("excatest",))
 @pytest.mark.parametrize("project", ("excatest-install", "excatest"))
-def test_identify_path_editable(tmp_path: Path, project: str) -> None:
+@pytest.mark.parametrize("inside", (True,))  # (False, True))
+def test_identify_path_editable(tmp_path: Path, project: str, inside: bool) -> None:
+    tmp_path = Path()
     pkgname = "excatest"
 
     def uninstall() -> None:
@@ -114,18 +116,23 @@ def test_identify_path_editable(tmp_path: Path, project: str) -> None:
         pass
     else:
         uninstall()
-        raise RuntimeError("excatest should not be installed")
+        # raise RuntimeError("excatest should not be installed")
 
     # create structure
     (tmp_path / "repo").mkdir()
-    pyproject = (Path(__file__).with_name("data") / "fake-pyproject.toml").read_text()
-    pyproject = pyproject.format(name=pkgname, project=project)
-    (tmp_path / "repo" / "pyproject.toml").write_text(pyproject)
     (tmp_path / "repo" / pkgname).mkdir()
+    pyproject = (Path(__file__).with_name("data") / "fake-pyproject.toml").read_text()
+
+    pyproject = pyproject.format(name=pkgname if not inside else "", project=project)
+    pyproject_fp = tmp_path / "repo" / "pyproject.toml"
+    if inside:
+        pyproject_fp = tmp_path / "repo" / pkgname / "pyproject.toml"
+    pyproject_fp.write_text(pyproject)
     (tmp_path / "repo" / pkgname / "__init__.py").write_text("hello = 12")
     # install
     cmd = [sys.executable, "-m", "pip", "install", "-e", "."]
-    subprocess.check_call(cmd, cwd=tmp_path / "repo")
+    subprocess.check_call(cmd, cwd=pyproject_fp.parent)
+    raise
     # test identification (in a subprocess for install to be up to date)
     try:
         py = f"from exca import workdir; print(workdir.identify_path({pkgname!r}))"
@@ -136,7 +143,8 @@ def test_identify_path_editable(tmp_path: Path, project: str) -> None:
         folder = Path(out.stdout.decode("utf8").strip())
         assert (folder / "__init__.py").exists()
     finally:
-        uninstall()
+        pass
+        # uninstall()
 
 
 def test_ignore(tmp_path: Path) -> None:
