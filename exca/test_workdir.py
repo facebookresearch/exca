@@ -109,7 +109,7 @@ def test_identify_path_editable(tmp_path: Path, project: str) -> None:
         sys.modules.pop("excatest", None)
 
     try:
-        import excatest  # noqa
+        import excatest  # noqa  # type: ignore
     except ImportError:
         pass
     else:
@@ -128,10 +128,9 @@ def test_identify_path_editable(tmp_path: Path, project: str) -> None:
     subprocess.check_call(cmd, cwd=tmp_path / "repo")
     # test identification (in a subprocess for install to be up to date)
     try:
-        cmd = f"from exca import workdir; print(workdir.identify_path({pkgname!r}))"
-        out = subprocess.run(
-            [sys.executable, "-c", cmd], capture_output=True, check=False
-        )
+        py = f"from exca import workdir; print(workdir.identify_path({pkgname!r}))"
+        cmd = [sys.executable, "-c", py]
+        out = subprocess.run(cmd, capture_output=True, check=False)
         if out.returncode:
             raise RuntimeError(out.stderr.decode("utf8"))
         folder = Path(out.stdout.decode("utf8").strip())
