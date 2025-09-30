@@ -99,17 +99,26 @@ def test_workdir_clean_repo(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
         assert Path("git-hashes.log").read_text().startswith(repo)
 
 
-def test_workdir_editable(tmp_path: Path) -> None:
+@pytest.mark.parametrize("project", ("excatest", "excatest-install"))
+def test_workdir_editable(tmp_path: Path, project: str) -> None:
     pkgname = "excatest"
-    foldername = pkgname
-    (tmp_path / foldername).mkdir()
+    try:
+        pass
+    except ImportError:
+        pass
+    else:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "-y", project], check=False
+        )
+        raise RuntimeError("excatest should not be installed")
+    (tmp_path / "repo").mkdir()
     pyproject = (Path(__file__).with_name("data") / "fake-pyproject.toml").read_text()
-    pyproject = pyproject.format(name=pkgname)
-    (tmp_path / foldername / "pyproject.toml").write_text(pyproject)
-    (tmp_path / foldername / pkgname).mkdir()
-    (tmp_path / foldername / pkgname / "__init__.py").write_text("hello = 12")
+    pyproject = pyproject.format(name=pkgname, project=project)
+    (tmp_path / "repo" / "pyproject.toml").write_text(pyproject)
+    (tmp_path / "repo" / pkgname).mkdir()
+    (tmp_path / "repo" / pkgname / "__init__.py").write_text("hello = 12")
     subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=tmp_path / foldername
+        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=tmp_path / "repo"
     )
     try:
         # testing
@@ -122,7 +131,10 @@ def test_workdir_editable(tmp_path: Path) -> None:
             pkg = importlib.import_module(pkgname)
             assert pkg.__file__ == str(expected)
     finally:
-        subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", pkgname])
+        subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "-y", project], check=False
+        )
+        sys.modules.pop("excatest", None)
 
 
 def test_ignore(tmp_path: Path) -> None:

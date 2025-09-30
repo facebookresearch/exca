@@ -1,5 +1,5 @@
 [project]
-name = {name!r}
+name = {project!r}
 readme = "README.md"
 authors = [{{name = "Meta FAIR"}}]
 requires-python = ">=3.10"
