@@ -30,6 +30,7 @@ dependencies = [
         "pytest>=7.4.0",
         "pytest-markdown-docs>=0.5.0",
         "psutil>=6.1.1",
+        "pip",
         # Format
         "tqdm>=4.65.0",
         "black==24.3.0",
@@ -121,7 +122,7 @@ skip_gitignore = true
   show_error_codes = true
 
 [[tool.mypy.overrides]]
-  module = ['pytest', 'setuptools', 'cloudpickle', 'mne', 'mne.*', 'nibabel', 'neuralset', 'pyarrow', 'pybv']
+  module = ['pytest', 'setuptools', 'cloudpickle', 'mne', 'mne.*', 'nibabel', 'neuralset', 'pyarrow', 'pybv', 'excatest']
   ignore_missing_imports = true
 [[tool.mypy.overrides]]
   # some packages we do not install

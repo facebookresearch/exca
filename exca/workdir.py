@@ -6,14 +6,13 @@
 
 import contextlib
 import fnmatch
-import json
+import importlib
 import logging
 import os
 import shutil
 import subprocess
 import sys
 import typing as tp
-from importlib import metadata
 from pathlib import Path
 
 import pydantic
@@ -182,25 +181,17 @@ def identify_path(name: str | Path) -> Path:
         if fp.exists():
             return fp.absolute()
     # otherwise check for editable installations
-    try:
-        pdistrib = metadata.Distribution.from_name(str(name))
-    except Exception as e:  # pylint: disable=broad-except
-        raise ValueError(
-            f"No folder/file named {name} in {os.getcwd()}, "
-            "and failed to import it as well"
-        ) from e
-    direct_url_json = pdistrib.read_text("direct_url.json")
-    if direct_url_json is None:  # folder
-        raise ValueError(f"Package {name} has not been installed from source")
-    direct_url = json.loads(direct_url_json)
-    pkg_is_editable = direct_url.get("dir_info", {}).get("editable", False)
-    if not pkg_is_editable:
-        raise ValueError(f"Package {name} is not editable")
-    tag = "file://"
-    url = direct_url["url"]
-    if not url.startswith(tag):
-        raise ValueError("Package url {url} for {name} is not local")
-    fp = Path(url[len(tag) :]) / name
+    spec = importlib.util.find_spec(str(name))
+    if spec is None or spec.origin is None:
+        msg = f"No folder/file named {name} in system paths "
+        msg += "and failed to import it as well"
+        raise ValueError(msg)
+    fp = Path(spec.origin)
+    if fp.name == "__init__.py":
+        fp = fp.parent
+    if fp.is_relative_to(sys.base_prefix):
+        msg = f"Package {name} is not editable (installed in {fp})"
+        raise ValueError(msg)
     if not fp.exists():
         if not fp.with_name("__init__.py").exists():
             raise ValueError(f"Expected to copy {fp} but there's nothing there")
