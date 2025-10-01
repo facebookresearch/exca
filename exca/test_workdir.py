@@ -108,6 +108,7 @@ def test_identify_path_editable(tmp_path: Path, project: str) -> None:
         sys.modules.pop("excatest", None)
 
     try:
+        # pylint: disable=unused-import
         import excatest  # noqa  # type: ignore
     except ImportError:
         pass
