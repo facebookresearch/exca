@@ -179,7 +179,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     keep_in_ram: bool = True
     # job configuration
     max_jobs: int | None = 128
-    min_samples_per_job: int = 2048
+    min_samples_per_job: int = 1
     forbid_single_item_computation: bool = False  # for local/slurm/auto
     cluster: tp.Literal[None, "auto", "local", "slurm", "debug", "threadpool", "processpool"] = None  # type: ignore
     # mode among:
