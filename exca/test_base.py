@@ -516,6 +516,43 @@ def test_weird_types(tmp_path: Path) -> None:
     _ = whatever.build()
 
 
+class BaseModel(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+
+class FrozenBaseModel(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+
+@pytest.mark.parametrize("PydanticBase", (BaseModel, FrozenBaseModel))
+def test_large_frozen_model(
+    tmp_path: Path, PydanticBase: tp.Type[pydantic.BaseModel]
+) -> None:
+    fields: dict[str, tp.Any] = {f"int{k}": (int, k) for k in range(5)}
+    fields.update({f"str{k}": (str, str(k)) for k in range(5)})
+    for level in range(12):
+        Level = pydantic.create_model(f"Level{level}", **fields, __base__=PydanticBase)
+        fields[f"level{level}"] = (Level, Level())
+
+    class DeepH(PydanticBase):  # type: ignore
+        x: Level = Level()  # type: ignore
+        infra: TaskInfra = TaskInfra()
+
+        @infra.apply
+        def process(self) -> dict[str, tp.Any]:
+            return self.infra.config().flat()
+
+    # TODO: weirdly enough, model_dump (and therefore infra.config)
+    # does not work in a local job, and returns an empty dict
+    dh = DeepH(infra={"folder": tmp_path})
+    array = []
+    for k in range(10):  # instantiate several items just to check it works
+        array.append(dh.infra.clone_obj({"x.int0": k}))
+    out = array[0].process()
+    assert len(out) > 10000
+    assert isinstance(out, dict)
+
+
 class BasicP(pydantic.BaseModel):
     b: pydantic.BaseModel | None = None
     infra: TaskInfra = TaskInfra(version="12")
