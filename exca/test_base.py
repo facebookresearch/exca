@@ -534,8 +534,8 @@ def test_large_frozen_model(
         Level = pydantic.create_model(f"Level{level}", **fields, __base__=PydanticBase)
         fields[f"level{level}"] = (Level, Level())
 
-    class DeepH(PydanticBase):
-        x: Level = Level()
+    class DeepH(PydanticBase):  # type: ignore
+        x: Level = Level()  # type: ignore
         infra: TaskInfra = TaskInfra()
 
         @infra.apply
