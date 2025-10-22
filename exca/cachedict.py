@@ -20,6 +20,7 @@ from concurrent import futures
 from pathlib import Path
 
 from . import utils
+from .confdict import ConfDict
 from .dumperloader import DumperLoader, StaticDumperLoader, host_pid
 
 X = tp.TypeVar("X")
@@ -60,6 +61,9 @@ class CacheDict(tp.Generic[X]):
           - :code:`"TorchTensor"`: one .pt file per tensor
           - :code:`"PandasDataframe"`: one .csv file per pandas dataframe
           - :code:`"ParquetPandasDataframe"`: one .parquet file per pandas dataframe (faster to dump and read)
+          - :code:`"DataDict"`: a dict for which (first-level) fields are dumped using the default
+            dumper. This is particularly useful to store dict of arrays which would be then loaded
+            as dict of memmaps.
         If `None`, the type will be deduced automatically and by default use a standard pickle dump.
         Loading is handled using the cache_type specified in info files.
     permissions: optional int
@@ -333,7 +337,7 @@ class CacheDict(tp.Generic[X]):
             # only filename -> we can remove it as it is not shared
             # moves then delete to avoid weird effects
             fp = Path(self.folder) / dinfo.content["filename"]
-            with utils.fast_unlink(fp):
+            with utils.fast_unlink(fp, missing_ok=True):
                 pass
 
     def __contains__(self, key: str) -> bool:
@@ -429,7 +433,9 @@ class CacheDictWriter:
                 self._dumper = DumperLoader.CLASSES[cd.cache_type](cd.folder)
                 self._exit_stack.enter_context(self._dumper.open())
             info = self._dumper.dump(key, value)
-            files.append(cd.folder / info["filename"])
+            for x, y in ConfDict(info).flat().items():
+                if x.endswith("filename"):
+                    files.append(cd.folder / y)
             if cd._write_legacy_key_files:  # legacy
                 if isinstance(self._dumper, StaticDumperLoader):
                     name = info["filename"][: -len(self._dumper.SUFFIX)] + ".key"

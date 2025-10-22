@@ -16,6 +16,7 @@ import pytest
 
 from exca import ConfDict
 
+from .map import MapInfra
 from .task import TaskInfra
 from .workdir import WorkDir
 
@@ -60,11 +61,29 @@ class SubBase(Base):
     pass
 
 
-def test_subclass_infra(tmp_path: Path) -> None:
-    whatever = SubInfra(param=13, tag="hello", infra={"folder": tmp_path})  # type: ignore
+# with map infra
+class BaseMap(pydantic.BaseModel):
+    infra: MapInfra = MapInfra(version="12")
+    tag: str = "whatever"
+
+    @infra.apply(item_uid=str)
+    def func(self, inds: tp.Sequence[int]) -> tp.Iterator[float]:
+        for ind in inds:
+            yield ind * np.random.rand()
+
+
+class SubMapInfra(BaseMap):
+    infra: MapInfra = MapInfra(version="24")
+
+
+def test_subclass_map_infra(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError):
-        # infra is not connected
-        _ = whatever.func()
+        _ = SubMapInfra(tag="hello", infra={"folder": tmp_path})  # type: ignore
+
+
+def test_subclass_infra(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError):
+        _ = SubInfra(param=13, tag="hello", infra={"folder": tmp_path})  # type: ignore
 
 
 def test_subclass_func(tmp_path: Path) -> None:
@@ -357,16 +376,6 @@ def test_obj_in_obj() -> None:
     _ = Xp(base=base)
 
 
-class InfraNotApplied(pydantic.BaseModel):
-    infra: TaskInfra = TaskInfra()
-
-
-def test_infra_not_applied() -> None:
-    model = InfraNotApplied()
-    excluded = model.infra._exclude_from_cls_uid()
-    assert len(excluded) > 1
-
-
 class WrappedBase(pydantic.BaseModel):
     xp: Base = Base()
     infra: TaskInfra = TaskInfra(version="12")
@@ -378,7 +387,10 @@ class WrappedBase(pydantic.BaseModel):
 
 def test_tricky_update(tmp_path: Path) -> None:
     # pb in confdict for subconfig
-    infra: tp.Any = {"folder": tmp_path, "workdir": {"copied": [Path(__file__).parent]}}
+    infra: tp.Any = {
+        "folder": tmp_path,
+        "workdir": {"copied": [Path(__file__).parent], "includes": ("*.py",)},
+    }
     xp = Base().infra.clone_obj(infra=infra)
     wxp = WrappedBase(xp=xp)
     wxp.infra._update(dict(xp.infra))
@@ -431,6 +443,9 @@ def test_ordered_dict(tmp_path: Path) -> None:
     whatever3 = OrderedCfg(**cfg)
     assert ",".join(whatever3.d) == ",".join(keys2)
     assert whatever3.build() == ",".join(keys2)
+    # check modeldump/cloneobj
+    whatever4 = whatever3.infra.clone_obj()
+    assert ",".join(whatever4.d) == ",".join(whatever3.d)
 
 
 def test_unordered_dict() -> None:
@@ -473,6 +488,29 @@ def test_ordered_dict_with_subcfg_flat(tmp_path: Path) -> None:
     np.testing.assert_equal([k if k != 5 else 12 for k in keys], keys2)
 
 
+def test_clone_obj_with_dict(tmp_path: Path) -> None:
+    keys = [str(k) for k in range(10)]
+    w = OrderedCfg(d={k: [1] for k in keys}, infra={"folder": tmp_path})  # type: ignore
+    w2 = w.infra.clone_obj()
+    w2.d["0"][0] = 12
+    assert w.d["0"][0] == 1
+
+
+class OptCfg(OrderedNumCfg):
+    num: Num | None = Num(k=12)
+
+
+def test_clone_obj_with_optional_subconfig() -> None:
+    cfg = OptCfg()
+    assert cfg.num is not None
+    assert cfg.num.k == 12
+    nonecfg = cfg.infra.clone_obj({"num": None})
+    assert nonecfg.num is None
+    cfg2 = nonecfg.infra.clone_obj({"num": {"k": 10}})
+    assert cfg2.num is not None
+    assert cfg2.num.k == 10
+
+
 def test_weird_types(tmp_path: Path) -> None:
     whatever = WeirdTypes(infra={"folder": tmp_path})  # type: ignore
     _ = whatever.build()
@@ -506,6 +544,33 @@ def test_large_model(tmp_path: Path) -> None:
     assert len(out) > 10000
     assert isinstance(out, dict)
     raise
+
+
+class BasicP(pydantic.BaseModel):
+    b: pydantic.BaseModel | None = None
+    infra: TaskInfra = TaskInfra(version="12")
+
+    @infra.apply
+    def func(self) -> int:
+        return 12
+
+
+def test_basic_pydantic(tmp_path: Path) -> None:
+    _ = BasicP()
+
+
+class Ambiguous(pydantic.BaseModel):
+    float_or_list: float | list[float] = [0.0, 1.0]
+    infra: TaskInfra = TaskInfra(version="12")
+
+    @infra.apply
+    def func(self) -> tp.Any:
+        return self.float_or_list
+
+
+def test_ambiguous_clone() -> None:
+    a = Ambiguous()
+    a.infra.clone_obj({"float_or_list": 12})
 
 
 def test_defined_in_main() -> None:

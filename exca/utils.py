@@ -10,19 +10,13 @@ import copy
 import logging
 import os
 import shutil
+import sys
 import typing as tp
 import uuid
 from pathlib import Path
 
 import numpy as np
 import pydantic
-
-try:
-    import torch
-except ImportError:
-    TorchTensor: tp.Any = np.ndarray
-else:
-    TorchTensor = torch.Tensor
 
 _default = object()  # sentinel
 EXCLUDE_FIELD = "_exclude_from_cls_uid"
@@ -52,7 +46,6 @@ def _get_uid_info(
         discriminator = model.__dict__.get(DISCRIMINATOR_FIELD, DiscrimStatus.NONE)
         if DiscrimStatus.is_discriminator(discriminator):
             uid_info[FORCE_INCLUDED].add(discriminator)
-
     return uid_info  # type: ignore
 
 
@@ -185,8 +178,8 @@ def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) 
                     break  # val is different from cfg default -> keep in cfg
             else:
                 dump.pop(name)  # all equal to default, let's remove it
-    if isinstance(obj, list):
-        if not isinstance(dump, list) or len(obj) != len(dump):
+    if isinstance(obj, (tuple, list, set)):
+        if not isinstance(dump, (tuple, list, set)) or len(obj) != len(dump):
             raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
         for obj2, dump2 in zip(obj, dump):
             _post_process_dump(obj2, dump2, cfg=cfg)
@@ -270,6 +263,14 @@ def _set_discriminated_status(
         return  # avoid sub-checks if we already went though it
     if "extra" not in obj.model_config:  # SAFETY MEASURE
         cls = obj.__class__
+        if cls is pydantic.BaseModel:
+            msg = "A raw/empty BaseModel was instantiated. You must have set a "
+            msg += "BaseModel type hint so all parameters were ignored. You probably "
+            msg += "want to use a pydantic discriminated union instead:\n"
+            msg += (
+                "https://docs.pydantic.dev/latest/concepts/unions/#discriminated-unions"
+            )
+            raise RuntimeError(msg)
         name = f"{cls.__module__}.{cls.__qualname__}"
         msg = f"It is strongly advised to forbid extra parameters to {name} by adding to its def:\n"
         msg += 'model_config = pydantic.ConfigDict(extra="forbid")\n'
@@ -281,7 +282,15 @@ def _set_discriminated_status(
         discriminator: str = DiscrimStatus.NONE
         if schema is None and len(_pydantic_hints(field.annotation)) > 1:
             # compute schema only if finding a possible pydantic union, as it is slow
-            schema = obj.model_json_schema()
+            try:
+                schema = obj.model_json_schema()
+            except Exception:
+                from .confdict import ConfDict
+
+                msg = "Failed to extract schema for type %s:\n%s\nFull yaml:\n%s"
+                cfg = ConfDict.from_model(obj, uid=False, exclude_defaults=False)
+                logger.warning(msg, obj.__class__.__name__, repr(obj), cfg.to_yaml())
+                raise
         if schema is not None:
             discriminator = _get_discriminator(schema, name)
         value = getattr(obj, name, _default)  # use _default for backward compat
@@ -290,13 +299,18 @@ def _set_discriminated_status(
 
 
 def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
+    if isinstance(new, (int, str, Path, float)):
+        return  # nothing to do
     if isinstance(ref, pydantic.BaseModel):
+        # depth first in case something goes wrong
+        copy_discriminated_status(dict(ref), dict(new))
         val = ref.__dict__.get(DISCRIMINATOR_FIELD, None)
         if val is None:
             return  # not checked
+        if new is None:
+            return  # no more present
         new.__dict__[DISCRIMINATOR_FIELD] = val
-        ref = dict(ref)
-        new = dict(new)
+        return
     if isinstance(ref, collections.abc.Mapping):
         keys = list(set(ref) & set(new))  # only check shared ones (in case of extra)
         ref = [ref[k] for k in keys]
@@ -353,7 +367,12 @@ def find_models(
         stop the search when reaching the searched type
     """
     out: dict[str, T] = {}
-    if isinstance(obj, (str, int, float, np.ndarray, TorchTensor)):
+    base: tp.Tuple[tp.Type[tp.Any], ...] = (str, int, float, np.ndarray)
+    if "torch" in sys.modules:
+        import torch
+
+        base = base + (torch.Tensor,)
+    if isinstance(obj, base):
         return out
     if isinstance(obj, pydantic.BaseModel):
         # copy and set to avoid modifying class attribute instead of instance attribute

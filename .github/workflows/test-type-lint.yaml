@@ -67,6 +67,7 @@ jobs:
         source activate ./ci_env
         pip show pytest
         pytest exca --durations=10
+        python -m exca.test_safeguard  # checks no unneeded imports
 
     - name: Test README code blocks
       run: |

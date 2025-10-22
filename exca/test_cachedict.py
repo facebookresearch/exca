@@ -104,6 +104,7 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any, write_key_files: bool) -
         (np.array([12, 12]), "NumpyMemmapArray"),
         (np.array([12, 12]), "MemmapArrayFile"),
         (np.array([12, 12]), "MemmapArrayFile:0"),
+        ({"x": np.array([12, 12])}, "DataDict"),
     ],
 )
 @pytest.mark.parametrize("legacy_write", (True, False))
@@ -138,7 +139,9 @@ def test_specialized_dump(
     keeps_memmap = cache_type == "MemmapArrayFile" and (
         memmap_cache_size or keep_in_ram
     )  # keeps internal cache
-    keeps_memmap |= cache_type == "NumpyMemmapArray" and keep_in_ram  # stays in ram
+    keeps_memmap |= (
+        cache_type in ("NumpyMemmapArray", "DataDict") and keep_in_ram
+    )  # stays in ram
     files = proc.open_files()
     if keeps_memmap:
         assert files, "Some memmaps should stay open"

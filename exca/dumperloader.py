@@ -11,6 +11,7 @@ import logging
 import os
 import pickle
 import socket
+import sys
 import threading
 import typing as tp
 import warnings
@@ -20,10 +21,7 @@ import numpy as np
 
 from . import utils
 
-X = tp.TypeVar("X")
-Y = tp.TypeVar("Y", bound=tp.Type[tp.Any])
 logger = logging.getLogger(__name__)
-
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 MEMMAP_ARRAY_FILE_MAX_CACHE = "EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE"
 
@@ -40,9 +38,9 @@ def host_pid() -> str:
     return f"{socket.gethostname()}-{threading.get_native_id()}"
 
 
-class DumperLoader(tp.Generic[X]):
-    CLASSES: tp.MutableMapping[str, "tp.Type[DumperLoader[tp.Any]]"] = {}
-    DEFAULTS: tp.MutableMapping[tp.Any, "tp.Type[DumperLoader[tp.Any]]"] = {}
+class DumperLoader:  # not generic, as we don't want to load packages for typig
+    CLASSES: tp.MutableMapping[str, "tp.Type[DumperLoader]"] = {}
+    DEFAULTS: tp.MutableMapping[tp.Any, "tp.Type[DumperLoader]"] = {}
 
     def __init__(self, folder: str | Path = "") -> None:
         self.folder = Path(folder)
@@ -56,20 +54,46 @@ class DumperLoader(tp.Generic[X]):
         super().__init_subclass__(**kwargs)
         DumperLoader.CLASSES[cls.__name__] = cls
 
-    def load(self, filename: str, **kwargs: tp.Any) -> X:
+    def load(self, filename: str, **kwargs: tp.Any) -> tp.Any:
         raise NotImplementedError
 
-    def dump(self, key: str, value: X) -> dict[str, tp.Any]:
+    def dump(self, key: str, value: tp.Any) -> dict[str, tp.Any]:
         raise NotImplementedError
 
     @staticmethod
-    def default_class(type_: Y) -> tp.Type["DumperLoader[Y]"]:
+    def default_class(type_: tp.Type[tp.Any]) -> tp.Type["DumperLoader"]:
         Cls: tp.Any = Pickle  # default
         try:
+            # external implementations first
             for supported, DL in DumperLoader.DEFAULTS.items():
                 if issubclass(type_, supported):
                     Cls = DL
                     break
+            # internal defaults
+            if issubclass(type_, np.ndarray):
+                return MemmapArrayFile
+            if issubclass(type_, str):
+                return String
+            if "pandas" in sys.modules:
+                import pandas as pd
+
+                if issubclass(type_, pd.DataFrame):
+                    return PandasDataFrame
+            if "torch" in sys.modules:
+                import torch
+
+                if issubclass(type_, torch.Tensor):
+                    return TorchTensor
+            if "nibabel" in sys.modules:
+                import nibabel
+
+                if issubclass(type_, (nibabel.Nifti1Image, nibabel.Nifti2Image)):
+                    return NibabelNifti
+            if "mne" in sys.modules:
+                import mne
+
+                if issubclass(type_, (mne.io.Raw, mne.io.RawArray)):
+                    return MneRawFif
         except TypeError:
             pass
         return Cls  # type: ignore
@@ -81,29 +105,29 @@ class DumperLoader(tp.Generic[X]):
             raise ValueError(f"Unknown {cache_type=}, use one of {avail}")
 
 
-class StaticDumperLoader(DumperLoader[X]):
+class StaticDumperLoader(DumperLoader):
     SUFFIX = ""
 
-    def load(self, filename: str) -> X:  # type: ignore
+    def load(self, filename: str) -> tp.Any:  # type: ignore
         filepath = self.folder / filename
         return self.static_load(filepath)
 
-    def dump(self, key: str, value: X) -> dict[str, tp.Any]:
+    def dump(self, key: str, value: tp.Any) -> dict[str, tp.Any]:
         uid = _string_uid(key)
         filename = uid + self.SUFFIX
         self.static_dump(filepath=self.folder / filename, value=value)
         return {"filename": filename}
 
     @classmethod
-    def static_load(cls, filepath: Path) -> X:
+    def static_load(cls, filepath: Path) -> tp.Any:
         raise NotImplementedError
 
     @classmethod
-    def static_dump(cls, filepath: Path, value: X) -> None:
+    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
         raise NotImplementedError
 
 
-class Pickle(StaticDumperLoader[tp.Any]):
+class Pickle(StaticDumperLoader):
     SUFFIX = ".pkl"
 
     @classmethod
@@ -118,7 +142,7 @@ class Pickle(StaticDumperLoader[tp.Any]):
                 pickle.dump(value, f)
 
 
-class NumpyArray(StaticDumperLoader[np.ndarray]):
+class NumpyArray(StaticDumperLoader):
     SUFFIX = ".npy"
 
     @classmethod
@@ -140,7 +164,7 @@ class NumpyMemmapArray(NumpyArray):
         return np.load(filepath, mmap_mode="r")  # type: ignore
 
 
-class MemmapArrayFile(DumperLoader[np.ndarray]):
+class MemmapArrayFile(DumperLoader):
 
     def __init__(self, folder: str | Path = "", max_cache: int | None = None) -> None:
         super().__init__(folder=folder)
@@ -200,166 +224,243 @@ class MemmapArrayFile(DumperLoader[np.ndarray]):
         }
 
 
-DumperLoader.DEFAULTS[np.ndarray] = MemmapArrayFile
+class String(DumperLoader):
 
+    def __init__(self, folder: str | Path = "") -> None:
+        super().__init__(folder=folder)
+        self._f: io.BufferedWriter | None = None
+        self._name: str | None = None
 
-try:
-    import pandas as pd
-except ImportError:
-    pass
-else:
-
-    class PandasDataFrame(StaticDumperLoader[pd.DataFrame]):
-        SUFFIX = ".csv"
-
-        @classmethod
-        def static_load(cls, filepath: Path) -> pd.DataFrame:
-            return pd.read_csv(
-                filepath, index_col=0, keep_default_na=False, na_values=[""]
-            )
-
-        @classmethod
-        def static_dump(cls, filepath: Path, value: pd.DataFrame) -> None:
-            with utils.temporary_save_path(filepath) as tmp:
-                value.to_csv(tmp, index=True)
-
-    DumperLoader.DEFAULTS[pd.DataFrame] = PandasDataFrame
-
-    try:
-        # pylint: disable=unused-import
-        import pyarrow  # noqa
-    except ImportError:
-        pass
-    else:
-
-        class ParquetPandasDataFrame(StaticDumperLoader[pd.DataFrame]):
-            SUFFIX = ".parquet"
-
-            @classmethod
-            def static_load(cls, filepath: Path) -> pd.DataFrame:
-                if not filepath.exists():
-                    # fallback to csv for compatibility when updating to parquet
-                    return PandasDataFrame.static_load(filepath.with_suffix(".csv"))
-                return pd.read_parquet(filepath, dtype_backend="numpy_nullable")
-
-            @classmethod
-            def static_dump(cls, filepath: Path, value: pd.DataFrame) -> None:
-                with utils.temporary_save_path(filepath) as tmp:
-                    value.to_parquet(tmp)
-
-
-try:
-    import mne
-except ImportError:
-    pass
-else:
-
-    class MneRawFif(StaticDumperLoader[mne.io.Raw]):
-        SUFFIX = "-raw.fif"
-
-        @classmethod
-        def static_load(cls, filepath: Path) -> mne.io.Raw:
+    @contextlib.contextmanager
+    def open(self) -> tp.Iterator[None]:
+        if self._name is not None:
+            raise RuntimeError("Cannot reopen DumperLoader context")
+        self._name = f"{host_pid()}.txt"
+        with (self.folder / self._name).open("ab") as f:
+            self._f = f
             try:
-                return mne.io.read_raw_fif(filepath, verbose=False, allow_maxshield=False)
-            except ValueError:
-                raw = mne.io.read_raw_fif(filepath, verbose=False, allow_maxshield=True)
-                msg = "MaxShield data detected, consider applying Maxwell filter and interpolating bad channels"
-                warnings.warn(msg)
-                return raw
+                yield
+            finally:
+                self._f = None
+                self._name = None
 
-        @classmethod
-        def static_dump(cls, filepath: Path, value: mne.io.Raw) -> None:
+    def load(self, filename: str, offset: int, length: int) -> str:  # type: ignore
+        path = self.folder / filename
+        with path.open("rb") as f:
+            f.seek(offset)
+            out = f.read(length).decode("utf8")
+        return out
+
+    def dump(self, key: str, value: str) -> dict[str, tp.Any]:
+        if self._f is None or self._name is None:
+            raise RuntimeError("Need a write_mode context")
+        if not isinstance(value, str):
+            raise TypeError(f"Expected string but got {value} ({type(value)})")
+        prefix = "\n<value>".encode("utf8")
+        offset = self._f.tell()
+        b = value.encode("utf8")
+        self._f.write(prefix + b)
+        return {"filename": self._name, "offset": offset + len(prefix), "length": len(b)}
+
+
+class DataDict(DumperLoader):
+    """Dumps the first level of values using the default dumper for
+    their type"""
+
+    # Note: making DataDict the default for dicts could generate a lot of small files for heavily nested dicts
+
+    def __init__(self, folder: str | Path = "") -> None:
+        super().__init__(folder=folder)
+        self._subs: dict[tp.Any, DumperLoader] = {}
+        self._exit_stack: contextlib.ExitStack | None = None
+
+    @contextlib.contextmanager
+    def open(self) -> tp.Iterator[None]:
+        if self._exit_stack is not None:
+            raise RuntimeError("Cannot reopen DumperLoader context")
+        with contextlib.ExitStack() as estack:
+            self._exit_stack = estack
+            try:
+                yield
+            finally:
+                self._subs.clear()
+                self._exit_stack = None
+
+    def load(self, optimized: dict[str, tp.Any], pickled: dict[str, tp.Any]) -> dict[str, tp.Any]:  # type: ignore
+        output = {}
+        for key, info in optimized.items():
+            loader = self.CLASSES[info["cls"]](self.folder)
+            output[key] = loader.load(**info["info"])
+        if pickled:
+            loader = Pickle(self.folder)
+            output.update(loader.load(**pickled))
+        return output
+
+    def dump(self, key: str, value: dict[str, tp.Any]) -> dict[str, tp.Any]:
+        output: dict[str, dict[str, tp.Any]] = {"optimized": {}, "pickled": {}}
+        if self._exit_stack is None:
+            raise RuntimeError("Dict dumper is not in open context")
+        pickled: tp.Any = {}
+        for skey, val in value.items():
+            default = self.default_class(type(val))
+            if default.__name__ not in self._subs:
+                sub = default(self.folder)
+                self._exit_stack.enter_context(sub.open())
+                self._subs[default.__name__] = sub
+            sub = self._subs[default.__name__]
+            if default.__name__ != "Pickle":
+                output["optimized"][skey] = {
+                    "cls": sub.__class__.__name__,
+                    "info": sub.dump(f"{key}(dict){skey}", val),
+                }
+            else:
+                pickled[skey] = val
+        if pickled:
+            sub = self._subs["Pickle"]
+            output["pickled"] = sub.dump(key, pickled)
+        return output
+
+
+class PandasDataFrame(StaticDumperLoader):
+    SUFFIX = ".csv"
+
+    @classmethod
+    def static_load(cls, filepath: Path) -> tp.Any:
+        import pandas as pd
+
+        return pd.read_csv(filepath, index_col=0, keep_default_na=False, na_values=[""])
+
+    @classmethod
+    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+        import pandas as pd
+
+        if not isinstance(value, pd.DataFrame):
+            raise TypeError(f"Only supports pd.DataFrame (got {type(value)})")
+        with utils.temporary_save_path(filepath) as tmp:
+            value.to_csv(tmp, index=True)
+
+
+class ParquetPandasDataFrame(StaticDumperLoader):
+    SUFFIX = ".parquet"
+
+    @classmethod
+    def static_load(cls, filepath: Path) -> tp.Any:
+        import pandas as pd
+
+        if not filepath.exists():
+            # fallback to csv for compatibility when updating to parquet
+            return PandasDataFrame.static_load(filepath.with_suffix(".csv"))
+        return pd.read_parquet(filepath, dtype_backend="numpy_nullable")
+
+    @classmethod
+    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+        import pandas as pd
+
+        if not isinstance(value, pd.DataFrame):
+            raise TypeError(f"Only supports pd.DataFrame (got {type(value)})")
+        with utils.temporary_save_path(filepath) as tmp:
+            value.to_parquet(tmp)
+
+
+class MneRawFif(StaticDumperLoader):
+    SUFFIX = "-raw.fif"
+
+    @classmethod
+    def static_load(cls, filepath: Path) -> tp.Any:
+        import mne
+
+        try:
+            return mne.io.read_raw_fif(filepath, verbose=False, allow_maxshield=False)
+        except ValueError:
+            raw = mne.io.read_raw_fif(filepath, verbose=False, allow_maxshield=True)
+            msg = "MaxShield data detected, consider applying Maxwell filter and interpolating bad channels"
+            warnings.warn(msg)
+            return raw
+
+    @classmethod
+    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+        try:
             with utils.temporary_save_path(filepath) as tmp:
                 value.save(tmp)
-
-    DumperLoader.DEFAULTS[(mne.io.Raw, mne.io.RawArray)] = MneRawFif
-    DumperLoader.CLASSES["MneRaw"] = MneRawFif  # for backwards compatibility
-
-
-try:
-    # pylint: disable=unused-import
-    import mne
-    import pybv  # noqa
-    from mne.io.brainvision.brainvision import RawBrainVision
-except ImportError:
-    pass
-else:
-
-    Raw = mne.io.Raw | RawBrainVision
-
-    class MneRawBrainVision(DumperLoader[Raw]):
-
-        def dump(self, key: str, value: X) -> dict[str, tp.Any]:
-            uid = _string_uid(key)
-            fp = self.folder / uid / f"{uid}-raw.vhdr"
-            with utils.temporary_save_path(fp) as tmp:
-                mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
-            return {"filename": uid}
-
-        def load(self, filename: str) -> Raw:  # type: ignore
-            fp = self.folder / filename / f"{filename}-raw.vhdr"
-            return mne.io.read_raw_brainvision(fp, verbose=False)
-
-    DumperLoader.DEFAULTS[RawBrainVision] = MneRawBrainVision
+        except Exception as e:
+            msg = f"Failed to save object of type {type(value)} through MneRawFif dumper"
+            raise TypeError(msg) from e
 
 
-try:
-    import nibabel
-except ImportError:
-    pass
-else:
+class MneRawBrainVision(DumperLoader):
 
-    Nifti = (
-        nibabel.Nifti1Image | nibabel.Nifti2Image | nibabel.filebasedimages.FileBasedImage
-    )
+    # Raw = mne.io.Raw | RawBrainVision
+    def dump(self, key: str, value: tp.Any) -> dict[str, tp.Any]:
+        # pylint: disable=unused-import
+        import mne
+        import pybv  # noqa
 
-    class NibabelNifti(StaticDumperLoader[Nifti]):
-        SUFFIX = ".nii.gz"
+        uid = _string_uid(key)
+        fp = self.folder / uid / f"{uid}-raw.vhdr"
+        with utils.temporary_save_path(fp) as tmp:
+            mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
+        return {"filename": uid}
 
-        @classmethod
-        def static_load(cls, filepath: Path) -> Nifti:
-            return nibabel.load(filepath, mmap=True)
+    def load(self, filename: str) -> tp.Any:  # type: ignore
+        # pylint: disable=unused-import
+        import mne
+        import pybv  # noqa
 
-        @classmethod
-        def static_dump(cls, filepath: Path, value: Nifti) -> None:
-            with utils.temporary_save_path(filepath) as tmp:
-                nibabel.save(value, tmp)
-
-    DumperLoader.DEFAULTS[(nibabel.Nifti1Image, nibabel.Nifti2Image)] = NibabelNifti
+        fp = self.folder / filename / f"{filename}-raw.vhdr"
+        return mne.io.read_raw_brainvision(fp, verbose=False)
 
 
-try:
+class NibabelNifti(StaticDumperLoader):
+    SUFFIX = ".nii.gz"
+
+    # nibabel.Nifti1Image | nibabel.Nifti2Image | nibabel.filebasedimages.FileBasedImage
+    @classmethod
+    def static_load(cls, filepath: Path) -> tp.Any:
+        import nibabel
+
+        return nibabel.load(filepath, mmap=True)
+
+    @classmethod
+    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+        import nibabel
+
+        with utils.temporary_save_path(filepath) as tmp:
+            nibabel.save(value, tmp)
+
+
+def is_view(x: tp.Any) -> bool:
+    """Check if the tensor is a view by checking if it is contiguous and has
+    same size as storage.
+
+    Note
+    ----
+    dumping the view of a slice dumps the full underlying storage, so it is
+    safer to clone beforehand
+    """
     import torch
-except ImportError:
-    pass
-else:
 
-    def is_view(x: torch.Tensor) -> bool:
-        """Check if the tensor is a view by checking if it is contiguous and has
-        same size as storage.
+    if not isinstance(x, torch.Tensor):
+        raise TypeError("is_view should only be called on tensors")
+    storage_size = len(x.untyped_storage()) // x.dtype.itemsize
+    return storage_size != x.numel() or not x.is_contiguous()
 
-        Note
-        ----
-        dumping the view of a slice dumps the full underlying storage, so it is
-        safer to clone beforehand
-        """
-        storage_size = len(x.untyped_storage()) // x.dtype.itemsize
-        return storage_size != x.numel() or not x.is_contiguous()
 
-    class TorchTensor(StaticDumperLoader[torch.Tensor]):
-        SUFFIX = ".pt"
+class TorchTensor(StaticDumperLoader):
+    SUFFIX = ".pt"
 
-        @classmethod
-        def static_load(cls, filepath: Path) -> torch.Tensor:
-            return torch.load(filepath, map_location="cpu", weights_only=True)  # type: ignore
+    @classmethod
+    def static_load(cls, filepath: Path) -> tp.Any:  # torch.Tensor
+        import torch
 
-        @classmethod
-        def static_dump(cls, filepath: Path, value: torch.Tensor) -> None:
-            if not isinstance(value, torch.Tensor):
-                raise TypeError(f"Expected torch Tensor but got {value} ({type(value)}")
-            if is_view(value):
-                value = value.clone()
-            with utils.temporary_save_path(filepath) as tmp:
-                torch.save(value.detach().cpu(), tmp)
+        return torch.load(filepath, map_location="cpu", weights_only=True)  # type: ignore
 
-    DumperLoader.DEFAULTS[torch.Tensor] = TorchTensor
+    @classmethod
+    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+        import torch
+
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"Expected torch Tensor but got {value} ({type(value)}")
+        if is_view(value):
+            value = value.clone()
+        with utils.temporary_save_path(filepath) as tmp:
+            torch.save(value.detach().cpu(), tmp)

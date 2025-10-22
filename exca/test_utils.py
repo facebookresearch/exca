@@ -13,6 +13,8 @@ from pathlib import Path
 import pydantic
 import pytest
 
+import exca
+
 from . import utils
 from .confdict import ConfDict
 from .utils import to_dict
@@ -375,6 +377,18 @@ def test_ordered_dict() -> None:
     assert out.to_uid() == uid
 
 
+class ComplexDiscrim(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    inst: dict[str, tuple[D1D2, bool]] | None = None
+
+
+def test_complex_discrim() -> None:
+    d = ComplexDiscrim(inst={"stuff": ({"uid": "D2"}, True)})  # type: ignore
+    out = ConfDict.from_model(d, uid=True, exclude_defaults=True)
+    assert utils.DISCRIMINATOR_FIELD in d.inst["stuff"][0].__dict__  # type: ignore
+    assert "D2" in out.to_uid()
+
+
 class HierarchicalCfg(pydantic.BaseModel):
     a: A = A()
     _a: A = A()
@@ -429,3 +443,19 @@ z: exca.confdict.ConfDict
 """
     assert out.to_yaml() == expected
     assert out.to_uid().startswith("x=-,y=PT1M,z=exca.confdict.ConfDict")
+
+
+class BasicP(pydantic.BaseModel):
+    b: pydantic.BaseModel | None = None
+    infra: exca.TaskInfra = exca.TaskInfra(version="12")
+
+    @infra.apply
+    def func(self) -> int:
+        return 12
+
+
+def test_basic_pydantic() -> None:
+    b = BasicP(b={"uid": "D2"})  # type: ignore
+    with pytest.raises(RuntimeError) as e:
+        b.infra.clone_obj()
+    assert "discriminated union" in e.value.args[0]

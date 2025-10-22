@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import re
+import sys
 import typing as tp
 from collections import OrderedDict, abc
 from pathlib import Path, PosixPath, WindowsPath
@@ -20,13 +21,6 @@ import pydantic
 import yaml as _yaml
 
 from . import utils
-
-try:
-    import torch
-except ImportError:
-    TorchTensor: tp.Any = np.ndarray
-else:
-    TorchTensor = torch.Tensor
 
 logger = logging.getLogger(__name__)
 Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tp.Tuple[str, tp.Any]]
@@ -342,8 +336,7 @@ def _flatten(data: tp.Any) -> tp.Any:
         return output
     if isinstance(data, abc.Sequence):
         return data.__class__([_flatten(y) for y in data])  # type: ignore
-    logger.warning("Replacing unsupported data type by None: %s (%s)", type(data), data)
-    return None
+    return data
 
 
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
@@ -369,10 +362,13 @@ class UidMaker:
         self.brackets: tuple[str, str] | None = None
         typestr = ""
         # convert to simpler types
+        if "torch" in sys.modules:
+            import torch
+
+            if isinstance(data, torch.Tensor):
+                data = data.detach().cpu().numpy()
         if isinstance(data, (float, np.float32)) and data.is_integer():
             data = int(data)
-        elif isinstance(data, TorchTensor):
-            data = data.detach().cpu().numpy()
         elif isinstance(data, Path):
             data = str(data)
         # handle base types
@@ -407,6 +403,8 @@ class UidMaker:
                 self.hash = ",".join(udata[key].hash for key in keys)
         elif isinstance(data, (set, tuple, list)):
             items = [UidMaker(val, version=version) for val in data]
+            if isinstance(data, set):
+                items.sort(key=lambda i: i.string)
             self.string = ",".join(i.string for i in items)
             self.hash = ",".join(i.hash for i in items)
             self.brackets = ("(", ")") if version > 2 else ("[", "]")

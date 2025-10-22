@@ -179,7 +179,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     keep_in_ram: bool = True
     # job configuration
     max_jobs: int | None = 128
-    min_samples_per_job: int = 2048
+    min_samples_per_job: int = 1
     forbid_single_item_computation: bool = False  # for local/slurm/auto
     cluster: tp.Literal[None, "auto", "local", "slurm", "debug", "threadpool", "processpool"] = None  # type: ignore
     # mode among:
@@ -327,7 +327,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 for uid in to_remove:
                     del cache[uid]
             missing = {x: y for x, y in items.items() if x not in self._recomputed}
-            self._recomputed |= set(missing)
+            if isinstance(cache, CacheDict):
+                # dont record computed items if no cache
+                self._recomputed |= set(missing)
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
