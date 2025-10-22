@@ -553,21 +553,6 @@ def test_large_frozen_model(
     assert isinstance(out, dict)
 
 
-class Frozen(Base):
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
-
-
-def test_frozen_model(tmp_path: Path) -> None:
-    f = Frozen(param=0, tag="hello", infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
-    array = []
-    with f.infra.job_array() as array:
-        for k in range(200):
-            array.append(f.infra.clone_obj({"param": k}))
-    out = array[1].func()
-    print(out)
-    raise
-
-
 class BasicP(pydantic.BaseModel):
     b: pydantic.BaseModel | None = None
     infra: TaskInfra = TaskInfra(version="12")
