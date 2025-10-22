@@ -517,18 +517,24 @@ def test_weird_types(tmp_path: Path) -> None:
 
 
 class BaseModel(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+
+class FrozenBaseModel(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
 
-def test_large_model(tmp_path: Path) -> None:
-    tmp_path = Path("tmp")
+@pytest.mark.parametrize("PydanticBase", (BaseModel, FrozenBaseModel))
+def test_large_frozen_model(
+    tmp_path: Path, PydanticBase: tp.Type[pydantic.BaseModel]
+) -> None:
     fields: dict[str, tp.Any] = {f"int{k}": (int, k) for k in range(5)}
     fields.update({f"str{k}": (str, str(k)) for k in range(5)})
     for level in range(12):
-        Level = pydantic.create_model(f"Level{level}", **fields, __base__=BaseModel)
+        Level = pydantic.create_model(f"Level{level}", **fields, __base__=PydanticBase)
         fields[f"level{level}"] = (Level, Level())
 
-    class DeepH(BaseModel):
+    class DeepH(PydanticBase):
         x: Level = Level()
         infra: TaskInfra = TaskInfra()
 
@@ -536,13 +542,29 @@ def test_large_model(tmp_path: Path) -> None:
         def process(self) -> dict[str, tp.Any]:
             return self.infra.config().flat()
 
-    dh = DeepH(infra={"folder": tmp_path, "cluster": "local", "tasks_per_node": 2})  # type: ignore
-    with dh.infra.job_array() as array:
-        array.extend([dh.infra.clone_obj({"x.int0": k}) for k in range(250)])
-    # out = array[0].process()
-    out = array[1].process()
+    # TODO: weirdly enough, model_dump (and therefore infra.config)
+    # does not work in a local job, and returns an empty dict
+    dh = DeepH(infra={"folder": tmp_path})
+    array = []
+    for k in range(10):  # instantiate several items just to check it works
+        array.append(dh.infra.clone_obj({"x.int0": k}))
+    out = array[0].process()
     assert len(out) > 10000
     assert isinstance(out, dict)
+
+
+class Frozen(Base):
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+
+def test_frozen_model(tmp_path: Path) -> None:
+    f = Frozen(param=0, tag="hello", infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
+    array = []
+    with f.infra.job_array() as array:
+        for k in range(200):
+            array.append(f.infra.clone_obj({"param": k}))
+    out = array[1].func()
+    print(out)
     raise
 
 

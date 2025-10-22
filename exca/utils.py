@@ -336,6 +336,8 @@ def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hierarchy"""
     models = find_models(obj, pydantic.BaseModel, include_private=False)
     for m in models.values():
+        if m.model_config.get("frozen", False):
+            continue  # no need to freeze + it actually creates a recursion (not sure why)
         if hasattr(m, "__pydantic_setattr_handlers__"):
             # starting at pydantic 2.11
             m.__pydantic_setattr_handlers__.clear()  # type: ignore
