@@ -517,7 +517,7 @@ def test_weird_types(tmp_path: Path) -> None:
 
 
 class BaseModel(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
 
 def test_large_model(tmp_path: Path) -> None:
@@ -538,7 +538,7 @@ def test_large_model(tmp_path: Path) -> None:
 
     dh = DeepH(infra={"folder": tmp_path, "cluster": "local", "tasks_per_node": 2})  # type: ignore
     with dh.infra.job_array() as array:
-        array.extend([dh.infra.clone_obj({"x.int0": k}) for k in range(50)])
+        array.extend([dh.infra.clone_obj({"x.int0": k}) for k in range(250)])
     # out = array[0].process()
     out = array[1].process()
     assert len(out) > 10000
