@@ -100,6 +100,9 @@ class World(Hello):
 
 def test_named_model() -> None:
     model = Model(sub={"name": "World", "string": "Hello"})  # type: ignore
-    cfg = ConfDict.from_model(model)
-    print(cfg.to_yaml())
-    raise
+    cfg = ConfDict.from_model(model, exclude_defaults=True, uid=True)
+    expected = """sub:
+  name: World
+  string: Hello
+"""
+    assert cfg.to_yaml() == expected
