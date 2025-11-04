@@ -331,8 +331,10 @@ def _get_subclasses(cls: tp.Type[X]) -> dict[str, tp.Type[X]]:
 class NamedModel(pydantic.BaseModel):
     """
     Preserves the types of objects passed in pydantic models during serialization and de-serialization.
-    This is achieved by injecting a field called "type" upon serialization.
+    This is achieved by injecting a field called "name" upon serialization.
     """
+
+    # ref: https://github.com/pydantic/pydantic/issues/7366
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
