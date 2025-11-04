@@ -317,3 +317,48 @@ def update_uids(folder: str | Path, dryrun: bool = True):
     logger.warning(msg, folder, newfolder)
     if not dryrun:
         shutil.move(folder, newfolder)
+
+
+def _get_subclasses(cls: tp.Type[X]) -> dict[str, tp.Type[X]]:
+    """Returns all the subclasses of a given class."""
+    subclasses = {}
+    for subclass in cls.__subclasses__():
+        subclasses[subclass.__name__] = subclass
+        subclasses.update(_get_subclasses(subclass))
+    return subclasses
+
+
+class NamedModel(pydantic.BaseModel):
+    """
+    Preserves the types of objects passed in pydantic models during serialization and de-serialization.
+    This is achieved by injecting a field called "type" upon serialization.
+    """
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    @pydantic.model_serializer(mode="wrap")
+    def _inject_type_on_serialization(
+        self, handler: pydantic.ValidatorFunctionWrapHandler
+    ) -> dict[str, tp.Any]:
+        result: dict[str, tp.Any] = handler(self)
+        if "name" in result:
+            raise ValueError('Cannot use field "name". It is reserved.')
+        result["name"] = f"{self.__class__.__name__}"
+        return result
+
+    @pydantic.model_validator(mode="wrap")  # noqa  # the decorator position is correct
+    @classmethod
+    def _retrieve_type_on_deserialization(
+        cls, value: tp.Any, handler: pydantic.ValidatorFunctionWrapHandler
+    ) -> "NamedModel":
+        if isinstance(value, dict):
+            # WARNING: we do not want to modify `value` which will come from the outer scope
+            # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove `name`
+            modified_value = value.copy()
+            sub_cls_name = modified_value.pop("name", None)
+            if sub_cls_name is not None:
+                sub_cls = _get_subclasses(cls=cls)[sub_cls_name]
+                return sub_cls(**modified_value)  # type: ignore
+            else:
+                return handler(value)  # type: ignore
+        return handler(value)  # type: ignore

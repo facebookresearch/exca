@@ -9,9 +9,11 @@ import typing as tp
 from pathlib import Path
 
 import numpy as np
+import pydantic
 import pytest
 
 from . import helpers
+from .confdict import ConfDict
 
 
 def my_func(a: int, b: int) -> np.ndarray:
@@ -81,3 +83,23 @@ def test_find_slurm_job(tmp_path: Path) -> None:
     assert job is not None
     assert job.config == {"a": 12}
     assert job.stdout() == "Ice cream"
+
+
+class Hello(helpers.NamedModel):
+    num: int = 12
+
+
+class Model(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    sub: helpers.NamedModel
+
+
+class World(Hello):
+    string: str = "world"
+
+
+def test_named_model() -> None:
+    model = Model(sub={"name": "World", "string": "Hello"})  # type: ignore
+    cfg = ConfDict.from_model(model)
+    print(cfg.to_yaml())
+    raise
