@@ -85,7 +85,7 @@ def test_find_slurm_job(tmp_path: Path) -> None:
     assert job.stdout() == "Ice cream"
 
 
-class BaseNamed(helpers.NamedModel, config_key="name"):
+class BaseNamed(helpers.DiscriminatedModel, discriminator_key="name"):
     pass
 
 
@@ -102,7 +102,7 @@ class World(Hello):
     string: str = "world"
 
 
-def test_named_model() -> None:
+def test_discriminated_model() -> None:
     model = Model(sub={"name": "World", "string": "Hello"})  # type: ignore
     cfg = ConfDict.from_model(model, exclude_defaults=True, uid=True)
     expected = """sub:
@@ -112,8 +112,8 @@ def test_named_model() -> None:
     assert cfg.to_yaml() == expected
 
 
-def test_named_model_bad_field() -> None:
+def test_discriminated_model_bad_field() -> None:
     with pytest.raises(RuntimeError):
 
-        class Hello(helpers.NamedModel):
-            name: str = "stuff"
+        class Hello2(helpers.DiscriminatedModel):
+            type: str = "stuff"

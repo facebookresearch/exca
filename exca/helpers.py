@@ -328,25 +328,35 @@ def _get_subclasses(cls: tp.Type[X]) -> dict[str, tp.Type[X]]:
     return subclasses
 
 
-class NamedModel(pydantic.BaseModel):
-    """
-    Preserves the types of objects passed in pydantic models during serialization and de-serialization.
-    This is achieved by injecting a field called "name" upon serialization.
+class DiscriminatedModel(pydantic.BaseModel):
+    """Preserves the types of child class instance passed in pydantic
+    models during serialization and de-serialization. This is achieved
+    by injecting a key upon serialization.
+
+    By default the key is "type" but this can be customized throught heritage
+    (eg: :code:`class SubNamedModel(NamedModel, discriminator_key="name")`)
     """
 
     # ref: https://github.com/pydantic/pydantic/issues/7366
 
     model_config = pydantic.ConfigDict(extra="forbid")
-    _exca_config_key: tp.ClassVar[str] = "type"
+    _exca_discriminator_key: tp.ClassVar[str] = "type"
 
     @classmethod
-    def __init_subclass__(cls, config_key: str | None = None, **kwargs: tp.Any) -> None:
-        if config_key is not None:
-            cls._exca_config_key = config_key
+    def __init_subclass__(
+        cls, discriminator_key: str | None = None, **kwargs: tp.Any
+    ) -> None:
+        if discriminator_key is not None:
+            cls._exca_discriminator_key = discriminator_key
         super().__init_subclass__(**kwargs)
-        if config_key in cls.model_fields:
-            msg = f"Class {cls.__name__!r} cannot have a {config_key!r} field "
-            msg += "as it is used as automatic config name"
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
+        print(cls._exca_discriminator_key, cls.model_fields)
+        key = cls._exca_discriminator_key
+        if key in cls.model_fields:
+            msg = f"Class {cls.__name__!r} cannot have a {key!r} field "
+            msg += "as it is used as discriminator key (automatically added to the serialization)"
             raise RuntimeError(msg)
 
     @pydantic.model_serializer(mode="wrap")
@@ -354,7 +364,7 @@ class NamedModel(pydantic.BaseModel):
         self, handler: pydantic.ValidatorFunctionWrapHandler
     ) -> dict[str, tp.Any]:
         result: dict[str, tp.Any] = handler(self)
-        key = self._exca_config_key
+        key = self._exca_discriminator_key
         if key in result:
             raise ValueError("Cannot use field {key!r}. It is reserved.")
         result[key] = f"{self.__class__.__name__}"
@@ -368,17 +378,17 @@ class NamedModel(pydantic.BaseModel):
         if isinstance(value, dict):
             # WARNING: we do not want to modify `value` which will come from the outer scope
             # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove the config key
-            key = cls._exca_config_key
+            key = cls._exca_discriminator_key
             modified_value = value.copy()
             sub_cls_name = modified_value.pop(key, None)
             if sub_cls_name is not None:
                 sub_classes = _get_subclasses(cls=cls)
                 # safety check (same key):
-                keys = set(s._exca_config_key for s in sub_classes.values())
-                keys.add(cls._exca_config_key)
+                keys = set(s._exca_discriminator_key for s in sub_classes.values())
+                keys.add(cls._exca_discriminator_key)
                 if len(keys) != 1:
                     raise RuntimeError(
-                        f"_exca_config_key differs in subclasses, got {keys}"
+                        f"_exca_discriminator_key differs in subclasses, got {keys}"
                     )
                 sub_cls = sub_classes[sub_cls_name]
                 return sub_cls(**modified_value)  # type: ignore
