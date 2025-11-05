@@ -431,7 +431,7 @@ class ComplexTypesConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     x: pydantic.DirectoryPath = Path("/")
     y: datetime.timedelta = datetime.timedelta(minutes=1)
-    z: pydantic.ImportString = ConfDict
+    # z: pydantic.ImportString = ConfDict  # support dropped because of serialize_as_any
 
 
 def test_complex_types() -> None:
@@ -439,10 +439,9 @@ def test_complex_types() -> None:
     out = ConfDict.from_model(c, uid=True, exclude_defaults=False)
     expected = """x: /
 y: PT1M
-z: exca.confdict.ConfDict
 """
     assert out.to_yaml() == expected
-    assert out.to_uid().startswith("x=-,y=PT1M,z=exca.confdict.ConfDict")
+    assert out.to_uid().startswith("x=-,y=PT1M")
 
 
 class BasicP(pydantic.BaseModel):

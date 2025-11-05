@@ -92,7 +92,9 @@ def to_dict(
     if exclude_defaults:
         _set_discriminated_status(model)
     cfg = ExportCfg(uid=uid, exclude_defaults=exclude_defaults)
-    out = model.model_dump(exclude_defaults=exclude_defaults, mode="json")
+    out = model.model_dump(
+        exclude_defaults=exclude_defaults, mode="json", serialize_as_any=True
+    )
     _post_process_dump(model, out, cfg=cfg)
     return out
 
