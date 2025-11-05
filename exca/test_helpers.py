@@ -112,6 +112,13 @@ def test_discriminated_model() -> None:
     assert cfg.to_yaml() == expected
 
 
+def test_discriminated_model_missing() -> None:
+    with pytest.raises(KeyError) as e:
+        model = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore
+    # existing options should be brinted
+    assert "Hello" in e.value.args[0]
+
+
 def test_discriminated_model_bad_field() -> None:
     with pytest.raises(RuntimeError):
 
