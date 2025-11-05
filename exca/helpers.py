@@ -398,7 +398,7 @@ class DiscriminatedModel(pydantic.BaseModel):
                         raise RuntimeError(msg)
                     val_classes[val] = s
                 if sub_cls_val not in val_classes:
-                    msg = f"Unknown subclass discriminator {sub_cls_val} for {cls}, available: {list(val_classes)}"
+                    msg = f"Unknown subclass discriminator {sub_cls_val!r} for {cls}, available: {list(val_classes)}"
                     raise KeyError(msg)
 
                 sub_cls = val_classes[sub_cls_val]
