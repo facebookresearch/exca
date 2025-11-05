@@ -102,11 +102,6 @@ class World(Hello):
     string: str = "world"
 
 
-# pylint: disable=no-redef
-class Hello(BaseNamed):  # redefined
-    num: int = 11
-
-
 def test_discriminated_model() -> None:
     model = Model(sub={"name": "World", "string": "Hello"})  # type: ignore
     cfg = ConfDict.from_model(model, exclude_defaults=True, uid=True)
