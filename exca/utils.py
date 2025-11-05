@@ -331,6 +331,9 @@ class _FrozenSetattr:
         if name.startswith("_"):
             return self._pydantic_setattr_handler(name, value)
         msg = f"Cannot proceed to update {type(self)}.{name} = {value} as the instance was frozen"
+        msg += (
+            "\n(you can create an unfrozen instance with `type(obj)(**obj.model_dump())`)"
+        )
         raise RuntimeError(msg)
 
 
