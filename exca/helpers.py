@@ -42,9 +42,8 @@ class FuncConfig(pydantic.BaseModel):
     @infra.apply
     def build(self) -> tp.Any:
         """Build the underlying buildable object for this config"""
-        params = {
-            name: getattr(self, name) for name in self.model_fields if name != "infra"
-        }
+        fields = type(self).model_fields
+        params = {name: getattr(self, name) for name in fields if name != "infra"}
         return self._func[0](**params)
 
     def __reduce__(self) -> tp.Any:
@@ -403,6 +402,10 @@ class DiscriminatedModel(pydantic.BaseModel):
                     raise KeyError(msg)
                 sub_cls = val_classes[sub_cls_val]
                 # return handler(sub_cls(**value))
-                return sub_cls(**value)
+                out = sub_cls(**value)
+                print("returning", repr(out))
+                out2 = handler(out)
+                print("after", out2)
+                return out
                 # return handler(sub_cls(**value))
         return handler(value)  # type: ignore

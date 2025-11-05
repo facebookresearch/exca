@@ -115,8 +115,9 @@ def test_discriminated_model() -> None:
     assert model.sub.common == "blublu"
     # instantiate directly
     # w = World(**{"name": "World"})
-    w = World(**{"string": "other", "name": "World"})
+    w = World(**{"string": "other"})  # type: ignore
     assert w.string == "other"
+    # w = World(**{"string": "other", "name": "World"})  # should bug on top level?
 
 
 def test_discriminated_model_missing() -> None:
