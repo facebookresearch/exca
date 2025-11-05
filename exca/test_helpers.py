@@ -9,9 +9,11 @@ import typing as tp
 from pathlib import Path
 
 import numpy as np
+import pydantic
 import pytest
 
 from . import helpers
+from .confdict import ConfDict
 
 
 def my_func(a: int, b: int) -> np.ndarray:
@@ -81,3 +83,38 @@ def test_find_slurm_job(tmp_path: Path) -> None:
     assert job is not None
     assert job.config == {"a": 12}
     assert job.stdout() == "Ice cream"
+
+
+class BaseNamed(helpers.DiscriminatedModel, discriminator_key="name"):
+    pass
+
+
+class Hello(BaseNamed):
+    num: int = 12
+
+
+class Model(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    sub: BaseNamed
+
+
+class World(Hello):
+    string: str = "world"
+
+
+def test_discriminated_model() -> None:
+    model = Model(sub={"name": "World", "string": "Hello"})  # type: ignore
+    cfg = ConfDict.from_model(model, exclude_defaults=True, uid=True)
+    expected = """sub:
+  name: World
+  string: Hello
+"""
+    assert cfg.to_yaml() == expected
+
+
+def test_discriminated_model_bad_field() -> None:
+    with pytest.raises(RuntimeError):
+
+        # pylint: disable=unused-variable
+        class Hello2(helpers.DiscriminatedModel):
+            type: str = "stuff"

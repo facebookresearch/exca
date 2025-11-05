@@ -317,3 +317,90 @@ def update_uids(folder: str | Path, dryrun: bool = True):
     logger.warning(msg, folder, newfolder)
     if not dryrun:
         shutil.move(folder, newfolder)
+
+
+def _get_subclasses(cls: tp.Type[X]) -> list[tp.Type[X]]:
+    """Returns all the subclasses of a given class."""
+    subclasses = []
+    for subclass in cls.__subclasses__():
+        subclasses.append(subclass)
+        subclasses.extend(_get_subclasses(subclass))
+    return subclasses
+
+
+class DiscriminatedModel(pydantic.BaseModel):
+    """Preserves the types of child class instance passed in pydantic
+    models during serialization and de-serialization. This is achieved
+    by injecting a key upon serialization.
+
+    By default the key is "type" but this can be customized throught heritage
+    (eg: :code:`class SubNamedModel(NamedModel, discriminator_key="name")`)
+
+    Note
+    ----
+    experimental feature
+    """
+
+    # ref: https://github.com/pydantic/pydantic/issues/7366
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+    _exca_discriminator_key: tp.ClassVar[str] = "type"
+
+    @classmethod
+    def __init_subclass__(
+        cls, discriminator_key: str | None = None, **kwargs: tp.Any
+    ) -> None:
+        if discriminator_key is not None:
+            cls._exca_discriminator_key = discriminator_key
+        super().__init_subclass__(**kwargs)
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
+        print(cls._exca_discriminator_key, cls.model_fields)
+        key = cls._exca_discriminator_key
+        if key in cls.model_fields:
+            msg = f"Class {cls.__name__!r} cannot have a {key!r} field "
+            msg += "as it is used as discriminator key (automatically added to the serialization)"
+            raise RuntimeError(msg)
+
+    @pydantic.model_serializer(mode="wrap")
+    def _inject_type_on_serialization(
+        self, handler: pydantic.ValidatorFunctionWrapHandler
+    ) -> dict[str, tp.Any]:
+        result: dict[str, tp.Any] = handler(self)
+        key = self._exca_discriminator_key
+        if key in result:
+            raise ValueError("Cannot use field {key!r}. It is reserved.")
+        result[key] = f"{self.__class__.__name__}"
+        return result
+
+    @pydantic.model_validator(mode="wrap")  # noqa  # the decorator position is correct
+    @classmethod
+    def _retrieve_type_on_deserialization(
+        cls, value: tp.Any, handler: pydantic.ValidatorFunctionWrapHandler
+    ) -> "DiscriminatedModel":
+        if isinstance(value, dict):
+            # WARNING: we do not want to modify `value` which will come from the outer scope
+            # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove the config key
+            key = cls._exca_discriminator_key
+            modified_value = value.copy()
+            sub_cls_val = modified_value.pop(key, None)
+            if sub_cls_val is not None:
+                sub_classes = _get_subclasses(cls=cls)
+                val_classes: dict[str, tp.Any] = {}
+                for s in sub_classes:
+                    # safety check (same key):
+                    if s._exca_discriminator_key != key:
+                        msg = f"discriminator_key differs for {s} and base class {cls}"
+                        raise RuntimeError(msg)
+                    val = s.__name__
+                    if val in val_classes:
+                        raise RuntimeError(
+                            f"2 classes are named {val!r}: {val_classes[val]} and {s}."
+                        )
+                    val_classes[val] = s
+                sub_cls = val_classes[sub_cls_val]
+                return sub_cls(**modified_value)
+            else:
+                return handler(value)  # type: ignore
+        return handler(value)  # type: ignore

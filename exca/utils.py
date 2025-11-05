@@ -145,6 +145,8 @@ def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) 
         obj = dict(obj)
     if isinstance(obj, dict):
         for name, sub_dump in list(dump.items()):
+            if name not in obj:
+                continue  # ignore as it may be added by serialization
             if isinstance(obj[name], collections.OrderedDict):
                 # keep ordered dicts
                 dump[name] = collections.OrderedDict(sub_dump)

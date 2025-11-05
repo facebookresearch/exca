@@ -36,4 +36,4 @@ Associated classes and functions
     :members:
 
 .. automodule:: exca.helpers
-    :members: with_infra, find_slurm_job
+    :members: with_infra, find_slurm_job, DiscriminatedModel
