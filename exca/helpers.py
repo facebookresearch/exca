@@ -356,7 +356,6 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
-        print(cls._exca_discriminator_key, cls.model_fields)
         key = cls._exca_discriminator_key
         if key in cls.model_fields:
             msg = f"Class {cls.__name__!r} cannot have a {key!r} field "
