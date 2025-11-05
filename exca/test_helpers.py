@@ -106,3 +106,10 @@ def test_named_model() -> None:
   string: Hello
 """
     assert cfg.to_yaml() == expected
+
+
+def test_named_model_bad_field() -> None:
+    with pytest.raises(RuntimeError):
+
+        class Bad(helpers.NamedModel):
+            name: str = "stuff"

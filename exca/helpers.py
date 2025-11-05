@@ -338,6 +338,12 @@ class NamedModel(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
+        super().__pydantic_init_subclass__(**kwargs)
+        if "name" in cls.model_fields:
+            raise RuntimeError(f"Class {cls.__name__!r} cannot have a 'name' field")
+
     @pydantic.model_serializer(mode="wrap")
     def _inject_type_on_serialization(
         self, handler: pydantic.ValidatorFunctionWrapHandler
