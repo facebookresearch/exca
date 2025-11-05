@@ -335,6 +335,10 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     By default the key is "type" but this can be customized throught heritage
     (eg: :code:`class SubNamedModel(NamedModel, discriminator_key="name")`)
+
+    Note
+    ----
+    experimental feature
     """
 
     # ref: https://github.com/pydantic/pydantic/issues/7366
