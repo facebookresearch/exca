@@ -358,8 +358,8 @@ class DiscriminatedModel(pydantic.BaseModel):
     def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
         key = cls._exca_discriminator_key
         if key in cls.model_fields:
-            msg = f"Class {cls.__name__!r} cannot have a {key!r} field "
-            msg += "as it is used as discriminator key (automatically added to the serialization)"
+            msg = f"{cls!r} cannot have a {key!r} field as it is used as "
+            msg += "discriminator key (automatically added to the serialization)"
             raise RuntimeError(msg)
 
     @pydantic.model_serializer(mode="wrap")
