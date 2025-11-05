@@ -113,6 +113,9 @@ def test_discriminated_model() -> None:
     # instantiate base
     model = Model(sub={"name": "BaseNamed"})  # type: ignore
     assert model.sub.common == "blublu"
+    # instantiate directly
+    w = World(**{"name": "World"})
+    assert w.string == "world"
 
 
 def test_discriminated_model_missing() -> None:
