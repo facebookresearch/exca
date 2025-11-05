@@ -102,6 +102,11 @@ class World(Hello):
     string: str = "world"
 
 
+# pylint: disable=no-redef
+class Hello(BaseNamed):  # redefined
+    num: int = 11
+
+
 def test_discriminated_model() -> None:
     model = Model(sub={"name": "World", "string": "Hello"})  # type: ignore
     cfg = ConfDict.from_model(model, exclude_defaults=True, uid=True)
@@ -116,4 +121,4 @@ def test_discriminated_model_bad_field() -> None:
     with pytest.raises(RuntimeError):
 
         class Hello2(helpers.DiscriminatedModel):
-            type: str = "stuff"  # type: ignore
+            type: str = "stuff"

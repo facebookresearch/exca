@@ -319,12 +319,12 @@ def update_uids(folder: str | Path, dryrun: bool = True):
         shutil.move(folder, newfolder)
 
 
-def _get_subclasses(cls: tp.Type[X]) -> dict[str, tp.Type[X]]:
+def _get_subclasses(cls: tp.Type[X]) -> list[tp.Type[X]]:
     """Returns all the subclasses of a given class."""
-    subclasses = {}
+    subclasses = []
     for subclass in cls.__subclasses__():
-        subclasses[subclass.__name__] = subclass
-        subclasses.update(_get_subclasses(subclass))
+        subclasses.append(subclass)
+        subclasses.extend(_get_subclasses(subclass))
     return subclasses
 
 
@@ -380,18 +380,23 @@ class DiscriminatedModel(pydantic.BaseModel):
             # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove the config key
             key = cls._exca_discriminator_key
             modified_value = value.copy()
-            sub_cls_name = modified_value.pop(key, None)
-            if sub_cls_name is not None:
+            sub_cls_val = modified_value.pop(key, None)
+            if sub_cls_val is not None:
                 sub_classes = _get_subclasses(cls=cls)
-                # safety check (same key):
-                keys = set(s._exca_discriminator_key for s in sub_classes.values())
-                keys.add(cls._exca_discriminator_key)
-                if len(keys) != 1:
-                    raise RuntimeError(
-                        f"_exca_discriminator_key differs in subclasses, got {keys}"
-                    )
-                sub_cls = sub_classes[sub_cls_name]
-                return sub_cls(**modified_value)  # type: ignore
+                val_classes = {}
+                for s in sub_classes:
+                    # safety check (same key):
+                    if s._exca_discriminator_key != key:
+                        msg = f"discriminator_key differs for {s} and base class {cls}"
+                        raise RuntimeError(msg)
+                    val = s.__name__
+                    if val in val_classes:
+                        raise RuntimeError(
+                            f"2 classes are named {val!r}: {val_classes[val]} and {s}."
+                        )
+                    val_classes[val] = s
+                sub_cls = val_classes[sub_cls_val]
+                return sub_cls(**modified_value)
             else:
                 return handler(value)  # type: ignore
         return handler(value)  # type: ignore
