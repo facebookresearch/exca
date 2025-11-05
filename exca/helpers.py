@@ -385,7 +385,7 @@ class DiscriminatedModel(pydantic.BaseModel):
             modified_value = value.copy()
             sub_cls_val = modified_value.pop(key, None)
             if sub_cls_val is not None:
-                sub_classes = _get_subclasses(cls=cls)
+                sub_classes = _get_subclasses(cls=cls) + [cls]
                 val_classes: dict[str, tp.Any] = {}
                 for s in sub_classes:
                     # safety check (same key):

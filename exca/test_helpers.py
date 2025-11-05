@@ -86,7 +86,7 @@ def test_find_slurm_job(tmp_path: Path) -> None:
 
 
 class BaseNamed(helpers.DiscriminatedModel, discriminator_key="name"):
-    pass
+    common: str = "blublu"
 
 
 class Hello(BaseNamed):
@@ -110,6 +110,9 @@ def test_discriminated_model() -> None:
   string: Hello
 """
     assert cfg.to_yaml() == expected
+    # instantiate base
+    model = Model(sub={"name": "BaseNamed"})  # type: ignore
+    assert model.sub.common == "blublu"
 
 
 def test_discriminated_model_missing() -> None:
