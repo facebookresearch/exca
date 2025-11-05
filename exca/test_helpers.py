@@ -85,13 +85,17 @@ def test_find_slurm_job(tmp_path: Path) -> None:
     assert job.stdout() == "Ice cream"
 
 
-class Hello(helpers.NamedModel):
+class BaseNamed(helpers.NamedModel, config_key="name"):
+    pass
+
+
+class Hello(BaseNamed):
     num: int = 12
 
 
 class Model(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
-    sub: helpers.NamedModel
+    sub: BaseNamed
 
 
 class World(Hello):
@@ -111,5 +115,5 @@ def test_named_model() -> None:
 def test_named_model_bad_field() -> None:
     with pytest.raises(RuntimeError):
 
-        class Bad(helpers.NamedModel):
+        class Hello(helpers.NamedModel):
             name: str = "stuff"

@@ -337,21 +337,27 @@ class NamedModel(pydantic.BaseModel):
     # ref: https://github.com/pydantic/pydantic/issues/7366
 
     model_config = pydantic.ConfigDict(extra="forbid")
+    _exca_config_key: tp.ClassVar[str] = "type"
 
     @classmethod
-    def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
-        super().__pydantic_init_subclass__(**kwargs)
-        if "name" in cls.model_fields:
-            raise RuntimeError(f"Class {cls.__name__!r} cannot have a 'name' field")
+    def __init_subclass__(cls, config_key: str | None = None, **kwargs: tp.Any) -> None:
+        if config_key is not None:
+            cls._exca_config_key = config_key
+        super().__init_subclass__(**kwargs)
+        if config_key in cls.model_fields:
+            msg = f"Class {cls.__name__!r} cannot have a {config_key!r} field "
+            msg += "as it is used as automatic config name"
+            raise RuntimeError(msg)
 
     @pydantic.model_serializer(mode="wrap")
     def _inject_type_on_serialization(
         self, handler: pydantic.ValidatorFunctionWrapHandler
     ) -> dict[str, tp.Any]:
         result: dict[str, tp.Any] = handler(self)
-        if "name" in result:
-            raise ValueError('Cannot use field "name". It is reserved.')
-        result["name"] = f"{self.__class__.__name__}"
+        key = self._exca_config_key
+        if key in result:
+            raise ValueError("Cannot use field {key!r}. It is reserved.")
+        result[key] = f"{self.__class__.__name__}"
         return result
 
     @pydantic.model_validator(mode="wrap")  # noqa  # the decorator position is correct
@@ -361,11 +367,20 @@ class NamedModel(pydantic.BaseModel):
     ) -> "NamedModel":
         if isinstance(value, dict):
             # WARNING: we do not want to modify `value` which will come from the outer scope
-            # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove `name`
+            # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove the config key
+            key = cls._exca_config_key
             modified_value = value.copy()
-            sub_cls_name = modified_value.pop("name", None)
+            sub_cls_name = modified_value.pop(key, None)
             if sub_cls_name is not None:
-                sub_cls = _get_subclasses(cls=cls)[sub_cls_name]
+                sub_classes = _get_subclasses(cls=cls)
+                # safety check (same key):
+                keys = set(s._exca_config_key for s in sub_classes.values())
+                keys.add(cls._exca_config_key)
+                if len(keys) != 1:
+                    raise RuntimeError(
+                        f"_exca_config_key differs in subclasses, got {keys}"
+                    )
+                sub_cls = sub_classes[sub_cls_name]
                 return sub_cls(**modified_value)  # type: ignore
             else:
                 return handler(value)  # type: ignore
