@@ -342,7 +342,7 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     # ref: https://github.com/pydantic/pydantic/issues/7366
 
-    model_config = pydantic.ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid", validation_error_cause=True)
     _exca_discriminator_key: tp.ClassVar[str] = "type"
 
     @classmethod
@@ -377,7 +377,6 @@ class DiscriminatedModel(pydantic.BaseModel):
     def _retrieve_type_on_deserialization(
         cls, value: tp.Any, handler: pydantic.ValidatorFunctionWrapHandler
     ) -> "DiscriminatedModel":
-        print("HERE", cls, value)
         if isinstance(value, dict):
             # WARNING: we do not want to modify `value` which will come from the outer scope
             # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove the config key
@@ -403,4 +402,13 @@ class DiscriminatedModel(pydantic.BaseModel):
                 sub_cls = val_classes[sub_cls_val]
                 if sub_cls is not cls:
                     return sub_cls(**value)  # type: ignore
-        return handler(value)  # type: ignore
+                else:
+                    return handler(value)  # type: ignore
+        try:
+            return handler(value)  # type: ignore
+        except pydantic.ValidationError as e:
+            options = [x.__name__ for x in _get_subclasses(cls=cls) + [cls]]
+            msg = f"failing to instantiate {cls} which is a {DiscriminatedModel}, "
+            msg += f"have you forgotten specifying the discriminated key {cls._exca_discriminator_key!r} "
+            msg += f"with a valid option? {options}\n\nInitial error: {e}"
+            raise ValueError(msg)

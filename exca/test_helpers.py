@@ -122,11 +122,14 @@ def test_discriminated_model() -> None:
         kwargs["name"] = "World"  # must accept key as well
 
 
-def test_discriminated_model_missing() -> None:
+def test_discriminated_model_errors() -> None:
     with pytest.raises(KeyError) as e:
         _ = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore
     # existing options should be brinted
     assert "Hello" in e.value.args[0]
+    with pytest.raises(pydantic.ValidationError) as e2:
+        _ = Model(sub={"num": 12})  # type: ignore
+    assert "specifying the discriminated key" in str(e2.value)
 
 
 def test_discriminated_model_bad_field() -> None:
