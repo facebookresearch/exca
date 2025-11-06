@@ -401,11 +401,6 @@ class DiscriminatedModel(pydantic.BaseModel):
                     msg = f"Unknown subclass discriminator {sub_cls_val!r} for {cls}, available: {list(val_classes)}"
                     raise KeyError(msg)
                 sub_cls = val_classes[sub_cls_val]
-                # return handler(sub_cls(**value))
-                out = sub_cls(**value)
-                print("returning", repr(out))
-                out2 = handler(out)
-                print("after", out2)
-                return out
-                # return handler(sub_cls(**value))
+                if sub_cls is not cls:
+                    return sub_cls(**value)  # type: ignore
         return handler(value)  # type: ignore
