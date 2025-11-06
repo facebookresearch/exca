@@ -411,4 +411,4 @@ class DiscriminatedModel(pydantic.BaseModel):
             msg = f"failing to instantiate {cls} which is a {DiscriminatedModel}, "
             msg += f"have you forgotten specifying the discriminated key {cls._exca_discriminator_key!r} "
             msg += f"with a valid option? {options}\n\nInitial error: {e}"
-            raise ValueError(msg)
+            raise ValueError(msg) from e
