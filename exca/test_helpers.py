@@ -116,7 +116,7 @@ def test_discriminated_model() -> None:
     # instantiate directly
     # w = World(**{"name": "World"})
     kwargs: tp.Any = {"string": "other"}  # type: ignore
-    for k in range(2):
+    for _ in range(2):
         w = World(**kwargs)
         assert w.string == "other"
         kwargs["name"] = "World"  # must accept key as well
