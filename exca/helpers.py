@@ -394,6 +394,8 @@ class DiscriminatedModel(pydantic.BaseModel):
                     val = s.__name__
                     past = val_classes.get(val, None)
                     if past is not None and past.__module__ != s.__module__:
+                        # if the new class with same name is in the same module, it will
+                        # replace it, otherwise it raises for safety
                         msg = f"2 subclasses from different modules are named {val!r}: {past} and {s}."
                         raise RuntimeError(msg)
                     val_classes[val] = s
