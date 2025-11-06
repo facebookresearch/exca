@@ -392,8 +392,11 @@ class DiscriminatedModel(pydantic.BaseModel):
                         msg = f"discriminator_key differs for {s} and base class {cls}"
                         raise RuntimeError(msg)
                     val = s.__name__
-                    if val in val_classes:
-                        msg = f"2 classes are named {val!r}: {val_classes[val]} and {s}."
+                    past = val_classes.get(val, None)
+                    if past is not None and past.__module__ != s.__module__:
+                        # if the new class with same name is in the same module, it will
+                        # replace it, otherwise it raises for safety
+                        msg = f"2 subclasses from different modules are named {val!r}: {past} and {s}."
                         raise RuntimeError(msg)
                     val_classes[val] = s
                 if sub_cls_val not in val_classes:
