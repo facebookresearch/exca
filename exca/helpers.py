@@ -42,9 +42,8 @@ class FuncConfig(pydantic.BaseModel):
     @infra.apply
     def build(self) -> tp.Any:
         """Build the underlying buildable object for this config"""
-        params = {
-            name: getattr(self, name) for name in self.model_fields if name != "infra"
-        }
+        fields = type(self).model_fields
+        params = {name: getattr(self, name) for name in fields if name != "infra"}
         return self._func[0](**params)
 
     def __reduce__(self) -> tp.Any:
@@ -343,7 +342,7 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     # ref: https://github.com/pydantic/pydantic/issues/7366
 
-    model_config = pydantic.ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid", validation_error_cause=True)
     _exca_discriminator_key: tp.ClassVar[str] = "type"
 
     @classmethod
@@ -382,10 +381,10 @@ class DiscriminatedModel(pydantic.BaseModel):
             # WARNING: we do not want to modify `value` which will come from the outer scope
             # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove the config key
             key = cls._exca_discriminator_key
-            modified_value = value.copy()
-            sub_cls_val = modified_value.pop(key, None)
+            value = value.copy()
+            sub_cls_val = value.pop(key, None)
             if sub_cls_val is not None:
-                sub_classes = _get_subclasses(cls=cls)
+                sub_classes = _get_subclasses(cls=cls) + [cls]
                 val_classes: dict[str, tp.Any] = {}
                 for s in sub_classes:
                     # safety check (same key):
@@ -400,9 +399,16 @@ class DiscriminatedModel(pydantic.BaseModel):
                 if sub_cls_val not in val_classes:
                     msg = f"Unknown subclass discriminator {sub_cls_val!r} for {cls}, available: {list(val_classes)}"
                     raise KeyError(msg)
-
                 sub_cls = val_classes[sub_cls_val]
-                return sub_cls(**modified_value)
-            else:
-                return handler(value)  # type: ignore
-        return handler(value)  # type: ignore
+                if sub_cls is not cls:
+                    return sub_cls(**value)  # type: ignore
+                else:
+                    return handler(value)  # type: ignore
+        try:
+            return handler(value)  # type: ignore
+        except pydantic.ValidationError as e:
+            options = [x.__name__ for x in _get_subclasses(cls=cls) + [cls]]
+            msg = f"failing to instantiate {cls} which is a {DiscriminatedModel}, "
+            msg += f"have you forgotten specifying the discriminated key {cls._exca_discriminator_key!r} "
+            msg += f"with a valid option? {options}\n\nInitial error on instantiating {cls.__name__!r}: {e}"
+            raise ValueError(msg) from e

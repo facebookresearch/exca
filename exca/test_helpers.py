@@ -86,7 +86,7 @@ def test_find_slurm_job(tmp_path: Path) -> None:
 
 
 class BaseNamed(helpers.DiscriminatedModel, discriminator_key="name"):
-    pass
+    common: str = "blublu"
 
 
 class Hello(BaseNamed):
@@ -110,13 +110,26 @@ def test_discriminated_model() -> None:
   string: Hello
 """
     assert cfg.to_yaml() == expected
+    # instantiate base
+    model = Model(sub={"name": "BaseNamed"})  # type: ignore
+    assert model.sub.common == "blublu"
+    # instantiate directly
+    # w = World(**{"name": "World"})
+    kwargs: tp.Any = {"string": "other"}  # type: ignore
+    for _ in range(2):
+        w = World(**kwargs)
+        assert w.string == "other"
+        kwargs["name"] = "World"  # must accept key as well
 
 
-def test_discriminated_model_missing() -> None:
+def test_discriminated_model_errors() -> None:
     with pytest.raises(KeyError) as e:
         _ = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore
     # existing options should be brinted
     assert "Hello" in e.value.args[0]
+    with pytest.raises(pydantic.ValidationError) as e2:
+        _ = Model(sub={"num": 12})  # type: ignore
+    assert "specifying the discriminated key" in str(e2.value)
 
 
 def test_discriminated_model_bad_field() -> None:

@@ -12,4 +12,4 @@ from .map import MapInfra as MapInfra
 from .task import SubmitInfra as SubmitInfra
 from .task import TaskInfra as TaskInfra
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"
