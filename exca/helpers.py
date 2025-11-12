@@ -368,10 +368,11 @@ class DiscriminatedModel(pydantic.BaseModel):
         result: dict[str, tp.Any] = handler(self)
         key = self._exca_discriminator_key
         name = self.__class__.__name__
-        if key in result:
-            msg = f"Cannot use field {key!r} in {self.__class__}, it is reserved."
+        result.setdefault(key, name)
+        # serialization can be reentrant (not sure why) so field may be prepopulated
+        if result[key] != name:
+            msg = f"Field {key!r} in {self.__class__} has unexpected value {result[key]}"
             raise ValueError(msg)
-        result[key] = name
         return result
 
     @pydantic.model_validator(mode="wrap")  # noqa  # the decorator position is correct

@@ -12,6 +12,8 @@ import numpy as np
 import pydantic
 import pytest
 
+import exca
+
 from . import helpers
 from .confdict import ConfDict
 
@@ -138,3 +140,19 @@ def test_discriminated_model_bad_field() -> None:
         # pylint: disable=unused-variable
         class Hello2(helpers.DiscriminatedModel):
             type: str = "stuff"
+
+
+class DiscriminatedWithInfra(BaseNamed):
+    string: str = "world"
+    infra: exca.MapInfra = exca.MapInfra()
+
+    @infra.apply(item_uid=str)
+    def process(self, nums: list[int]) -> tp.Iterator[int]:
+        for num in nums:
+            yield 2 * num
+
+
+def test_discriminated_model_with_infra(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path}
+    model = Model(sub={"name": "DiscriminatedWithInfra", "infra": infra})  # type: ignore
+    print(model.sub.infra.uid())
