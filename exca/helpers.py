@@ -367,9 +367,10 @@ class DiscriminatedModel(pydantic.BaseModel):
     ) -> dict[str, tp.Any]:
         result: dict[str, tp.Any] = handler(self)
         key = self._exca_discriminator_key
+        name = self.__class__.__name__
         if key in result:
-            raise ValueError("Cannot use field {key!r}. It is reserved.")
-        result[key] = f"{self.__class__.__name__}"
+            raise ValueError(f"Cannot use field {key!r} in {self.__class__}, it is reserved.")
+        result[key] = name
         return result
 
     @pydantic.model_validator(mode="wrap")  # noqa  # the decorator position is correct
