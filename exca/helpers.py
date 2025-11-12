@@ -369,7 +369,8 @@ class DiscriminatedModel(pydantic.BaseModel):
         key = self._exca_discriminator_key
         name = self.__class__.__name__
         result.setdefault(key, name)
-        # serialization can be reentrant (not sure why) so field may be prepopulated
+        # serialization can be reentrant in some pydantic version (not sure why)
+        # so the field may be prepopulated
         if result[key] != name:
             msg = f"Field {key!r} in {self.__class__} has unexpected value {result[key]}"
             raise ValueError(msg)
