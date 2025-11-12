@@ -369,7 +369,8 @@ class DiscriminatedModel(pydantic.BaseModel):
         key = self._exca_discriminator_key
         name = self.__class__.__name__
         if key in result:
-            raise ValueError(f"Cannot use field {key!r} in {self.__class__}, it is reserved.")
+            msg = f"Cannot use field {key!r} in {self.__class__}, it is reserved."
+            raise ValueError(msg)
         result[key] = name
         return result
 
