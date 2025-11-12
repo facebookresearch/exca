@@ -155,4 +155,4 @@ class DiscriminatedWithInfra(BaseNamed):
 def test_discriminated_model_with_infra(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path}
     model = Model(sub={"name": "DiscriminatedWithInfra", "infra": infra})  # type: ignore
-    print(model.sub.infra.uid())
+    assert "DiscriminatedWithInfra" in model.sub.infra.uid()
