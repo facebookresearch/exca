@@ -125,7 +125,7 @@ def test_discriminated_model() -> None:
 
 
 def test_discriminated_model_errors() -> None:
-    with pytest.raises(KeyError) as e:
+    with pytest.raises(ValueError) as e:
         _ = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore
     # existing options should be brinted
     assert "Hello" in e.value.args[0]
