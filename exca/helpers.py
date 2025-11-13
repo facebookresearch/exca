@@ -369,7 +369,9 @@ class DiscriminatedModel(pydantic.BaseModel):
         key = self._exca_discriminator_key
         name = self.__class__.__name__
         if key in result:
-            raise ValueError(f"Cannot use field {key!r} in {self.__class__}, it is reserved.")
+            raise ValueError(
+                f"Cannot use field {key!r} in {self.__class__}, it is reserved."
+            )
         result[key] = name
         return result
 
@@ -401,8 +403,10 @@ class DiscriminatedModel(pydantic.BaseModel):
                         raise RuntimeError(msg)
                     val_classes[val] = s
                 if sub_cls_val not in val_classes:
+                    # https://docs.pydantic.dev/latest/concepts/validators/#raising-validation-errors
+                    # -> should not use a KeyError for pydantic to handle unions in type
                     msg = f"Unknown subclass discriminator {sub_cls_val!r} for {cls}, available: {list(val_classes)}"
-                    raise KeyError(msg)
+                    raise ValueError(msg)  # use ValueError
                 sub_cls = val_classes[sub_cls_val]
                 if sub_cls is not cls:
                     return sub_cls(**value)  # type: ignore
