@@ -161,7 +161,6 @@ def test_discriminated_model_with_infra(tmp_path: Path) -> None:
 class UnionModel(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     sub: DiscriminatedWithInfra | World
-    # sub: DiscriminatedWithInfra | World = DiscriminatedWithInfra()
 
 
 def test_discriminated_model_with_union(tmp_path: Path) -> None:
