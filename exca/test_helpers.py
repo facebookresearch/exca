@@ -168,4 +168,4 @@ def test_discriminated_model_with_union(tmp_path: Path) -> None:
     model = UnionModel(sub={"name": "World", "string": "hey"})  # type: ignore
     assert isinstance(model.sub, World)
     with pytest.raises(pydantic.ValidationError):
-        _ = UnionModel(sub={"name": "Hello"})
+        _ = UnionModel(sub={"name": "Hello"})  # type: ignore
