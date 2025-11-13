@@ -116,8 +116,7 @@ def test_discriminated_model() -> None:
     model = Model(sub={"name": "BaseNamed"})  # type: ignore
     assert model.sub.common == "blublu"
     # instantiate directly
-    # w = World(**{"name": "World"})
-    kwargs: tp.Any = {"string": "other"}  # type: ignore
+    kwargs: tp.Any = {"string": "other"}
     for _ in range(2):
         w = World(**kwargs)
         assert w.string == "other"
@@ -125,10 +124,10 @@ def test_discriminated_model() -> None:
 
 
 def test_discriminated_model_errors() -> None:
-    with pytest.raises(KeyError) as e:
+    with pytest.raises(ValueError) as e:
         _ = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore
     # existing options should be brinted
-    assert "Hello" in e.value.args[0]
+    assert "Hello" in str(e.value)
     with pytest.raises(pydantic.ValidationError) as e2:
         _ = Model(sub={"num": 12})  # type: ignore
     assert "specifying the discriminated key" in str(e2.value)
@@ -156,3 +155,15 @@ def test_discriminated_model_with_infra(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path}
     model = Model(sub={"name": "DiscriminatedWithInfra", "infra": infra})  # type: ignore
     assert "DiscriminatedWithInfra" in model.sub.infra.uid()  # type: ignore
+
+
+class UnionModel(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    sub: DiscriminatedWithInfra | World
+
+
+def test_discriminated_model_with_union(tmp_path: Path) -> None:
+    model = UnionModel(sub={"name": "World", "string": "hey"})  # type: ignore
+    assert isinstance(model.sub, World)
+    with pytest.raises(pydantic.ValidationError):
+        _ = UnionModel(sub={"name": "Hello"})  # type: ignore
