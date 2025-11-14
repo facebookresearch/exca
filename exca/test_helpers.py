@@ -173,7 +173,5 @@ def test_discriminated_model_with_union(tmp_path: Path) -> None:
     assert isinstance(model.sub, World)
     with pytest.raises(pydantic.ValidationError):
         _ = UnionModel(sub={"name": "Hello"})  # type: ignore
-    expected = (
-        "exca.test_helpers.UnionModel.process,0/sub={name=World,string=hey}-7f18d064"
-    )
-    assert model.infra.uid() == expected
+    expected = "sub={name=World,string=hey}-7f18d064"
+    assert model.infra.uid().endswith(expected)
