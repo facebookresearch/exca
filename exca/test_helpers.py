@@ -160,6 +160,12 @@ def test_discriminated_model_with_infra(tmp_path: Path) -> None:
 class UnionModel(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     sub: DiscriminatedWithInfra | World
+    infra: exca.MapInfra = exca.MapInfra()
+
+    @infra.apply(item_uid=str)
+    def process(self, nums: list[int]) -> tp.Iterator[int]:
+        for num in nums:
+            yield 2 * num
 
 
 def test_discriminated_model_with_union(tmp_path: Path) -> None:
@@ -167,3 +173,7 @@ def test_discriminated_model_with_union(tmp_path: Path) -> None:
     assert isinstance(model.sub, World)
     with pytest.raises(pydantic.ValidationError):
         _ = UnionModel(sub={"name": "Hello"})  # type: ignore
+    expected = (
+        "exca.test_helpers.UnionModel.process,0/sub={name=World,string=hey}-7f18d064"
+    )
+    assert model.infra.uid() == expected

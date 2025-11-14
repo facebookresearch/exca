@@ -18,6 +18,8 @@ from pathlib import Path
 import numpy as np
 import pydantic
 
+from . import helpers
+
 _default = object()  # sentinel
 EXCLUDE_FIELD = "_exclude_from_cls_uid"
 UID_EXCLUDED = "excluded"
@@ -284,7 +286,10 @@ def _set_discriminated_status(
     schema: tp.Any = None
     for name, field in type(obj).model_fields.items():
         discriminator: str = DiscrimStatus.NONE
-        if schema is None and len(_pydantic_hints(field.annotation)) > 1:
+        classes = _pydantic_hints(field.annotation)
+        # ignore DiscriminatedModel which do not need discriminator checks
+        classes = [c for c in classes if not issubclass(c, helpers.DiscriminatedModel)]
+        if schema is None and len(classes) > 1:
             # compute schema only if finding a possible pydantic union, as it is slow
             try:
                 schema = obj.model_json_schema()
