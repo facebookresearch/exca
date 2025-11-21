@@ -121,6 +121,9 @@ def test_discriminated_model() -> None:
         w = World(**kwargs)
         assert w.string == "other"
         kwargs["name"] = "World"  # must accept key as well
+    # instantiate with string
+    model = Model(sub="World")  # type: ignore
+    assert isinstance(model.sub, World)
 
 
 def test_discriminated_model_errors() -> None:

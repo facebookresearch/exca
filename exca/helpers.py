@@ -381,10 +381,12 @@ class DiscriminatedModel(pydantic.BaseModel):
     def _retrieve_type_on_deserialization(
         cls, value: tp.Any, handler: pydantic.ValidatorFunctionWrapHandler
     ) -> "DiscriminatedModel":
+        key = cls._exca_discriminator_key
+        if isinstance(value, str):
+            value = {key: value}  # -> instantiate corresponding class with default params
         if isinstance(value, dict):
             # WARNING: we do not want to modify `value` which will come from the outer scope
             # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove the config key
-            key = cls._exca_discriminator_key
             value = value.copy()
             sub_cls_val = value.pop(key, None)
             if sub_cls_val is not None:
