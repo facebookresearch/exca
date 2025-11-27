@@ -450,9 +450,9 @@ class CacheDictWriter:
                 fp = self._info_filepath
                 self._info_handle = self._exit_stack.enter_context(fp.open("ab"))
             if not self._info_handle.tell():
-                meta_str = METADATA_TAG + json.dumps(meta) + "\n"
+                meta_str = METADATA_TAG + str(json.dumps(meta)) + "\n"
                 self._info_handle.write(meta_str.encode("utf8"))
-            b = json.dumps(info).encode("utf8")
+            b = json.dumps(info)
             current = self._info_handle.tell()
             self._info_handle.write(b + b"\n")
             info.pop("#key")
