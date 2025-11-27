@@ -10,7 +10,7 @@ Disk, RAM caches
 import contextlib
 import dataclasses
 import io
-import json
+import orjson as json
 import logging
 import os
 import shutil
