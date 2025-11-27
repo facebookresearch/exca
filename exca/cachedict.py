@@ -10,7 +10,6 @@ Disk, RAM caches
 import contextlib
 import dataclasses
 import io
-import json
 import logging
 import os
 import shutil
@@ -18,6 +17,8 @@ import subprocess
 import typing as tp
 from concurrent import futures
 from pathlib import Path
+
+import orjson as json
 
 from . import utils
 from .confdict import ConfDict
@@ -450,9 +451,9 @@ class CacheDictWriter:
                 fp = self._info_filepath
                 self._info_handle = self._exit_stack.enter_context(fp.open("ab"))
             if not self._info_handle.tell():
-                meta_str = METADATA_TAG + json.dumps(meta) + "\n"
+                meta_str = METADATA_TAG + json.dumps(meta).decode("utf8") + "\n"
                 self._info_handle.write(meta_str.encode("utf8"))
-            b = json.dumps(info).encode("utf8")
+            b = json.dumps(info)
             current = self._info_handle.tell()
             self._info_handle.write(b + b"\n")
             info.pop("#key")
