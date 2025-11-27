@@ -10,7 +10,6 @@ Disk, RAM caches
 import contextlib
 import dataclasses
 import io
-import orjson as json
 import logging
 import os
 import shutil
@@ -18,6 +17,8 @@ import subprocess
 import typing as tp
 from concurrent import futures
 from pathlib import Path
+
+import orjson as json
 
 from . import utils
 from .confdict import ConfDict
