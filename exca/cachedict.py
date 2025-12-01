@@ -16,7 +16,6 @@ import os
 import shutil
 import subprocess
 import typing as tp
-from concurrent import futures
 from pathlib import Path
 
 from . import utils
@@ -99,13 +98,11 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram: bool = False,
         cache_type: None | str = None,
         permissions: int | None = 0o777,
-        _write_legacy_key_files: bool = False,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
         self.cache_type = cache_type
         self._keep_in_ram = keep_in_ram
-        self._write_legacy_key_files = _write_legacy_key_files
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
         if self.folder is not None:
@@ -155,54 +152,9 @@ class CacheDict(tp.Generic[X]):
     def keys(self) -> tp.Iterator[str]:
         """Returns the keys in the dictionary
         (triggers a cache folder reading if folder is not None)"""
-        self._read_key_files()
         self._read_info_files()
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
-
-    # LEGACY
-    def _read_key_files(self) -> None:
-        """Legacy reader"""
-        if self.folder is None:
-            return
-        if self._folder_modified > 0:
-            # already checked once so no need to check again (key files are legacy)
-            return
-        folder = Path(self.folder)
-        fp = folder / ".cache_type"  # legacy cache type detection
-        if not fp.exists():
-            return  # no key file if no .cache_type file
-        cache_type = fp.read_text()
-        # read all existing key files as fast as possible (pathlib.glob is slow)
-        find_cmd = 'find . -type f -name "*.key"'
-        try:
-            out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
-        except subprocess.CalledProcessError as e:
-            out = e.output
-        names = out.decode("utf8").splitlines()
-        jobs = {}
-        if not names:
-            return
-        # parallelize content reading
-        loader = DumperLoader.CLASSES[cache_type](self.folder)
-        if not isinstance(loader, StaticDumperLoader):
-            raise RuntimeError("Old key files with non legacy writer")
-        with futures.ThreadPoolExecutor() as ex:
-            jobs = {
-                name[:-4]: ex.submit((self.folder / name).read_text, "utf8")
-                for name in names
-                if name[:-4] not in self._key_info
-            }
-        info = {
-            j.result(): DumpInfo(
-                byte_range=(0, 0),
-                jsonl=folder / (name + ".key"),
-                cache_type=cache_type,  # type: ignore
-                content={"filename": (self.folder / name).name + loader.SUFFIX},
-            )
-            for name, j in jobs.items()
-        }
-        self._key_info.update(info)
 
     def _read_info_files(self) -> None:
         """Load current info files"""
@@ -347,7 +299,6 @@ class CacheDict(tp.Generic[X]):
         if key in self._key_info:
             return True
         # not available, so checking files again
-        self._read_key_files()
         self._read_info_files()
         return key in self._key_info
 
@@ -415,11 +366,6 @@ class CacheDictWriter:
         if cd.cache_type is None:
             cls = DumperLoader.default_class(type(value))
             cd.cache_type = cls.__name__
-            if cd.folder is not None and cd._write_legacy_key_files:
-                cache_file = cd.folder / ".cache_type"
-                if not cache_file.exists():
-                    cache_file.write_text(cd.cache_type)
-                    files.append(cache_file)
         if key in cd._ram_data or key in cd._key_info:
             raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
         if cd._keep_in_ram and cd.folder is None:
@@ -436,13 +382,7 @@ class CacheDictWriter:
             for x, y in ConfDict(info).flat().items():
                 if x.endswith("filename"):
                     files.append(cd.folder / y)
-            if cd._write_legacy_key_files:  # legacy
-                if isinstance(self._dumper, StaticDumperLoader):
-                    name = info["filename"][: -len(self._dumper.SUFFIX)] + ".key"
-                    keyfile = cd.folder / name
-                    keyfile.write_text(key, encoding="utf8")
-                    files.append(keyfile)
-            # new write
+            # write
             info["#key"] = key
             meta = {"cache_type": cd.cache_type}
             if self._info_handle is None:
