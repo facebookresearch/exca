@@ -379,52 +379,58 @@ class JsonlReader:
         self.readings = 0
 
     def read(self) -> dict[str, DumpInfo]:
+        out: dict[str, DumpInfo] = {}
         self.readings += 1
-        last = 0
-        meta = {}
-        fail = ""
-        key_info = {}
         with self._fp.open("rb") as f:
-            for k, line in enumerate(f):
-                if fail:
-                    msg = (
-                        f"Failed to read non-last line #{k - 1} in {self._fp}:\n{fail!r}"
-                    )
-                    raise RuntimeError(msg)
-                count = len(line)
-                last = last + count
-                line = line.strip()
-                if not line:
-                    logger.debug("Skipping empty line #%s", k)
-                    continue
-                strline = line.decode("utf8")
-                if not k:
-                    if not strline.startswith(METADATA_TAG):
-                        raise RuntimeError(f"metadata missing in info file {self._fp}")
-                    strline = strline[len(METADATA_TAG) :]
+            # metadata
+            try:
+                first = next(f)
+            except StopIteration:
+                return out  # nothing to do
+            strline = first.decode("utf8")
+            if not strline.startswith(METADATA_TAG):
+                raise RuntimeError(f"metadata missing in info file {self._fp}")
+            meta = json.loads(strline[len(METADATA_TAG) :])
+            last = len(first)
+            if self._last > len(first):
+                msg = "Forwarding to byte %s in info file %s"
+                logger.debug(msg, self._last, self._fp.name)
+                f.seek(self._last)
+                last = self._last
+            branges = []
+            lines = []
+            for line in f.readlines():
+                if not line.startswith(b"  "):  # empty
+                    lines.append(line)
+                    branges.append((last, last + len(line)))
+                last += len(line)
+            if not lines:
+                return out
+            lines[0] = b"[" + lines[0]
+            # last line may be corruped, so check twice
+            for k in range(2):
+                print(lines)
+                lines[-1] = lines[-1] + b"]"
+                json_str = b",".join(lines).decode("utf8")
                 try:
-                    info = json.loads(strline)
-                except json.JSONDecodeError:
-                    msg = "Failed to read to line #%s in %s in info file %s"
-                    logger.warning(msg, k, self._fp.name, strline)
-                    # last line could be currently being written?
-                    # (let's be robust to it)
-                    fail = strline
-                    last -= count  # move back for next read
-                    continue
-                if not k:  # metadata
-                    meta = info
-                    new_last = max(last, self._last)
-                    if new_last > last:
-                        last = new_last
-                        msg = "Forwarding to byte %s in info file %s"
-                        logger.debug(msg, last, self._fp.name)
-                        f.seek(last)
-                    continue
+                    infos = json.loads(json_str)
+                except json.decoder.JSONDecodeError:
+                    if not k:
+                        lines = lines[:-1]
+                        branges = branges[:-1]
+                    else:
+                        logger.warning(
+                            "Could not read json in %s:\n%s", self._fp, json_str
+                        )
+                        raise
+                else:
+                    break
+            # metadata
+            if len(infos) != len(branges):
+                raise RuntimeError("info and ranges are no more aligned")
+            for info, brange in zip(infos, branges):
                 key = info.pop("#key")
-                dinfo = DumpInfo(
-                    jsonl=self._fp, byte_range=(last - count, last), **meta, content=info
-                )
-                key_info[key] = dinfo
-            self._last = last
-        return key_info
+                dinfo = DumpInfo(jsonl=self._fp, byte_range=brange, **meta, content=info)
+                out[key] = dinfo
+            self._last = branges[-1][-1]
+            return out
