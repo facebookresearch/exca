@@ -409,7 +409,6 @@ class JsonlReader:
             lines[0] = b"[" + lines[0]
             # last line may be corruped, so check twice
             for k in range(2):
-                print(lines)
                 lines[-1] = lines[-1] + b"]"
                 json_str = b",".join(lines).decode("utf8")
                 try:
