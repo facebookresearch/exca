@@ -110,15 +110,15 @@ def test_map_infra_cache_dict_calls(tmp_path: Path) -> None:
     whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
     cd = whatever.infra.cache_dict
     _ = list(whatever.process([1, 2, 3, 4]))
-    assert cd._jsonl_readings == 3
+    assert max(r.readings for r in cd._jsonl_readers.values()) == 1
     whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
     cd = whatever.infra.cache_dict
     _ = list(whatever.process([1]))
-    assert cd._jsonl_readings == 1
+    assert max(r.readings for r in cd._jsonl_readers.values()) == 1
     _ = list(whatever.process([2, 3, 4]))
-    assert cd._jsonl_readings == 1
+    assert max(r.readings for r in cd._jsonl_readers.values()) == 1
     _ = list(whatever.process([5]))
-    assert cd._jsonl_readings == 4
+    assert max(r.readings for r in cd._jsonl_readers.values()) == 2
 
 
 def test_missing_yield() -> None:
