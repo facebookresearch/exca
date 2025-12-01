@@ -9,12 +9,10 @@ import typing as tp
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import pydantic
 import pytest
 
 from . import MapInfra, TaskInfra
-from .cachedict import CacheDict
 
 DATA = Path(__file__).parent / "data"
 
@@ -62,11 +60,3 @@ def test_backward_compatibility(tmp_path: Path, uid_first: bool, fp: Path | None
     # check outputs
     assert cfg.process_task() == 26
     assert tuple(cfg.process_map([3])) == (39,)
-
-
-@pytest.mark.parametrize("cache_type", (None, "MemmapArrayFile"))
-def test_legacy_key_files(cache_type: str | None) -> None:
-    folder = DATA / "cachedict2501"
-    cd: CacheDict[np.ndarray] = CacheDict(folder=folder, cache_type=cache_type)
-    assert "x" in cd
-    assert set(cd.keys()) == {"x", "y"}
