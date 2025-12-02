@@ -252,6 +252,34 @@ def test_migration_utility(tmp_path: Path) -> None:
     assert not (tmp_path / "dummy-info.jsonl").exists()
 
 
+def test_auto_migration(tmp_path: Path) -> None:
+    """Test that JSONL files are auto-migrated when opening a CacheDict"""
+    # Create dummy jsonl (simulating old cache format)
+    fp = tmp_path / "worker-0-info.jsonl"
+    meta = {"cache_type": "Pickle"}
+    with open(fp, "w") as f:
+        f.write("metadata=" + json.dumps(meta) + "\n")
+        f.write(json.dumps({"#key": "old_key", "filename": "data.pkl"}) + "\n")
+
+    # No sqlite file yet
+    assert not (tmp_path / "cache.sqlite").exists()
+    assert fp.exists()
+
+    # Opening CacheDict should auto-migrate
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(folder=tmp_path)
+
+    # Trigger connection (and thus migration)
+    _ = "old_key" in cache
+
+    # Now sqlite should exist and jsonl should be renamed
+    assert (tmp_path / "cache.sqlite").exists()
+    assert (tmp_path / "worker-0-info.jsonl.migrated").exists()
+    assert not fp.exists()
+
+    # Key should be accessible
+    assert "old_key" in cache
+
+
 def test_lazy_metadata_loading(tmp_path: Path) -> None:
     """Test that metadata is lazily loaded on first access"""
     # Create cache with multiple items

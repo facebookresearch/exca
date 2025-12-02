@@ -126,6 +126,13 @@ class CacheDict(tp.Generic[X]):
         if self.folder is None:
             raise RuntimeError("No folder set for sqlite cache")
         db_path = self.folder / SQLITE_FILENAME
+        # Auto-migrate from JSONL if needed (quick check: any file ending with -info.jsonl)
+        if not db_path.exists():
+            for fp in self.folder.iterdir():
+                if fp.name.endswith("-info.jsonl"):
+                    logger.info(f"Auto-migrating JSONL files to SQLite in {self.folder}")
+                    migrate_jsonl_to_sqlite(self.folder)
+                    break
         # isolation_level=None for autocommit, check_same_thread=False for multi-threading
         self._conn = sqlite3.connect(
             db_path, check_same_thread=False, isolation_level=None
