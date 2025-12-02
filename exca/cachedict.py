@@ -110,6 +110,8 @@ class CacheDict(tp.Generic[X]):
                     logger.warning(msg)
         # file cache access and RAM cache
         self._ram_data: dict[str, X] = {}
+        # metadata cache (key -> DumpInfo), populated on first keys() call
+        self._key_info: dict[str, DumpInfo] | None = None
         # sqlite connections are thread-local
         self._local = threading.local()
         # keep loaders live for optimized loading
@@ -154,6 +156,7 @@ class CacheDict(tp.Generic[X]):
 
     def clear(self) -> None:
         self._ram_data.clear()
+        self._key_info = None
         if hasattr(self._local, "conn"):
             self._local.conn.close()
             del self._local.conn
@@ -177,56 +180,73 @@ class CacheDict(tp.Generic[X]):
     def __len__(self) -> int:
         return len(list(self.keys()))  # inefficient, but correct
 
+    def _ensure_key_info_loaded(self) -> dict[str, DumpInfo]:
+        """Load all metadata from SQLite on first access (lazy loading)."""
+        if self._key_info is not None:
+            return self._key_info
+        self._key_info = {}
+        if self.folder is None or not (self.folder / SQLITE_FILENAME).exists():
+            return self._key_info
+        conn = self._get_sqlite_conn()
+        for key, cache_type, content_json in conn.execute(
+            "SELECT key, cache_type, content FROM metadata"
+        ):
+            self._key_info[key] = DumpInfo(
+                cache_type=cache_type, content=json.loads(content_json)
+            )
+        return self._key_info
+
+    def _get_info(self, key: str) -> DumpInfo | None:
+        """Get metadata for a key, checking cache then SQLite."""
+        key_info = self._ensure_key_info_loaded()
+        if key in key_info:
+            return key_info[key]
+        # Key not in cache - check SQLite for new keys from other writers
+        if self.folder is None:
+            return None
+        row = (
+            self._get_sqlite_conn()
+            .execute("SELECT cache_type, content FROM metadata WHERE key=?", (key,))
+            .fetchone()
+        )
+        if row is None:
+            return None
+        dinfo = DumpInfo(cache_type=row[0], content=json.loads(row[1]))
+        key_info[key] = dinfo  # cache for future lookups
+        return dinfo
+
     def keys(self) -> tp.Iterator[str]:
-        """Returns the keys in the dictionary
-        (triggers a cache folder reading if folder is not None)"""
-        keys = set(self._ram_data)
-        if self.folder is not None:
-            if not (self.folder / SQLITE_FILENAME).exists():
-                return iter(keys)
-            conn = self._get_sqlite_conn()
-            cursor = conn.execute("SELECT key FROM metadata")
-            keys.update(row[0] for row in cursor)
-        return iter(keys)
+        """Returns the keys in the dictionary."""
+        return iter(set(self._ram_data) | set(self._ensure_key_info_loaded()))
 
     def values(self) -> tp.Iterable[X]:
-        for key in self:
-            yield self[key]
+        return (self[key] for key in self)
 
     def __iter__(self) -> tp.Iterator[str]:
         return self.keys()
 
     def items(self) -> tp.Iterator[tuple[str, X]]:
-        for key in self:
-            yield key, self[key]
+        return ((key, self[key]) for key in self)
 
     def __getitem__(self, key: str) -> X:
-        if self._keep_in_ram:
-            if key in self._ram_data or self.folder is None:
-                return self._ram_data[key]
-        # necessarily in file cache folder from now on
+        if self._keep_in_ram and (key in self._ram_data or self.folder is None):
+            return self._ram_data[key]
         if self.folder is None:
             raise RuntimeError("This should not happen")
-
-        conn = self._get_sqlite_conn()
-        cursor = conn.execute(
-            "SELECT cache_type, content FROM metadata WHERE key=?", (key,)
-        )
-        row = cursor.fetchone()
-        if row is None:
+        dinfo = self._get_info(key)
+        if dinfo is None:
             raise KeyError(key)
-        cache_type, content_json = row
-        content = json.loads(content_json)
-        dinfo = DumpInfo(cache_type=cache_type, content=content)
-
-        if dinfo.cache_type not in self._loaders:  # keep loaders in store
-            Cls = DumperLoader.CLASSES[dinfo.cache_type]
-            self._loaders[dinfo.cache_type] = Cls(self.folder)
-        loader = self._loaders[dinfo.cache_type]
-        loaded = loader.load(**dinfo.content)
+        if dinfo.cache_type not in self._loaders:
+            self._loaders[dinfo.cache_type] = DumperLoader.CLASSES[dinfo.cache_type](
+                self.folder
+            )
+        loaded = self._loaders[dinfo.cache_type].load(**dinfo.content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
         return loaded  # type: ignore
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._ram_data or self._get_info(key) is not None
 
     @contextlib.contextmanager
     def writer(self) -> tp.Iterator["CacheDictWriter"]:
@@ -238,51 +258,34 @@ class CacheDict(tp.Generic[X]):
         raise RuntimeError('Use cachedict.writer() as writer" context to set items')
 
     def __delitem__(self, key: str) -> None:
-        # necessarily in file cache folder from now on
         self._ram_data.pop(key, None)
+        if self._key_info is not None:
+            self._key_info.pop(key, None)
         if self.folder is None:
             return
         conn = self._get_sqlite_conn()
-        # Fetch content first to delete external files
-        cursor = conn.execute("SELECT content FROM metadata WHERE key=?", (key,))
-        row = cursor.fetchone()
+        row = conn.execute("SELECT content FROM metadata WHERE key=?", (key,)).fetchone()
         if row:
             content = json.loads(row[0])
-            # Delete external file if exists in content
             if "filename" in content:
-                fp = Path(self.folder) / content["filename"]
-                with utils.fast_unlink(fp, missing_ok=True):
+                with utils.fast_unlink(
+                    self.folder / content["filename"], missing_ok=True
+                ):
                     pass
             conn.execute("DELETE FROM metadata WHERE key=?", (key,))
             conn.commit()
-        else:
-            pass
-
-    def __contains__(self, key: str) -> bool:
-        # in-memory cache
-        if key in self._ram_data:
-            return True
-        if self.folder is None:
-            return False
-        if not (self.folder / SQLITE_FILENAME).exists():
-            return False
-        conn = self._get_sqlite_conn()
-        cursor = conn.execute("SELECT 1 FROM metadata WHERE key=?", (key,))
-        return cursor.fetchone() is not None
 
 
 class CacheDictWriter:
 
     def __init__(self, cache: CacheDict) -> None:
         self.cache = cache
-        # write mode
         self._exit_stack: contextlib.ExitStack | None = None
         self._dumper: DumperLoader | None = None
-        self._dirty = False  # track if changes were made
+        self._dirty = False
 
     def __repr__(self) -> str:
-        name = self.__class__.__name__
-        return f"{name}({self.cache!r})"
+        return f"{self.__class__.__name__}({self.cache!r})"
 
     @contextlib.contextmanager
     def open(self) -> tp.Iterator[None]:
@@ -293,22 +296,15 @@ class CacheDictWriter:
             with contextlib.ExitStack() as estack:
                 self._exit_stack = estack
                 if cd.folder is not None:
-                    _ = cd._get_sqlite_conn()  # ensure connected
+                    cd._get_sqlite_conn()  # ensure connected
                 yield
         finally:
             if cd.folder is not None:
-                os.utime(cd.folder)  # make sure the modified time is updated
+                os.utime(cd.folder)
+                if hasattr(cd._local, "conn") and self._dirty:
+                    cd._local.conn.commit()
             self._exit_stack = None
             self._dumper = None
-            if cd.folder is not None and hasattr(cd._local, "conn") and self._dirty:
-                # Only commit if dirty to avoid "no transaction" error if nothing happened
-                # although standard sqlite3 commit shouldn't raise if no transaction...
-                # unless we are in a weird state.
-                try:
-                    cd._local.conn.commit()
-                except sqlite3.OperationalError:
-                    # Swallow "cannot commit - no transaction is active" if it happens
-                    pass
             self._dirty = False
 
     def __setitem__(self, key: str, value: X) -> None:
@@ -319,19 +315,14 @@ class CacheDictWriter:
         cd = self.cache
 
         if cd.folder is None:
-            # Pure RAM mode
             if cd._keep_in_ram:
                 cd._ram_data[key] = value
             return
 
-        # figure out cache type
         if cd.cache_type is None:
-            cls = DumperLoader.default_class(type(value))
-            cd.cache_type = cls.__name__
-
+            cd.cache_type = DumperLoader.default_class(type(value)).__name__
         if key in cd:
-            raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
-
+            raise ValueError(f"Overwriting a key is currently not implemented ({key=})")
         if cd._keep_in_ram:
             cd._ram_data[key] = value
 
@@ -343,26 +334,23 @@ class CacheDictWriter:
 
         # Set permissions on generated files
         if cd.permissions is not None:
-            files: list[Path] = []
             for x, y in ConfDict(info).flat().items():
                 if x.endswith("filename"):
-                    files.append(cd.folder / y)
-            for fp in files:
-                try:
-                    fp.chmod(cd.permissions)
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                    try:
+                        (cd.folder / y).chmod(cd.permissions)
+                    except Exception:
+                        pass
 
-        conn = cd._get_sqlite_conn()
-        content_json = json.dumps(info)
         try:
-            conn.execute(
+            cd._get_sqlite_conn().execute(
                 "INSERT INTO metadata (key, cache_type, content) VALUES (?, ?, ?)",
-                (key, cd.cache_type, content_json),
+                (key, cd.cache_type, json.dumps(info)),
             )
             self._dirty = True
+            if cd._key_info is not None:
+                cd._key_info[key] = DumpInfo(cache_type=cd.cache_type, content=info)
         except sqlite3.IntegrityError:
-            raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
+            raise ValueError(f"Overwriting a key is currently not implemented ({key=})")
 
 
 # JSONL migration utilities
