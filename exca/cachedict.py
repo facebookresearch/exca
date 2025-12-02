@@ -249,6 +249,15 @@ class CacheDict(tp.Generic[X]):
         return key in self._ram_data or self._get_info(key) is not None
 
     @contextlib.contextmanager
+    def frozen_cache_folder(self) -> tp.Iterator[None]:
+        """No-op context manager for backwards compatibility.
+
+        With SQLite backend, metadata is lazily loaded once and cached,
+        so there's no need to "freeze" the cache folder anymore.
+        """
+        yield
+
+    @contextlib.contextmanager
     def writer(self) -> tp.Iterator["CacheDictWriter"]:
         writer = CacheDictWriter(self)
         with writer.open():
