@@ -14,7 +14,6 @@ import logging
 import os
 import shutil
 import sqlite3
-import threading
 import typing as tp
 from pathlib import Path
 
@@ -110,58 +109,45 @@ class CacheDict(tp.Generic[X]):
                     logger.warning(msg)
         # file cache access and RAM cache
         self._ram_data: dict[str, X] = {}
-        # metadata cache (key -> DumpInfo), populated on first keys() call
+        # metadata cache (key -> DumpInfo), populated on first access
         self._key_info: dict[str, DumpInfo] | None = None
-        # sqlite connections are thread-local
-        self._local = threading.local()
         # keep loaders live for optimized loading
-        # (instances are reinstantiated for dumping though,  to make sure they are unique)
         self._loaders: dict[str, DumperLoader] = {}
+        # sqlite connection (lazily created)
+        self._conn: sqlite3.Connection | None = None
 
     def __repr__(self) -> str:
-        name = self.__class__.__name__
-        keep_in_ram = self._keep_in_ram
-        return f"{name}({self.folder},{keep_in_ram=})"
+        return f"{self.__class__.__name__}({self.folder},keep_in_ram={self._keep_in_ram})"
 
-    def __getstate__(self) -> dict[str, tp.Any]:
-        state = self.__dict__.copy()
-        state.pop("_local", None)
-        return state
-
-    def __setstate__(self, state: dict[str, tp.Any]) -> None:
-        self.__dict__.update(state)
-        self._local = threading.local()
-
-    def _get_sqlite_conn(self) -> sqlite3.Connection:
+    def _get_conn(self) -> sqlite3.Connection:
+        """Get or create SQLite connection."""
+        if self._conn is not None:
+            return self._conn
         if self.folder is None:
             raise RuntimeError("No folder set for sqlite cache")
-        if not hasattr(self._local, "conn"):
-            db_path = self.folder / SQLITE_FILENAME
-            # check_same_thread=False allows usage in threads if serialized (WAL handles concurrency)
-            # But since we use thread-local connections, we don't need check_same_thread=False
-            # actually, we use separate connections per thread, so it is safe.
-            # However, for WAL mode to work well, all connections must be to the same file.
-            self._local.conn = sqlite3.connect(db_path)
-            self._local.conn.execute("PRAGMA journal_mode=WAL;")
-            self._local.conn.execute(
-                "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, cache_type TEXT, content TEXT)"
-            )
-            # Ensure permissions on the DB file
-            if self.permissions is not None and db_path.exists():
-                try:
-                    db_path.chmod(self.permissions)
-                except Exception:
-                    pass
-        return self._local.conn
+        db_path = self.folder / SQLITE_FILENAME
+        # isolation_level=None for autocommit, check_same_thread=False for multi-threading
+        self._conn = sqlite3.connect(
+            db_path, check_same_thread=False, isolation_level=None
+        )
+        self._conn.execute("PRAGMA journal_mode=WAL;")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, cache_type TEXT, content TEXT)"
+        )
+        if self.permissions is not None and db_path.exists():
+            try:
+                db_path.chmod(self.permissions)
+            except Exception:
+                pass
+        return self._conn
 
     def clear(self) -> None:
         self._ram_data.clear()
         self._key_info = None
-        if hasattr(self._local, "conn"):
-            self._local.conn.close()
-            del self._local.conn
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
         if self.folder is not None:
-            # let's remove content but not the folder to keep same permissions
             for sub in self.folder.iterdir():
                 if sub.is_dir():
                     shutil.rmtree(sub)
@@ -169,8 +155,7 @@ class CacheDict(tp.Generic[X]):
                     try:
                         sub.unlink()
                     except OSError:
-                        # might happen if file is locked (e.g. -shm/-wal)
-                        pass
+                        pass  # might happen if file is locked (e.g. -shm/-wal)
 
     def __bool__(self) -> bool:
         if self._ram_data:
@@ -187,8 +172,7 @@ class CacheDict(tp.Generic[X]):
         self._key_info = {}
         if self.folder is None or not (self.folder / SQLITE_FILENAME).exists():
             return self._key_info
-        conn = self._get_sqlite_conn()
-        for key, cache_type, content_json in conn.execute(
+        for key, cache_type, content_json in self._get_conn().execute(
             "SELECT key, cache_type, content FROM metadata"
         ):
             self._key_info[key] = DumpInfo(
@@ -205,7 +189,7 @@ class CacheDict(tp.Generic[X]):
         if self.folder is None:
             return None
         row = (
-            self._get_sqlite_conn()
+            self._get_conn()
             .execute("SELECT cache_type, content FROM metadata WHERE key=?", (key,))
             .fetchone()
         )
@@ -272,7 +256,7 @@ class CacheDict(tp.Generic[X]):
             self._key_info.pop(key, None)
         if self.folder is None:
             return
-        conn = self._get_sqlite_conn()
+        conn = self._get_conn()
         row = conn.execute("SELECT content FROM metadata WHERE key=?", (key,)).fetchone()
         if row:
             content = json.loads(row[0])
@@ -282,7 +266,6 @@ class CacheDict(tp.Generic[X]):
                 ):
                     pass
             conn.execute("DELETE FROM metadata WHERE key=?", (key,))
-            conn.commit()
 
 
 class CacheDictWriter:
@@ -291,7 +274,6 @@ class CacheDictWriter:
         self.cache = cache
         self._exit_stack: contextlib.ExitStack | None = None
         self._dumper: DumperLoader | None = None
-        self._dirty = False
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.cache!r})"
@@ -305,16 +287,13 @@ class CacheDictWriter:
             with contextlib.ExitStack() as estack:
                 self._exit_stack = estack
                 if cd.folder is not None:
-                    cd._get_sqlite_conn()  # ensure connected
+                    cd._get_conn()  # ensure connected
                 yield
         finally:
             if cd.folder is not None:
                 os.utime(cd.folder)
-                if hasattr(cd._local, "conn") and self._dirty:
-                    cd._local.conn.commit()
             self._exit_stack = None
             self._dumper = None
-            self._dirty = False
 
     def __setitem__(self, key: str, value: X) -> None:
         if not isinstance(key, str):
@@ -351,11 +330,10 @@ class CacheDictWriter:
                         pass
 
         try:
-            cd._get_sqlite_conn().execute(
+            cd._get_conn().execute(
                 "INSERT INTO metadata (key, cache_type, content) VALUES (?, ?, ?)",
                 (key, cd.cache_type, json.dumps(info)),
             )
-            self._dirty = True
             if cd._key_info is not None:
                 cd._key_info[key] = DumpInfo(cache_type=cd.cache_type, content=info)
         except sqlite3.IntegrityError:
