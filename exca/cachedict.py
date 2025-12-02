@@ -109,8 +109,8 @@ class CacheDict(tp.Generic[X]):
                     logger.warning(msg)
         # file cache access and RAM cache
         self._ram_data: dict[str, X] = {}
-        # metadata cache (key -> DumpInfo), populated on first access
-        self._key_info: dict[str, DumpInfo] | None = None
+        # Set of known keys (loaded on first access for fast membership test)
+        self._known_keys: set[str] | None = None
         # keep loaders live for optimized loading
         self._loaders: dict[str, DumperLoader] = {}
         # sqlite connection (lazily created)
@@ -154,7 +154,7 @@ class CacheDict(tp.Generic[X]):
 
     def clear(self) -> None:
         self._ram_data.clear()
-        self._key_info = None
+        self._known_keys = None
         if self._conn is not None:
             self._conn.close()
             self._conn = None
@@ -174,29 +174,22 @@ class CacheDict(tp.Generic[X]):
         return len(self) > 0  # triggers key check
 
     def __len__(self) -> int:
-        return len(list(self.keys()))  # inefficient, but correct
+        return len(self._ensure_keys_loaded() | set(self._ram_data))
 
-    def _ensure_key_info_loaded(self) -> dict[str, DumpInfo]:
-        """Load all metadata from SQLite on first access (lazy loading)."""
-        if self._key_info is not None:
-            return self._key_info
-        self._key_info = {}
+    def _ensure_keys_loaded(self) -> set[str]:
+        """Load all keys from SQLite on first access (fast - keys only)."""
+        if self._known_keys is not None:
+            return self._known_keys
+        self._known_keys = set()
         if self.folder is None or not (self.folder / SQLITE_FILENAME).exists():
-            return self._key_info
-        for key, cache_type, content_json in self._get_conn().execute(
-            "SELECT key, cache_type, content FROM metadata"
-        ):
-            self._key_info[key] = DumpInfo(
-                cache_type=cache_type, content=json.loads(content_json)
-            )
-        return self._key_info
+            return self._known_keys
+        # Only fetch keys - much faster than fetching all metadata
+        cursor = self._get_conn().execute("SELECT key FROM metadata")
+        self._known_keys = {row[0] for row in cursor}
+        return self._known_keys
 
     def _get_info(self, key: str) -> DumpInfo | None:
-        """Get metadata for a key, checking cache then SQLite."""
-        key_info = self._ensure_key_info_loaded()
-        if key in key_info:
-            return key_info[key]
-        # Key not in cache - check SQLite for new keys from other writers
+        """Get metadata for a key from SQLite (on-demand)."""
         if self.folder is None:
             return None
         row = (
@@ -206,13 +199,11 @@ class CacheDict(tp.Generic[X]):
         )
         if row is None:
             return None
-        dinfo = DumpInfo(cache_type=row[0], content=json.loads(row[1]))
-        key_info[key] = dinfo  # cache for future lookups
-        return dinfo
+        return DumpInfo(cache_type=row[0], content=json.loads(row[1]))
 
     def keys(self) -> tp.Iterator[str]:
         """Returns the keys in the dictionary."""
-        return iter(set(self._ram_data) | set(self._ensure_key_info_loaded()))
+        return iter(set(self._ram_data) | self._ensure_keys_loaded())
 
     def values(self) -> tp.Iterable[X]:
         return (self[key] for key in self)
@@ -241,7 +232,23 @@ class CacheDict(tp.Generic[X]):
         return loaded  # type: ignore
 
     def __contains__(self, key: str) -> bool:
-        return key in self._ram_data or self._get_info(key) is not None
+        if key in self._ram_data:
+            return True
+        known = self._ensure_keys_loaded()
+        if key in known:
+            return True
+        # Check for keys added by other writers (not in our cached set)
+        if self.folder is None:
+            return False
+        row = (
+            self._get_conn()
+            .execute("SELECT 1 FROM metadata WHERE key=?", (key,))
+            .fetchone()
+        )
+        if row:
+            known.add(key)  # cache for future lookups
+            return True
+        return False
 
     @contextlib.contextmanager
     def frozen_cache_folder(self) -> tp.Iterator[None]:
@@ -263,8 +270,8 @@ class CacheDict(tp.Generic[X]):
 
     def __delitem__(self, key: str) -> None:
         self._ram_data.pop(key, None)
-        if self._key_info is not None:
-            self._key_info.pop(key, None)
+        if self._known_keys is not None:
+            self._known_keys.discard(key)
         if self.folder is None:
             return
         conn = self._get_conn()
@@ -345,8 +352,8 @@ class CacheDictWriter:
                 "INSERT INTO metadata (key, cache_type, content) VALUES (?, ?, ?)",
                 (key, cd.cache_type, json.dumps(info)),
             )
-            if cd._key_info is not None:
-                cd._key_info[key] = DumpInfo(cache_type=cd.cache_type, content=info)
+            if cd._known_keys is not None:
+                cd._known_keys.add(key)
         except sqlite3.IntegrityError:
             raise ValueError(f"Overwriting a key is currently not implemented ({key=})")
 

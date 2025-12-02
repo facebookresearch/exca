@@ -288,15 +288,15 @@ def test_lazy_metadata_loading(tmp_path: Path) -> None:
         for i in range(100):
             writer[f"key_{i}"] = i
 
-    # Create new cache - metadata not loaded yet
+    # Create new cache - keys not loaded yet
     cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    assert cache2._key_info is None  # Not loaded yet
+    assert cache2._known_keys is None  # Not loaded yet
 
-    # First access triggers lazy load of ALL metadata
+    # First access triggers lazy load of keys (not full metadata)
     assert "key_50" in cache2
-    assert cache2._key_info is not None
-    assert len(cache2._key_info) == 100  # All metadata loaded
+    assert cache2._known_keys is not None
+    assert len(cache2._known_keys) == 100  # All keys loaded
 
-    # Subsequent accesses use cached metadata
+    # Subsequent accesses use cached keys, metadata fetched on-demand
     assert cache2["key_50"] == 50
     assert "key_99" in cache2
