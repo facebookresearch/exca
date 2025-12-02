@@ -122,10 +122,6 @@ def test_specialized_dump(
     assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
     for fp in tmp_path.iterdir():
         octal_permissions = oct(fp.stat().st_mode)[-3:]
-        if "cache.sqlite" in fp.name:
-            # SQLite files might have different permissions depending on system/umask
-            # WAL/SHM files are managed by sqlite
-            continue
         assert octal_permissions == "777", f"Wrong permissions for {fp}"
     # check file remaining open
     keeps_memmap = cache_type == "MemmapArrayFile" and (

@@ -134,11 +134,15 @@ class CacheDict(tp.Generic[X]):
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, cache_type TEXT, content TEXT)"
         )
-        if self.permissions is not None and db_path.exists():
-            try:
-                db_path.chmod(self.permissions)
-            except Exception:
-                pass
+        # Set permissions on DB and WAL/SHM files
+        if self.permissions is not None:
+            for suffix in ("", "-wal", "-shm"):
+                fp = Path(str(db_path) + suffix)
+                if fp.exists():
+                    try:
+                        fp.chmod(self.permissions)
+                    except Exception:
+                        pass
         return self._conn
 
     def clear(self) -> None:
