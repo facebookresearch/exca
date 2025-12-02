@@ -107,18 +107,26 @@ def test_map_infra(tmp_path: Path) -> None:
 
 
 def test_map_infra_cache_dict_calls(tmp_path: Path) -> None:
+    # Test that CacheDict metadata is lazily loaded and cached
     whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
     cd = whatever.infra.cache_dict
+    assert cd._key_info is None  # Not loaded yet
     _ = list(whatever.process([1, 2, 3, 4]))
-    assert cd._jsonl_readings == 3
-    whatever = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
-    cd = whatever.infra.cache_dict
-    _ = list(whatever.process([1]))
-    assert cd._jsonl_readings == 1
-    _ = list(whatever.process([2, 3, 4]))
-    assert cd._jsonl_readings == 1
-    _ = list(whatever.process([5]))
-    assert cd._jsonl_readings == 4
+    # After processing, metadata should be loaded
+    assert cd._key_info is not None
+    assert len(cd._key_info) == 4
+
+    # New CacheDict instance on same folder
+    whatever2 = Whatever(infra={"folder": tmp_path, "cluster": "local"})  # type: ignore
+    cd2 = whatever2.infra.cache_dict
+    assert cd2._key_info is None  # Not loaded yet for new instance
+    _ = list(whatever2.process([1]))  # Should use cached data
+    assert cd2._key_info is not None
+    assert len(cd2._key_info) == 4  # All metadata loaded lazily
+
+    # Process more items
+    _ = list(whatever2.process([5]))
+    assert len(cd2._key_info) == 5  # New key added to cache
 
 
 def test_missing_yield() -> None:
