@@ -192,8 +192,21 @@ def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) 
     return True
 
 
+def _resolve_schema_ref(schema: tp.Dict[str, tp.Any]) -> tp.Dict[str, tp.Any]:
+    """Resolve $ref references in a pydantic schema to get the actual definition"""
+    ref = schema.get("$ref", "")
+    if ref.startswith("#/$defs/"):
+        def_name = ref[len("#/$defs/"):]
+        if "$defs" in schema and def_name in schema["$defs"]:
+            return schema["$defs"][def_name]
+    return schema
+
+
 def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
     """Find the discriminator for a field in a pydantic schema"""
+    schema = _resolve_schema_ref(schema)
+    if "properties" not in schema:
+        return DiscrimStatus.NONE
     prop = schema["properties"][name]
     discriminator: str = DiscrimStatus.NONE
     # for list and dicts:
