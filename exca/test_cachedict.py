@@ -247,7 +247,7 @@ def test_migration_utility(tmp_path: Path) -> None:
     cd.migrate_jsonl_to_sqlite(tmp_path)
 
     # Check
-    cache: cd.CacheDict[str, tp.Any] = cd.CacheDict(folder=tmp_path)
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(folder=tmp_path)
     assert "k1" in cache
     # We didn't write real dump files so loading might fail if we try to load k1
     # But we can check existence
