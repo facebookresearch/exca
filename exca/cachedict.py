@@ -359,9 +359,13 @@ class CacheDictWriter:
                 # create the file only when required to avoid leaving empty files for some time
                 self._info_handle = self._exit_stack.enter_context(fp.open("ab"))
             if not self._info_handle.tell():
-                meta_str = METADATA_TAG + json.dumps(meta) + "\n"
-                self._info_handle.write(meta_str.encode("utf8"))
-            b = json.dumps(info).encode("utf8")
+                meta_dump = json.dumps(meta)
+                if isinstance(meta_dump, str):
+                    meta_dump = meta_dump.encode("utf8")
+                self._info_handle.write(METADATA_TAG.encode("utf8") + meta_dump + b"\n")
+            b = json.dumps(info)
+            if isinstance(b, str):
+                b = b.encode("utf8")
             current = self._info_handle.tell()
             self._info_handle.write(b + b"\n")
             info.pop("#key")
