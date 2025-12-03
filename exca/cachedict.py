@@ -14,8 +14,8 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import typing as tp
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # orjson is ~2x faster for JSON parsing (line-by-line)
@@ -169,7 +169,7 @@ class CacheDict(tp.Generic[X]):
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
-    def _read_info_files(self) -> None:
+    def _read_info_files(self, max_workers: int = 8) -> None:
         """Load current info files"""
         if self.folder is None:
             return
@@ -178,22 +178,25 @@ class CacheDict(tp.Generic[X]):
             # bypass reloading info files
             return
         folder = Path(self.folder)
-        # read all existing jsonl files
-        find_cmd = 'find . -type f -name "*-info.jsonl"'
+        # read all existing jsonl files (iterdir is faster than subprocess find)
         modified = folder.lstat().st_mtime
         nothing_new = self._folder_modified == modified
         self._folder_modified = modified
         if nothing_new:
             logger.debug("Nothing new to read from info files")
             return  # nothing new!
-        try:
-            out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
-        except subprocess.CalledProcessError as e:
-            out = e.output  # stderr contains missing tmp files
-        names = out.decode("utf8").splitlines()
-        for name in names:
-            jreader = self._jsonl_readers.setdefault(name, JsonlReader(folder / name))
-            self._key_info.update(jreader.read())
+        # parallel read: submit jobs as we discover files
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            for fp in folder.iterdir():
+                if not fp.name.endswith("-info.jsonl"):
+                    continue
+                if fp.name not in self._jsonl_readers:
+                    self._jsonl_readers[fp.name] = JsonlReader(fp)
+                reader = self._jsonl_readers[fp.name]
+                futures.append(executor.submit(reader.read))
+            for future in futures:
+                self._key_info.update(future.result())
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -400,7 +403,20 @@ class JsonlReader:
         last = 0
         fail = b""
         with self._fp.open("rb") as f:
-            if self._last > 0:
+            # always read metadata first if not cached
+            if not self._meta:
+                first = f.readline()
+                if not first:
+                    return out  # empty file
+                if not first.startswith(meta_tag):
+                    raise RuntimeError(f"metadata missing in info file {self._fp}")
+                try:
+                    self._meta = _json_loads(first[len(meta_tag) :])
+                except (json.JSONDecodeError, ValueError):
+                    # metadata line being written, retry later
+                    return out
+                last = len(first)
+            if self._last > last:
                 msg = "Forwarding to byte %s in info file %s"
                 logger.debug(msg, self._last, self._fp.name)
                 f.seek(self._last)
@@ -415,17 +431,6 @@ class JsonlReader:
                 if not line:
                     last += count
                     continue
-                # first line is metadata
-                if line.startswith(meta_tag):
-                    try:
-                        self._meta = _json_loads(line[len(meta_tag) :])
-                    except (json.JSONDecodeError, ValueError):
-                        # metadata line being written, retry later
-                        break
-                    last += count
-                    continue
-                if not self._meta:
-                    raise RuntimeError(f"metadata missing in info file {self._fp}")
                 try:
                     info = _json_loads(line)
                 except (json.JSONDecodeError, ValueError):
