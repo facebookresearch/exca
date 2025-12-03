@@ -181,9 +181,7 @@ class CacheDict(tp.Generic[X]):
             for fp in folder.iterdir():
                 if not fp.name.endswith("-info.jsonl"):
                     continue
-                if fp.name not in self._jsonl_readers:
-                    self._jsonl_readers[fp.name] = JsonlReader(fp)
-                reader = self._jsonl_readers[fp.name]
+                reader = self._jsonl_readers.setdefault(fp.name, JsonlReader(fp))
                 futures.append(executor.submit(reader.read))
             for future in futures:
                 self._key_info.update(future.result())
@@ -307,10 +305,8 @@ class CacheDictWriter:
                 yield
         finally:
             if cd.folder is not None:
-                t = time.time()
-                os.utime(
-                    cd.folder, times=(t, t)
-                )  # make sure the modified time is updated
+                t = time.time()  # make sure the modified time is updated:
+                os.utime(cd.folder, times=(t, t))
             fp2 = self._info_filepath
             if cd.permissions is not None and fp2 is not None and fp2.exists():
                 fp2.chmod(cd.permissions)
