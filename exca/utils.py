@@ -11,10 +11,12 @@ import logging
 import os
 import shutil
 import sys
+import time
 import typing as tp
 import uuid
 from pathlib import Path
 
+import filelock
 import numpy as np
 import pydantic
 
@@ -27,6 +29,152 @@ FORCE_INCLUDED = "force_included"  # priority over UID_EXCLUDED
 logger = logging.getLogger(__name__)
 DISCRIMINATOR_FIELD = "#infra#pydantic#discriminator"
 T = tp.TypeVar("T", bound=pydantic.BaseModel)
+
+
+class LockManager:
+    """Manages distributed file-based locking for item processing.
+
+    Handles lock acquisition, stale lock detection, and incremental processing
+    across multiple workers that may have overlapping item assignments.
+
+    Parameters
+    ----------
+    lock_dir: Path
+        directory where lock files will be created
+    item_uid: callable
+        function to get unique ID from an item
+    cache_contains: callable
+        function to check if item UID is in cache (expensive operation)
+    lock_timeout: int
+        timeout in seconds for lock acquisition and stale lock threshold
+    """
+
+    def __init__(
+        self,
+        lock_dir: Path,
+        item_uid: tp.Callable[[tp.Any], str],
+        cache_contains: tp.Callable[[str], bool],
+        lock_timeout: int = 3600,
+    ):
+        self.lock_dir = Path(lock_dir)
+        self.lock_dir.mkdir(exist_ok=True, parents=True)
+        self.item_uid = item_uid
+        self.cache_contains = cache_contains
+        self.lock_timeout = lock_timeout
+
+    def process_with_locks(
+        self,
+        items: tp.Sequence[tp.Any],
+        process_fn: tp.Callable[[list[tp.Any]], dict[str, tp.Any]],
+    ) -> dict[str, tp.Any]:
+        """Acquire locks and process items, handling contention automatically.
+
+        Strategy:
+        1. Try to acquire locks optimistically (fast timeout)
+        2. Process acquired items immediately
+        3. For remaining items, retry with full timeout
+        """
+        result: dict[str, tp.Any] = {}
+
+        # Filter out already cached items
+        remaining = [
+            item for item in items if not self.cache_contains(self.item_uid(item))
+        ]
+
+        if not remaining:
+            return result
+
+        # Pass 1: Optimistic acquisition (don't wait)
+        acquired, remaining = self._acquire_batch(remaining, timeout=0.01)
+        if acquired:
+            result.update(self._process_batch(acquired, process_fn))
+
+        # Pass 2: Wait for remaining items
+        if remaining:
+            acquired, remaining = self._acquire_batch(
+                remaining, timeout=self.lock_timeout
+            )
+            if acquired:
+                result.update(self._process_batch(acquired, process_fn))
+
+        # Log items we couldn't acquire
+        if remaining:
+            for item in remaining:
+                logger.warning(
+                    f"Skipping {self.item_uid(item)} - could not acquire lock "
+                    f"after {self.lock_timeout}s"
+                )
+
+        return result
+
+    def _acquire_batch(
+        self, items: list[tp.Any], timeout: float
+    ) -> tuple[list[tuple[tp.Any, filelock.FileLock]], list[tp.Any]]:
+        """Try to acquire locks for items.
+
+        Returns (acquired_with_locks, failed_items)
+        """
+        acquired = []
+        failed = []
+
+        for item in items:
+            uid = self.item_uid(item)
+
+            # Check cache before locking (might have been completed)
+            if self.cache_contains(uid):
+                continue
+
+            lock = filelock.FileLock(self.lock_dir / f"{uid}.lock")
+            if self._try_acquire_lock(lock, uid, timeout):
+                # Double-check cache after acquiring (someone else may have finished)
+                if self.cache_contains(uid):
+                    lock.release()
+                    continue
+                acquired.append((item, lock))
+            else:
+                failed.append(item)
+
+        return acquired, failed
+
+    def _try_acquire_lock(
+        self, lock: filelock.FileLock, uid: str, timeout: float
+    ) -> bool:
+        """Try to acquire lock with stale detection."""
+        try:
+            lock.acquire(timeout=timeout)
+            return True
+        except filelock.Timeout:
+            # Check for stale lock
+            lock_file = Path(lock.lock_file)
+            if lock_file.exists():
+                try:
+                    age = time.time() - lock_file.stat().st_mtime
+                    if age > self.lock_timeout:
+                        logger.warning(f"Removing stale lock for {uid} (age={age:.0f}s)")
+                        lock_file.unlink(missing_ok=True)
+                        try:
+                            lock.acquire(timeout=0.1)
+                            return True
+                        except filelock.Timeout:
+                            pass
+                except (FileNotFoundError, OSError):
+                    pass
+            return False
+
+    def _process_batch(
+        self,
+        items_with_locks: list[tuple[tp.Any, filelock.FileLock]],
+        process_fn: tp.Callable[[list[tp.Any]], dict[str, tp.Any]],
+    ) -> dict[str, tp.Any]:
+        """Process items and release locks."""
+        items = [item for item, _ in items_with_locks]
+        locks = [lock for _, lock in items_with_locks]
+
+        try:
+            return process_fn(items)
+        finally:
+            for lock in locks:
+                lock.release()
 
 
 def _get_uid_info(

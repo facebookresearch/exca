@@ -11,20 +11,16 @@ import inspect
 import itertools
 import logging
 import os
-import pickle
 import typing as tp
-import uuid
 from concurrent import futures
 from pathlib import Path
 
-import filelock
 import numpy as np
 import pydantic
-import submitit
-from submitit.core import utils
 
 from . import base, slurm
 from .cachedict import CacheDict
+from .utils import LockManager
 
 MapFunc = tp.Callable[[tp.Sequence[tp.Any]], tp.Iterator[tp.Any]]
 X = tp.TypeVar("X")
@@ -64,45 +60,6 @@ class CachedMethod:
 
     def __call__(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
         return self.infra._method_override(items)
-
-
-class JobChecker:
-    """Keeps a record of running jobs in a folder
-    and enables waiting for them to complete.
-    """
-
-    def __init__(self, folder: Path | str) -> None:
-        basefolder = utils.JobPaths.get_first_id_independent_folder(folder)
-        self.folder = basefolder / "running-jobs"
-
-    def add(self, jobs: tp.Iterable[tp.Any]) -> None:
-        """Add jobs to the list of running jobs"""
-        self.folder.mkdir(exist_ok=True, parents=True)
-        for job in jobs:
-            if not job.done():
-                job_path = self.folder / (uuid.uuid4().hex[:8] + ".pkl")
-                with job_path.open("wb") as f:
-                    pickle.dump(job, f)
-
-    def wait(self) -> bool:
-        """Wait for completion of running jobs"""
-        waited = False
-        for fp in self.folder.glob("*.pkl"):
-            try:  # avoid concurrency issues with deleted items
-                with fp.open("rb") as f:
-                    job: tp.Any = pickle.load(f)
-            except Exception:  # pylint: disable=broad-except
-                continue
-            if not job.done():
-                msg = "Waiting for completion of pre-existing map job: %s\nin '%s'"
-                logger.info(msg, job, self.folder)
-                job.wait()
-                waited = True
-            # delete the file as it is not needed anymore
-            fp.unlink(missing_ok=True)
-        if waited:
-            logger.info("Waiting is over")
-        return waited
 
 
 def to_chunks(
@@ -335,13 +292,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
-            executor: submitit.Executor | None = self.executor()
-            if executor is not None:  # wait for items being computed
-                jcheck = JobChecker(folder=executor.folder)
-                jcheck.wait()
-                # update cache dict and recheck as actual checking for keys updates the dict
-                keys = set(self.cache_dict)  # update cache dict
-                missing = {k: item for k, item in missing.items() if k not in keys}
         if len(items) == len(missing) == 1 and self.forbid_single_item_computation:
             key, item = next(iter(missing.items()))
             raise RuntimeError(
@@ -400,8 +350,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     # select a batch/chunk of samples_per_job items to send to a job
                     j = executor.submit(self._call_and_store, chunk, use_cache_dict=True)
                     jobs.append(j)
-            jcheck = JobChecker(folder=executor.folder)
-            jcheck.add(jobs)
             # pylint: disable=expression-not-assigned
             uid = self.uid()
             msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"
@@ -489,60 +437,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         logger.debug(msg, len(uid_items), self._factory(), self.cache_dict)
         return (cache_dict[k] for k, _ in uid_items)
 
-    def _acquire_locks(
-        self, items: tp.Sequence[tp.Any], item_uid: tp.Callable[[tp.Any], str]
-    ) -> tuple[list[tp.Any], list[filelock.FileLock]]:
-        """Acquire locks for items, return (items_to_process, locks)"""
-        locks: list[filelock.FileLock] = []
-        if self.cache_dict.folder is None:
-            return list(items), locks
-
-        lock_dir = self.cache_dict.folder / "locks"
-        lock_dir.mkdir(exist_ok=True)
-
-        work_items = []
-
-        # First pass: optimistic locking
-        delayed_items = []
-        for item in items:
-            uid = item_uid(item)
-            lock = filelock.FileLock(lock_dir / f"{uid}.lock")
-            try:
-                lock.acquire(timeout=0.01)
-                # We have the lock
-                # Skip cache check for performance (rely on initial filter)
-                locks.append(lock)
-                work_items.append(item)
-            except filelock.Timeout:
-                # Locked by someone else
-                delayed_items.append(item)
-
-        # Second pass: wait for delayed items
-        # If they were locked, someone is working on them.
-        # We wait for them to finish. If they release the lock and
-        # it's still not done (e.g. crash), we pick it up.
-        for item in delayed_items:
-            uid = item_uid(item)
-            if uid in self.cache_dict:
-                continue  # Done
-
-            lock = filelock.FileLock(lock_dir / f"{uid}.lock")
-            try:
-                # Wait for lock
-                lock.acquire(timeout=self.lock_timeout)
-                if uid in self.cache_dict:
-                    lock.release()
-                    continue  # Done
-                locks.append(lock)
-                work_items.append(item)
-            except filelock.Timeout:
-                logger.warning(
-                    f"Could not acquire lock for {uid} after {self.lock_timeout}s"
-                )
-                # We skip it, but it will likely fail downstream if we expected it
-
-        return work_items, locks
-
     def _call_and_store(
         self, items: tp.Sequence[tp.Any], use_cache_dict: bool = True
     ) -> dict[str, tp.Any]:
@@ -551,36 +445,62 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
         item_uid = imethod.item_uid
-        locks: list[filelock.FileLock] = []
-        try:
-            if items:  # make sure some overlapping job did not already run stuff
-                keys = set(d)  # update cache dict
-                items = [item for item in items if item_uid(item) not in keys]
-                if use_cache_dict:
-                    items, locks = self._acquire_locks(items, item_uid)
 
-            if isinstance(self, slurm.SubmititMixin):  # dependence to mixin
-                if self.workdir is not None and self.cluster is not None and items:
-                    logger.info("Running from working directory: '%s'", os.getcwd())
-            outputs = self._run_method(items)
-            sentinel = base.Sentinel()
-            with contextlib.ExitStack() as estack:
-                writer = d
-                if isinstance(d, CacheDict):
-                    writer = estack.enter_context(d.writer())  # type: ignore
-                in_out = itertools.zip_longest(
-                    _set_tqdm(items), outputs, fillvalue=sentinel
-                )
-                for item, output in in_out:
-                    if item is sentinel or output is sentinel:
-                        msg = f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
-                        raise RuntimeError(msg)
-                    writer[item_uid(item)] = output
-            # don't return the whole cache dict if data is cached
-            return {} if use_cache_dict else d
-        finally:
-            for lock in locks:
-                lock.release()
+        # Filter out already cached items
+        if items:
+            keys = set(d)
+            items = [item for item in items if item_uid(item) not in keys]
+
+        # No locking needed
+        if not items or not use_cache_dict or self.cache_dict.folder is None:
+            return self._process_items(items, d, item_uid)
+
+        # With locking: delegate to LockManager
+        lock_manager = LockManager(
+            lock_dir=self.cache_dict.folder / "locks",
+            item_uid=item_uid,
+            cache_contains=lambda uid: uid in self.cache_dict,
+            lock_timeout=self.lock_timeout,
+        )
+        result = lock_manager.process_with_locks(
+            items, lambda itms: self._process_items(itms, d, item_uid)
+        )
+        return {} if isinstance(d, CacheDict) else result
+
+    def _process_items(
+        self,
+        items: tp.Sequence[tp.Any],
+        d: dict[str, tp.Any],
+        item_uid: tp.Callable[[tp.Any], str],
+    ) -> dict[str, tp.Any]:
+        """Process items and store results"""
+        if not items:
+            return {}
+
+        if isinstance(self, slurm.SubmititMixin):  # dependence to mixin
+            if self.workdir is not None and self.cluster is not None:
+                logger.info("Running from working directory: '%s'", os.getcwd())
+
+        outputs = self._run_method(items)
+        sentinel = base.Sentinel()
+        result = {}
+
+        with contextlib.ExitStack() as estack:
+            writer = d
+            if isinstance(d, CacheDict):
+                writer = estack.enter_context(d.writer())  # type: ignore
+            in_out = itertools.zip_longest(_set_tqdm(items), outputs, fillvalue=sentinel)
+            for item, output in in_out:
+                if item is sentinel or output is sentinel:
+                    msg = f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
+                    raise RuntimeError(msg)
+                uid = item_uid(item)
+                writer[uid] = output
+                if not isinstance(d, CacheDict):
+                    # don't return the whole output dict if data is cached
+                    result[uid] = output
+
+        return result
 
 
 @dataclasses.dataclass
