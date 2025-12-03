@@ -10,13 +10,15 @@ Disk, RAM caches
 import contextlib
 import dataclasses
 import io
-import json
 import logging
 import os
 import shutil
-import subprocess
+import time
 import typing as tp
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import orjson
 
 from . import utils
 from .confdict import ConfDict
@@ -155,7 +157,7 @@ class CacheDict(tp.Generic[X]):
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
-    def _read_info_files(self) -> None:
+    def _read_info_files(self, max_workers: int = 4) -> None:
         """Load current info files"""
         if self.folder is None:
             return
@@ -164,22 +166,25 @@ class CacheDict(tp.Generic[X]):
             # bypass reloading info files
             return
         folder = Path(self.folder)
-        # read all existing jsonl files
-        find_cmd = 'find . -type f -name "*-info.jsonl"'
         modified = folder.lstat().st_mtime
         nothing_new = self._folder_modified == modified
         self._folder_modified = modified
         if nothing_new:
             logger.debug("Nothing new to read from info files")
             return  # nothing new!
-        try:
-            out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
-        except subprocess.CalledProcessError as e:
-            out = e.output  # stderr contains missing tmp files
-        names = out.decode("utf8").splitlines()
-        for name in names:
-            jreader = self._jsonl_readers.setdefault(name, JsonlReader(folder / name))
-            self._key_info.update(jreader.read())
+        cpus = os.cpu_count()
+        if cpus is not None and cpus < max_workers:
+            max_workers = max(1, cpus)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # parallel read: submit jobs as we discover files
+            futures = []
+            for fp in folder.iterdir():
+                if not fp.name.endswith("-info.jsonl"):
+                    continue
+                reader = self._jsonl_readers.setdefault(fp.name, JsonlReader(fp))
+                futures.append(executor.submit(reader.read))
+            for future in futures:
+                self._key_info.update(future.result())
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -300,7 +305,8 @@ class CacheDictWriter:
                 yield
         finally:
             if cd.folder is not None:
-                os.utime(cd.folder)  # make sure the modified time is updated
+                t = time.time()  # make sure the modified time is updated:
+                os.utime(cd.folder, times=(t, t))
             fp2 = self._info_filepath
             if cd.permissions is not None and fp2 is not None and fp2.exists():
                 fp2.chmod(cd.permissions)
@@ -346,9 +352,9 @@ class CacheDictWriter:
                 # create the file only when required to avoid leaving empty files for some time
                 self._info_handle = self._exit_stack.enter_context(fp.open("ab"))
             if not self._info_handle.tell():
-                meta_str = METADATA_TAG + json.dumps(meta) + "\n"
-                self._info_handle.write(meta_str.encode("utf8"))
-            b = json.dumps(info).encode("utf8")
+                meta_dump = orjson.dumps(meta)
+                self._info_handle.write(METADATA_TAG.encode("utf8") + meta_dump + b"\n")
+            b = orjson.dumps(info)
             current = self._info_handle.tell()
             self._info_handle.write(b + b"\n")
             info.pop("#key")
@@ -376,60 +382,55 @@ class JsonlReader:
     def __init__(self, filepath: str | Path) -> None:
         self._fp = Path(filepath)
         self._last = 0
+        self._meta: dict[str, tp.Any] = {}
         self.readings = 0
 
     def read(self) -> dict[str, DumpInfo]:
         out: dict[str, DumpInfo] = {}
         self.readings += 1
+        meta_tag = METADATA_TAG.encode("utf8")
+        last = 0
+        fail = b""
         with self._fp.open("rb") as f:
-            # metadata
-            try:
-                first = next(f)
-            except StopIteration:
-                return out  # nothing to do
-            strline = first.decode("utf8")
-            if not strline.startswith(METADATA_TAG):
-                raise RuntimeError(f"metadata missing in info file {self._fp}")
-            meta = json.loads(strline[len(METADATA_TAG) :])
-            last = len(first)
-            if self._last > len(first):
+            # always read metadata first if not cached
+            if not self._meta:
+                first = f.readline()
+                if not first:
+                    return out  # empty file
+                if not first.startswith(meta_tag):
+                    raise RuntimeError(f"metadata missing in info file {self._fp}")
+                try:
+                    self._meta = orjson.loads(first[len(meta_tag) :])
+                except (orjson.JSONDecodeError, ValueError):
+                    # metadata line being written, retry later
+                    return out
+                last = len(first)
+            if self._last > last:
                 msg = "Forwarding to byte %s in info file %s"
                 logger.debug(msg, self._last, self._fp.name)
                 f.seek(self._last)
                 last = self._last
-            branges = []
-            lines = []
-            for line in f.readlines():
-                if not line.startswith(b"  "):  # empty
-                    lines.append(line)
-                    branges.append((last, last + len(line)))
-                last += len(line)
-            if not lines:
-                return out
-            lines[0] = b"[" + lines[0]
-            # last line may be corruped, so check twice
-            for k in range(2):
-                lines[-1] = lines[-1] + b"]"
-                json_str = b",".join(lines).decode("utf8")
+            for line in f:
+                if fail:
+                    msg = f"Failed to read non-last line in {self._fp}:\n{fail!r}"
+                    raise RuntimeError(msg)
+                count = len(line)
+                brange = (last, last + count)
+                line = line.strip()
+                if not line:
+                    last += count
+                    continue
                 try:
-                    infos = json.loads(json_str)
-                except json.decoder.JSONDecodeError:
-                    if not k:
-                        lines = lines[:-1]
-                        branges = branges[:-1]
-                    else:
-                        logger.warning(
-                            "Could not read json in %s:\n%s", self._fp, json_str
-                        )
-                        raise
-                else:
-                    break
-            # metadata
-            if len(infos) != len(branges):
-                raise RuntimeError("info and ranges are no more aligned")
-            for info, brange in zip(infos, branges):
+                    info = orjson.loads(line)
+                except (orjson.JSONDecodeError, ValueError):
+                    # last line could be currently being written, be robust to it
+                    fail = line
+                    continue
+                last += count  # only advance _last for valid lines
                 key = info.pop("#key")
-                dinfo = DumpInfo(jsonl=self._fp, byte_range=brange, **meta, content=info)
+                dinfo = DumpInfo(
+                    jsonl=self._fp, byte_range=brange, content=info, **self._meta
+                )
                 out[key] = dinfo
-            self._last = branges[-1][-1]
-            return out
+        self._last = last
+        return out
