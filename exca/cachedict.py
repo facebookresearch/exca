@@ -18,6 +18,20 @@ import subprocess
 import typing as tp
 from pathlib import Path
 
+# orjson is ~2x faster for JSON parsing (line-by-line)
+try:
+    import orjson as _json_mod
+
+    def _json_loads(s: bytes) -> tp.Any:
+        return _json_mod.loads(s)
+
+except ImportError:
+    _json_mod = None  # type: ignore
+
+    def _json_loads(s: bytes) -> tp.Any:
+        return json.loads(s)
+
+
 from . import utils
 from .confdict import ConfDict
 from .dumperloader import DumperLoader, StaticDumperLoader, host_pid
@@ -376,60 +390,53 @@ class JsonlReader:
     def __init__(self, filepath: str | Path) -> None:
         self._fp = Path(filepath)
         self._last = 0
+        self._meta: dict[str, tp.Any] = {}
         self.readings = 0
 
     def read(self) -> dict[str, DumpInfo]:
         out: dict[str, DumpInfo] = {}
         self.readings += 1
+        meta_tag = METADATA_TAG.encode("utf8")
+        last = 0
+        fail = b""
         with self._fp.open("rb") as f:
-            # metadata
-            try:
-                first = next(f)
-            except StopIteration:
-                return out  # nothing to do
-            strline = first.decode("utf8")
-            if not strline.startswith(METADATA_TAG):
-                raise RuntimeError(f"metadata missing in info file {self._fp}")
-            meta = json.loads(strline[len(METADATA_TAG) :])
-            last = len(first)
-            if self._last > len(first):
+            if self._last > 0:
                 msg = "Forwarding to byte %s in info file %s"
                 logger.debug(msg, self._last, self._fp.name)
                 f.seek(self._last)
                 last = self._last
-            branges = []
-            lines = []
-            for line in f.readlines():
-                if not line.startswith(b"  "):  # empty
-                    lines.append(line)
-                    branges.append((last, last + len(line)))
-                last += len(line)
-            if not lines:
-                return out
-            lines[0] = b"[" + lines[0]
-            # last line may be corruped, so check twice
-            for k in range(2):
-                lines[-1] = lines[-1] + b"]"
-                json_str = b",".join(lines).decode("utf8")
+            for line in f:
+                if fail:
+                    msg = f"Failed to read non-last line in {self._fp}:\n{fail!r}"
+                    raise RuntimeError(msg)
+                count = len(line)
+                brange = (last, last + count)
+                line = line.strip()
+                if not line:
+                    last += count
+                    continue
+                # first line is metadata
+                if line.startswith(meta_tag):
+                    try:
+                        self._meta = _json_loads(line[len(meta_tag) :])
+                    except (json.JSONDecodeError, ValueError):
+                        # metadata line being written, retry later
+                        break
+                    last += count
+                    continue
+                if not self._meta:
+                    raise RuntimeError(f"metadata missing in info file {self._fp}")
                 try:
-                    infos = json.loads(json_str)
-                except json.decoder.JSONDecodeError:
-                    if not k:
-                        lines = lines[:-1]
-                        branges = branges[:-1]
-                    else:
-                        logger.warning(
-                            "Could not read json in %s:\n%s", self._fp, json_str
-                        )
-                        raise
-                else:
-                    break
-            # metadata
-            if len(infos) != len(branges):
-                raise RuntimeError("info and ranges are no more aligned")
-            for info, brange in zip(infos, branges):
+                    info = _json_loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    # last line could be currently being written, be robust to it
+                    fail = line
+                    continue
+                last += count  # only advance _last for valid lines
                 key = info.pop("#key")
-                dinfo = DumpInfo(jsonl=self._fp, byte_range=brange, **meta, content=info)
+                dinfo = DumpInfo(
+                    jsonl=self._fp, byte_range=brange, content=info, **self._meta
+                )
                 out[key] = dinfo
-            self._last = branges[-1][-1]
-            return out
+        self._last = last
+        return out
