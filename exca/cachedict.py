@@ -165,7 +165,6 @@ class CacheDict(tp.Generic[X]):
             # bypass reloading info files
             return
         folder = Path(self.folder)
-        # read all existing jsonl files (iterdir is faster than subprocess find)
         modified = folder.lstat().st_mtime
         nothing_new = self._folder_modified == modified
         self._folder_modified = modified
