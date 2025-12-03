@@ -20,16 +20,9 @@ from pathlib import Path
 
 # orjson is ~2x faster for JSON parsing (line-by-line)
 try:
-    import orjson as _json_mod
-
-    def _json_loads(s: bytes) -> tp.Any:
-        return _json_mod.loads(s)
-
+    import orjson as json  # type: ignore
 except ImportError:
-    _json_mod = None  # type: ignore
-
-    def _json_loads(s: bytes) -> tp.Any:
-        return json.loads(s)
+    pass
 
 
 from . import utils
@@ -413,7 +406,7 @@ class JsonlReader:
                 if not first.startswith(meta_tag):
                     raise RuntimeError(f"metadata missing in info file {self._fp}")
                 try:
-                    self._meta = _json_loads(first[len(meta_tag) :])
+                    self._meta = json.loads(first[len(meta_tag) :])
                 except (json.JSONDecodeError, ValueError):
                     # metadata line being written, retry later
                     return out
@@ -434,7 +427,7 @@ class JsonlReader:
                     last += count
                     continue
                 try:
-                    info = _json_loads(line)
+                    info = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     # last line could be currently being written, be robust to it
                     fail = line
