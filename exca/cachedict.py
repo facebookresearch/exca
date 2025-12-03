@@ -10,7 +10,6 @@ Disk, RAM caches
 import contextlib
 import dataclasses
 import io
-import json
 import logging
 import os
 import shutil
@@ -18,12 +17,7 @@ import typing as tp
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-# orjson is ~2x faster for JSON parsing (line-by-line)
-try:
-    import orjson as json  # type: ignore
-except ImportError:
-    pass
-
+import orjson
 
 from . import utils
 from .confdict import ConfDict
@@ -359,13 +353,9 @@ class CacheDictWriter:
                 # create the file only when required to avoid leaving empty files for some time
                 self._info_handle = self._exit_stack.enter_context(fp.open("ab"))
             if not self._info_handle.tell():
-                meta_dump = json.dumps(meta)
-                if isinstance(meta_dump, str):
-                    meta_dump = meta_dump.encode("utf8")
+                meta_dump = orjson.dumps(meta)
                 self._info_handle.write(METADATA_TAG.encode("utf8") + meta_dump + b"\n")
-            b = json.dumps(info)
-            if isinstance(b, str):
-                b = b.encode("utf8")
+            b = orjson.dumps(info)
             current = self._info_handle.tell()
             self._info_handle.write(b + b"\n")
             info.pop("#key")
@@ -411,8 +401,8 @@ class JsonlReader:
                 if not first.startswith(meta_tag):
                     raise RuntimeError(f"metadata missing in info file {self._fp}")
                 try:
-                    self._meta = json.loads(first[len(meta_tag) :])
-                except (json.JSONDecodeError, ValueError):
+                    self._meta = orjson.loads(first[len(meta_tag) :])
+                except (orjson.JSONDecodeError, ValueError):
                     # metadata line being written, retry later
                     return out
                 last = len(first)
@@ -432,8 +422,8 @@ class JsonlReader:
                     last += count
                     continue
                 try:
-                    info = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
+                    info = orjson.loads(line)
+                except (orjson.JSONDecodeError, ValueError):
                     # last line could be currently being written, be robust to it
                     fail = line
                     continue
