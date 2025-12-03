@@ -169,7 +169,9 @@ class CacheDict(tp.Generic[X]):
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
-    def _read_info_files(self, max_workers: int = 8) -> None:
+    def _read_info_files(self, max_workers: int | None = None) -> None:
+        if max_workers is None:
+            max_workers = max(1, (os.cpu_count() or 2) // 2)
         """Load current info files"""
         if self.folder is None:
             return
