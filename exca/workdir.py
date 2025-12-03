@@ -180,8 +180,8 @@ def identify_path(name: str | Path) -> Path:
         fp = Path(folder) / name
         if fp.exists():
             return fp.absolute()
-    # otherwise check for editable installations
-    spec = importlib.util.find_spec(str(name))
+    # otherwise check for editable installations (typing fails for importlib?)
+    spec = importlib.util.find_spec(str(name))  # type: ignore
     if spec is None or spec.origin is None:
         msg = f"No folder/file named {name} in system paths "
         msg += "and failed to import it as well"

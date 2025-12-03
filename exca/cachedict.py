@@ -10,13 +10,15 @@ Disk, RAM caches
 import contextlib
 import dataclasses
 import io
-import json
 import logging
 import os
 import shutil
-import subprocess
+import time
 import typing as tp
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import orjson
 
 from . import utils
 from .confdict import ConfDict
@@ -118,8 +120,7 @@ class CacheDict(tp.Generic[X]):
         self._key_info: dict[str, DumpInfo] = {}
         # json info file reading
         self._folder_modified = -1.0
-        self._info_files_last: dict[str, int] = {}
-        self._jsonl_readings = 0  # for perf
+        self._jsonl_readers: dict[str, JsonlReader] = {}
         self._jsonl_reading_allowance = float("inf")
         # keep loaders live for optimized loading
         # (instances are reinstantiated for dumping though,  to make sure they are unique)
@@ -156,75 +157,34 @@ class CacheDict(tp.Generic[X]):
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
-    def _read_info_files(self) -> None:
+    def _read_info_files(self, max_workers: int = 4) -> None:
         """Load current info files"""
         if self.folder is None:
             return
-        if self._jsonl_reading_allowance <= self._jsonl_readings:
+        readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
+        if self._jsonl_reading_allowance <= readings:
             # bypass reloading info files
             return
-        self._jsonl_readings += 1
         folder = Path(self.folder)
-        # read all existing jsonl files
-        find_cmd = 'find . -type f -name "*-info.jsonl"'
         modified = folder.lstat().st_mtime
         nothing_new = self._folder_modified == modified
         self._folder_modified = modified
         if nothing_new:
             logger.debug("Nothing new to read from info files")
             return  # nothing new!
-        try:
-            out = subprocess.check_output(find_cmd, shell=True, cwd=folder)
-        except subprocess.CalledProcessError as e:
-            out = e.output  # stderr contains missing tmp files
-        names = out.decode("utf8").splitlines()
-        for name in names:
-            fp = folder / name
-            last = 0
-            meta = {}
-            fail = ""
-            with fp.open("rb") as f:
-                for k, line in enumerate(f):
-                    if fail:
-                        msg = f"Failed to read non-last line #{k - 1} in {fp}:\n{fail!r}"
-                        raise RuntimeError(msg)
-                    count = len(line)
-                    last = last + count
-                    line = line.strip()
-                    if not line:
-                        logger.debug("Skipping empty line #%s", k)
-                        continue
-                    strline = line.decode("utf8")
-                    if not k:
-                        if not strline.startswith(METADATA_TAG):
-                            raise RuntimeError(f"metadata missing in info file {fp}")
-                        strline = strline[len(METADATA_TAG) :]
-                    try:
-                        info = json.loads(strline)
-                    except json.JSONDecodeError:
-                        msg = "Failed to read to line #%s in %s in info file %s"
-                        logger.warning(msg, k, name, strline)
-                        # last line could be currently being written?
-                        # (let's be robust to it)
-                        fail = strline
-                        last -= count  # move back for next read
-                        continue
-                    if not k:  # metadata
-                        meta = info
-                        new_last = self._info_files_last.get(fp.name, last)
-                        if new_last > last:
-                            last = new_last
-                            msg = "Forwarding to byte %s in info file %s"
-                            logger.debug(msg, last, name)
-                            f.seek(last)
-                        continue
-                    key = info.pop("#key")
-                    dinfo = DumpInfo(
-                        jsonl=fp, byte_range=(last - count, last), **meta, content=info
-                    )
-                    self._key_info[key] = dinfo
-
-                self._info_files_last[fp.name] = last  # f.tell()
+        cpus = os.cpu_count()
+        if cpus is not None and cpus < max_workers:
+            max_workers = max(1, cpus)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # parallel read: submit jobs as we discover files
+            futures = []
+            for fp in folder.iterdir():
+                if not fp.name.endswith("-info.jsonl"):
+                    continue
+                reader = self._jsonl_readers.setdefault(fp.name, JsonlReader(fp))
+                futures.append(executor.submit(reader.read))
+            for future in futures:
+                self._key_info.update(future.result())
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -309,7 +269,8 @@ class CacheDict(tp.Generic[X]):
         This is useful to speed up __contains__ statement with many missing
         items, which could trigger thousands of file rereads
         """
-        self._jsonl_reading_allowance = self._jsonl_readings + 1
+        readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
+        self._jsonl_reading_allowance = readings + 1
         try:
             yield
         finally:
@@ -344,7 +305,8 @@ class CacheDictWriter:
                 yield
         finally:
             if cd.folder is not None:
-                os.utime(cd.folder)  # make sure the modified time is updated
+                t = time.time()  # make sure the modified time is updated:
+                os.utime(cd.folder, times=(t, t))
             fp2 = self._info_filepath
             if cd.permissions is not None and fp2 is not None and fp2.exists():
                 fp2.chmod(cd.permissions)
@@ -375,6 +337,7 @@ class CacheDictWriter:
         if cd.folder is not None:
             if self._info_filepath is None:
                 raise RuntimeError("Cannot write out of a writer context")
+            fp = self._info_filepath
             if self._dumper is None:
                 self._dumper = DumperLoader.CLASSES[cd.cache_type](cd.folder)
                 self._exit_stack.enter_context(self._dumper.open())
@@ -387,23 +350,23 @@ class CacheDictWriter:
             meta = {"cache_type": cd.cache_type}
             if self._info_handle is None:
                 # create the file only when required to avoid leaving empty files for some time
-                fp = self._info_filepath
                 self._info_handle = self._exit_stack.enter_context(fp.open("ab"))
             if not self._info_handle.tell():
-                meta_str = METADATA_TAG + json.dumps(meta) + "\n"
-                self._info_handle.write(meta_str.encode("utf8"))
-            b = json.dumps(info).encode("utf8")
+                meta_dump = orjson.dumps(meta)
+                self._info_handle.write(METADATA_TAG.encode("utf8") + meta_dump + b"\n")
+            b = orjson.dumps(info)
             current = self._info_handle.tell()
             self._info_handle.write(b + b"\n")
             info.pop("#key")
             dinfo = DumpInfo(
-                jsonl=self._info_filepath,
+                jsonl=fp,
                 byte_range=(current, current + len(b) + 1),
                 content=info,
                 **meta,
             )
             cd._key_info[key] = dinfo
-            cd._info_files_last[self._info_filepath.name] = self._info_handle.tell()
+            last = self._info_handle.tell()
+            cd._jsonl_readers.setdefault(fp.name, JsonlReader(fp))._last = last
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if cd.permissions is not None:
@@ -413,3 +376,61 @@ class CacheDictWriter:
                     except Exception:  # pylint: disable=broad-except
                         pass  # avoid issues in case of overlapping processes
             os.utime(cd.folder)  # make sure the modified time is updated
+
+
+class JsonlReader:
+    def __init__(self, filepath: str | Path) -> None:
+        self._fp = Path(filepath)
+        self._last = 0
+        self._meta: dict[str, tp.Any] = {}
+        self.readings = 0
+
+    def read(self) -> dict[str, DumpInfo]:
+        out: dict[str, DumpInfo] = {}
+        self.readings += 1
+        meta_tag = METADATA_TAG.encode("utf8")
+        last = 0
+        fail = b""
+        with self._fp.open("rb") as f:
+            # always read metadata first if not cached
+            if not self._meta:
+                first = f.readline()
+                if not first:
+                    return out  # empty file
+                if not first.startswith(meta_tag):
+                    raise RuntimeError(f"metadata missing in info file {self._fp}")
+                try:
+                    self._meta = orjson.loads(first[len(meta_tag) :])
+                except (orjson.JSONDecodeError, ValueError):
+                    # metadata line being written, retry later
+                    return out
+                last = len(first)
+            if self._last > last:
+                msg = "Forwarding to byte %s in info file %s"
+                logger.debug(msg, self._last, self._fp.name)
+                f.seek(self._last)
+                last = self._last
+            for line in f:
+                if fail:
+                    msg = f"Failed to read non-last line in {self._fp}:\n{fail!r}"
+                    raise RuntimeError(msg)
+                count = len(line)
+                brange = (last, last + count)
+                line = line.strip()
+                if not line:
+                    last += count
+                    continue
+                try:
+                    info = orjson.loads(line)
+                except (orjson.JSONDecodeError, ValueError):
+                    # last line could be currently being written, be robust to it
+                    fail = line
+                    continue
+                last += count  # only advance _last for valid lines
+                key = info.pop("#key")
+                dinfo = DumpInfo(
+                    jsonl=self._fp, byte_range=brange, content=info, **self._meta
+                )
+                out[key] = dinfo
+        self._last = last
+        return out
