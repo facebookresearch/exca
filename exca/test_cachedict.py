@@ -7,6 +7,7 @@
 import gc
 import logging
 import os
+import time
 import typing as tp
 from concurrent import futures
 from pathlib import Path
@@ -220,6 +221,8 @@ def test_2_caches(tmp_path: Path) -> None:
     with cache.writer() as writer:
         writer["blublu"] = 12
         keys = list(cache2.keys())
+        time.sleep(0.001)
+    print("reading again")
     keys = list(cache2.keys())
     assert "blublu" in keys
 

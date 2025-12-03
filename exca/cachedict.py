@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import shutil
+import time
 import typing as tp
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -306,7 +307,10 @@ class CacheDictWriter:
                 yield
         finally:
             if cd.folder is not None:
-                os.utime(cd.folder)  # make sure the modified time is updated
+                t = time.time()
+                os.utime(
+                    cd.folder, times=(t, t)
+                )  # make sure the modified time is updated
             fp2 = self._info_filepath
             if cd.permissions is not None and fp2 is not None and fp2.exists():
                 fp2.chmod(cd.permissions)
