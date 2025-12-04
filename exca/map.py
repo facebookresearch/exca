@@ -11,19 +11,16 @@ import inspect
 import itertools
 import logging
 import os
-import pickle
 import typing as tp
-import uuid
 from concurrent import futures
 from pathlib import Path
 
 import numpy as np
 import pydantic
-import submitit
-from submitit.core import utils
 
 from . import base, slurm
 from .cachedict import CacheDict
+from .utils import LockManager
 
 MapFunc = tp.Callable[[tp.Sequence[tp.Any]], tp.Iterator[tp.Any]]
 X = tp.TypeVar("X")
@@ -63,45 +60,6 @@ class CachedMethod:
 
     def __call__(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
         return self.infra._method_override(items)
-
-
-class JobChecker:
-    """Keeps a record of running jobs in a folder
-    and enables waiting for them to complete.
-    """
-
-    def __init__(self, folder: Path | str) -> None:
-        basefolder = utils.JobPaths.get_first_id_independent_folder(folder)
-        self.folder = basefolder / "running-jobs"
-
-    def add(self, jobs: tp.Iterable[tp.Any]) -> None:
-        """Add jobs to the list of running jobs"""
-        self.folder.mkdir(exist_ok=True, parents=True)
-        for job in jobs:
-            if not job.done():
-                job_path = self.folder / (uuid.uuid4().hex[:8] + ".pkl")
-                with job_path.open("wb") as f:
-                    pickle.dump(job, f)
-
-    def wait(self) -> bool:
-        """Wait for completion of running jobs"""
-        waited = False
-        for fp in self.folder.glob("*.pkl"):
-            try:  # avoid concurrency issues with deleted items
-                with fp.open("rb") as f:
-                    job: tp.Any = pickle.load(f)
-            except Exception:  # pylint: disable=broad-except
-                continue
-            if not job.done():
-                msg = "Waiting for completion of pre-existing map job: %s\nin '%s'"
-                logger.info(msg, job, self.folder)
-                job.wait()
-                waited = True
-            # delete the file as it is not needed anymore
-            fp.unlink(missing_ok=True)
-        if waited:
-            logger.info("Waiting is over")
-        return waited
 
 
 def to_chunks(
@@ -188,6 +146,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     # - force: cache is ignored, and result is (re)computed (and cached)
     # - read-only: never compute anything
     mode: Mode = "cached"
+    lock_timeout: int = 3600
 
     # internals
     _recomputed: tp.Set[str] = set()  # for mode="force"
@@ -333,13 +292,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
-            executor: submitit.Executor | None = self.executor()
-            if executor is not None:  # wait for items being computed
-                jcheck = JobChecker(folder=executor.folder)
-                jcheck.wait()
-                # update cache dict and recheck as actual checking for keys updates the dict
-                keys = set(self.cache_dict)  # update cache dict
-                missing = {k: item for k, item in missing.items() if k not in keys}
         if len(items) == len(missing) == 1 and self.forbid_single_item_computation:
             key, item = next(iter(missing.items()))
             raise RuntimeError(
@@ -398,8 +350,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     # select a batch/chunk of samples_per_job items to send to a job
                     j = executor.submit(self._call_and_store, chunk, use_cache_dict=True)
                     jobs.append(j)
-            jcheck = JobChecker(folder=executor.folder)
-            jcheck.add(jobs)
             # pylint: disable=expression-not-assigned
             uid = self.uid()
             msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"
@@ -495,14 +445,46 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
         item_uid = imethod.item_uid
-        if items:  # make sure some overlapping job did not already run stuff
-            keys = set(d)  # update cache dict
+
+        # Filter out already cached items
+        if items:
+            keys = set(d)
             items = [item for item in items if item_uid(item) not in keys]
+
+        # No locking needed
+        if not items or not use_cache_dict or self.cache_dict.folder is None:
+            return self._process_items(items, d, item_uid)
+
+        # With locking: delegate to LockManager
+        lock_manager = LockManager(
+            lock_dir=self.cache_dict.folder / "locks",
+            item_uid=item_uid,
+            cache_contains=lambda uid: uid in self.cache_dict,
+            lock_timeout=self.lock_timeout,
+        )
+        result = lock_manager.process_with_locks(
+            items, lambda itms: self._process_items(itms, d, item_uid)
+        )
+        return {} if isinstance(d, CacheDict) else result
+
+    def _process_items(
+        self,
+        items: tp.Sequence[tp.Any],
+        d: dict[str, tp.Any],
+        item_uid: tp.Callable[[tp.Any], str],
+    ) -> dict[str, tp.Any]:
+        """Process items and store results"""
+        if not items:
+            return {}
+
         if isinstance(self, slurm.SubmititMixin):  # dependence to mixin
-            if self.workdir is not None and self.cluster is not None and items:
+            if self.workdir is not None and self.cluster is not None:
                 logger.info("Running from working directory: '%s'", os.getcwd())
+
         outputs = self._run_method(items)
         sentinel = base.Sentinel()
+        result = {}
+
         with contextlib.ExitStack() as estack:
             writer = d
             if isinstance(d, CacheDict):
@@ -512,9 +494,13 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 if item is sentinel or output is sentinel:
                     msg = f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
                     raise RuntimeError(msg)
-                writer[item_uid(item)] = output
-        # don't return the whole cache dict if data is cached
-        return {} if use_cache_dict else d
+                uid = item_uid(item)
+                writer[uid] = output
+                if not isinstance(d, CacheDict):
+                    # don't return the whole output dict if data is cached
+                    result[uid] = output
+
+        return result
 
 
 @dataclasses.dataclass

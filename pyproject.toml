@@ -12,6 +12,7 @@ dependencies = [
   "pydantic>=2.5.0",
   "submitit>=1.5.1",
   "orjson",  # significantly faster than json
+  "filelock",
 ]
 
 [project.urls]
