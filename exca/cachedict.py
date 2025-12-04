@@ -397,8 +397,10 @@ class JsonlReader:
                 first = f.readline()
                 if not first:
                     return out  # empty file
-                if not first.startswith(meta_tag):
-                    raise RuntimeError(f"metadata missing in info file {self._fp}")
+                if not first.startswith(meta_tag[: len(first)]):
+                    raise RuntimeError(
+                        f"metadata missing in first line {first!r} of file {self._fp}"
+                    )
                 try:
                     self._meta = orjson.loads(first[len(meta_tag) :])
                 except (orjson.JSONDecodeError, ValueError):
