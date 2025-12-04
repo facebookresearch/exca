@@ -464,7 +464,7 @@ def test_basic_pydantic() -> None:
 
 
 def test_item_queue_basic(tmp_path: Path) -> None:
-    """Test basic add and claim operations."""
+    """Test basic add, claim, and mark_done operations."""
     queue = utils.ItemQueue(tmp_path / "queue")
 
     # Add items
@@ -472,16 +472,22 @@ def test_item_queue_basic(tmp_path: Path) -> None:
     added = queue.add_items(items)
     assert added == 3
     assert len(queue) == 3
+    assert queue.pending_count() == 3
 
-    # Claim all items
+    # Claim all items (marks them as claimed, doesn't remove)
     claimed = queue.claim_batch(batch_size=10)
     assert len(claimed) == 3
     assert set(uid for uid, _ in claimed) == {"a", "b", "c"}
-    assert len(queue) == 0
+    assert len(queue) == 3  # Still in queue (claimed status)
+    assert queue.pending_count() == 0  # No pending items
 
-    # Claim from empty queue
-    claimed = queue.claim_batch()
-    assert claimed == []
+    # Claim again - no pending items
+    claimed2 = queue.claim_batch()
+    assert claimed2 == []
+
+    # Mark items as done
+    queue.mark_done([uid for uid, _ in claimed])
+    assert len(queue) == 0
 
 
 def test_item_queue_batch_claiming(tmp_path: Path) -> None:
@@ -496,18 +502,26 @@ def test_item_queue_batch_claiming(tmp_path: Path) -> None:
     # Claim in batches of 3
     batch1 = queue.claim_batch(batch_size=3)
     assert len(batch1) == 3
-    assert len(queue) == 7
+    assert queue.pending_count() == 7
 
     batch2 = queue.claim_batch(batch_size=3)
     assert len(batch2) == 3
-    assert len(queue) == 4
+    assert queue.pending_count() == 4
+
+    # Mark first batch done
+    queue.mark_done([uid for uid, _ in batch1])
+    assert len(queue) == 7  # 3 removed
 
     batch3 = queue.claim_batch(batch_size=3)
     assert len(batch3) == 3
-    assert len(queue) == 1
+    assert queue.pending_count() == 1
 
     batch4 = queue.claim_batch(batch_size=3)
     assert len(batch4) == 1
+    assert queue.pending_count() == 0
+
+    # Mark all done
+    queue.mark_done([uid for uid, _ in batch2 + batch3 + batch4])
     assert len(queue) == 0
 
 
@@ -541,9 +555,10 @@ def test_item_queue_concurrent_queues(tmp_path: Path) -> None:
     # q1 claims some
     claimed1 = q1.claim_batch(batch_size=2)
     assert len(claimed1) == 2
+    assert q1.pending_count() == 1
 
-    # q2 sees remaining
-    assert len(q2) == 1
+    # q2 sees same state
+    assert q2.pending_count() == 1
 
     # q2 claims the rest
     claimed2 = q2.claim_batch(batch_size=10)
@@ -552,6 +567,11 @@ def test_item_queue_concurrent_queues(tmp_path: Path) -> None:
     # All items accounted for
     all_uids = {uid for uid, _ in claimed1} | {uid for uid, _ in claimed2}
     assert all_uids == {"a", "b", "c"}
+
+    # Mark all done
+    q1.mark_done([uid for uid, _ in claimed1])
+    q2.mark_done([uid for uid, _ in claimed2])
+    assert len(q1) == 0
 
 
 def test_item_queue_complex_items(tmp_path: Path) -> None:
@@ -573,3 +593,80 @@ def test_item_queue_complex_items(tmp_path: Path) -> None:
     assert claimed_dict["dict"] == {"key": "value", "nested": [1, 2, 3]}
     assert claimed_dict["list"] == [1, "two", 3.0]
     assert claimed_dict["tuple"] == (1, 2, 3)
+
+    # Clean up
+    queue.mark_done([uid for uid, _ in claimed])
+
+
+def test_item_queue_wait_for_completion(tmp_path: Path) -> None:
+    """Test wait_for_completion blocks until items are done."""
+    import threading
+
+    queue = utils.ItemQueue(tmp_path / "queue")
+    queue.add_items([("a", 1), ("b", 2)])
+
+    # Claim items in another thread, then mark done after delay
+    def worker():
+        import time
+
+        claimed = queue.claim_batch()
+        time.sleep(0.1)
+        queue.mark_done([uid for uid, _ in claimed])
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+
+    # Wait for completion (should block until worker marks done)
+    queue.wait_for_completion(["a", "b"], poll_interval=0.05)
+    thread.join()
+
+    assert len(queue) == 0
+
+
+def test_item_queue_stale_reclaim(tmp_path: Path) -> None:
+    """Test that stale claimed items are reclaimed based on observed processing time."""
+    import time
+
+    # Use a low stale multiplier for faster testing
+    queue = utils.ItemQueue(tmp_path / "queue", stale_multiplier=2.0)
+
+    # Add two items
+    queue.add_items([("a", 1), ("b", 2)])
+
+    # Claim and quickly complete item "a" to establish baseline
+    claimed_a = queue.claim_batch(batch_size=1)
+    assert len(claimed_a) == 1
+    time.sleep(0.05)  # Simulate 50ms processing
+    queue.mark_done([claimed_a[0][0]])
+
+    # Now claim item "b" but don't complete it
+    claimed_b = queue.claim_batch(batch_size=1)
+    assert len(claimed_b) == 1
+    assert queue.pending_count() == 0
+
+    # Wait for item to become stale (>2x the 50ms baseline = >100ms)
+    time.sleep(0.15)
+
+    # Reclaim should move it back to pending
+    reclaimed = queue._reclaim_stale()
+    assert reclaimed == 1
+    assert queue.pending_count() == 1
+
+    # Can claim again
+    claimed2 = queue.claim_batch()
+    assert len(claimed2) == 1
+
+
+def test_item_queue_no_baseline(tmp_path: Path) -> None:
+    """Test that without any completed items, stale reclaim is disabled."""
+    queue = utils.ItemQueue(tmp_path / "queue")
+    queue.add_items([("a", 1)])
+
+    # Claim item but don't complete
+    claimed = queue.claim_batch()
+    assert len(claimed) == 1
+
+    # Reclaim should do nothing (no baseline yet)
+    reclaimed = queue._reclaim_stale()
+    assert reclaimed == 0
+    assert queue.pending_count() == 0  # Still claimed, not reclaimed

@@ -527,24 +527,53 @@ class ItemQueue:
     Flow:
     1. Main process calls add_items() with all missing (uid, item) pairs
     2. Main process submits worker jobs to cluster
-    3. Workers call claim_batch() to get items to process
-    4. Workers process items, write to cache, repeat until queue empty
+    3. Workers call claim_batch() to get items (marks them as claimed with timestamp)
+    4. Workers process items, call mark_done() to remove from queue
+       (this records processing time for stale detection)
+    5. Main process calls wait_for_completion() to block until items are done
+       (stale items are reclaimed based on observed max processing time)
     """
 
-    def __init__(self, folder: Path | str) -> None:
+    # Status constants
+    PENDING = "pending"
+    CLAIMED = "claimed"
+
+    def __init__(self, folder: Path | str, stale_multiplier: float = 3.0) -> None:
+        """
+        Parameters
+        ----------
+        folder: Path or str
+            Directory for the SQLite database
+        stale_multiplier: float
+            Multiplier applied to max observed processing time to detect stale items.
+            An item is stale if claimed_time > max_processing_time * stale_multiplier.
+            Default: 3.0 (items taking 3x longer than the slowest completed item are stale)
+        """
         self.folder = Path(folder)
         self.folder.mkdir(exist_ok=True, parents=True)
         self.db_path = self.folder / "item_queue.db"
+        self.stale_multiplier = stale_multiplier
         self._init_db()
 
     def _init_db(self) -> None:
-        """Initialize the SQLite database with the items table."""
+        """Initialize the SQLite database with the items table and stats."""
         with self._connect() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS items (
                     uid TEXT PRIMARY KEY,
-                    item BLOB NOT NULL
+                    item BLOB NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    claimed_at REAL
+                )
+                """
+            )
+            # Stats table to track max processing time
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stats (
+                    key TEXT PRIMARY KEY,
+                    value REAL NOT NULL
                 )
                 """
             )
@@ -582,7 +611,8 @@ class ItemQueue:
                 try:
                     item_blob = pickle.dumps(item)
                     conn.execute(
-                        "INSERT INTO items (uid, item) VALUES (?, ?)", (uid, item_blob)
+                        "INSERT INTO items (uid, item, status) VALUES (?, ?, ?)",
+                        (uid, item_blob, self.PENDING),
                     )
                     added += 1
                 except sqlite3.IntegrityError:
@@ -592,9 +622,9 @@ class ItemQueue:
         return added
 
     def claim_batch(self, batch_size: int = 100) -> tp.List[tp.Tuple[str, tp.Any]]:
-        """Claim a batch of items from the queue. Called by workers.
+        """Claim a batch of pending items from the queue. Called by workers.
 
-        Atomically selects and deletes items from the queue.
+        Atomically selects pending items and marks them as claimed with timestamp.
 
         Parameters
         ----------
@@ -604,19 +634,28 @@ class ItemQueue:
         Returns
         -------
         list of (uid, item) tuples
-            Items that were claimed (empty if queue is exhausted)
+            Items that were claimed (empty if no pending items)
         """
+        import time
+
         claimed: tp.List[tp.Tuple[str, tp.Any]] = []
+        now = time.time()
         with self._connect() as conn:
-            # Select items to claim
-            cursor = conn.execute("SELECT uid, item FROM items LIMIT ?", (batch_size,))
+            # Select pending items
+            cursor = conn.execute(
+                "SELECT uid, item FROM items WHERE status = ? LIMIT ?",
+                (self.PENDING, batch_size),
+            )
             rows = cursor.fetchall()
             if not rows:
                 return claimed
-            # Delete claimed items
+            # Mark as claimed with timestamp
             uids = [row[0] for row in rows]
             placeholders = ",".join("?" * len(uids))
-            conn.execute(f"DELETE FROM items WHERE uid IN ({placeholders})", uids)
+            conn.execute(
+                f"UPDATE items SET status = ?, claimed_at = ? WHERE uid IN ({placeholders})",
+                (self.CLAIMED, now, *uids),
+            )
             conn.commit()
             # Deserialize items
             for uid, item_blob in rows:
@@ -624,8 +663,125 @@ class ItemQueue:
                 claimed.append((uid, item))
         return claimed
 
+    def mark_done(self, uids: tp.Sequence[str]) -> None:
+        """Mark items as done by removing them from the queue.
+
+        Called by workers after successfully caching processed items.
+        Also updates the max processing time for stale detection.
+
+        Parameters
+        ----------
+        uids: sequence of str
+            UIDs of items to remove from queue
+        """
+        if not uids:
+            return
+        import time
+
+        now = time.time()
+        with self._connect() as conn:
+            # Get claimed_at times to compute processing durations
+            placeholders = ",".join("?" * len(uids))
+            cursor = conn.execute(
+                f"SELECT claimed_at FROM items WHERE uid IN ({placeholders}) AND claimed_at IS NOT NULL",
+                list(uids),
+            )
+            claimed_times = [row[0] for row in cursor.fetchall()]
+
+            # Update max processing time if we have valid times
+            if claimed_times:
+                max_duration = max(now - claimed_at for claimed_at in claimed_times)
+                conn.execute(
+                    """
+                    INSERT INTO stats (key, value) VALUES ('max_processing_time', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = MAX(value, ?)
+                    """,
+                    (max_duration, max_duration),
+                )
+
+            # Delete the items
+            conn.execute(f"DELETE FROM items WHERE uid IN ({placeholders})", list(uids))
+            conn.commit()
+
+    def _reclaim_stale(self) -> int:
+        """Reclaim items that have been claimed for too long (worker probably crashed).
+
+        Uses the max observed processing time * stale_multiplier as the threshold.
+        Only reclaims if at least one item has completed (so we have a baseline).
+
+        Returns the number of items reclaimed.
+        """
+        import time
+
+        with self._connect() as conn:
+            # Get max processing time from stats
+            cursor = conn.execute(
+                "SELECT value FROM stats WHERE key = 'max_processing_time'"
+            )
+            row = cursor.fetchone()
+            if row is None:
+                # No items completed yet, can't determine stale threshold
+                return 0
+
+            max_processing_time = row[0]
+            stale_threshold = max_processing_time * self.stale_multiplier
+            cutoff = time.time() - stale_threshold
+
+            cursor = conn.execute(
+                "UPDATE items SET status = ?, claimed_at = NULL "
+                "WHERE status = ? AND claimed_at < ?",
+                (self.PENDING, self.CLAIMED, cutoff),
+            )
+            conn.commit()
+            return cursor.rowcount
+
+    def wait_for_completion(
+        self, uids: tp.Sequence[str], poll_interval: float = 1.0
+    ) -> None:
+        """Block until all specified items are no longer in the queue.
+
+        Automatically reclaims stale items (claimed too long ago) so they can
+        be retried by other workers.
+
+        Parameters
+        ----------
+        uids: sequence of str
+            UIDs to wait for
+        poll_interval: float
+            Seconds to wait between checks
+        """
+        import time
+
+        uids_set = set(uids)
+        while True:
+            # Reclaim any stale items first
+            reclaimed = self._reclaim_stale()
+            if reclaimed > 0:
+                logger.warning(
+                    "Reclaimed %s stale items (worker likely crashed)", reclaimed
+                )
+
+            with self._connect() as conn:
+                placeholders = ",".join("?" * len(uids_set))
+                cursor = conn.execute(
+                    f"SELECT COUNT(*) FROM items WHERE uid IN ({placeholders})",
+                    list(uids_set),
+                )
+                remaining = cursor.fetchone()[0]
+            if remaining == 0:
+                return
+            time.sleep(poll_interval)
+
     def __len__(self) -> int:
-        """Return the number of items remaining in the queue."""
+        """Return the number of items remaining in the queue (pending + claimed)."""
         with self._connect() as conn:
             cursor = conn.execute("SELECT COUNT(*) FROM items")
+            return cursor.fetchone()[0]
+
+    def pending_count(self) -> int:
+        """Return the number of pending (unclaimed) items."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM items WHERE status = ?", (self.PENDING,)
+            )
             return cursor.fetchone()[0]

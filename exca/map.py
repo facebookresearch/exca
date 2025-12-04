@@ -368,6 +368,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             queue_folder = executor.folder
 
         item_queue = ItemQueue(queue_folder)
+        expected_uids = [uid for uid, _ in missing]
+
         # Add missing items to the queue (workers will claim them)
         added = item_queue.add_items(missing)
         if added < len(missing):
@@ -379,64 +381,68 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         else:
             logger.info("Added %s items to queue", added)
 
-        # Calculate number of workers based on queue size
-        queue_size = len(item_queue)
-        if queue_size == 0:
-            return {}
-
-        num_workers = min(
-            queue_size if self.max_jobs is None else self.max_jobs,
-            int(np.ceil(queue_size / self.min_samples_per_job)),
-        )
-
-        if self.cluster in ("threadpool", "processpool"):
-            # Use concurrent.futures for local parallel execution
-            ExecutorCls = (
-                futures.ThreadPoolExecutor
-                if self.cluster == "threadpool"
-                else futures.ProcessPoolExecutor
+        # Calculate number of workers based on pending items
+        pending = item_queue.pending_count()
+        if pending > 0:
+            num_workers = min(
+                pending if self.max_jobs is None else self.max_jobs,
+                int(np.ceil(pending / self.min_samples_per_job)),
             )
-            with ExecutorCls(max_workers=num_workers) as ex:
-                jobs = [
-                    ex.submit(
-                        self._process_from_queue, queue_folder, self.min_samples_per_job
-                    )
-                    for _ in range(num_workers)
-                ]
-                logger.info(
-                    "Sent %s workers for %s items into %s",
-                    num_workers,
-                    queue_size,
-                    self.cluster,
+
+            if self.cluster in ("threadpool", "processpool"):
+                # Use concurrent.futures for local parallel execution
+                ExecutorCls = (
+                    futures.ThreadPoolExecutor
+                    if self.cluster == "threadpool"
+                    else futures.ProcessPoolExecutor
                 )
-                for job in _set_tqdm(futures.as_completed(jobs), total=len(jobs)):
-                    job.result()  # raise asap
-            logger.info("Finished processing %s items for %s", queue_size, self.uid())
-        else:
-            # Use submitit for slurm/local/debug
-            executor = self.executor()
-            if executor is None:
-                raise RuntimeError(f"Executor is None for {self.cluster!r}")
-            executor.update_parameters(slurm_array_parallelism=num_workers)
-            jobs = []
-            with self._work_env(), executor.batch():
-                for _ in range(num_workers):
-                    j = executor.submit(
-                        self._process_from_queue,
-                        queue_folder=queue_folder,
-                        batch_size=self.min_samples_per_job,
+                with ExecutorCls(max_workers=num_workers) as ex:
+                    jobs = [
+                        ex.submit(
+                            self._process_from_queue,
+                            queue_folder,
+                            self.min_samples_per_job,
+                        )
+                        for _ in range(num_workers)
+                    ]
+                    logger.info(
+                        "Sent %s workers for %s items into %s",
+                        num_workers,
+                        pending,
+                        self.cluster,
                     )
-                    jobs.append(j)
-            logger.info(
-                "Sent %s jobs for %s items on cluster '%s' (eg: %s)",
-                len(jobs),
-                queue_size,
-                executor.cluster,
-                jobs[0].job_id,
-            )
-            [j.result() for j in jobs]  # wait for completion
-            logger.info("Finished processing items for %s", self.uid())
-        return {}  # Results are in cache
+                    for job in _set_tqdm(futures.as_completed(jobs), total=len(jobs)):
+                        job.result()  # raise asap
+                logger.info("Finished processing %s items for %s", pending, self.uid())
+            else:
+                # Use submitit for slurm/local/debug
+                executor = self.executor()
+                if executor is None:
+                    raise RuntimeError(f"Executor is None for {self.cluster!r}")
+                executor.update_parameters(slurm_array_parallelism=num_workers)
+                jobs = []
+                with self._work_env(), executor.batch():
+                    for _ in range(num_workers):
+                        j = executor.submit(
+                            self._process_from_queue,
+                            queue_folder=queue_folder,
+                            batch_size=self.min_samples_per_job,
+                        )
+                        jobs.append(j)
+                logger.info(
+                    "Sent %s jobs for %s items on cluster '%s' (eg: %s)",
+                    len(jobs),
+                    pending,
+                    executor.cluster,
+                    jobs[0].job_id,
+                )
+                [j.result() for j in jobs]  # wait for completion
+                logger.info("Finished processing items for %s", self.uid())
+
+        # Wait for all expected items to be removed from queue
+        # (handles items processed by concurrent workers, with stale reclaim)
+        item_queue.wait_for_completion(expected_uids)
+        return {}
 
     def _process_items(
         self,
@@ -494,17 +500,20 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         """Worker method: claim items from queue and process them in batches.
 
         Workers claim batches of items from the shared queue, process them,
-        and repeat until the queue is empty. This allows dynamic load balancing.
+        mark them done, and repeat until no pending items remain.
+        This allows dynamic load balancing across workers.
         """
         item_queue = ItemQueue(queue_folder)
         total_processed = 0
         while True:
-            # Claim a batch of items from the queue
+            # Claim a batch of pending items from the queue
             claimed = item_queue.claim_batch(batch_size)
             if not claimed:
-                break  # Queue exhausted
+                break  # No pending items
             # Process the batch (filtering for cache is done inside _process_items)
             self._process_items(claimed, use_cache=True)
+            # Mark items as done (removes from queue)
+            item_queue.mark_done([uid for uid, _ in claimed])
             total_processed += len(claimed)
             logger.debug(
                 "Processed batch of %s items (total: %s)", len(claimed), total_processed
