@@ -300,8 +300,7 @@ class StringMap(pydantic.BaseModel):
 
     @infra.apply(item_uid=str, item_uid_max_length=32)
     def process(self, items: tp.Sequence[str]) -> tp.Iterable[str]:
-        for item in items:
-            yield item
+        yield from items
 
 
 def test_item_uid_max_length() -> None:

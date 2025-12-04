@@ -506,7 +506,7 @@ def temporary_save_path(filepath: Path | str, replace: bool = True) -> tp.Iterat
 
 class ShortItemUid:
 
-    def __init__(self, item_uid: tp.Callable[tp.Any, str], max_length: int) -> None:
+    def __init__(self, item_uid: tp.Callable[[tp.Any], str], max_length: int) -> None:
         self.item_uid = item_uid
         self.max_length = int(max_length)
         if max_length < 32:
