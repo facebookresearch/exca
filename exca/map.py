@@ -11,16 +11,13 @@ import inspect
 import itertools
 import logging
 import os
-import pickle
+import sqlite3
 import typing as tp
-import uuid
 from concurrent import futures
 from pathlib import Path
 
 import numpy as np
 import pydantic
-import submitit
-from submitit.core import utils
 
 from . import base, slurm
 from .cachedict import CacheDict
@@ -65,43 +62,122 @@ class CachedMethod:
         return self.infra._method_override(items)
 
 
-class JobChecker:
-    """Keeps a record of running jobs in a folder
-    and enables waiting for them to complete.
+class ItemQueue:
+    """SQLite3-based queue for coordinating item processing across concurrent jobs.
+
+    Instead of waiting for other jobs to complete (like JobChecker did), this allows
+    workers to atomically claim items from a shared queue. The main process adds
+    items to the queue, and workers claim them batch by batch.
+
+    Flow:
+    1. Main process calls add_items() with all missing (uid, item) pairs
+    2. Main process submits worker jobs to cluster
+    3. Workers call claim_batch() to get items to process
+    4. Workers process items, write to cache, repeat until queue empty
     """
 
     def __init__(self, folder: Path | str) -> None:
-        basefolder = utils.JobPaths.get_first_id_independent_folder(folder)
-        self.folder = basefolder / "running-jobs"
-
-    def add(self, jobs: tp.Iterable[tp.Any]) -> None:
-        """Add jobs to the list of running jobs"""
+        self.folder = Path(folder)
         self.folder.mkdir(exist_ok=True, parents=True)
-        for job in jobs:
-            if not job.done():
-                job_path = self.folder / (uuid.uuid4().hex[:8] + ".pkl")
-                with job_path.open("wb") as f:
-                    pickle.dump(job, f)
+        self.db_path = self.folder / "item_queue.db"
+        self._init_db()
 
-    def wait(self) -> bool:
-        """Wait for completion of running jobs"""
-        waited = False
-        for fp in self.folder.glob("*.pkl"):
-            try:  # avoid concurrency issues with deleted items
-                with fp.open("rb") as f:
-                    job: tp.Any = pickle.load(f)
-            except Exception:  # pylint: disable=broad-except
-                continue
-            if not job.done():
-                msg = "Waiting for completion of pre-existing map job: %s\nin '%s'"
-                logger.info(msg, job, self.folder)
-                job.wait()
-                waited = True
-            # delete the file as it is not needed anymore
-            fp.unlink(missing_ok=True)
-        if waited:
-            logger.info("Waiting is over")
-        return waited
+    def _init_db(self) -> None:
+        """Initialize the SQLite database with the items table."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS items (
+                    uid TEXT PRIMARY KEY,
+                    item BLOB NOT NULL
+                )
+            """
+            )
+            conn.commit()
+
+    @contextlib.contextmanager
+    def _connect(self) -> tp.Iterator[sqlite3.Connection]:
+        """Context manager for database connections with proper isolation."""
+        conn = sqlite3.connect(
+            str(self.db_path), timeout=30.0, isolation_level="IMMEDIATE"
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def add_items(self, uid_items: tp.Sequence[tp.Tuple[str, tp.Any]]) -> int:
+        """Add items to the queue. Called by main process.
+
+        Parameters
+        ----------
+        uid_items: sequence of (uid, item) tuples
+            Items to add to the queue
+
+        Returns
+        -------
+        int
+            Number of items actually added (existing items are skipped)
+        """
+        if not uid_items:
+            return 0
+        added = 0
+        with self._connect() as conn:
+            import pickle
+
+            for uid, item in uid_items:
+                try:
+                    item_blob = pickle.dumps(item)
+                    conn.execute(
+                        "INSERT INTO items (uid, item) VALUES (?, ?)", (uid, item_blob)
+                    )
+                    added += 1
+                except sqlite3.IntegrityError:
+                    # Already in queue (from concurrent main process), skip
+                    pass
+            conn.commit()
+        return added
+
+    def claim_batch(self, batch_size: int = 100) -> tp.List[tp.Tuple[str, tp.Any]]:
+        """Claim a batch of items from the queue. Called by workers.
+
+        Atomically selects and deletes items from the queue.
+
+        Parameters
+        ----------
+        batch_size: int
+            Maximum number of items to claim
+
+        Returns
+        -------
+        list of (uid, item) tuples
+            Items that were claimed (empty if queue is exhausted)
+        """
+        import pickle
+
+        claimed: tp.List[tp.Tuple[str, tp.Any]] = []
+        with self._connect() as conn:
+            # Select items to claim
+            cursor = conn.execute("SELECT uid, item FROM items LIMIT ?", (batch_size,))
+            rows = cursor.fetchall()
+            if not rows:
+                return claimed
+            # Delete claimed items
+            uids = [row[0] for row in rows]
+            placeholders = ",".join("?" * len(uids))
+            conn.execute(f"DELETE FROM items WHERE uid IN ({placeholders})", uids)
+            conn.commit()
+            # Deserialize items
+            for uid, item_blob in rows:
+                item = pickle.loads(item_blob)
+                claimed.append((uid, item))
+        return claimed
+
+    def __len__(self) -> int:
+        """Return the number of items remaining in the queue."""
+        with self._connect() as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM items")
+            return cursor.fetchone()[0]
 
 
 def to_chunks(
@@ -317,9 +393,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if not hasattr(self, "mode"):  # compatibility
             self.mode = "cached"
         if self.mode == "force":
-            # remove any item already computed, but not items being computed
-            # in another process (waited for by JobChecker)
-            # will not be removed
+            # remove any item already computed, but not items being recomputed
             to_remove = set(items) - set(missing) - self._recomputed
             if to_remove:
                 msg = "Clearing %s items for %s (infra.mode=%s)"
@@ -333,13 +407,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
-            executor: submitit.Executor | None = self.executor()
-            if executor is not None:  # wait for items being computed
-                jcheck = JobChecker(folder=executor.folder)
-                jcheck.wait()
-                # update cache dict and recheck as actual checking for keys updates the dict
-                keys = set(self.cache_dict)  # update cache dict
-                missing = {k: item for k, item in missing.items() if k not in keys}
         if len(items) == len(missing) == 1 and self.forbid_single_item_computation:
             key, item = next(iter(missing.items()))
             raise RuntimeError(
@@ -376,38 +443,49 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         uid_func = imethod.item_uid
         # we need to keep order for output:
         uid_items = [(uid_func(item), item) for item in items]
+        # Set up item queue for coordination between concurrent jobs
+        executor = self.executor()
+        if executor is None:
+            raise RuntimeError(f"Executor is None for {self.cluster!r}")
+        item_queue = ItemQueue(executor.folder)
         missing = list(self._find_missing(dict(uid_items)).items())
         if missing:
-            executor = self.executor()
-            if executor is None:
-                raise RuntimeError(f"Executor is None for {self.cluster!r}")
-            # avoid processing same files at same time if several jobs overlap
-            np.random.shuffle(missing)
-            # run on cluster
-            jobs = []
-            chunks = list(
-                to_chunks(
-                    [ki[1] for ki in missing],
-                    max_chunks=self.max_jobs,
-                    min_items_per_chunk=self.min_samples_per_job,
+            # Add missing items to the queue (workers will claim them)
+            # Items already in queue (from concurrent main process) are skipped
+            added = item_queue.add_items(missing)
+            if added < len(missing):
+                logger.info(
+                    "Added %s/%s items to queue (others already queued by concurrent process)",
+                    added,
+                    len(missing),
                 )
+            else:
+                logger.info("Added %s items to queue", added)
+        # Submit worker jobs if there are items in the queue
+        queue_size = len(item_queue)
+        if queue_size > 0:
+            # Calculate number of jobs based on queue size and constraints
+            num_jobs = min(
+                queue_size if self.max_jobs is None else self.max_jobs,
+                int(np.ceil(queue_size / self.min_samples_per_job)),
             )
-            executor.update_parameters(slurm_array_parallelism=len(chunks))
+            executor.update_parameters(slurm_array_parallelism=num_jobs)
+            jobs = []
             with self._work_env(), executor.batch():  # submitit>=1.4.6
-                for chunk in chunks:
-                    # select a batch/chunk of samples_per_job items to send to a job
-                    j = executor.submit(self._call_and_store, chunk, use_cache_dict=True)
+                for _ in range(num_jobs):
+                    # Workers claim items from queue - no items passed directly
+                    j = executor.submit(
+                        self._call_and_store_from_queue,
+                        queue_folder=executor.folder,
+                        batch_size=self.min_samples_per_job,
+                    )
                     jobs.append(j)
-            jcheck = JobChecker(folder=executor.folder)
-            jcheck.add(jobs)
             # pylint: disable=expression-not-assigned
             uid = self.uid()
-            msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"
-            logger.info(
-                msg, len(missing), uid, len(jobs), executor.cluster, jobs[0].job_id
-            )
+            msg = "Sent %s jobs for %s items on cluster '%s' (eg: %s)"
+            logger.info(msg, len(jobs), queue_size, executor.cluster, jobs[0].job_id)
             [j.result() for j in jobs]  # wait for processing to complete
-            logger.info("Finished processing %s samples for %s", len(missing), uid)
+            logger.info("Finished processing items for %s", uid)
             folder = self.uid_folder()
             if folder is not None:
                 os.utime(folder)  # make sure the modified time is updated
@@ -490,6 +568,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     def _call_and_store(
         self, items: tp.Sequence[tp.Any], use_cache_dict: bool = True
     ) -> dict[str, tp.Any]:
+        """Process items and store results. Used by threadpool/processpool executors."""
         d: dict[str, tp.Any] = self.cache_dict if use_cache_dict else {}  # type: ignore
         imethod = self._infra_method
         if imethod is None:
@@ -515,6 +594,64 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 writer[item_uid(item)] = output
         # don't return the whole cache dict if data is cached
         return {} if use_cache_dict else d
+
+    def _call_and_store_from_queue(
+        self, queue_folder: Path | str, batch_size: int = 100
+    ) -> None:
+        """Claim items from queue and process them. Used by slurm/local/debug executors.
+
+        Workers claim batches of items from the shared queue, process them,
+        and repeat until the queue is empty. This allows dynamic load balancing
+        across workers.
+        """
+        imethod = self._infra_method
+        if imethod is None:
+            raise RuntimeError(f"Infra was not applied: {self!r}")
+        item_uid = imethod.item_uid
+        item_queue = ItemQueue(queue_folder)
+        cache = self.cache_dict
+
+        if isinstance(self, slurm.SubmititMixin):  # dependence to mixin
+            if self.workdir is not None and self.cluster is not None:
+                logger.info("Running from working directory: '%s'", os.getcwd())
+
+        total_processed = 0
+        while True:
+            # Claim a batch of items from the queue
+            claimed = item_queue.claim_batch(batch_size)
+            if not claimed:
+                break  # Queue exhausted
+
+            # Filter out items already in cache (from concurrent workers)
+            keys = set(cache)
+            items_to_process = [(uid, item) for uid, item in claimed if uid not in keys]
+            if not items_to_process:
+                continue  # All claimed items already processed
+
+            # Process items
+            items = [item for _, item in items_to_process]
+            outputs = self._run_method(items)
+
+            # Store results
+            sentinel = base.Sentinel()
+            with cache.writer() as writer:
+                in_out = itertools.zip_longest(
+                    items_to_process, outputs, fillvalue=sentinel
+                )
+                for (uid, item), output in in_out:
+                    if (uid, item) is sentinel or output is sentinel:
+                        msg = f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
+                        raise RuntimeError(msg)
+                    writer[uid] = output
+
+            total_processed += len(items_to_process)
+            logger.debug(
+                "Processed batch of %s items (total: %s)",
+                len(items_to_process),
+                total_processed,
+            )
+
+        logger.info("Worker finished, processed %s items total", total_processed)
 
 
 @dataclasses.dataclass
