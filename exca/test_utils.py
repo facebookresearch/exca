@@ -458,3 +458,118 @@ def test_basic_pydantic() -> None:
     with pytest.raises(RuntimeError) as e:
         b.infra.clone_obj()
     assert "discriminated union" in e.value.args[0]
+
+
+# ItemQueue tests
+
+
+def test_item_queue_basic(tmp_path: Path) -> None:
+    """Test basic add and claim operations."""
+    queue = utils.ItemQueue(tmp_path / "queue")
+
+    # Add items
+    items = [("a", 1), ("b", 2), ("c", 3)]
+    added = queue.add_items(items)
+    assert added == 3
+    assert len(queue) == 3
+
+    # Claim all items
+    claimed = queue.claim_batch(batch_size=10)
+    assert len(claimed) == 3
+    assert set(uid for uid, _ in claimed) == {"a", "b", "c"}
+    assert len(queue) == 0
+
+    # Claim from empty queue
+    claimed = queue.claim_batch()
+    assert claimed == []
+
+
+def test_item_queue_batch_claiming(tmp_path: Path) -> None:
+    """Test claiming items in batches."""
+    queue = utils.ItemQueue(tmp_path / "queue")
+
+    # Add 10 items
+    items = [(str(i), i) for i in range(10)]
+    queue.add_items(items)
+    assert len(queue) == 10
+
+    # Claim in batches of 3
+    batch1 = queue.claim_batch(batch_size=3)
+    assert len(batch1) == 3
+    assert len(queue) == 7
+
+    batch2 = queue.claim_batch(batch_size=3)
+    assert len(batch2) == 3
+    assert len(queue) == 4
+
+    batch3 = queue.claim_batch(batch_size=3)
+    assert len(batch3) == 3
+    assert len(queue) == 1
+
+    batch4 = queue.claim_batch(batch_size=3)
+    assert len(batch4) == 1
+    assert len(queue) == 0
+
+
+def test_item_queue_duplicate_add(tmp_path: Path) -> None:
+    """Test that duplicate items are skipped."""
+    queue = utils.ItemQueue(tmp_path / "queue")
+
+    # Add initial items
+    added1 = queue.add_items([("a", 1), ("b", 2)])
+    assert added1 == 2
+
+    # Try to add overlapping items
+    added2 = queue.add_items([("b", 20), ("c", 3)])  # "b" should be skipped
+    assert added2 == 1  # Only "c" added
+    assert len(queue) == 3
+
+
+def test_item_queue_concurrent_queues(tmp_path: Path) -> None:
+    """Test that multiple queue instances share the same data."""
+    folder = tmp_path / "queue"
+    q1 = utils.ItemQueue(folder)
+    q2 = utils.ItemQueue(folder)
+
+    # Add items from q1
+    q1.add_items([("a", 1), ("b", 2), ("c", 3)])
+
+    # Both see the same count
+    assert len(q1) == 3
+    assert len(q2) == 3
+
+    # q1 claims some
+    claimed1 = q1.claim_batch(batch_size=2)
+    assert len(claimed1) == 2
+
+    # q2 sees remaining
+    assert len(q2) == 1
+
+    # q2 claims the rest
+    claimed2 = q2.claim_batch(batch_size=10)
+    assert len(claimed2) == 1
+
+    # All items accounted for
+    all_uids = {uid for uid, _ in claimed1} | {uid for uid, _ in claimed2}
+    assert all_uids == {"a", "b", "c"}
+
+
+def test_item_queue_complex_items(tmp_path: Path) -> None:
+    """Test that complex picklable items work."""
+    queue = utils.ItemQueue(tmp_path / "queue")
+
+    # Add complex items
+    items = [
+        ("dict", {"key": "value", "nested": [1, 2, 3]}),
+        ("list", [1, "two", 3.0]),
+        ("tuple", (1, 2, 3)),
+    ]
+    queue.add_items(items)
+
+    # Claim and verify
+    claimed = queue.claim_batch()
+    claimed_dict = {uid: item for uid, item in claimed}
+
+    assert claimed_dict["dict"] == {"key": "value", "nested": [1, 2, 3]}
+    assert claimed_dict["list"] == [1, "two", 3.0]
+    assert claimed_dict["tuple"] == (1, 2, 3)

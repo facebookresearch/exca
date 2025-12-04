@@ -9,7 +9,9 @@ import contextlib
 import copy
 import logging
 import os
+import pickle
 import shutil
+import sqlite3
 import sys
 import typing as tp
 import uuid
@@ -513,3 +515,117 @@ def environment_variables(**kwargs: tp.Any) -> tp.Iterator[None]:
         for x in kwargs:
             del os.environ[x]
         os.environ.update(backup)
+
+
+class ItemQueue:
+    """SQLite3-based queue for coordinating item processing across concurrent jobs.
+
+    Instead of waiting for other jobs to complete, this allows workers to atomically
+    claim items from a shared queue. The main process adds items to the queue,
+    and workers claim them batch by batch.
+
+    Flow:
+    1. Main process calls add_items() with all missing (uid, item) pairs
+    2. Main process submits worker jobs to cluster
+    3. Workers call claim_batch() to get items to process
+    4. Workers process items, write to cache, repeat until queue empty
+    """
+
+    def __init__(self, folder: Path | str) -> None:
+        self.folder = Path(folder)
+        self.folder.mkdir(exist_ok=True, parents=True)
+        self.db_path = self.folder / "item_queue.db"
+        self._init_db()
+
+    def _init_db(self) -> None:
+        """Initialize the SQLite database with the items table."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS items (
+                    uid TEXT PRIMARY KEY,
+                    item BLOB NOT NULL
+                )
+                """
+            )
+            conn.commit()
+
+    @contextlib.contextmanager
+    def _connect(self) -> tp.Iterator[sqlite3.Connection]:
+        """Context manager for database connections with proper isolation."""
+        conn = sqlite3.connect(
+            str(self.db_path), timeout=30.0, isolation_level="IMMEDIATE"
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def add_items(self, uid_items: tp.Sequence[tp.Tuple[str, tp.Any]]) -> int:
+        """Add items to the queue. Called by main process.
+
+        Parameters
+        ----------
+        uid_items: sequence of (uid, item) tuples
+            Items to add to the queue
+
+        Returns
+        -------
+        int
+            Number of items actually added (existing items are skipped)
+        """
+        if not uid_items:
+            return 0
+        added = 0
+        with self._connect() as conn:
+            for uid, item in uid_items:
+                try:
+                    item_blob = pickle.dumps(item)
+                    conn.execute(
+                        "INSERT INTO items (uid, item) VALUES (?, ?)", (uid, item_blob)
+                    )
+                    added += 1
+                except sqlite3.IntegrityError:
+                    # Already in queue (from concurrent main process), skip
+                    pass
+            conn.commit()
+        return added
+
+    def claim_batch(self, batch_size: int = 100) -> tp.List[tp.Tuple[str, tp.Any]]:
+        """Claim a batch of items from the queue. Called by workers.
+
+        Atomically selects and deletes items from the queue.
+
+        Parameters
+        ----------
+        batch_size: int
+            Maximum number of items to claim
+
+        Returns
+        -------
+        list of (uid, item) tuples
+            Items that were claimed (empty if queue is exhausted)
+        """
+        claimed: tp.List[tp.Tuple[str, tp.Any]] = []
+        with self._connect() as conn:
+            # Select items to claim
+            cursor = conn.execute("SELECT uid, item FROM items LIMIT ?", (batch_size,))
+            rows = cursor.fetchall()
+            if not rows:
+                return claimed
+            # Delete claimed items
+            uids = [row[0] for row in rows]
+            placeholders = ",".join("?" * len(uids))
+            conn.execute(f"DELETE FROM items WHERE uid IN ({placeholders})", uids)
+            conn.commit()
+            # Deserialize items
+            for uid, item_blob in rows:
+                item = pickle.loads(item_blob)
+                claimed.append((uid, item))
+        return claimed
+
+    def __len__(self) -> int:
+        """Return the number of items remaining in the queue."""
+        with self._connect() as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM items")
+            return cursor.fetchone()[0]
