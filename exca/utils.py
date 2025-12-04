@@ -7,6 +7,7 @@
 import collections
 import contextlib
 import copy
+import hashlib
 import logging
 import os
 import shutil
@@ -501,6 +502,28 @@ def temporary_save_path(filepath: Path | str, replace: bool = True) -> tp.Iterat
         finally:
             if tmppath.exists():
                 os.remove(tmppath)
+
+
+class ShortItemUid:
+
+    def __init__(self, item_uid: tp.Callable[tp.Any, str], max_length: int) -> None:
+        self.item_uid = item_uid
+        self.max_length = int(max_length)
+        if max_length < 32:
+            raise ValueError(
+                f"max_length of item_uid should be at least 32, got {max_length}"
+            )
+
+    def __call__(self, item: tp.Any) -> str:
+        uid = self.item_uid(item)
+        if len(uid) < self.max_length:
+            return uid
+        cut = (self.max_length - 15) // 2
+        sub = f"{uid[:cut]}..{len(uid) - 2 * cut}..{uid[-cut:]}"
+        sub += "-" + hashlib.md5(uid.encode("utf8")).hexdigest()[:8]
+        if len(uid) < len(sub):
+            return uid
+        return sub
 
 
 @contextlib.contextmanager
