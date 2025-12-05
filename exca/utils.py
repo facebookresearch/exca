@@ -518,7 +518,7 @@ class ShortItemUid:
         uid = self.item_uid(item)
         if len(uid) < self.max_length:
             return uid
-        cut = (self.max_length - 15) // 2
+        cut = (self.max_length - 13 - len(str(len(uid)))) // 2
         sub = f"{uid[:cut]}..{len(uid) - 2 * cut}..{uid[-cut:]}"
         sub += "-" + hashlib.md5(uid.encode("utf8")).hexdigest()[:8]
         if len(uid) < len(sub):
