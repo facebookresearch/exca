@@ -247,7 +247,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         self,
         *,
         item_uid: tp.Callable[[tp.Any], str],
-        item_uid_max_length: int | None = 1024,
+        item_uid_max_length: int | None = 256,
         exclude_from_cache_uid: tp.Iterable[str] | base.ExcludeCallable = (),
         cache_type: str | None = None,
     ) -> tp.Callable[[C], C]:
@@ -262,6 +262,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             function returning a uid from the item of a map
         item_uid_max_length: int or None
             maximum length of the item_uid output before it gets shortened for efficiency
+            (as all uids need to be read at first call). Use None to deactivate shortening.
         exclude_from_cache_uid: iterable of str / method / method name
             fields that must be removed from the uid of the cache (in addition to
             the ones already removed from the class uid)
