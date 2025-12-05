@@ -293,3 +293,19 @@ def test_map_infra_recompute_with_no_cache() -> None:
     for _ in range(2):
         out = list(whatever.process([2]))[0]
         assert out.shape == (2, 12)
+
+
+class StringMap(pydantic.BaseModel):
+    infra: MapInfra = MapInfra()
+
+    @infra.apply(item_uid=str, item_uid_max_length=32)
+    def process(self, items: tp.Sequence[str]) -> tp.Iterable[str]:
+        yield from items
+
+
+def test_item_uid_max_length() -> None:
+    cfg = StringMap()
+    string = "Hello world!"
+    out = cfg.infra.item_uid(" ".join([string]) * 64)
+    assert len(out) == 32
+    assert out.startswith("Hello")
