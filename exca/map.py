@@ -24,6 +24,7 @@ from submitit.core import utils
 
 from . import base, slurm
 from .cachedict import CacheDict
+from .utils import ShortItemUid
 
 MapFunc = tp.Callable[[tp.Sequence[tp.Any]], tp.Iterator[tp.Any]]
 X = tp.TypeVar("X")
@@ -246,6 +247,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         self,
         *,
         item_uid: tp.Callable[[tp.Any], str],
+        item_uid_max_length: int | None = 256,
         exclude_from_cache_uid: tp.Iterable[str] | base.ExcludeCallable = (),
         cache_type: str | None = None,
     ) -> tp.Callable[[C], C]:
@@ -258,6 +260,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             of a type X, and yielding one output of a type Y for each input item.
         item_uid: callable from item to str
             function returning a uid from the item of a map
+        item_uid_max_length: int or None
+            maximum length of the item_uid output before it gets shortened for efficiency
+            (as all uids need to be read at first call). Use None to deactivate shortening.
         exclude_from_cache_uid: iterable of str / method / method name
             fields that must be removed from the uid of the cache (in addition to
             the ones already removed from the class uid)
@@ -284,8 +289,11 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         #     [tp.Callable[[pydantic.BaseModel, tp.Sequence[X]], tp.Iterator[Y]]],
         #     tp.Callable[[tp.Sequence[X]], tp.Iterator[Y]],
         # ]:
-        params = locals()
+        params = dict(locals())
         params.pop("self")
+        max_length = params.pop("item_uid_max_length")
+        if max_length is not None:
+            params["item_uid"] = ShortItemUid(params["item_uid"], max_length=max_length)
         if self._infra_method is not None:
             raise RuntimeError(f"Infra was already applied: {self._infra_method}")
 
