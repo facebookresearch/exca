@@ -190,7 +190,7 @@ class RecursiveLeaf(pydantic.BaseModel):
 
 class RecursiveEdge(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
-    infra: exca.TaskInfra = exca.TaskInfra(cluster=None, folder="/tmp/")
+    infra: exca.TaskInfra = exca.TaskInfra(cluster=None)
     edge_type: tp.Literal["edge"] = "edge"
     child: "RecursiveElem"
 
@@ -205,13 +205,13 @@ RecursiveElem = tp.Annotated[
 ]
 
 
-def test_recursive_discriminated_union() -> None:
+def test_recursive_discriminated_union(tmp_path: Path) -> None:
     """Test that recursive discriminated unions work with infra.config().
 
     This tests the fix for KeyError when using recursive types with
     discriminated unions, where model_json_schema() returns a $ref schema.
     """
-    cfg = RecursiveEdge(child=RecursiveLeaf())
+    cfg = RecursiveEdge(infra=exca.TaskInfra(cluster=None, folder=tmp_path), child=RecursiveLeaf())
     # This should work without KeyError
     result = cfg.infra.config(exclude_defaults=True)
     assert result == {"child": {"edge_type": "leaf"}}
@@ -219,7 +219,13 @@ def test_recursive_discriminated_union() -> None:
     result_uid = cfg.infra.config(uid=True, exclude_defaults=True)
     assert "child" in result_uid
     # Test deep recursion
-    cfg_deep = RecursiveEdge(child=RecursiveEdge(child=RecursiveLeaf()))
+    cfg_deep = RecursiveEdge(
+        infra=exca.TaskInfra(cluster=None, folder=tmp_path),
+        child=RecursiveEdge(
+            infra=exca.TaskInfra(cluster=None, folder=tmp_path),
+            child=RecursiveLeaf()
+        )
+    )
     result_deep = cfg_deep.infra.config(exclude_defaults=True)
     assert result_deep == {
         "child": {"child": {"edge_type": "leaf"}, "edge_type": "edge"}
