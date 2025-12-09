@@ -92,6 +92,7 @@ def to_dict(
     OrderedDict are preserved as OrderedDict to allow for order specific
     uids
     """
+    return ConfigExtractor(uid=uid, exclude_defaults=exclude_defaults).apply(model)
     if exclude_defaults:
         _set_discriminated_status(model)
     cfg = ExportCfg(uid=uid, exclude_defaults=exclude_defaults)
@@ -109,7 +110,7 @@ class ConfigExtractor(pydantic.BaseModel):
     def apply(self, obj: tp.Any) -> tp.Any:
         return self._apply(obj)
 
-    def _apply(self, obj: tp.Any, disciminator: str | None = None) -> tp.Any:
+    def _apply(self, obj: tp.Any, discriminator: str | None = None) -> tp.Any:
         if isinstance(obj, pydantic.BaseModel):
             return self._apply_pydantic(obj, discriminator=discriminator)
         if isinstance(obj, dict):
@@ -117,7 +118,7 @@ class ConfigExtractor(pydantic.BaseModel):
                 {x: self._apply(y, discriminator=discriminator) for x, y in obj.items()}
             )
         if isinstance(obj, (list, tuple, set)):
-            return type(obj)(self.apply(y, discriminator=discriminator) for y in obj)
+            return type(obj)(self._apply(y, discriminator=discriminator) for y in obj)
         return obj
 
     def _apply_pydantic(
@@ -125,9 +126,9 @@ class ConfigExtractor(pydantic.BaseModel):
     ) -> dict[str, tp.Any]:
         tmp = dict(obj)
         out = {}
-        to_remove = set()
+        to_remove: set[str] = set()
         if self.uid:
-            excluded = self._get_uid_info(obj)["excluded"] - {discriminator}
+            excluded = _get_uid_info(obj)["excluded"] - {discriminator}
         schema: tp.Any = None
         # iter on each field
         for name, field in type(obj).model_fields.items():
@@ -142,7 +143,8 @@ class ConfigExtractor(pydantic.BaseModel):
             val = self._apply(tmp[name], discriminator=sub_discrim)
             if self.exclude_defaults and name != discriminator:
                 if isinstance(tmp[name], pydantic.BaseModel) and not val:
-                    continue  # no value
+                    if isinstance(field.default, pydantic.BaseModel):
+                        continue  # dont skip if no default
                 if val == field.default:
                     continue
             out[name] = val
