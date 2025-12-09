@@ -197,7 +197,7 @@ def _resolve_schema_ref(schema: tp.Dict[str, tp.Any]) -> tp.Dict[str, tp.Any]:
     """Resolve $ref references in a pydantic schema to get the actual definition"""
     ref = schema.get("$ref", "")
     if ref.startswith("#/$defs/"):
-        def_name = ref[len("#/$defs/"):]
+        def_name = ref[len("#/$defs/") :]
         if "$defs" in schema and def_name in schema["$defs"]:
             return schema["$defs"][def_name]
     return schema
