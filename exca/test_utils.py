@@ -211,7 +211,9 @@ def test_recursive_discriminated_union(tmp_path: Path) -> None:
     This tests the fix for KeyError when using recursive types with
     discriminated unions, where model_json_schema() returns a $ref schema.
     """
-    cfg = RecursiveEdge(infra=exca.TaskInfra(cluster=None, folder=tmp_path), child=RecursiveLeaf())
+    cfg = RecursiveEdge(
+        infra=exca.TaskInfra(cluster=None, folder=tmp_path), child=RecursiveLeaf()
+    )
     # This should work without KeyError
     result = cfg.infra.config(exclude_defaults=True)
     assert result == {"child": {"edge_type": "leaf"}}
@@ -222,14 +224,11 @@ def test_recursive_discriminated_union(tmp_path: Path) -> None:
     cfg_deep = RecursiveEdge(
         infra=exca.TaskInfra(cluster=None, folder=tmp_path),
         child=RecursiveEdge(
-            infra=exca.TaskInfra(cluster=None, folder=tmp_path),
-            child=RecursiveLeaf()
-        )
+            infra=exca.TaskInfra(cluster=None, folder=tmp_path), child=RecursiveLeaf()
+        ),
     )
     result_deep = cfg_deep.infra.config(exclude_defaults=True)
-    assert result_deep == {
-        "child": {"child": {"edge_type": "leaf"}, "edge_type": "edge"}
-    }
+    assert result_deep == {"child": {"child": {"edge_type": "leaf"}, "edge_type": "edge"}}
 
 
 @pytest.mark.parametrize("replace", (True, False))
