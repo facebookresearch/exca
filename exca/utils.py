@@ -102,6 +102,66 @@ def to_dict(
     return out
 
 
+class ConfigExtractor(pydantic.BaseModel):
+    uid: bool = False
+    exclude_defaults: bool = False
+
+    def apply(self, obj: tp.Any) -> tp.Any:
+        return self._apply(obj)
+
+    def _apply(self, obj: tp.Any, disciminator: str | None = None) -> tp.Any:
+        if isinstance(obj, pydantic.BaseModel):
+            return self._apply_pydantic(obj, discriminator=discriminator)
+        if isinstance(obj, dict):
+            return type(obj)(
+                {x: self._apply(y, discriminator=discriminator) for x, y in obj.items()}
+            )
+        if isinstance(obj, (list, tuple, set)):
+            return type(obj)(self.apply(y, discriminator=discriminator) for y in obj)
+        return obj
+
+    def _apply_pydantic(
+        self, obj: pydantic.BaseModel, discriminator: str | None = None
+    ) -> dict[str, tp.Any]:
+        tmp = dict(obj)
+        out = {}
+        to_remove = set()
+        if self.uid:
+            excluded = self._get_uid_info(obj)["excluded"] - {discriminator}
+        schema: tp.Any = None
+        # iter on each field
+        for name, field in type(obj).model_fields.items():
+            if name in to_remove:
+                continue
+            sub_discrim: str | None = None
+            if isinstance(tmp[name], pydantic.BaseModel):
+                if len(_pydantic_hints(field.annotation)) > 1:
+                    if schema is None:
+                        schema = _get_schema(obj)
+                    sub_discrim = _get_discriminator(schema, name)
+            val = self._apply(tmp[name], discriminator=sub_discrim)
+            if self.exclude_defaults and name != discriminator:
+                if isinstance(tmp[name], pydantic.BaseModel) and not val:
+                    continue  # no value
+                if val == field.default:
+                    continue
+            out[name] = val
+        return out
+
+
+def _get_schema(obj: pydantic.BaseModel) -> dict[str, tp.Any]:
+    try:
+        schema = obj.model_json_schema()
+    except Exception:
+        from .confdict import ConfDict
+
+        msg = "Failed to extract schema for type %s:\n%s\nFull yaml:\n%s"
+        cfg = ConfDict.from_model(obj, uid=False, exclude_defaults=False)
+        logger.warning(msg, obj.__class__.__name__, repr(obj), cfg.to_yaml())
+        raise
+    return _resolve_schema(obj)
+
+
 def _dump(obj: tp.Any, cfg: ExportCfg) -> tp.Any:
     """Dumps the object"""
     if isinstance(obj, pydantic.BaseModel):
