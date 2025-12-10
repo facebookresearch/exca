@@ -7,6 +7,7 @@
 import collections
 import contextlib
 import copy
+import functools
 import hashlib
 import logging
 import os
@@ -19,8 +20,6 @@ from pathlib import Path
 import numpy as np
 import pydantic
 
-from . import helpers
-
 _default = object()  # sentinel
 EXCLUDE_FIELD = "_exclude_from_cls_uid"
 UID_EXCLUDED = "excluded"
@@ -30,33 +29,9 @@ DISCRIMINATOR_FIELD = "#infra#pydantic#discriminator"
 T = tp.TypeVar("T", bound=pydantic.BaseModel)
 
 
-def _get_uid_info(
-    model: pydantic.BaseModel, ignore_discriminator: bool = False
-) -> tp.Dict[str, tp.Set[str]]:
-    """Extract uid info from object, and possibly force include the discriminator field"""
-    excluded = getattr(model, EXCLUDE_FIELD, [])
-    if not isinstance(excluded, (list, set, tuple)):
-        if isinstance(excluded, str):
-            msg = "exclude_from_cls_uid should be a list/tuple/set, not a string"
-            raise TypeError(msg)
-        excluded = list(excluded())
-    uid_info = {UID_EXCLUDED: set(excluded), FORCE_INCLUDED: set()}
-    if isinstance(excluded, str):
-        msg = "exclude_from_cache_uid should be a list/tuple/set, not a string"
-        raise TypeError(msg)
-    # force include discriminator field if available
-    if not ignore_discriminator:
-        discriminator = model.__dict__.get(DISCRIMINATOR_FIELD, DiscrimStatus.NONE)
-        if DiscrimStatus.is_discriminator(discriminator):
-            uid_info[FORCE_INCLUDED].add(discriminator)
-    return uid_info  # type: ignore
-
-
 class ExportCfg(pydantic.BaseModel):
     uid: bool = False
     exclude_defaults: bool = False
-    # first discriminator needs to be ignored to avoid signature of a model to depend
-    # on if it is part of a bigger hierarchy or not
     ignore_first_discriminator: bool = True
 
 
@@ -92,111 +67,188 @@ def to_dict(
     OrderedDict are preserved as OrderedDict to allow for order specific
     uids
     """
-    if exclude_defaults:
-        _set_discriminated_status(model)
-    cfg = ExportCfg(uid=uid, exclude_defaults=exclude_defaults)
-    out = model.model_dump(
-        exclude_defaults=exclude_defaults, mode="json", serialize_as_any=True
-    )
-    _post_process_dump(model, out, cfg=cfg)
-    return out
+    _check_recursive(model)
+    return _DictConverter(uid=uid, exclude_defaults=exclude_defaults).run(model)
 
 
-def _dump(obj: tp.Any, cfg: ExportCfg) -> tp.Any:
-    """Dumps the object"""
+def _check_model_rules(model: pydantic.BaseModel) -> None:
+    cls = type(model)
+    if cls is pydantic.BaseModel:
+        msg = "A raw/empty BaseModel was instantiated. You must have set a "
+        msg += "BaseModel type hint so all parameters were ignored. You probably "
+        msg += "want to use a pydantic discriminated union instead:\n"
+        msg += "https://docs.pydantic.dev/latest/concepts/unions/#discriminated-unions"
+        raise RuntimeError(msg)
+
+    if "extra" not in model.model_config:
+        name = f"{cls.__module__}.{cls.__qualname__}"
+        msg = f"It is strongly advised to forbid extra parameters to {name} by adding to its def:\n"
+        msg += 'model_config = pydantic.ConfigDict(extra="forbid")\n'
+        msg += '(you can however bypass this error by explicitely setting extra="allow")'
+        raise RuntimeError(msg)
+
+
+def _check_recursive(obj: tp.Any) -> None:
     if isinstance(obj, pydantic.BaseModel):
-        return to_dict(obj, uid=cfg.uid, exclude_defaults=cfg.exclude_defaults)
-    if isinstance(obj, dict):
-        return {x: _dump(y, cfg=cfg) for x, y in obj.items()}
-    if isinstance(obj, list):
-        return [_dump(y, cfg=cfg) for y in obj]
-    return obj
+        _check_model_rules(obj)
+        for name in obj.model_fields:
+            val = getattr(obj, name, _default)
+            if val is not _default:
+                _check_recursive(val)
+    elif isinstance(obj, (list, tuple, set)):
+        for item in obj:
+            _check_recursive(item)
+    elif isinstance(obj, dict):
+        for val in obj.values():
+            _check_recursive(val)
 
 
-def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) -> bool:
-    # handles uid / defaults / discriminators / ordered dict
-    forced = set()
-    ignore_discriminator = cfg.ignore_first_discriminator
-    cfg.ignore_first_discriminator = False  # don't ignore for sub-models
-    bobj = obj
-    if isinstance(obj, pydantic.BaseModel):
-        if cfg.exclude_defaults and cfg.uid and hasattr(obj, "_exca_uid_dict"):
-            # bypass used for custom representations, for Chain models for instance
-            dump.clear()  # override the config
-            dump.update(dict(obj._exca_uid_dict()))
-            return True
-        info = _get_uid_info(obj, ignore_discriminator=ignore_discriminator)
-        excluded = info[UID_EXCLUDED]
-        forced = info[FORCE_INCLUDED]
-        excluded -= forced  # forced taks over
-        fields = set(type(obj).model_fields)
-        missing = (excluded | forced) - (fields | {"."})
+class _DictConverter:
+    def __init__(self, uid: bool, exclude_defaults: bool):
+        self.uid = uid
+        self.exclude_defaults = exclude_defaults
 
-        if cfg.uid and "." in excluded:
-            dump.clear()
-            return False
-        if missing:
-            raise ValueError(
-                "Field(s) specified for exclusion/inclusion do(es) not exist:\n"
-                f"{missing}\n(existing on {obj}: {fields})"
-            )
-        if cfg.uid:
-            for name in excluded:
-                dump.pop(name, None)
-        for name in forced:
-            if name not in dump:
-                dump[name] = _dump(getattr(obj, name), cfg=cfg)
-        # add required field to force ones, to make sure we don't remove them later on
-        reqs = {
-            name for name, field in type(obj).model_fields.items() if field.is_required()
-        }
-        forced |= reqs
-        obj = dict(obj)
-    if isinstance(obj, dict):
-        for name, sub_dump in list(dump.items()):
-            if name not in obj:
-                continue  # ignore as it may be added by serialization
-            if isinstance(obj[name], collections.OrderedDict):
-                # keep ordered dicts
-                dump[name] = collections.OrderedDict(sub_dump)
-                sub_dump = dump[name]
-            keep = _post_process_dump(obj[name], sub_dump, cfg=cfg)
-            if not keep:
-                del obj[name]
-                del dump[name]
+    def run(self, model: pydantic.BaseModel) -> tp.Dict[str, tp.Any]:
+        return self._to_dict_impl(model, forced_fields=set())
+
+    def _to_dict_impl(
+        self,
+        model: pydantic.BaseModel,
+        forced_fields: tp.Set[str],
+    ) -> tp.Dict[str, tp.Any]:
+        if self.uid and self.exclude_defaults and hasattr(model, "_exca_uid_dict"):
+            return dict(model._exca_uid_dict())  # type: ignore
+
+        # 1. Dump with exclude_defaults
+        data = model.model_dump(
+            exclude_defaults=self.exclude_defaults,
+            mode="json",
+            serialize_as_any=True,
+        )
+
+        # 2. Restore forced fields (discriminators)
+        if forced_fields:
+            for f in forced_fields:
+                if f not in data:
+                    val = getattr(model, f, _default)
+                    if val is not _default:
+                        if isinstance(val, pydantic.BaseModel):
+                            data[f] = self._to_dict_impl(
+                                val,
+                                forced_fields=set(),
+                            )
+                        else:
+                            data[f] = val
+
+        # 3. Handle Exclusions (uid)
+        exclusions: tp.Set[str] = set()
+        if self.uid:
+            excl_attr = getattr(model, EXCLUDE_FIELD, [])
+            if callable(excl_attr):
+                excl_attr = excl_attr()
+            if isinstance(excl_attr, str):
+                raise TypeError(
+                    "exclude_from_cls_uid should be a list/tuple/set, not a string"
+                )
+            exclusions = set(excl_attr)
+
+        if "." in exclusions:
+            return {}
+
+        for name in exclusions:
+            if name in data and name not in forced_fields:
+                del data[name]
+
+        # 4. Recurse into children and extra pruning
+        child_discriminators = _get_child_discriminators(type(model))
+
+        for name in list(data.keys()):
+            val = getattr(model, name, _default)
+            if val is _default:
                 continue
-            # clear defaults after exclusion
-            if name in forced:
-                continue
-            if not (cfg.exclude_defaults and cfg.uid):
-                continue
-            # possibly remove if all default (appart from excluded attributes)
-            if not isinstance(obj[name], pydantic.BaseModel):
-                continue
-            if not isinstance(bobj, pydantic.BaseModel):
-                continue
-            default = type(bobj).model_fields[name].default
-            if not isinstance(default, pydantic.BaseModel):
-                continue
-            if set(sub_dump) - default.model_fields_set:
-                continue  # forced fields have been added
-            subinfo = _get_uid_info(obj[name], ignore_discriminator=ignore_discriminator)
-            exc = subinfo[UID_EXCLUDED]
-            #
-            for f in default.model_fields_set - set(exc):
-                cls_default = type(default).model_fields[f].default
-                val = sub_dump.get(f, cls_default)
-                cfg_default = getattr(default, f)
-                if cfg_default != val:
-                    break  # val is different from cfg default -> keep in cfg
+
+            if isinstance(val, collections.OrderedDict):
+                data[name] = collections.OrderedDict(data[name])
+
+            child_forced = set()
+            if name in child_discriminators:
+                child_forced.add(child_discriminators[name])
+
+            if isinstance(val, pydantic.BaseModel):
+                data[name] = self._to_dict_impl(val, forced_fields=child_forced)
             else:
-                dump.pop(name)  # all equal to default, let's remove it
-    if isinstance(obj, (tuple, list, set)):
-        if not isinstance(dump, (tuple, list, set)) or len(obj) != len(dump):
-            raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
-        for obj2, dump2 in zip(obj, dump):
-            _post_process_dump(obj2, dump2, cfg=cfg)
-    return True
+                data[name] = self._prune_recursive(
+                    data[name], val, forced_fields=child_forced
+                )
+
+            # 5. Extra Pruning of Defaults
+            if self.exclude_defaults and name not in forced_fields:
+                if self.uid and hasattr(val, "_exca_uid_dict"):
+                    continue
+
+                if name in model.model_fields:
+                    field_info = model.model_fields[name]
+                    if not field_info.is_required():
+                        default = field_info.default
+                        should_remove = False
+
+                        if isinstance(val, pydantic.BaseModel):
+                            if isinstance(default, pydantic.BaseModel):
+                                default_dump = self._to_dict_impl(
+                                    default,
+                                    forced_fields=child_forced,
+                                )
+                                if data[name] == default_dump:
+                                    should_remove = True
+
+                        if should_remove:
+                            del data[name]
+
+        return data
+
+    def _prune_recursive(
+        self,
+        data: tp.Any,
+        obj: tp.Any,
+        forced_fields: tp.Set[str],
+    ) -> tp.Any:
+        if isinstance(obj, pydantic.BaseModel):
+            return self._to_dict_impl(obj, forced_fields=forced_fields)
+
+        if isinstance(obj, (list, tuple, set)) and isinstance(data, list):
+            for i, (d, o) in enumerate(zip(data, obj)):
+                data[i] = self._prune_recursive(d, o, forced_fields=forced_fields)
+            return data
+
+        if isinstance(obj, dict) and isinstance(data, dict):
+            if isinstance(obj, collections.OrderedDict):
+                data = collections.OrderedDict(data)
+
+            keys = list(data.keys())
+            for k in keys:
+                if k in obj:
+                    data[k] = self._prune_recursive(
+                        data[k], obj[k], forced_fields=forced_fields
+                    )
+            return data
+
+        return data
+
+
+@functools.lru_cache(maxsize=None)
+def _get_child_discriminators(cls: tp.Type[pydantic.BaseModel]) -> tp.Dict[str, str]:
+    """Returns a map of {field_name: discriminator_field_in_child}"""
+    try:
+        schema = cls.model_json_schema()
+    except Exception:
+        return {}
+
+    discriminators = {}
+    for name in cls.model_fields:
+        d = _get_discriminator(schema, name)
+        if DiscrimStatus.is_discriminator(d):
+            discriminators[name] = d
+    return discriminators
 
 
 def _resolve_schema_ref(schema: tp.Dict[str, tp.Any]) -> tp.Dict[str, tp.Any]:
@@ -219,6 +271,7 @@ def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
     # for list and dicts:
     while "items" in prop:
         prop = prop["items"]
+
     if "discriminator" in str(prop):
         discrims = {
             y
@@ -230,7 +283,7 @@ def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
         elif not discrims:
             should_have_discrim = True
         elif len(discrims) == 2:
-            raise RuntimeError("Found several discriminators for {name!r}: {discrims}")
+            raise RuntimeError(f"Found several discriminators for {name!r}: {discrims}")
     else:
         any_of = [
             x.get("$ref", "")
@@ -238,6 +291,7 @@ def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
             if "#/$defs/" in x.get("$ref", "")
         ]
         should_have_discrim = len(any_of) > 1
+
     if discriminator == DiscrimStatus.NONE and should_have_discrim:
         title = schema.get("title", "#UNKNOWN#")
         msg = "Did not find a discriminator for '%s' in '%s' (uid will be inaccurate).\n"
@@ -245,6 +299,7 @@ def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
         msg += "\nEg: you can use following pattern if you need defaults:\n"
         msg += "field: TypeA | TypeB = pydantic.Field(TypeA(), discriminator='discriminator_attribute')"
         raise RuntimeError(msg % (name, title))
+
     return discriminator
 
 
@@ -264,89 +319,6 @@ def _iter_string_values(data: tp.Any) -> tp.Iterable[tp.Tuple[str, str]]:
         for sx, sy in _iter_string_values(y):
             name = str(x) if not sx else f"{x}.{sx}"
             yield name, sy
-
-
-def _set_discriminated_status(
-    obj: tp.Any, _discriminator: str = DiscrimStatus.SUBCHECKED
-) -> None:
-    """Force uid inclusion of fields which have served as discriminator
-    This should solve 95% of cases (i.e cases where the discriminator is manually set)
-    """
-    if isinstance(obj, collections.abc.Mapping):
-        obj = list(obj.values())
-    if isinstance(obj, collections.abc.Sequence) and not isinstance(obj, str):
-        for item in obj:
-            _set_discriminated_status(item, _discriminator=_discriminator)
-    if not isinstance(obj, pydantic.BaseModel):
-        return
-    sub_checked = DISCRIMINATOR_FIELD in obj.__dict__  # already went through the node
-    if _discriminator != DiscrimStatus.SUBCHECKED or not sub_checked:
-        # update the discriminitar if we have something more precise
-        current = obj.__dict__.get(DISCRIMINATOR_FIELD, DiscrimStatus.NONE)
-        if not DiscrimStatus.is_discriminator(current):  # if not manually pre-set
-            obj.__dict__[DISCRIMINATOR_FIELD] = _discriminator
-    if sub_checked:
-        return  # avoid sub-checks if we already went though it
-    if "extra" not in obj.model_config:  # SAFETY MEASURE
-        cls = obj.__class__
-        if cls is pydantic.BaseModel:
-            msg = "A raw/empty BaseModel was instantiated. You must have set a "
-            msg += "BaseModel type hint so all parameters were ignored. You probably "
-            msg += "want to use a pydantic discriminated union instead:\n"
-            msg += (
-                "https://docs.pydantic.dev/latest/concepts/unions/#discriminated-unions"
-            )
-            raise RuntimeError(msg)
-        name = f"{cls.__module__}.{cls.__qualname__}"
-        msg = f"It is strongly advised to forbid extra parameters to {name} by adding to its def:\n"
-        msg += 'model_config = pydantic.ConfigDict(extra="forbid")\n'
-        msg += '(you can however bypass this error by explicitely setting extra="allow")'
-        raise RuntimeError(msg)
-    # propagate below
-    schema: tp.Any = None
-    for name, field in type(obj).model_fields.items():
-        discriminator: str = DiscrimStatus.NONE
-        classes = _pydantic_hints(field.annotation)
-        # ignore DiscriminatedModel which do not need discriminator checks
-        classes = [c for c in classes if not issubclass(c, helpers.DiscriminatedModel)]
-        if schema is None and len(classes) > 1:
-            # compute schema only if finding a possible pydantic union, as it is slow
-            try:
-                schema = obj.model_json_schema()
-            except Exception:
-                from .confdict import ConfDict
-
-                msg = "Failed to extract schema for type %s:\n%s\nFull yaml:\n%s"
-                cfg = ConfDict.from_model(obj, uid=False, exclude_defaults=False)
-                logger.warning(msg, obj.__class__.__name__, repr(obj), cfg.to_yaml())
-                raise
-        if schema is not None:
-            discriminator = _get_discriminator(schema, name)
-        value = getattr(obj, name, _default)  # use _default for backward compat
-        if value is not _default:
-            _set_discriminated_status(value, _discriminator=discriminator)
-
-
-def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
-    if isinstance(new, (int, str, Path, float)):
-        return  # nothing to do
-    if isinstance(ref, pydantic.BaseModel):
-        # depth first in case something goes wrong
-        copy_discriminated_status(dict(ref), dict(new))
-        val = ref.__dict__.get(DISCRIMINATOR_FIELD, None)
-        if val is None:
-            return  # not checked
-        if new is None:
-            return  # no more present
-        new.__dict__[DISCRIMINATOR_FIELD] = val
-        return
-    if isinstance(ref, collections.abc.Mapping):
-        keys = list(set(ref) & set(new))  # only check shared ones (in case of extra)
-        ref = [ref[k] for k in keys]
-        new = [new[k] for k in keys]
-    if isinstance(ref, collections.abc.Sequence) and not isinstance(ref, str):
-        for item_ref, item_new in zip(ref, new):
-            copy_discriminated_status(item_ref, item_new)
 
 
 class _FrozenSetattr:
