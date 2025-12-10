@@ -8,5 +8,6 @@ Note: this API is unstable, use at your own risk
 """
 
 from . import backends as backends
+from .steps import Cache as Cache
 from .steps import Chain as Chain
 from .steps import Step as Step

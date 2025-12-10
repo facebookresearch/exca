@@ -139,7 +139,7 @@ class Chain(Cache):
         steps: list[tp.Any] = [s.model_dump(serialize_as_any=True) for s in self.steps]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
-        chain = Chain(steps=steps, folder=self.folder, backend=self.backend)  # type: ignore
+        chain = type(self)(steps=steps, folder=self.folder, backend=self.backend)  # type: ignore
         previous = self._previous
         for step in chain.steps:
             step._previous = previous
