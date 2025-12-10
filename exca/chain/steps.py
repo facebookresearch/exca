@@ -42,7 +42,10 @@ class Step(exca.helpers.DiscriminatedModel):
             raise RuntimeError("Something is wrong, no chain for {self!r}")
         if len(steps) == 1:
             steps = [Cache()] + steps  # add for extra default folder
-        parts = [steps[-1], steps[0] if len(steps) == 2 else Chain(steps=steps[:-1])]
+        parts = [
+            steps[-1],
+            steps[0] if len(steps) == 2 else Chain(steps=tuple(steps[:-1])),
+        ]
         cfgs = [
             exca.ConfDict.from_model(p, exclude_defaults=True, uid=True) for p in parts
         ]
@@ -120,7 +123,6 @@ class Chain(Cache):
             for s in steps
         ]
         cfg = {"steps": cfgs}
-        key = steps
         if cfg["steps"]:
             key = steps[0]._exca_discriminator_key
             if cfg["steps"][0][key] == "Input":
@@ -137,7 +139,7 @@ class Chain(Cache):
         steps: list[tp.Any] = [s.model_dump(serialize_as_any=True) for s in self.steps]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
-        chain = Chain(steps=steps, folder=self.folder, backend=self.backend)
+        chain = Chain(steps=steps, folder=self.folder, backend=self.backend)  # type: ignore
         previous = self._previous
         for step in chain.steps:
             step._previous = previous

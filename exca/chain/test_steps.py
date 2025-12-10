@@ -52,7 +52,7 @@ def test_sequence() -> None:
 
 def test_multi_sequence_hash() -> None:
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-    seq = Chain(steps=[steps[1], Cache(), {"type": "Chain", "steps": steps}])
+    seq = Chain(steps=[steps[1], Cache(), {"type": "Chain", "steps": steps}])  # type: ignore
     out = seq.forward(1)
     assert out == 51
     expected = "type=Add,value=12-725c0018/input=1,steps=({type=Add,value=12},{coeff=3,type=Mult})-8180d1fd"
@@ -94,7 +94,7 @@ def test_cache(tmp_path: Path) -> None:
 def test_backend(tmp_path: Path, cluster: str) -> None:
     steps: tp.Any = [{"type": "RandInput"}, {"type": "Mult", "coeff": 10}]
     # storage cache
-    seq = Chain(steps=steps, folder=tmp_path / cluster, backend={"type": cluster})
+    seq = Chain(steps=steps, folder=tmp_path / cluster, backend={"type": cluster})  # type: ignore
     out = seq.forward(1)
     out2 = seq.forward(1)
     assert out2 == out
@@ -120,7 +120,7 @@ def test_error_cache(tmp_path: Path) -> None:
         {"type": "ErrorAdd", "value": 1, "error": True},
     ]
     # storage cache
-    seq = Chain(steps=steps, folder=tmp_path, backend={"type": "LocalProcess"})
+    seq = Chain(steps=steps, folder=tmp_path, backend={"type": "LocalProcess"})  # type: ignore
     with pytest.raises(submitit.core.utils.FailedJobError):
         seq.forward(2)
     seq.steps[1].error = False  # type: ignore
