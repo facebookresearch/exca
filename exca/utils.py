@@ -119,10 +119,8 @@ def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) 
     ignore_discriminator = cfg.ignore_first_discriminator
     cfg.ignore_first_discriminator = False  # don't ignore for sub-models
     bobj = obj
-    print("WORK ON", type(obj))
     if isinstance(obj, pydantic.BaseModel):
         if cfg.exclude_defaults and cfg.uid and hasattr(obj, "_exca_uid_dict"):
-            print("HERE")
             dump.clear()  # override the config
             dump.update(dict(obj._exca_uid_dict()))
             return True

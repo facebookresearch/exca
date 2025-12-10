@@ -496,7 +496,7 @@ def test_basic_pydantic() -> None:
 class CO(BaseModel):
     stuff: str = "blublu"
 
-    def _exca_uid_dict() -> dict[str, tp.Any]:
+    def _exca_uid_dict(self) -> dict[str, tp.Any]:
         return {"override": "success"}
 
 
@@ -508,7 +508,7 @@ class ConfWithOverride(BaseModel):
 @pytest.mark.parametrize("uid", (True, False))
 @pytest.mark.parametrize("exc", (True, False))
 def test_uid_dict_override(uid: bool, exc: bool) -> None:
-    model = ConfWithOverride()
+    model = ConfWithOverride(s={"stuff": "blu"})  # type: ignore
     cfg = ConfDict.from_model(model, uid=uid, exclude_defaults=exc)
     out = cfg.to_yaml()
     if uid and exc:
