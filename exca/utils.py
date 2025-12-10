@@ -114,16 +114,12 @@ class ConfigExtractor(pydantic.BaseModel):
         if isinstance(obj, pydantic.BaseModel):
             return self._apply_pydantic(obj, discriminator=discriminator)
         if isinstance(obj, dict):
-            return type(obj)(
-                {x: self._apply(y, discriminator=discriminator) for x, y in obj.items()}
-            )
+            return type(obj)({x: self._apply(y, discriminator=discriminator) for x, y in obj.items()})
         if isinstance(obj, (list, tuple, set)):
             return type(obj)(self._apply(y, discriminator=discriminator) for y in obj)
         return obj
 
-    def _apply_pydantic(
-        self, obj: pydantic.BaseModel, discriminator: str | None = None
-    ) -> dict[str, tp.Any]:
+    def _apply_pydantic(self, obj: pydantic.BaseModel, discriminator: str | None = None) -> dict[str, tp.Any]:
         tmp = dict(obj)
         out = {}
         to_remove: set[str] = set()
@@ -142,9 +138,19 @@ class ConfigExtractor(pydantic.BaseModel):
                     sub_discrim = _get_discriminator(schema, name)
             val = self._apply(tmp[name], discriminator=sub_discrim)
             if self.exclude_defaults and name != discriminator:
-                if isinstance(tmp[name], pydantic.BaseModel) and not val:
+                if isinstance(tmp[name], pydantic.BaseModel):
                     if isinstance(field.default, pydantic.BaseModel):
-                        continue  # dont skip if no default
+                        fieldset = field.default.model_fields_set
+                        fieldset -= _get_uid_info(tmp[name])["excluded"]
+
+                        cls_default = type(default).model_fields[f].default
+                        val = sub_dump.get(f, cls_default)
+                        cfg_default = getattr(default, f)
+                        if cfg_default != val:
+                            break  # val is different from cfg default -> keep in cfg
+            else:
+                dump.pop(name)  # all equal to default, let's remove it
+
                 if val == field.default:
                     continue
             out[name] = val
