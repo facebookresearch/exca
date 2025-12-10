@@ -311,7 +311,7 @@ def test_inside_job(tmp_path: Path) -> None:
     assert injob.process() == 12
     assert injob.infra.status() == "completed"
     fp = tmp_path / "symlink.log"
-    assert "Hello symlink world" in fp.read_text()
+    assert "Hello symlink world" in fp.read_text("utf8")
     # check find slurm job while we are at it
     job = helpers.find_slurm_job(job_id=injob.infra.job().job_id, folder=tmp_path)
     assert job is not None
@@ -496,7 +496,7 @@ def test_conda_env(tmp_path: Path) -> None:
 @contextlib.contextmanager
 def tmp_autoreload_change() -> tp.Iterator[None]:
     fp = Path(test_compat.__file__)
-    content = fp.read_text()
+    content = fp.read_text("utf8")
     part = "return 2 * self.param"
     if part not in content:
         raise ValueError(f"{part!r} not in {fp}")
