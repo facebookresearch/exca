@@ -95,7 +95,7 @@ def test_workdir_clean_repo(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
     repo = "exca" if "exca" in MapInfra.__module__ else "brainai"
     assert repo in wd._commits
     with wd.activate():
-        assert Path("git-hashes.log").read_text().startswith(repo)
+        assert Path("git-hashes.log").read_text("utf8").startswith(repo)
 
 
 @pytest.mark.parametrize("project", ("excatest-install", "excatest"))
@@ -119,7 +119,9 @@ def test_identify_path_editable(tmp_path: Path, project: str) -> None:
     # create structure
     (tmp_path / "repo").mkdir()
     (tmp_path / "repo" / pkgname).mkdir()
-    pyproject = (Path(__file__).with_name("data") / "fake-pyproject.toml").read_text()
+    pyproject = (Path(__file__).with_name("data") / "fake-pyproject.toml").read_text(
+        "utf8"
+    )
 
     pyproject = pyproject.format(name=pkgname, project=project)
     pyproject_fp = tmp_path / "repo" / "pyproject.toml"

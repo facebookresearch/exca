@@ -81,7 +81,7 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     assert len(names) == 2
     j_name = [n for n in names if n.endswith("-info.jsonl")][0]
     assert isinstance(cache["blublu.tmp"], type(data))
-    assert (tmp_path / j_name).read_text().startswith("metadata={")
+    assert (tmp_path / j_name).read_text("utf8").startswith("metadata={")
 
 
 @pytest.mark.parametrize(

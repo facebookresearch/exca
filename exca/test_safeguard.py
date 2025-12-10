@@ -32,6 +32,28 @@ def test_slurm_in_doc() -> None:
     assert expected in doc.read_text()
 
 
+def test_read_text_encoding() -> None:
+    root = Path(__file__).parents[1]
+    assert root.name == "exca"
+    # list of files to check
+    output = subprocess.check_output(["find", root, "-name", "*.py"], shell=False)
+    tocheck = [Path(p) for p in output.decode().splitlines()]
+    # add missing licenses if none already exists
+    found = []
+    skip = ("/lib/", "/build/", "docs/conf.py", "test_safeguard.py")
+    for fp in tocheck:
+        if any(x in str(fp.relative_to(root)) for x in skip):
+            continue
+        text = Path(fp).read_text("utf8")
+        if "read_text()" in text:
+            found.append(str(fp))
+    if found:
+        found_str = "\n - ".join(found)
+        msg = f"Following files contain read_text() without encoding:\n - {found_str}"
+        # this is dangereous as it will depend on local settings
+        raise AssertionError(msg)
+
+
 def test_header() -> None:
     lines = Path(__file__).read_text("utf8").splitlines()
     header = "\n".join(itertools.takewhile(lambda line: line.startswith("#"), lines))

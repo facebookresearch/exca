@@ -243,11 +243,11 @@ def test_temporary_save_path(
         assert str(tmp).endswith(".txt")
         tmp.write_text("12")
         if existing_content:
-            assert filepath.read_text() == existing_content
+            assert filepath.read_text("utf8") == existing_content
     expected = "12"
     if existing_content is not None and not replace:
         expected = "blublu"
-    assert filepath.read_text() == expected
+    assert filepath.read_text("utf8") == expected
 
 
 def test_temporary_save_path_error() -> None:
