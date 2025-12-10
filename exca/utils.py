@@ -199,19 +199,28 @@ def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) 
     return True
 
 
-def _resolve_schema_ref(schema: tp.Dict[str, tp.Any]) -> tp.Dict[str, tp.Any]:
+def _get_resolved_schema(obj: pydantic.BaseModel) -> dict[str, tp.Any]:
     """Resolve $ref references in a pydantic schema to get the actual definition"""
+    try:
+        schema = obj.model_json_schema()
+    except Exception:
+        from .confdict import ConfDict
+
+        msg = "Failed to extract schema for type %s:\n%s\nFull yaml:\n%s"
+        cfg = ConfDict.from_model(obj, uid=False, exclude_defaults=False)
+        logger.warning(msg, obj.__class__.__name__, repr(obj), cfg.to_yaml())
+        raise
+    # resolve
     ref = schema.get("$ref", "")
     if ref.startswith("#/$defs/"):
         def_name = ref[len("#/$defs/") :]
         if "$defs" in schema and def_name in schema["$defs"]:
-            return schema["$defs"][def_name]
+            return schema["$defs"][def_name]  # type: ignore
     return schema
 
 
-def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
+def _get_discriminator(schema: dict[str, tp.Any], name: str) -> str:
     """Find the discriminator for a field in a pydantic schema"""
-    schema = _resolve_schema_ref(schema)
     if "properties" not in schema:
         return DiscrimStatus.NONE
     prop = schema["properties"][name]
@@ -311,15 +320,7 @@ def _set_discriminated_status(
         classes = [c for c in classes if not issubclass(c, helpers.DiscriminatedModel)]
         if schema is None and len(classes) > 1:
             # compute schema only if finding a possible pydantic union, as it is slow
-            try:
-                schema = obj.model_json_schema()
-            except Exception:
-                from .confdict import ConfDict
-
-                msg = "Failed to extract schema for type %s:\n%s\nFull yaml:\n%s"
-                cfg = ConfDict.from_model(obj, uid=False, exclude_defaults=False)
-                logger.warning(msg, obj.__class__.__name__, repr(obj), cfg.to_yaml())
-                raise
+            schema = _get_resolved_schema(obj)
         if schema is not None:
             discriminator = _get_discriminator(schema, name)
         value = getattr(obj, name, _default)  # use _default for backward compat
