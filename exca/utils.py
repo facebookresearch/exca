@@ -121,6 +121,7 @@ def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) 
     bobj = obj
     if isinstance(obj, pydantic.BaseModel):
         if cfg.exclude_defaults and cfg.uid and hasattr(obj, "_exca_uid_dict"):
+            # bypass used for custom representations, for Chain models for instance
             dump.clear()  # override the config
             dump.update(dict(obj._exca_uid_dict()))
             return True
