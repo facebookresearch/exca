@@ -120,12 +120,18 @@ def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) 
     cfg.ignore_first_discriminator = False  # don't ignore for sub-models
     bobj = obj
     if isinstance(obj, pydantic.BaseModel):
+        if cfg.exclude_defaults and cfg.uid and hasattr(obj, "_exca_uid_dict"):
+            # bypass used for custom representations, for Chain models for instance
+            dump.clear()  # override the config
+            dump.update(dict(obj._exca_uid_dict()))
+            return True
         info = _get_uid_info(obj, ignore_discriminator=ignore_discriminator)
         excluded = info[UID_EXCLUDED]
         forced = info[FORCE_INCLUDED]
         excluded -= forced  # forced taks over
         fields = set(type(obj).model_fields)
         missing = (excluded | forced) - (fields | {"."})
+
         if cfg.uid and "." in excluded:
             dump.clear()
             return False
