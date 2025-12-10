@@ -20,21 +20,22 @@ from .confdict import ConfDict
 from .utils import to_dict
 
 
-class C(pydantic.BaseModel):
+class BaseModel(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
+
+
+class C(BaseModel):
     param: int = 12
     _exclude_from_cls_uid = (".",)
 
 
-class A(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class A(BaseModel):
     _exclude_from_cls_uid = ("y",)
     x: int = 12
     y: str = "hello"
 
 
-class B(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class B(BaseModel):
     a1: A
     a2: A = A()
     a3: A = A(x=13)
@@ -85,20 +86,17 @@ def test_to_dict_uid() -> None:
     assert out == expected
 
 
-class D2(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class D2(BaseModel):
     uid: tp.Literal["D2"] = "D2"
 
 
-class D1(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class D1(BaseModel):
     uid: tp.Literal["D1"] = "D1"
     anything: int = 12
     sub: D2 = D2()
 
 
-class Discrim(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class Discrim(BaseModel):
     inst: D1 | D2 = pydantic.Field(..., discriminator="uid")
     something_else: tp.List[str] | int
     seq: tp.List[tp.List[tp.Annotated[D1 | D2, pydantic.Field(discriminator="uid")]]]
@@ -106,8 +104,7 @@ class Discrim(pydantic.BaseModel):
 
 
 def test_missing_discriminator() -> None:
-    class DiscrimD(pydantic.BaseModel):
-        model_config = pydantic.ConfigDict(extra="forbid")
+    class DiscrimD(BaseModel):
         instd: D1 | D2
 
     _ = DiscrimD(instd={"uid": "D1"})  # type: ignore
@@ -183,13 +180,11 @@ def test_optional_discriminator(caplog: tp.Any) -> None:
     assert out == expected
 
 
-class RecursiveLeaf(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class RecursiveLeaf(BaseModel):
     edge_type: tp.Literal["leaf"] = "leaf"
 
 
-class RecursiveEdge(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class RecursiveEdge(BaseModel):
     infra: exca.TaskInfra = exca.TaskInfra(cluster=None)
     edge_type: tp.Literal["edge"] = "edge"
     child: "RecursiveElem"
@@ -295,8 +290,7 @@ class MissingForbid(pydantic.BaseModel):
     param: int = 12
 
 
-class WithMissingForbid(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class WithMissingForbid(BaseModel):
     missing: MissingForbid = MissingForbid()
 
 
@@ -314,8 +308,7 @@ class D(pydantic.BaseModel):
     x: int = 12
 
 
-class A12(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class A12(BaseModel):
     _exclude_from_cls_uid = ("y",)
     name: str = "name"
     unneeded: str = "is default"
@@ -323,8 +316,7 @@ class A12(pydantic.BaseModel):
     y: str = "hello"
 
 
-class NewDefault(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class NewDefault(BaseModel):
     a: A12 = A12(x=13)
 
 
@@ -348,8 +340,7 @@ def test_new_default(value: int, expected: str, with_y: bool) -> None:
     assert m2.a.x == value
 
 
-class NewDefaultOther(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class NewDefaultOther(BaseModel):
     a: A12 = A12(x=13, y="stuff")
 
 
@@ -359,8 +350,7 @@ def test_new_default_other() -> None:
     assert out.to_yaml().strip() == "{}"
 
 
-class NewDefaultOther2diff(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class NewDefaultOther2diff(BaseModel):
     a: A12 = A12(x=13, unneeded="something else", y="stuff")
 
 
@@ -371,8 +361,7 @@ def test_new_default_other2diff() -> None:
     assert out.to_yaml().strip() == "a.x: 13"
 
 
-class ActualDefaultOverride(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class ActualDefaultOverride(BaseModel):
     a: A12 = A12(x=12)
     a_default: A12 = A12()
 
@@ -387,8 +376,7 @@ def test_actual_default_override() -> None:
     assert out.to_yaml().strip() == "{}"
 
 
-class DiscrimDump(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class DiscrimDump(BaseModel):
     inst: D1 | D2 = pydantic.Field(D1(), discriminator="uid")
 
 
@@ -404,8 +392,7 @@ def test_dump() -> None:
 D1D2 = tp.Annotated[D1 | D2, pydantic.Field(discriminator="uid")]
 
 
-class OrderedDump(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class OrderedDump(BaseModel):
     insts: collections.OrderedDict[str, D1D2] = collections.OrderedDict()
 
 
@@ -425,8 +412,7 @@ def test_ordered_dict() -> None:
     assert out.to_uid() == uid
 
 
-class ComplexDiscrim(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class ComplexDiscrim(BaseModel):
     inst: dict[str, tuple[D1D2, bool]] | None = None
 
 
@@ -475,8 +461,7 @@ def test_fast_unlink(tmp_path: Path) -> None:
     assert not fp.exists()
 
 
-class ComplexTypesConfig(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class ComplexTypesConfig(BaseModel):
     x: pydantic.DirectoryPath = Path("/")
     y: datetime.timedelta = datetime.timedelta(minutes=1)
     # z: pydantic.ImportString = ConfDict  # support dropped because of serialize_as_any
@@ -506,3 +491,27 @@ def test_basic_pydantic() -> None:
     with pytest.raises(RuntimeError) as e:
         b.infra.clone_obj()
     assert "discriminated union" in e.value.args[0]
+
+
+class CO(BaseModel):
+    stuff: str = "blublu"
+
+    def _exca_uid_dict() -> dict[str, tp.Any]:
+        return {"override": "success"}
+
+
+class ConfWithOverride(BaseModel):
+    a: A = A()
+    s: CO = CO()
+
+
+@pytest.mark.parametrize("uid", (True, False))
+@pytest.mark.parametrize("exc", (True, False))
+def test_uid_dict_override(uid: bool, exc: bool) -> None:
+    model = ConfWithOverride()
+    cfg = ConfDict.from_model(model, uid=uid, exclude_defaults=exc)
+    out = cfg.to_yaml()
+    if uid and exc:
+        assert "override" in out
+    else:
+        assert "override" not in out
