@@ -507,11 +507,29 @@ class ConfWithOverride(BaseModel):
 
 @pytest.mark.parametrize("uid", (True, False))
 @pytest.mark.parametrize("exc", (True, False))
-def test_uid_dict_override(uid: bool, exc: bool) -> None:
-    model = ConfWithOverride(s={"stuff": "blu"})  # type: ignore
-    cfg = ConfDict.from_model(model, uid=uid, exclude_defaults=exc)
+@pytest.mark.parametrize("raw", (True, False))
+@pytest.mark.parametrize("bypass", (True, False))
+@pytest.mark.parametrize("use_exporter", (True, False))
+def test_uid_dict_override(
+    uid: bool, exc: bool, raw: bool, bypass: bool, use_exporter: bool
+) -> None:
+    if raw:
+        model = CO(stuff="blu")
+    else:
+        model = ConfWithOverride(s={"stuff": "blu"})  # type: ignore
+    if use_exporter:
+        exporter = utils.ConfigExporter(
+            uid=uid, exclude_defaults=exc, ignore_first_bypass=bypass
+        )
+        cfg = ConfDict(exporter.apply(model))
+    else:
+        cfg = ConfDict.from_model(model, uid=uid, exclude_defaults=exc)
     out = cfg.to_yaml()
-    if uid and exc:
+    if uid and exc and not (use_exporter and raw and bypass):
         assert "override" in out
     else:
         assert "override" not in out
+
+
+def test_uid_dict_override_bypass() -> None:
+    model = CO(stuff="blu")

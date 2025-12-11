@@ -81,6 +81,7 @@ class ConfigExporter(pydantic.BaseModel):
     exclude_defaults: bool = False
     ignore_first_discriminator: bool = True
     ignore_first_bypass: bool = False
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     def apply(self, model: pydantic.BaseModel) -> dict[str, tp.Any]:
         if self.exclude_defaults:
@@ -96,12 +97,9 @@ class ConfigExporter(pydantic.BaseModel):
         cfg = self
         if cfg.ignore_first_discriminator or cfg.ignore_first_bypass:
             # dont ignore for submodels
-            cfg = self.model_copy(
-                update={
-                    "ignore_first_discriminator": False,
-                    "hignore_first_bypass": False,
-                }
-            )
+            cfg = self.model_copy()
+            cfg.ignore_first_discriminator = False
+            cfg.ignore_first_bypass = False
         forced = set()
         bobj = obj
         if isinstance(obj, pydantic.BaseModel):
