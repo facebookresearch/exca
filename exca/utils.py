@@ -214,23 +214,7 @@ class DiscrimStatus:
 def to_dict(
     model: pydantic.BaseModel, uid: bool = False, exclude_defaults: bool = False
 ) -> tp.Dict[str, tp.Any]:
-    """Returns the pydantic.BaseModel configuration as a dictionary
-
-    Parameters
-    ----------
-    model: pydantic.BaseModel
-        the model to convert into a dictionary
-    uid: bool
-        if True, uses the _exclude_from_cls_uid field/method to filter in and out
-        some fields
-    exclude_defaults: bool
-        if True, values that are set to defaults are not included
-
-    Note
-    ----
-    OrderedDict are preserved as OrderedDict to allow for order specific
-    uids
-    """
+    """DEPRECATED"""
     warnings.warn("to_dict is deprecated, use ConfigExporter.apply", DeprecationWarning)
     exporter = ConfigExporter(uid=uid, exclude_defaults=exclude_defaults)
     return exporter.apply(model)
