@@ -14,6 +14,7 @@ import shutil
 import sys
 import typing as tp
 import uuid
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -52,12 +53,150 @@ def _get_uid_info(
     return uid_info  # type: ignore
 
 
-class ExportCfg(pydantic.BaseModel):
+class ConfigExporter(pydantic.BaseModel):
+    """Enables exporting a pydantic.BaseModel configuration as a dictionary
+
+    Parameters
+    ----------
+    uid: bool
+        if True, uses the _exclude_from_cls_uid field/method to filter in and out
+        some fields
+    exclude_defaults: bool
+        if True, values that are set to defaults are not included
+    ignore_first_discriminator: bool
+        first discriminator can be ignored to avoid signature of a model to depend
+        on if it is part of a bigger hierarchy or not
+    ignore_first_bypass: bool
+        ignore the _exca_uid_dict method bypass on first call, this is useful to
+        avoid infinite recursion without the method itself when we want to tamper
+        with the default config export.
+
+    Notes
+    -----
+    - OrderedDict are preserved as OrderedDict to allow for order specific uids
+    - use exporter.apply(model) to get the config
+    """
+
     uid: bool = False
     exclude_defaults: bool = False
-    # first discriminator needs to be ignored to avoid signature of a model to depend
-    # on if it is part of a bigger hierarchy or not
     ignore_first_discriminator: bool = True
+    ignore_first_bypass: bool = False
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    def apply(self, model: pydantic.BaseModel) -> dict[str, tp.Any]:
+        if self.exclude_defaults:
+            _set_discriminated_status(model)
+        out = model.model_dump(
+            exclude_defaults=self.exclude_defaults, mode="json", serialize_as_any=True
+        )
+        self._post_process_dump(model, out)
+        return out
+
+    def _post_process_dump(self, obj: tp.Any, dump: dict[str, tp.Any]) -> bool:
+        # handles uid / defaults / discriminators / ordered dict
+        cfg = self
+        if cfg.ignore_first_discriminator or cfg.ignore_first_bypass:
+            # dont ignore for submodels
+            cfg = self.model_copy()
+            cfg.ignore_first_discriminator = False
+            cfg.ignore_first_bypass = False
+        forced = set()
+        bobj = obj
+        if isinstance(obj, pydantic.BaseModel):
+            if self.exclude_defaults and self.uid and not self.ignore_first_bypass:
+                if hasattr(obj, "_exca_uid_dict"):
+                    # bypass used for custom representations, for Chain models for instance
+                    dump.clear()  # override the config
+                    dump.update(dict(obj._exca_uid_dict()))
+                    return True
+            info = _get_uid_info(
+                obj, ignore_discriminator=self.ignore_first_discriminator
+            )
+            excluded = info[UID_EXCLUDED]
+            forced = info[FORCE_INCLUDED]
+            excluded -= forced  # forced taks over
+            fields = set(type(obj).model_fields)
+            missing = (excluded | forced) - (fields | {"."})
+
+            if cfg.uid and "." in excluded:
+                dump.clear()
+                return False
+            if missing:
+                raise ValueError(
+                    "Field(s) specified for exclusion/inclusion do(es) not exist:\n"
+                    f"{missing}\n(existing on {obj}: {fields})"
+                )
+            if cfg.uid:
+                for name in excluded:
+                    dump.pop(name, None)
+            for name in forced:
+                if name not in dump:
+                    dump[name] = cfg._dump(getattr(obj, name))
+            # add required field to force ones, to make sure we don't remove them later on
+            reqs = {
+                name
+                for name, field in type(obj).model_fields.items()
+                if field.is_required()
+            }
+            forced |= reqs
+            obj = dict(obj)
+        if isinstance(obj, dict):
+            for name, sub_dump in list(dump.items()):
+                if name not in obj:
+                    continue  # ignore as it may be added by serialization
+                if isinstance(obj[name], collections.OrderedDict):
+                    # keep ordered dicts
+                    dump[name] = collections.OrderedDict(sub_dump)
+                    sub_dump = dump[name]
+                keep = cfg._post_process_dump(obj[name], sub_dump)
+                if not keep:
+                    del obj[name]
+                    del dump[name]
+                    continue
+                # clear defaults after exclusion
+                if name in forced:
+                    continue
+                if not (cfg.exclude_defaults and cfg.uid):
+                    continue
+                # possibly remove if all default (appart from excluded attributes)
+                if not isinstance(obj[name], pydantic.BaseModel):
+                    continue
+                if not isinstance(bobj, pydantic.BaseModel):
+                    continue
+                default = type(bobj).model_fields[name].default
+                if not isinstance(default, pydantic.BaseModel):
+                    continue
+                if set(sub_dump) - default.model_fields_set:
+                    continue  # forced fields have been added
+                subinfo = _get_uid_info(
+                    obj[name], ignore_discriminator=self.ignore_first_discriminator
+                )
+                exc = subinfo[UID_EXCLUDED]
+                #
+                for f in default.model_fields_set - set(exc):
+                    cls_default = type(default).model_fields[f].default
+                    val = sub_dump.get(f, cls_default)
+                    cfg_default = getattr(default, f)
+                    if cfg_default != val:
+                        break  # val is different from cfg default -> keep in cfg
+                else:
+                    dump.pop(name)  # all equal to default, let's remove it
+        if isinstance(obj, (tuple, list, set)):
+            if not isinstance(dump, (tuple, list, set)) or len(obj) != len(dump):
+                raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
+            for obj2, dump2 in zip(obj, dump):
+                cfg._post_process_dump(obj2, dump2)
+        return True
+
+    def _dump(self, obj: tp.Any) -> tp.Any:
+        """Dumps the object"""
+        if isinstance(obj, pydantic.BaseModel):
+            return self.apply(obj)
+        if isinstance(obj, dict):
+            return {x: self._dump(y) for x, y in obj.items()}
+        if isinstance(obj, list):
+            return [self._dump(y) for y in obj]
+        return obj
 
 
 class DiscrimStatus:
@@ -75,143 +214,34 @@ class DiscrimStatus:
 def to_dict(
     model: pydantic.BaseModel, uid: bool = False, exclude_defaults: bool = False
 ) -> tp.Dict[str, tp.Any]:
-    """Returns the pydantic.BaseModel configuration as a dictionary
-
-    Parameters
-    ----------
-    model: pydantic.BaseModel
-        the model to convert into a dictionary
-    uid: bool
-        if True, uses the _exclude_from_cls_uid field/method to filter in and out
-        some fields
-    exclude_defaults: bool
-        if True, values that are set to defaults are not included
-
-    Note
-    ----
-    OrderedDict are preserved as OrderedDict to allow for order specific
-    uids
-    """
-    if exclude_defaults:
-        _set_discriminated_status(model)
-    cfg = ExportCfg(uid=uid, exclude_defaults=exclude_defaults)
-    out = model.model_dump(
-        exclude_defaults=exclude_defaults, mode="json", serialize_as_any=True
-    )
-    _post_process_dump(model, out, cfg=cfg)
-    return out
+    """DEPRECATED"""
+    warnings.warn("to_dict is deprecated, use ConfigExporter.apply", DeprecationWarning)
+    exporter = ConfigExporter(uid=uid, exclude_defaults=exclude_defaults)
+    return exporter.apply(model)
 
 
-def _dump(obj: tp.Any, cfg: ExportCfg) -> tp.Any:
-    """Dumps the object"""
-    if isinstance(obj, pydantic.BaseModel):
-        return to_dict(obj, uid=cfg.uid, exclude_defaults=cfg.exclude_defaults)
-    if isinstance(obj, dict):
-        return {x: _dump(y, cfg=cfg) for x, y in obj.items()}
-    if isinstance(obj, list):
-        return [_dump(y, cfg=cfg) for y in obj]
-    return obj
-
-
-def _post_process_dump(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) -> bool:
-    # handles uid / defaults / discriminators / ordered dict
-    forced = set()
-    ignore_discriminator = cfg.ignore_first_discriminator
-    cfg.ignore_first_discriminator = False  # don't ignore for sub-models
-    bobj = obj
-    if isinstance(obj, pydantic.BaseModel):
-        if cfg.exclude_defaults and cfg.uid and hasattr(obj, "_exca_uid_dict"):
-            # bypass used for custom representations, for Chain models for instance
-            dump.clear()  # override the config
-            dump.update(dict(obj._exca_uid_dict()))
-            return True
-        info = _get_uid_info(obj, ignore_discriminator=ignore_discriminator)
-        excluded = info[UID_EXCLUDED]
-        forced = info[FORCE_INCLUDED]
-        excluded -= forced  # forced taks over
-        fields = set(type(obj).model_fields)
-        missing = (excluded | forced) - (fields | {"."})
-
-        if cfg.uid and "." in excluded:
-            dump.clear()
-            return False
-        if missing:
-            raise ValueError(
-                "Field(s) specified for exclusion/inclusion do(es) not exist:\n"
-                f"{missing}\n(existing on {obj}: {fields})"
-            )
-        if cfg.uid:
-            for name in excluded:
-                dump.pop(name, None)
-        for name in forced:
-            if name not in dump:
-                dump[name] = _dump(getattr(obj, name), cfg=cfg)
-        # add required field to force ones, to make sure we don't remove them later on
-        reqs = {
-            name for name, field in type(obj).model_fields.items() if field.is_required()
-        }
-        forced |= reqs
-        obj = dict(obj)
-    if isinstance(obj, dict):
-        for name, sub_dump in list(dump.items()):
-            if name not in obj:
-                continue  # ignore as it may be added by serialization
-            if isinstance(obj[name], collections.OrderedDict):
-                # keep ordered dicts
-                dump[name] = collections.OrderedDict(sub_dump)
-                sub_dump = dump[name]
-            keep = _post_process_dump(obj[name], sub_dump, cfg=cfg)
-            if not keep:
-                del obj[name]
-                del dump[name]
-                continue
-            # clear defaults after exclusion
-            if name in forced:
-                continue
-            if not (cfg.exclude_defaults and cfg.uid):
-                continue
-            # possibly remove if all default (appart from excluded attributes)
-            if not isinstance(obj[name], pydantic.BaseModel):
-                continue
-            if not isinstance(bobj, pydantic.BaseModel):
-                continue
-            default = type(bobj).model_fields[name].default
-            if not isinstance(default, pydantic.BaseModel):
-                continue
-            if set(sub_dump) - default.model_fields_set:
-                continue  # forced fields have been added
-            subinfo = _get_uid_info(obj[name], ignore_discriminator=ignore_discriminator)
-            exc = subinfo[UID_EXCLUDED]
-            #
-            for f in default.model_fields_set - set(exc):
-                cls_default = type(default).model_fields[f].default
-                val = sub_dump.get(f, cls_default)
-                cfg_default = getattr(default, f)
-                if cfg_default != val:
-                    break  # val is different from cfg default -> keep in cfg
-            else:
-                dump.pop(name)  # all equal to default, let's remove it
-    if isinstance(obj, (tuple, list, set)):
-        if not isinstance(dump, (tuple, list, set)) or len(obj) != len(dump):
-            raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
-        for obj2, dump2 in zip(obj, dump):
-            _post_process_dump(obj2, dump2, cfg=cfg)
-    return True
-
-
-def _resolve_schema_ref(schema: tp.Dict[str, tp.Any]) -> tp.Dict[str, tp.Any]:
+def _get_resolved_schema(obj: pydantic.BaseModel) -> dict[str, tp.Any]:
     """Resolve $ref references in a pydantic schema to get the actual definition"""
+    try:
+        schema = obj.model_json_schema()
+    except Exception:
+        from .confdict import ConfDict
+
+        msg = "Failed to extract schema for type %s:\n%s\nFull yaml:\n%s"
+        cfg = ConfDict.from_model(obj, uid=False, exclude_defaults=False)
+        logger.warning(msg, obj.__class__.__name__, repr(obj), cfg.to_yaml())
+        raise
+    # resolve
     ref = schema.get("$ref", "")
     if ref.startswith("#/$defs/"):
         def_name = ref[len("#/$defs/") :]
         if "$defs" in schema and def_name in schema["$defs"]:
-            return schema["$defs"][def_name]
+            return schema["$defs"][def_name]  # type: ignore
     return schema
 
 
-def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
+def _get_discriminator(schema: dict[str, tp.Any], name: str) -> str:
     """Find the discriminator for a field in a pydantic schema"""
-    schema = _resolve_schema_ref(schema)
     if "properties" not in schema:
         return DiscrimStatus.NONE
     prop = schema["properties"][name]
@@ -311,15 +341,7 @@ def _set_discriminated_status(
         classes = [c for c in classes if not issubclass(c, helpers.DiscriminatedModel)]
         if schema is None and len(classes) > 1:
             # compute schema only if finding a possible pydantic union, as it is slow
-            try:
-                schema = obj.model_json_schema()
-            except Exception:
-                from .confdict import ConfDict
-
-                msg = "Failed to extract schema for type %s:\n%s\nFull yaml:\n%s"
-                cfg = ConfDict.from_model(obj, uid=False, exclude_defaults=False)
-                logger.warning(msg, obj.__class__.__name__, repr(obj), cfg.to_yaml())
-                raise
+            schema = _get_resolved_schema(obj)
         if schema is not None:
             discriminator = _get_discriminator(schema, name)
         value = getattr(obj, name, _default)  # use _default for backward compat
