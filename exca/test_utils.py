@@ -513,10 +513,12 @@ class ConfWithOverride(BaseModel):
 def test_uid_dict_override(
     uid: bool, exc: bool, raw: bool, bypass: bool, use_exporter: bool
 ) -> None:
+    # use model with override as model or sub-model
     if raw:
         model = CO(stuff="blu")
     else:
         model = ConfWithOverride(s={"stuff": "blu"})  # type: ignore
+    # use the ConfDict directly, or the exporter (which allows bypassing the override)
     if use_exporter:
         exporter = utils.ConfigExporter(
             uid=uid, exclude_defaults=exc, ignore_first_bypass=bypass
@@ -529,7 +531,3 @@ def test_uid_dict_override(
         assert "override" in out
     else:
         assert "override" not in out
-
-
-def test_uid_dict_override_bypass() -> None:
-    model = CO(stuff="blu")
