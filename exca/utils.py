@@ -66,8 +66,8 @@ class ConfigExporter(pydantic.BaseModel):
     ignore_first_discriminator: bool
         first discriminator can be ignored to avoid signature of a model to depend
         on if it is part of a bigger hierarchy or not
-    ignore_first_bypass: bool
-        ignore the _exca_uid_dict method bypass on first call, this is useful to
+    ignore_first_override: bool
+        ignore the _exca_uid_dict_override method override on first call, this is useful to
         avoid infinite recursion without the method itself when we want to tamper
         with the default config export.
 
@@ -80,7 +80,7 @@ class ConfigExporter(pydantic.BaseModel):
     uid: bool = False
     exclude_defaults: bool = False
     ignore_first_discriminator: bool = True
-    ignore_first_bypass: bool = False
+    ignore_first_override: bool = False
     model_config = pydantic.ConfigDict(extra="forbid")
 
     def apply(self, model: pydantic.BaseModel) -> dict[str, tp.Any]:
@@ -95,19 +95,19 @@ class ConfigExporter(pydantic.BaseModel):
     def _post_process_dump(self, obj: tp.Any, dump: dict[str, tp.Any]) -> bool:
         # handles uid / defaults / discriminators / ordered dict
         cfg = self
-        if cfg.ignore_first_discriminator or cfg.ignore_first_bypass:
+        if cfg.ignore_first_discriminator or cfg.ignore_first_override:
             # dont ignore for submodels
             cfg = self.model_copy()
             cfg.ignore_first_discriminator = False
-            cfg.ignore_first_bypass = False
+            cfg.ignore_first_override = False
         forced = set()
         bobj = obj
         if isinstance(obj, pydantic.BaseModel):
-            if self.exclude_defaults and self.uid and not self.ignore_first_bypass:
-                if hasattr(obj, "_exca_uid_dict"):
+            if self.exclude_defaults and self.uid and not self.ignore_first_override:
+                if hasattr(obj, "_exca_uid_dict_override"):
                     # bypass used for custom representations, for Chain models for instance
                     dump.clear()  # override the config
-                    dump.update(dict(obj._exca_uid_dict()))
+                    dump.update(dict(obj._exca_uid_dict_override()))
                     return True
             info = _get_uid_info(
                 obj, ignore_discriminator=self.ignore_first_discriminator

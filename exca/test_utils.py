@@ -496,7 +496,7 @@ def test_basic_pydantic() -> None:
 class CO(BaseModel):
     stuff: str = "blublu"
 
-    def _exca_uid_dict(self) -> dict[str, tp.Any]:
+    def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
         return {"override": "success"}
 
 
@@ -521,7 +521,7 @@ def test_uid_dict_override(
     # use the ConfDict directly, or the exporter (which allows bypassing the override)
     if use_exporter:
         exporter = utils.ConfigExporter(
-            uid=uid, exclude_defaults=exc, ignore_first_bypass=bypass
+            uid=uid, exclude_defaults=exc, ignore_first_override=bypass
         )
         cfg = ConfDict(exporter.apply(model))
     else:

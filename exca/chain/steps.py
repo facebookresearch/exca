@@ -117,10 +117,10 @@ class Chain(Cache):
         if not self.steps:
             raise ValueError("steps cannot be empty")
 
-    def _exca_uid_dict(self) -> dict[str, tp.Any]:
+    def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
         chain = type(self)(steps=tuple(self._aligned_chain()))
         exporter = utils.ConfigExporter(
-            uid=True, exclude_defaults=True, ignore_first_bypass=True
+            uid=True, exclude_defaults=True, ignore_first_override=True
         )
         cfg = {"steps": exporter.apply(chain)["steps"]}  # export bypassing the override
         if cfg["steps"]:
