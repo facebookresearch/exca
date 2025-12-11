@@ -14,6 +14,7 @@ import pydantic
 import submitit
 
 import exca
+from exca import utils
 
 from . import backends
 
@@ -117,14 +118,13 @@ class Chain(Cache):
             raise ValueError("steps cannot be empty")
 
     def _exca_uid_dict(self) -> dict[str, tp.Any]:
-        steps = self._aligned_chain()
-        cfgs = [
-            dict(exca.ConfDict.from_model(s, exclude_defaults=True, uid=True))
-            for s in steps
-        ]
-        cfg = {"steps": cfgs}
+        chain = type(self)(steps=tuple(self._aligned_chain()))
+        exporter = utils.ConfigExporter(
+            uid=True, exclude_defaults=True, ignore_first_bypass=True
+        )
+        cfg = {"steps": exporter.apply(chain)["steps"]}  # export bypassing the override
         if cfg["steps"]:
-            key = steps[0]._exca_discriminator_key
+            key = chain.steps[0]._exca_discriminator_key
             if cfg["steps"][0][key] == "Input":
                 cfg["input"] = cfg["steps"][0]["value"]
                 cfg["steps"] = cfg["steps"][1:]

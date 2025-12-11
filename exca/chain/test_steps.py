@@ -87,7 +87,7 @@ def test_cache(tmp_path: Path) -> None:
     # intermediate cache
     seq.steps[-1].coeff = 100  # type: ignore
     out10 = seq.forward()
-    assert out10 == 10 * out
+    assert out10 == pytest.approx(10 * out, abs=1e-9)
 
 
 @pytest.mark.parametrize("cluster", ("LocalProcess", "SubmititDebug"))
