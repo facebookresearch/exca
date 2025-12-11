@@ -156,7 +156,8 @@ class ConfDict(dict[str, tp.Any]):
         - exclude: tuple of field names to be excluded
         - force_include: tuple of fields to include in all cases (even if excluded or set to defaults)
         """
-        return ConfDict(utils.to_dict(model, uid=uid, exclude_defaults=exclude_defaults))
+        exporter = utils.ConfigExporter(uid=uid, exclude_defaults=exclude_defaults)
+        return ConfDict(exporter.apply(model))
 
     def __setitem__(self, key: str, val: tp.Any) -> None:
         if not isinstance(key, str):
