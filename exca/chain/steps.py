@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import collections
 import logging
 import pickle
 import shutil
@@ -104,8 +105,11 @@ class Input(Step):
         return self.value
 
 
+_Step = pydantic.SerializeAsAny[Step]
+
+
 class Chain(Cache):
-    steps: tuple[pydantic.SerializeAsAny[Step], ...] = ()
+    steps: tp.Sequence[_Step] | collections.OrderedDict[str, _Step]
     folder: str | Path | None = None
     backend: backends.Backend | None = None
 
@@ -117,6 +121,10 @@ class Chain(Cache):
         if not self.steps:
             raise ValueError("steps cannot be empty")
 
+    def _step_sequence(self) -> tuple[Step, ...]:
+        # convenience function to avoid the OrderedDict case
+        return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
+
     def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
         chain = type(self)(steps=tuple(self._aligned_chain()))
         exporter = utils.ConfigExporter(
@@ -124,24 +132,26 @@ class Chain(Cache):
         )
         cfg = {"steps": exporter.apply(chain)["steps"]}  # export bypassing the override
         if cfg["steps"]:
-            key = chain.steps[0]._exca_discriminator_key
+            key = chain._step_sequence()[0]._exca_discriminator_key
             if cfg["steps"][0][key] == "Input":
                 cfg["input"] = cfg["steps"][0]["value"]
                 cfg["steps"] = cfg["steps"][1:]
         return cfg
 
     def _aligned_step(self) -> list[Step]:
-        return [s for step in self.steps for s in step._aligned_step()]
+        return [s for step in self._step_sequence() for s in step._aligned_step()]
 
     def with_input(self, value: tp.Any = NoValue()) -> "Chain":
         if self._previous is not None:
             raise RuntimeError("Cannot set input while already having a previous step")
-        steps: list[tp.Any] = [s.model_dump(serialize_as_any=True) for s in self.steps]
+        steps: list[tp.Any] = [
+            s.model_dump(serialize_as_any=True) for s in self._step_sequence()
+        ]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
         chain = type(self)(steps=steps, folder=self.folder, backend=self.backend)  # type: ignore
         previous = self._previous
-        for step in chain.steps:
+        for step in chain._step_sequence():
             step._previous = previous
             if isinstance(step, Cache):
                 step._folder = self.folder
@@ -208,7 +218,7 @@ class Chain(Cache):
         return self.backend.list_jobs(self._chain_folder())
 
     def _detached_forward(self, *param: tp.Any) -> tp.Any:
-        steps = self.steps
+        steps = self._step_sequence()
         for k, step in enumerate(reversed(steps)):
             if isinstance(step, Cache):
                 cached = step.cached()
