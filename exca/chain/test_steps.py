@@ -88,6 +88,11 @@ def test_cache(tmp_path: Path) -> None:
     seq.steps[-1].coeff = 100  # type: ignore
     out10 = seq.forward()
     assert out10 == pytest.approx(10 * out, abs=1e-9)
+    # now with dict
+    steps = {str(k): s for k, s in enumerate(steps)}
+    seq = Chain(steps=steps, folder=tmp_path)
+    out_d = seq.forward()
+    assert out_d == pytest.approx(out, abs=1e-9)
 
 
 @pytest.mark.parametrize("cluster", ("LocalProcess", "SubmititDebug"))
