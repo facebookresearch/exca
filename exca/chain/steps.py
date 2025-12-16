@@ -64,12 +64,12 @@ class Step(exca.helpers.DiscriminatedModel):
 
 
 class Cache(Step):
-    _folder: Path | str | None = None
+    _folder: Path | None = None
 
     def _chain_folder(self) -> Path:
         if self._folder is None:
             raise RuntimeError("No folder provided")
-        folder = Path(self._folder) / self._chain_hash()
+        folder = self._folder / self._chain_hash()
         folder.mkdir(exist_ok=True, parents=True)  # TODO permissions
         return folder
 
@@ -125,8 +125,12 @@ class Chain(Cache):
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
         self._folder = None if self.folder is None else Path(self.folder)
-        if self.backend is not None:
-            self.backend._folder = self._folder
+        if self._folder is not None:
+            if self.backend is not None:
+                self.backend._folder = self._folder
+            for step in self._step_sequence():
+                if isinstance(step, Cache):
+                    step._folder = self._folder
         if not self.steps:
             raise ValueError("steps cannot be empty")
 
@@ -162,12 +166,10 @@ class Chain(Cache):
         ]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
-        chain = type(self)(steps=steps, folder=self.folder, backend=self.backend)  # type: ignore
+        chain = type(self)(steps=steps, folder=self.folder, backend=self.backend)
         previous = self._previous
         for step in chain._step_sequence():
             step._previous = previous
-            if isinstance(step, Cache):
-                step._folder = self.folder
             previous = step
         return chain
 
