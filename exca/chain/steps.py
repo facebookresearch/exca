@@ -80,6 +80,15 @@ class Cache(Step):
             return cd["result"]
         return NoValue()
 
+    def clear_cache(self) -> None:
+        if self._folder is None:
+            logger.warning("Trying to clear cache, but no folder provided")
+            return
+        cache = self._chain_folder() / "cache"
+        if cache.exists():
+            logger.debug("Removing cache folder: %s", cache)
+            shutil.rmtree(cache)
+
     def _cache_dict(self) -> exca.cachedict.CacheDict[tp.Any]:
         if self._folder is None:
             return exca.cachedict.CacheDict(folder=None, keep_in_ram=True)
@@ -142,6 +151,10 @@ class Chain(Cache):
         return [s for step in self._step_sequence() for s in step._aligned_step()]
 
     def with_input(self, value: tp.Any = NoValue()) -> "Chain":
+        """Add an input step with the provided value
+        This also sets up the structure of the chain, including passing the folder
+        to the chain steps
+        """
         if self._previous is not None:
             raise RuntimeError("Cannot set input while already having a previous step")
         steps: list[tp.Any] = [
@@ -173,6 +186,7 @@ class Chain(Cache):
             pkl = chain._chain_folder() / "cache" / "job.pkl"
         backend = chain.backend
         if pkl is not None and pkl.exists():
+            logger.debug("Reloading job in: %s", pkl.parent)
             with pkl.open("rb") as f:
                 job = pickle.load(f)
         else:
@@ -183,6 +197,7 @@ class Chain(Cache):
             ):
                 job = backend.submit(chain._detached_forward, *params)
             if pkl is not None and not isinstance(job, backends.ResultJob):
+                logger.debug("Dumping job into: %s", pkl.parent)
                 with pkl.open("wb") as f:
                     pickle.dump(job, f)
         out = job.result()
@@ -195,6 +210,7 @@ class Chain(Cache):
         return out
 
     def clear_cache(self, recursive: bool = True) -> None:
+        """Clears the chain cache, and all intermediate cache if recursive=True"""
         if recursive:
             chain = self
             if self._previous is None:
@@ -202,11 +218,9 @@ class Chain(Cache):
             for step in chain.steps:
                 if isinstance(step, Chain):
                     step.clear_cache(recursive=True)
-        if self._folder is None:
-            return
-        cache = self._chain_folder() / "cache"
-        if cache.exists():
-            shutil.rmtree(cache)
+                elif isinstance(step, Cache):
+                    step.clear_cache()
+        super().clear_cache()
 
     def list_jobs(self) -> list[submitit.Job[tp.Any]]:
         if not isinstance(self.backend, backends._SubmititBackend):

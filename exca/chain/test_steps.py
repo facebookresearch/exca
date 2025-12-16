@@ -16,7 +16,7 @@ import exca
 
 from .steps import Cache, Chain, Step
 
-logging.getLogger("seqexca").setLevel(logging.DEBUG)
+logging.getLogger("exca").setLevel(logging.DEBUG)
 
 
 class Mult(Step):
@@ -93,6 +93,13 @@ def test_cache(tmp_path: Path) -> None:
     seq = Chain(steps=steps, folder=tmp_path)
     out_d = seq.forward()
     assert out_d == pytest.approx(out, abs=1e-9)
+    # clear cache
+    seq.clear_cache(recursive=False)
+    out_d = seq.forward()
+    assert out_d == pytest.approx(out, abs=1e-9)
+    seq.clear_cache(recursive=True)
+    out_d = seq.forward()
+    assert out_d != pytest.approx(out, abs=1e-9)
 
 
 @pytest.mark.parametrize("cluster", ("LocalProcess", "SubmititDebug"))
