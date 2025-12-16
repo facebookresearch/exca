@@ -119,7 +119,11 @@ class FunctionWithInfra(tp.Generic[X]):
     def config(self, **kwargs: tp.Any) -> FuncConfigProtocol[X]:
         return to_config(self.func, infra=self.infra, **kwargs)
 
-    def __call__(self, **kwargs: tp.Any) -> X:
+    def __call__(self, *args: tp.Any, **kwargs: tp.Any) -> X:
+        if args:
+            msg = "Positional arguments are disabled when using exca.helpers.with_infra"
+            msg += f" (got: {args})"
+            raise RuntimeError(msg)
         return self.config(**kwargs).build()
 
     def __repr__(self) -> str:
