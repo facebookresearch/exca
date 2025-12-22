@@ -105,6 +105,8 @@ class Cache(Step):
             with cd.writer() as w:
                 w["result"] = out
             logger.debug("Wrote to cache in folder: %s", cd.folder)
+        else:
+            logger.debug("Result already witten in folder: %s", cd.folder)
         return out
 
 
@@ -251,6 +253,7 @@ class Chain(Cache):
                     break
         out = param
         for step in steps:
+            logger.debug("Applying step %r", step)
             out = (step.forward(*out),)
         out = super().forward(out[0])  # caches
         if self.folder is None:
