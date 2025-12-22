@@ -163,11 +163,17 @@ def test_task_error(tmp_path: Path, use_infra: bool) -> None:
     assert what.infra1.status() == expected
 
 
-def test_task_infra_batch_repeated_config() -> None:
-    whatever = Whatever()
+def test_task_infra_batch_repeated_config(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    whatever = Whatever(infra1={"folder": tmp_path, "cluster": "debug"})
     with pytest.raises(ValueError):
         with whatever.infra1.job_array() as tasks:
             tasks.extend([whatever.infra1.clone_obj({"param1": x % 2}) for x in range(3)])
+    # if allowed, only 2 tasks should be computed
+    with whatever.infra1.job_array(allow_repeated_tasks=True) as tasks:
+        tasks.extend([whatever.infra1.clone_obj({"param1": x % 2}) for x in range(3)])
+    assert "Submitted 2 jobs" in caplog.messages[-1]
 
 
 def test_task_clone() -> None:
