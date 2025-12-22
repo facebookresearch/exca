@@ -48,9 +48,8 @@ class Step(exca.helpers.DiscriminatedModel):
             steps[-1],
             steps[0] if len(steps) == 2 else Chain(steps=tuple(steps[:-1])),
         ]
-        cfgs = [
-            exca.ConfDict.from_model(p, exclude_defaults=True, uid=True) for p in parts
-        ]
+        opts = {"exclude_defaults": True, "uid": True}
+        cfgs = [exca.ConfDict.from_model(p, **opts) for p in parts]
         return "/".join(cfg.to_uid() for cfg in cfgs)
 
     def _unique_param_check(self, param: tuple[tp.Any, ...]) -> tp.Any:
@@ -65,6 +64,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
 class Cache(Step):
     _folder: Path | None = None
+    cache_type: str | None = None
 
     def _chain_folder(self) -> Path:
         if self._folder is None:
@@ -92,7 +92,8 @@ class Cache(Step):
     def _cache_dict(self) -> exca.cachedict.CacheDict[tp.Any]:
         if self._folder is None:
             return exca.cachedict.CacheDict(folder=None, keep_in_ram=True)
-        return exca.cachedict.CacheDict(folder=self._chain_folder() / "cache")
+        folder = self._chain_folder() / "cache"
+        return exca.cachedict.CacheDict(folder=folder, cache_type=self.cache_type)
 
     def _aligned_step(self) -> list[Step]:
         return []
@@ -121,6 +122,12 @@ class Chain(Cache):
     steps: tp.Sequence[_Step] | collections.OrderedDict[str, _Step]
     folder: str | Path | None = None
     backend: backends.Backend | None = None
+
+    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = (
+        "folder",
+        "backend",
+        "cache_type",
+    )
 
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
