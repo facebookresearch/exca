@@ -100,12 +100,21 @@ class Cache(Step):
 
     def forward(self, *param: tp.Any) -> tp.Any:
         out = self._unique_param_check(param)
-        cd = self._cache_dict()
-        if "result" not in cd:
-            with cd.writer() as w:
-                w["result"] = out
-            logger.debug("Wrote to cache in folder: %s", cd.folder)
+        self._dump(out)
         return out
+
+    def _dump(self, value: tp.Any) -> None:
+        # separate function for easy overriding
+        if self._folder is None:
+            logger.debug("Ignoring caching as folder is None")
+            return
+        cd = self._cache_dict()
+        if "result" in cd:
+            logger.debug("Result already witten in folder: %s", cd.folder)
+            return  # do nothing
+        with cd.writer() as w:
+            w["result"] = value
+            logger.debug("Wrote to cache in folder: %s", cd.folder)
 
 
 class Input(Step):
@@ -251,6 +260,7 @@ class Chain(Cache):
                     break
         out = param
         for step in steps:
+            logger.debug("Applying step %r", step)
             out = (step.forward(*out),)
         out = super().forward(out[0])  # caches
         if self.folder is None:
