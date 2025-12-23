@@ -105,13 +105,16 @@ class Cache(Step):
 
     def _dump(self, value: tp.Any) -> None:
         # separate function for easy overriding
+        if self._folder is None:
+            logger.debug("Ignoring caching as folder is None")
+            return
         cd = self._cache_dict()
         if "result" in cd:
             logger.debug("Result already witten in folder: %s", cd.folder)
             return  # do nothing
         with cd.writer() as w:
-            w["result"] = out
-        logger.debug("Wrote to cache in folder: %s", cd.folder)
+            w["result"] = value
+            logger.debug("Wrote to cache in folder: %s", cd.folder)
 
 
 class Input(Step):
