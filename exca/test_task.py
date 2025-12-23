@@ -166,7 +166,8 @@ def test_task_error(tmp_path: Path, use_infra: bool) -> None:
 def test_task_infra_batch_repeated_config(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    whatever = Whatever(infra1={"folder": tmp_path, "cluster": "debug"})
+    infra: tp.Any = {"folder": tmp_path, "cluster": "debug"}
+    whatever = Whatever(infra1=infra)
     with pytest.raises(ValueError):
         with whatever.infra1.job_array() as tasks:
             tasks.extend([whatever.infra1.clone_obj({"param1": x % 2}) for x in range(3)])
