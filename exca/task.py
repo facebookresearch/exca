@@ -181,7 +181,10 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
 
     @contextlib.contextmanager
     def job_array(
-        self, max_workers: int = 256, allow_empty: bool = False
+        self,
+        max_workers: int = 256,
+        allow_empty: bool = False,
+        allow_repeated_tasks: bool = False,
     ) -> tp.Iterator[list[tp.Any]]:
         """Creates a list object to populate
         The tasks in the list will be sent as a job array when exiting the context
@@ -192,6 +195,8 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             maximum number of jobs in the array that can be running at a given time
         allow_empty: bool
             if False, an exception will be raised when exiting the context if the array is still empty
+        allow_repeated_tasks: bool
+            if False (default) a same task should not be repeated twice in the array.
         """
         executor = self.executor()
         tasks: list[tp.Any] = []
@@ -209,8 +214,18 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 for ind in [uid_index[uid], k]:
                     config = infras[ind].config(uid=True, exclude_defaults=True)
                     msg += f"* Config at index {ind}:\n{config.to_yaml()}\n\n"
-                raise ValueError(msg[:-2])
-            uid_index[uid] = k
+                if not allow_repeated_tasks:
+                    msg = (
+                        msg[:-2]
+                        + "\n(this is often due to silent errors, but you can ignore "
+                    )
+                    msg += "at your own risk with job_array(allow_repeated_tasks=True)"
+                    raise ValueError(msg)
+                logger.warning(msg)
+            else:  # only keep the first one if repeated
+                uid_index[uid] = k
+        if allow_repeated_tasks:
+            infras = [infras[k] for k in uid_index.values()]  # filter out repeated tasks
         if executor is None:
             self._computed = True  # to ignore mode retry and forced from now on
             _ = [infra.job() for infra in infras]
