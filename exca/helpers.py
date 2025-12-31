@@ -182,15 +182,16 @@ def validate_kwargs(func: tp.Callable[..., tp.Any], kwargs: tp.Dict[str, tp.Any]
     if not has_kwargs:
         additional = set(kwargs) - set(params.keys())
         if additional:
-            raise ValueError(f"Extra parameter(s) for {func}: {additional}")
+            msg = f"Extra parameter(s) for {func}:\n{additional}"
+            msg += f"\n(available: {set(params) - set(kwargs)})"
+            raise ValueError(msg)
     # check for correct types (only basic ones)
     for name, val in kwargs.items():
         if name in params:  # in case of **kwargs, it may not exist
             annot = params[name].annotation
             if annot in (bool, str, int, float) and not isinstance(val, annot):
-                raise TypeError(
-                    f"Wrong type {type(val)} for {name!r} in {func} (expected {annot})"
-                )
+                msg = f"Wrong type {type(val)} for {name!r} in {func} (expected {annot})"
+                raise TypeError(msg)
 
 
 # only used for typing, this is a bit hacky but convenient
