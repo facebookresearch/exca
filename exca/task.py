@@ -236,9 +236,11 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             name = self.uid().split("/", maxsplit=1)[0]
             # select jobs to run
             statuses: dict[Status, list[TaskInfra]] = collections.defaultdict(list)
+            logger.debug("Checking status of %s tasks", len(infras))
             for i in infras:
                 statuses[i.status()].append(i)
                 i._computed = True
+            logger.debug("Found status: %s", {x: len(y) for x, y in statuses.items()})
             missing = list(statuses["not submitted"])
             to_clear: list[Status] = []
             if self._effective_mode != "cached":
@@ -253,15 +255,13 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             computed = len(infras) - len(missing)
             self._computed = True  # to ignore mode retry and forced from now on
             if not missing:
-                logger.debug(
-                    "No job submitted for %s, all %s jobs already computed/ing in '%s'",
-                    name,
-                    computed,
-                    folder.parent,  # type: ignore
-                )
+                msg = "No job submitted for %s, all %s jobs already computed/ing in '%s'"
+                logger.debug(msg, name, computed, folder.parent)  # type: ignore
                 return
             jobs = []
             with self._work_env(), executor.batch():
+                msg = "Submitting %s jobs to cluster %s"
+                logger.debug(msg, len(missing), executor.cluster)
                 for infra in missing:
                     if infra._infra_method is None:
                         raise RuntimeError("Infra not correctly applied to a method")
