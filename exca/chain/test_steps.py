@@ -146,8 +146,26 @@ def test_final_cache(tmp_path: Path) -> None:  # TODO unclear what happens
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}, "Cache"]
     seq = Chain(steps=steps, folder=tmp_path)
     out = seq.forward(1)
-
     assert out == 15
+
+
+@pytest.mark.parametrize("with_param", (True, False))
+def test_initial_cache(
+    tmp_path: Path, with_param: bool
+) -> None:  # TODO unclear what happens
+    steps: list[tp.Any] = [
+        {"type": "Cache", "folder": tmp_path},
+        {"type": "Add", "value": 12},
+    ]
+    inputs: tp.Any = (np.random.rand(),)
+    if not with_param:
+        steps = [{"type": "RandInput"}] + steps
+        inputs = ()
+    seq = Chain(steps=steps)
+    out = seq.forward(*inputs)
+    out2 = seq.forward(*inputs)
+    assert out2 == out
+    # TODO remove external cache
 
 
 def test_subseq_cache(tmp_path: Path) -> None:
