@@ -140,3 +140,25 @@ def test_error_cache(tmp_path: Path) -> None:
         seq.forward(2)  # error should be cached
     seq.with_input(2).clear_cache()
     assert seq.forward(2) == 21
+
+
+def test_final_cache(tmp_path: Path) -> None:  # TODO unclear what happens
+    steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}, "Cache"]
+    seq = Chain(steps=steps, folder=tmp_path)
+    out = seq.forward(1)
+
+    assert out == 15
+
+
+def test_subseq_cache(tmp_path: Path) -> None:
+    substeps: tp.Any = [
+        {"type": "Mult", "coeff": 3},
+        {"type": "Add", "value": 12},
+        "Cache",
+    ]
+    seq = Chain(steps=[substeps[1], Cache(), {"type": "Chain", "steps": substeps, "folder": tmp_path}], folder=tmp_path)  # type: ignore
+    out = seq.forward(1)
+    assert out == 51
+    expected = "type=Add,value=12-725c0018/input=1,steps=({type=Add,value=12},{coeff=3,type=Mult})-8180d1fd"
+    assert seq.with_input(1)._chain_hash() == expected
+    # confdict export

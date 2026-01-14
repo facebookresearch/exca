@@ -41,7 +41,7 @@ class Step(exca.helpers.DiscriminatedModel):
         # TODO freeze?
         steps = self._aligned_chain()
         if not steps:
-            raise RuntimeError("Something is wrong, no chain for {self!r}")
+            raise RuntimeError(f"Something is wrong, no chain for {self!r}")
         if len(steps) == 1:
             steps = [Cache()] + steps  # add for extra default folder
         parts = [
