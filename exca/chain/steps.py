@@ -184,11 +184,20 @@ class Chain(Cache):
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
         chain = type(self)(steps=steps, folder=self.folder, backend=self.backend)
-        previous = self._previous
-        for step in chain._step_sequence():
-            step._previous = previous
-            previous = step
+        chain._previous = self._previous
+        chain._init()
         return chain
+
+    def _init(self) -> None:
+        previous = self._previous
+        for step in self._step_sequence():
+            step._previous = previous
+            if isinstance(step, Chain):
+                step._init()
+            elif isinstance(step, Cache):
+                if step.folder is None:
+                    step.folder = self.folder
+            previous = step
 
     def forward(self, *params: tp.Any) -> tp.Any:
         # get initial parameter (used for caching)
