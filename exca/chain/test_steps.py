@@ -142,11 +142,18 @@ def test_error_cache(tmp_path: Path) -> None:
     assert seq.forward(2) == 21
 
 
+def _extract_caches(folder: Path) -> tuple[str, ...]:
+    caches = sorted(str(x.relative_to(folder))[:-6] for x in folder.rglob("**/cache"))
+    assert not any("type=Cache" in x for x in caches), f"Bad caches {caches}"
+    return tuple(caches)
+
+
 def test_final_cache(tmp_path: Path) -> None:  # TODO unclear what happens
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}, "Cache"]
     seq = Chain(steps=steps, folder=tmp_path)
     out = seq.forward(1)
     assert out == 15
+    _ = _extract_caches(tmp_path)
 
 
 @pytest.mark.parametrize("with_param", (True, False))
@@ -165,7 +172,7 @@ def test_initial_cache(
     out = seq.forward(*inputs)
     out2 = seq.forward(*inputs)
     assert out2 == out
-    # TODO remove external cache
+    _ = _extract_caches(tmp_path)
 
 
 def test_subseq_cache(tmp_path: Path) -> None:
@@ -179,4 +186,4 @@ def test_subseq_cache(tmp_path: Path) -> None:
     assert out == 51
     expected = "type=Add,value=12-725c0018/input=1,steps=({type=Add,value=12},{coeff=3,type=Mult})-8180d1fd"
     assert seq.with_input(1)._chain_hash() == expected
-    # confdict export
+    _ = _extract_caches(tmp_path)
