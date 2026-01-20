@@ -233,6 +233,9 @@ class ConfDict(dict[str, tp.Any]):
         """
         return _flatten(self)  # type: ignore
 
+    def copy(self) -> "ConfDict":
+        return self.__class__(super().copy())
+
     @classmethod
     def from_yaml(cls, yaml: str | Path | tp.IO[str] | tp.IO[bytes]) -> "ConfDict":
         """Loads a ConfDict from a yaml string/filepath/file handle."""

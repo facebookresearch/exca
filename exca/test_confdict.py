@@ -106,6 +106,12 @@ def test_get_on_list() -> None:
     assert data["a.1.b"] == 13
 
 
+def test_copy() -> None:
+    data = ConfDict({"a": 12})
+    copied = data.copy()
+    assert isinstance(copied, ConfDict)
+
+
 def test_del() -> None:
     data = ConfDict({"a": 1, "b": {"c": {"e": 12}, "d": 13}})
     del data["b.c.e"]
