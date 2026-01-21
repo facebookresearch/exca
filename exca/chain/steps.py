@@ -177,9 +177,7 @@ class Chain(Cache):
         """
         if self._previous is not None:
             raise RuntimeError("Cannot set input while already having a previous step")
-        steps: list[tp.Any] = [
-            s.model_dump(serialize_as_any=True) for s in self._step_sequence()
-        ]
+        steps: list[tp.Any] = [s.model_dump() for s in self._step_sequence()]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
         chain = type(self)(steps=steps, folder=self.folder, backend=self.backend)
