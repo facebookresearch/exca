@@ -9,6 +9,7 @@ import typing as tp
 from pathlib import Path
 
 import numpy as np
+import pydantic
 import pytest
 import submitit
 
@@ -187,3 +188,23 @@ def test_subseq_cache(tmp_path: Path) -> None:
     expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     assert seq.with_input(1)._chain_hash() == expected
     _ = _extract_caches(tmp_path)
+
+
+class Xp(pydantic.BaseModel):
+    steps: Step
+    infra: exca.TaskInfra = exca.TaskInfra()
+
+    @infra.apply
+    def run(self) -> float:
+        return self.steps.forward(12)
+
+
+def test_step_in_xp(tmp_path: Path) -> None:
+    steps = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
+    chain: tp.Any = {"type": "Chain", "steps": steps, "folder": tmp_path / "steps"}
+    infra: tp.Any = {"folder": tmp_path / "cache"}
+    xp = Xp(steps=chain, infra=infra)
+    uid = xp.infra.uid()
+    expected = "exca.chain.test_steps.Xp.run,0/steps.steps=({coeff=3,type=Mult},{type=Add,value=12})-2f739f76"
+    assert uid == expected
+    assert xp.run() == 48
