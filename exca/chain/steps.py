@@ -36,22 +36,6 @@ class Step(exca.helpers.DiscriminatedModel):
         base = [] if self._previous is None else self._previous._aligned_chain()
         return base + self._aligned_step()
 
-    def _chain_hash(self) -> str:
-        """hash of form last_step/sequence_of_prev_steps"""
-        # TODO freeze?
-        steps = self._aligned_chain()
-        if not steps:
-            raise RuntimeError(f"Something is wrong, no chain for {self!r}")
-        if len(steps) == 1:
-            steps = [Cache()] + steps  # add for extra default folder
-        parts = [
-            steps[-1],
-            steps[0] if len(steps) == 2 else Chain(steps=tuple(steps[:-1])),
-        ]
-        opts = {"exclude_defaults": True, "uid": True}
-        cfgs = [exca.ConfDict.from_model(p, **opts) for p in parts]
-        return "/".join(cfg.to_uid() for cfg in cfgs)
-
     def _unique_param_check(self, param: tuple[tp.Any, ...]) -> tp.Any:
         if len(param) != 1:
             msg = f"In {self!r}.forward, exactly 1 parameter is allowed, got {param}"
@@ -72,6 +56,16 @@ class Cache(Step):
         folder = self.folder / self._chain_hash()
         folder.mkdir(exist_ok=True, parents=True)  # TODO permissions
         return folder
+
+    def _chain_hash(self) -> str:
+        """hash of form last_step/sequence_of_prev_steps"""
+        # TODO freeze?
+        steps = self._aligned_chain()
+        if not steps:
+            raise RuntimeError(f"Something is wrong, no chain for {self!r}")
+        opts = {"exclude_defaults": True, "uid": True}
+        cfgs = [exca.ConfDict.from_model(s, **opts) for s in steps]
+        return "/".join(cfg.to_uid() for cfg in cfgs)
 
     def cached(self) -> tp.Any:
         cd = self._cache_dict()

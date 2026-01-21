@@ -55,7 +55,7 @@ def test_multi_sequence_hash() -> None:
     seq = Chain(steps=[steps[1], Cache(), {"type": "Chain", "steps": steps}])  # type: ignore
     out = seq.forward(1)
     assert out == 51
-    expected = "type=Add,value=12-725c0018/input=1,steps=({type=Add,value=12},{coeff=3,type=Mult})-8180d1fd"
+    expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     assert seq.with_input(1)._chain_hash() == expected
     # confdict export
     yaml = exca.ConfDict.from_model(seq, uid=True, exclude_defaults=True).to_yaml()
@@ -184,6 +184,6 @@ def test_subseq_cache(tmp_path: Path) -> None:
     seq = Chain(steps=[substeps[1], Cache(), {"type": "Chain", "steps": substeps, "folder": tmp_path}], folder=tmp_path)  # type: ignore
     out = seq.forward(1)
     assert out == 51
-    expected = "type=Add,value=12-725c0018/input=1,steps=({type=Add,value=12},{coeff=3,type=Mult})-8180d1fd"
+    expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     assert seq.with_input(1)._chain_hash() == expected
     _ = _extract_caches(tmp_path)
