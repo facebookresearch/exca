@@ -123,7 +123,7 @@ _Step = pydantic.SerializeAsAny[Step]
 
 class Chain(Cache):
     steps: tp.Sequence[_Step] | collections.OrderedDict[str, _Step]
-    folder: str | Path | None = None
+    folder: Path | None = None
     backend: backends.Backend | None = None
 
     _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = (
