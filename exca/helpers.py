@@ -387,11 +387,17 @@ class DiscriminatedModel(pydantic.BaseModel):
         missing_fields = cls_fields - result_fields
         for name in missing_fields:
             value = getattr(self, name)
+            # Check if should exclude unset (field not explicitly provided)
+            if info.exclude_unset and name not in self.model_fields_set:
+                continue
             # Check if should exclude default
             if info.exclude_defaults:
                 field_info = cls.model_fields[name]
                 if not field_info.is_required() and value == field_info.default:
                     continue
+            # Check if should exclude None values
+            if info.exclude_none and value is None:
+                continue
             # Serialize sub-models properly
             if isinstance(value, pydantic.BaseModel):
                 value = value.model_dump(

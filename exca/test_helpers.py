@@ -145,23 +145,27 @@ def test_discriminated_model_bad_field() -> None:
 
 
 @pytest.mark.parametrize("with_params", (True, False))
-def test_discriminated_model_serialize_as_any(with_params: bool) -> None:
+@pytest.mark.parametrize("exclude_defaults", (True, False))
+@pytest.mark.parametrize("exclude_unset", (True, False))
+def test_discriminated_model_serialize_as_any(
+    with_params: bool, exclude_unset: bool, exclude_defaults: bool
+) -> None:
     """Test that DiscriminatedModel serializes all fields without needing serialize_as_any=True."""
+    info = {"exclude_defaults": exclude_defaults, "exclude_unset": exclude_unset}
     params: tp.Any = {"name": "Hello"}
     if with_params:
         params["num"] = 13
     model = Model(sub=params)
-    dump = model.model_dump()["sub"]
-    expected = model.sub.model_dump()
-    # Both should have the discriminator key
-    assert "name" in dump
+    # the model dump as actual type
+    expected = model.sub.model_dump(**info)
     assert "name" in expected
-    # num should be in both (it's a Hello field)
-    assert "num" in dump
+    if with_params or not (exclude_defaults or exclude_unset):
+        assert "num" in expected
+    if not (exclude_defaults or exclude_unset):
+        assert "common" in expected
+    # now the dump through model should hact the same
+    dump = model.model_dump(**info)["sub"]
     assert dump == expected
-    # Verify serialize_as_any=False also works (the whole point of this change)
-    dump_no_any = model.model_dump(serialize_as_any=False)["sub"]
-    assert dump_no_any == expected
 
 
 class DiscriminatedWithInfra(BaseNamed):
