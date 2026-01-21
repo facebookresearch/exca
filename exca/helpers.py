@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextvars
 import inspect
 import logging
 import shutil
@@ -13,6 +14,11 @@ from pathlib import Path
 
 import pydantic
 import submitit
+
+# Context variable to track if we're already in the DiscriminatedModel serializer
+_discriminated_serializing: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_discriminated_serializing", default=False
+)
 
 from exca.confdict import ConfDict
 from exca.task import TaskInfra
@@ -377,39 +383,30 @@ class DiscriminatedModel(pydantic.BaseModel):
         serialization, even when the type hint is the base class. This allows
         proper round-trip serialization/deserialization of discriminated models
         without requiring `serialize_as_any=True` globally.
-        """
-        result: dict[str, tp.Any] = handler(self)
-        cls = type(self)
-        cls_fields = set(cls.model_fields.keys())
-        result_fields = set(result.keys()) if isinstance(result, dict) else set()
 
-        # Add missing fields from actual runtime type
-        missing_fields = cls_fields - result_fields
-        for name in missing_fields:
-            value = getattr(self, name)
-            # Check if should exclude unset (field not explicitly provided)
-            if info.exclude_unset and name not in self.model_fields_set:
-                continue
-            # Check if should exclude default
-            if info.exclude_defaults:
-                field_info = cls.model_fields[name]
-                if not field_info.is_required() and value == field_info.default:
-                    continue
-            # Check if should exclude None values
-            if info.exclude_none and value is None:
-                continue
-            # Serialize sub-models properly
-            if isinstance(value, pydantic.BaseModel):
-                value = value.model_dump(
-                    mode=info.mode or "python",
-                    exclude_defaults=info.exclude_defaults,
-                    exclude_none=info.exclude_none,
-                    exclude_unset=info.exclude_unset,
-                    by_alias=info.by_alias,
-                )
-            result[name] = value
+        Uses a context variable to detect recursion and delegates to model_dump
+        with serialize_as_any=True for the actual serialization.
+        """
+        # Check if we're already serializing (recursive call from model_dump below)
+        if _discriminated_serializing.get():
+            return handler(self)
+
+        # Set flag and use model_dump with serialize_as_any=True
+        token = _discriminated_serializing.set(True)
+        try:
+            result = self.model_dump(
+                mode=info.mode or "python",
+                exclude_defaults=info.exclude_defaults,
+                exclude_none=info.exclude_none,
+                exclude_unset=info.exclude_unset,
+                by_alias=info.by_alias,
+                serialize_as_any=True,
+            )
+        finally:
+            _discriminated_serializing.reset(token)
 
         # Inject discriminator key
+        cls = type(self)
         key = cls._exca_discriminator_key
         name = cls.__name__
         result.setdefault(key, name)
