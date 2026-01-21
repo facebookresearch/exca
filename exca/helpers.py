@@ -332,8 +332,11 @@ def _get_subclasses(cls: tp.Type[X]) -> list[tp.Type[X]]:
     return subclasses
 
 
-# Context variable to track if we're already in the DiscriminatedModel serializer
-_dumping: contextvars.ContextVar[bool] = contextvars.ContextVar("_dumping", default=False)
+# Context variable to track which instances are currently being serialized (to avoid recursion)
+# Uses object IDs so nested DiscriminatedModels each get their discriminator key
+_dumping_ids: contextvars.ContextVar[tp.FrozenSet[int]] = contextvars.ContextVar(
+    "_dumping_ids", default=frozenset()
+)
 
 
 class DiscriminatedModel(pydantic.BaseModel):
@@ -382,16 +385,17 @@ class DiscriminatedModel(pydantic.BaseModel):
         serialization, even when the type hint is the base class. This allows
         proper round-trip serialization/deserialization of discriminated models
         without requiring `serialize_as_any=True` globally.
-
-        Uses a context variable to detect recursion and delegates to model_dump
-        with serialize_as_any=True for the actual serialization.
         """
-        # Check if we're already serializing (recursive call from model_dump below)
-        if _dumping.get():
+        # Check if THIS instance is already being serialized (recursive call from model_dump below)
+        my_id = id(self)
+        current_ids = _dumping_ids.get()
+        if my_id in current_ids:
+            # delegates to model_dump with serialize_as_any=True
+            # for the actual serialization.
             return handler(self)
 
-        # Set flag and use model_dump with serialize_as_any=True
-        token = _dumping.set(True)
+        # Set flag for this instance and use model_dump with serialize_as_any=True
+        token = _dumping_ids.set(current_ids | {my_id})
         try:
             result = self.model_dump(
                 mode=info.mode or "python",
@@ -402,7 +406,7 @@ class DiscriminatedModel(pydantic.BaseModel):
                 serialize_as_any=True,
             )
         finally:
-            _dumping.reset(token)
+            _dumping_ids.reset(token)
 
         # Inject discriminator key
         cls = type(self)
