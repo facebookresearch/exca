@@ -144,6 +144,19 @@ def test_discriminated_model_bad_field() -> None:
             type: str = "stuff"
 
 
+@pytest.mark.parametrize("with_params", (True, False))
+def test_discriminated_model_serialize_as_any(with_params: bool) -> None:
+    params: tp.Any = {"name": "Hello"}
+    if with_params:
+        params["num"] = 13
+    model = Model(sub=params)
+    dump = model.model_dump()["sub"]
+    expected = model.sub.model_dump()
+    assert "name" in expected
+    assert "num" in expected
+    assert dump == expected
+
+
 class DiscriminatedWithInfra(BaseNamed):
     string: str = "world"
     infra: exca.MapInfra = exca.MapInfra()
