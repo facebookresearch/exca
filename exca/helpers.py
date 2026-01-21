@@ -281,9 +281,8 @@ def find_slurm_job(
         if not sub.is_dir():
             continue
         if folder.parent.name == "logs":
-            if all(
-                x.isdigit() for x in sub.name.split("_")
-            ):  # looks like a submitit job folder
+            # looks like a submitit job folder:
+            if all(x.isdigit() for x in sub.name.split("_")):
                 if any(sub.glob("*_submitted.pkl")):  # definitely is one
                     return None  # stop iteratoring through this log folder
         job = find_slurm_job(folder=sub, job_id=job_id)
