@@ -86,9 +86,7 @@ class ConfigExporter(pydantic.BaseModel):
     def apply(self, model: pydantic.BaseModel) -> dict[str, tp.Any]:
         if self.exclude_defaults:
             _set_discriminated_status(model)
-        out = model.model_dump(
-            exclude_defaults=self.exclude_defaults, mode="json", serialize_as_any=True
-        )
+        out = model.model_dump(exclude_defaults=self.exclude_defaults, mode="json")
         self._post_process_dump(model, out)
         return out
 

@@ -144,6 +144,30 @@ def test_discriminated_model_bad_field() -> None:
             type: str = "stuff"
 
 
+@pytest.mark.parametrize("with_params", (True, False))
+@pytest.mark.parametrize("exclude_defaults", (True, False))
+@pytest.mark.parametrize("exclude_unset", (True, False))
+def test_discriminated_model_serialize_as_any(
+    with_params: bool, exclude_unset: bool, exclude_defaults: bool
+) -> None:
+    """Test that DiscriminatedModel serializes all fields without needing serialize_as_any=True."""
+    info: tp.Any = {"exclude_defaults": exclude_defaults, "exclude_unset": exclude_unset}
+    params: tp.Any = {"name": "Hello"}
+    if with_params:
+        params["num"] = 13
+    model = Model(sub=params)
+    # the model dump as actual type
+    expected = model.sub.model_dump(**info)
+    assert "name" in expected
+    if with_params or not (exclude_defaults or exclude_unset):
+        assert "num" in expected
+    if not (exclude_defaults or exclude_unset):
+        assert "common" in expected
+    # now the dump through model should hact the same
+    dump = model.model_dump(**info)["sub"]
+    assert dump == expected
+
+
 class DiscriminatedWithInfra(BaseNamed):
     string: str = "world"
     infra: exca.MapInfra = exca.MapInfra()

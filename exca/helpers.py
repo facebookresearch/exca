@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextvars
 import inspect
 import logging
 import shutil
@@ -281,9 +282,8 @@ def find_slurm_job(
         if not sub.is_dir():
             continue
         if folder.parent.name == "logs":
-            if all(
-                x.isdigit() for x in sub.name.split("_")
-            ):  # looks like a submitit job folder
+            # looks like a submitit job folder:
+            if all(x.isdigit() for x in sub.name.split("_")):
                 if any(sub.glob("*_submitted.pkl")):  # definitely is one
                     return None  # stop iteratoring through this log folder
         job = find_slurm_job(folder=sub, job_id=job_id)
@@ -332,6 +332,13 @@ def _get_subclasses(cls: tp.Type[X]) -> list[tp.Type[X]]:
     return subclasses
 
 
+# Context variable to track which instances are currently being serialized (to avoid recursion)
+# Uses object IDs so nested DiscriminatedModels each get their discriminator key
+_dumping_ids: contextvars.ContextVar[tp.FrozenSet[int]] = contextvars.ContextVar(
+    "_dumping_ids", default=frozenset()
+)
+
+
 class DiscriminatedModel(pydantic.BaseModel):
     """Preserves the types of child class instance passed in pydantic
     models during serialization and de-serialization. This is achieved
@@ -368,16 +375,48 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     @pydantic.model_serializer(mode="wrap")
     def _inject_type_on_serialization(
-        self, handler: pydantic.ValidatorFunctionWrapHandler
+        self,
+        handler: pydantic.SerializerFunctionWrapHandler,
+        info: pydantic.SerializationInfo,
     ) -> dict[str, tp.Any]:
-        result: dict[str, tp.Any] = handler(self)
-        key = self._exca_discriminator_key
-        name = self.__class__.__name__
+        """Serialize as the actual runtime type (serialize_as_any behavior).
+
+        This ensures all fields from the actual subclass are included in the
+        serialization, even when the type hint is the base class. This allows
+        proper round-trip serialization/deserialization of discriminated models
+        without requiring `serialize_as_any=True` globally.
+        """
+        # Check if THIS instance is already being serialized (recursive call from model_dump below)
+        my_id = id(self)
+        current_ids = _dumping_ids.get()
+        if my_id in current_ids:
+            # delegates to model_dump with serialize_as_any=True
+            # for the actual serialization.
+            return handler(self)
+
+        # Set flag for this instance and use model_dump with serialize_as_any=True
+        token = _dumping_ids.set(current_ids | {my_id})
+        try:
+            result = self.model_dump(
+                mode=info.mode or "python",
+                exclude_defaults=info.exclude_defaults,
+                exclude_none=info.exclude_none,
+                exclude_unset=info.exclude_unset,
+                by_alias=info.by_alias,
+                serialize_as_any=True,
+            )
+        finally:
+            _dumping_ids.reset(token)
+
+        # Inject discriminator key
+        cls = type(self)
+        key = cls._exca_discriminator_key
+        name = cls.__name__
         result.setdefault(key, name)
         # serialization can be reentrant in some pydantic version (not sure why)
         # so the field may be prepopulated
         if result[key] != name:
-            msg = f"Field {key!r} in {self.__class__} has unexpected value {result[key]}"
+            msg = f"Field {key!r} in {cls} has unexpected value {result[key]}"
             raise ValueError(msg)
         return result
 
