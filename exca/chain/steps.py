@@ -135,13 +135,6 @@ class Chain(Cache):
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
         self.folder = None if self.folder is None else Path(self.folder)
-        if self.folder is not None:
-            if self.backend is not None:
-                self.backend._folder = self.folder
-            for step in self._step_sequence():
-                if isinstance(step, Cache):
-                    if step.folder is None:
-                        step.folder = self.folder
         if not self.steps:
             raise ValueError("steps cannot be empty")
 
@@ -184,6 +177,8 @@ class Chain(Cache):
 
     def _init(self) -> None:
         previous = self._previous
+        if self.backend is not None:
+            self.backend._folder = self.folder
         for step in self._step_sequence():
             step._previous = previous
             if isinstance(step, Chain):
