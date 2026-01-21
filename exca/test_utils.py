@@ -464,9 +464,8 @@ def test_fast_unlink(tmp_path: Path) -> None:
 class ComplexTypesConfig(BaseModel):
     x: pydantic.DirectoryPath = Path("/")
     y: datetime.timedelta = datetime.timedelta(minutes=1)
-    z: pydantic.ImportString = (
-        ConfDict  # ImportString now works (serialize_as_any removed)
-    )
+    # ImportString needs to work (serialize_as_any=False in model_dump)
+    z: pydantic.ImportString = ConfDict
 
 
 def test_complex_types() -> None:
