@@ -464,7 +464,9 @@ def test_fast_unlink(tmp_path: Path) -> None:
 class ComplexTypesConfig(BaseModel):
     x: pydantic.DirectoryPath = Path("/")
     y: datetime.timedelta = datetime.timedelta(minutes=1)
-    # z: pydantic.ImportString = ConfDict  # support dropped because of serialize_as_any
+    z: pydantic.ImportString = (
+        ConfDict  # ImportString now works (serialize_as_any removed)
+    )
 
 
 def test_complex_types() -> None:
@@ -472,9 +474,10 @@ def test_complex_types() -> None:
     out = ConfDict.from_model(c, uid=True, exclude_defaults=False)
     expected = """x: /
 y: PT1M
+z: exca.confdict.ConfDict
 """
     assert out.to_yaml() == expected
-    assert out.to_uid().startswith("x=-,y=PT1M")
+    assert out.to_uid().startswith("x=-,y=PT1M,z=exca.confdict.ConfDict")
 
 
 class BasicP(pydantic.BaseModel):

@@ -367,16 +367,50 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     @pydantic.model_serializer(mode="wrap")
     def _inject_type_on_serialization(
-        self, handler: pydantic.ValidatorFunctionWrapHandler
+        self,
+        handler: pydantic.SerializerFunctionWrapHandler,
+        info: pydantic.SerializationInfo,
     ) -> dict[str, tp.Any]:
+        """Serialize as the actual runtime type (serialize_as_any behavior).
+
+        This ensures all fields from the actual subclass are included in the
+        serialization, even when the type hint is the base class. This allows
+        proper round-trip serialization/deserialization of discriminated models
+        without requiring `serialize_as_any=True` globally.
+        """
         result: dict[str, tp.Any] = handler(self)
-        key = self._exca_discriminator_key
-        name = self.__class__.__name__
+        cls = type(self)
+        cls_fields = set(cls.model_fields.keys())
+        result_fields = set(result.keys()) if isinstance(result, dict) else set()
+
+        # Add missing fields from actual runtime type
+        missing_fields = cls_fields - result_fields
+        for name in missing_fields:
+            value = getattr(self, name)
+            # Check if should exclude default
+            if info.exclude_defaults:
+                field_info = cls.model_fields[name]
+                if not field_info.is_required() and value == field_info.default:
+                    continue
+            # Serialize sub-models properly
+            if isinstance(value, pydantic.BaseModel):
+                value = value.model_dump(
+                    mode=info.mode or "python",
+                    exclude_defaults=info.exclude_defaults,
+                    exclude_none=info.exclude_none,
+                    exclude_unset=info.exclude_unset,
+                    by_alias=info.by_alias,
+                )
+            result[name] = value
+
+        # Inject discriminator key
+        key = cls._exca_discriminator_key
+        name = cls.__name__
         result.setdefault(key, name)
         # serialization can be reentrant in some pydantic version (not sure why)
         # so the field may be prepopulated
         if result[key] != name:
-            msg = f"Field {key!r} in {self.__class__} has unexpected value {result[key]}"
+            msg = f"Field {key!r} in {cls} has unexpected value {result[key]}"
             raise ValueError(msg)
         return result
 
