@@ -15,11 +15,6 @@ from pathlib import Path
 import pydantic
 import submitit
 
-# Context variable to track if we're already in the DiscriminatedModel serializer
-_discriminated_serializing: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "_discriminated_serializing", default=False
-)
-
 from exca.confdict import ConfDict
 from exca.task import TaskInfra
 
@@ -337,6 +332,10 @@ def _get_subclasses(cls: tp.Type[X]) -> list[tp.Type[X]]:
     return subclasses
 
 
+# Context variable to track if we're already in the DiscriminatedModel serializer
+_dumping: contextvars.ContextVar[bool] = contextvars.ContextVar("_dumping", default=False)
+
+
 class DiscriminatedModel(pydantic.BaseModel):
     """Preserves the types of child class instance passed in pydantic
     models during serialization and de-serialization. This is achieved
@@ -388,11 +387,11 @@ class DiscriminatedModel(pydantic.BaseModel):
         with serialize_as_any=True for the actual serialization.
         """
         # Check if we're already serializing (recursive call from model_dump below)
-        if _discriminated_serializing.get():
+        if _dumping.get():
             return handler(self)
 
         # Set flag and use model_dump with serialize_as_any=True
-        token = _discriminated_serializing.set(True)
+        token = _dumping.set(True)
         try:
             result = self.model_dump(
                 mode=info.mode or "python",
@@ -403,7 +402,7 @@ class DiscriminatedModel(pydantic.BaseModel):
                 serialize_as_any=True,
             )
         finally:
-            _discriminated_serializing.reset(token)
+            _dumping.reset(token)
 
         # Inject discriminator key
         cls = type(self)

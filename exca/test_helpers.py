@@ -151,7 +151,7 @@ def test_discriminated_model_serialize_as_any(
     with_params: bool, exclude_unset: bool, exclude_defaults: bool
 ) -> None:
     """Test that DiscriminatedModel serializes all fields without needing serialize_as_any=True."""
-    info = {"exclude_defaults": exclude_defaults, "exclude_unset": exclude_unset}
+    info: tp.Any = {"exclude_defaults": exclude_defaults, "exclude_unset": exclude_unset}
     params: tp.Any = {"name": "Hello"}
     if with_params:
         params["num"] = 13
