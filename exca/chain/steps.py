@@ -36,22 +36,6 @@ class Step(exca.helpers.DiscriminatedModel):
         base = [] if self._previous is None else self._previous._aligned_chain()
         return base + self._aligned_step()
 
-    def _chain_hash(self) -> str:
-        """hash of form last_step/sequence_of_prev_steps"""
-        # TODO freeze?
-        steps = self._aligned_chain()
-        if not steps:
-            raise RuntimeError("Something is wrong, no chain for {self!r}")
-        if len(steps) == 1:
-            steps = [Cache()] + steps  # add for extra default folder
-        parts = [
-            steps[-1],
-            steps[0] if len(steps) == 2 else Chain(steps=tuple(steps[:-1])),
-        ]
-        opts = {"exclude_defaults": True, "uid": True}
-        cfgs = [exca.ConfDict.from_model(p, **opts) for p in parts]
-        return "/".join(cfg.to_uid() for cfg in cfgs)
-
     def _unique_param_check(self, param: tuple[tp.Any, ...]) -> tp.Any:
         if len(param) != 1:
             msg = f"In {self!r}.forward, exactly 1 parameter is allowed, got {param}"
@@ -63,15 +47,25 @@ class Step(exca.helpers.DiscriminatedModel):
 
 
 class Cache(Step):
-    _folder: Path | None = None
+    folder: Path | None = None
     cache_type: str | None = None
 
     def _chain_folder(self) -> Path:
-        if self._folder is None:
+        if self.folder is None:
             raise RuntimeError("No folder provided")
-        folder = self._folder / self._chain_hash()
+        folder = self.folder / self._chain_hash()
         folder.mkdir(exist_ok=True, parents=True)  # TODO permissions
         return folder
+
+    def _chain_hash(self) -> str:
+        """hash of form last_step/sequence_of_prev_steps"""
+        # TODO freeze?
+        steps = self._aligned_chain()
+        if not steps:
+            raise RuntimeError(f"Something is wrong, no chain for {self!r}")
+        opts = {"exclude_defaults": True, "uid": True}
+        cfgs = [exca.ConfDict.from_model(s, **opts) for s in steps]
+        return "/".join(cfg.to_uid() for cfg in cfgs)
 
     def cached(self) -> tp.Any:
         cd = self._cache_dict()
@@ -81,7 +75,7 @@ class Cache(Step):
         return NoValue()
 
     def clear_cache(self) -> None:
-        if self._folder is None:
+        if self.folder is None:
             logger.warning("Trying to clear cache, but no folder provided")
             return
         cache = self._chain_folder() / "cache"
@@ -90,7 +84,7 @@ class Cache(Step):
             shutil.rmtree(cache)
 
     def _cache_dict(self) -> exca.cachedict.CacheDict[tp.Any]:
-        if self._folder is None:
+        if self.folder is None:
             return exca.cachedict.CacheDict(folder=None, keep_in_ram=True)
         folder = self._chain_folder() / "cache"
         return exca.cachedict.CacheDict(folder=folder, cache_type=self.cache_type)
@@ -105,7 +99,7 @@ class Cache(Step):
 
     def _dump(self, value: tp.Any) -> None:
         # separate function for easy overriding
-        if self._folder is None:
+        if self.folder is None:
             logger.debug("Ignoring caching as folder is None")
             return
         cd = self._cache_dict()
@@ -129,7 +123,7 @@ _Step = pydantic.SerializeAsAny[Step]
 
 class Chain(Cache):
     steps: tp.Sequence[_Step] | collections.OrderedDict[str, _Step]
-    folder: str | Path | None = None
+    folder: Path | None = None
     backend: backends.Backend | None = None
 
     _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = (
@@ -140,13 +134,7 @@ class Chain(Cache):
 
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
-        self._folder = None if self.folder is None else Path(self.folder)
-        if self._folder is not None:
-            if self.backend is not None:
-                self.backend._folder = self._folder
-            for step in self._step_sequence():
-                if isinstance(step, Cache):
-                    step._folder = self._folder
+        self.folder = None if self.folder is None else Path(self.folder)
         if not self.steps:
             raise ValueError("steps cannot be empty")
 
@@ -181,11 +169,22 @@ class Chain(Cache):
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
         chain = type(self)(steps=steps, folder=self.folder, backend=self.backend)
-        previous = self._previous
-        for step in chain._step_sequence():
-            step._previous = previous
-            previous = step
+        chain._previous = self._previous
+        chain._init()
         return chain
+
+    def _init(self) -> None:
+        previous = self._previous
+        if self.backend is not None:
+            self.backend._folder = self.folder
+        for step in self._step_sequence():
+            step._previous = previous
+            if isinstance(step, Chain):
+                step._init()
+            elif isinstance(step, Cache):
+                if step.folder is None:
+                    step.folder = self.folder
+            previous = step
 
     def forward(self, *params: tp.Any) -> tp.Any:
         # get initial parameter (used for caching)

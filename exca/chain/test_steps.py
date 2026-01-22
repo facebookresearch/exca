@@ -9,6 +9,7 @@ import typing as tp
 from pathlib import Path
 
 import numpy as np
+import pydantic
 import pytest
 import submitit
 
@@ -55,7 +56,7 @@ def test_multi_sequence_hash() -> None:
     seq = Chain(steps=[steps[1], Cache(), {"type": "Chain", "steps": steps}])  # type: ignore
     out = seq.forward(1)
     assert out == 51
-    expected = "type=Add,value=12-725c0018/input=1,steps=({type=Add,value=12},{coeff=3,type=Mult})-8180d1fd"
+    expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     assert seq.with_input(1)._chain_hash() == expected
     # confdict export
     yaml = exca.ConfDict.from_model(seq, uid=True, exclude_defaults=True).to_yaml()
@@ -140,3 +141,70 @@ def test_error_cache(tmp_path: Path) -> None:
         seq.forward(2)  # error should be cached
     seq.with_input(2).clear_cache()
     assert seq.forward(2) == 21
+
+
+def _extract_caches(folder: Path) -> tuple[str, ...]:
+    caches = sorted(str(x.relative_to(folder))[:-6] for x in folder.rglob("**/cache"))
+    assert not any("type=Cache" in x for x in caches), f"Bad caches {caches}"
+    return tuple(caches)
+
+
+def test_final_cache(tmp_path: Path) -> None:  # TODO unclear what happens
+    steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}, "Cache"]
+    seq = Chain(steps=steps, folder=tmp_path)
+    out = seq.forward(1)
+    assert out == 15
+    _ = _extract_caches(tmp_path)
+
+
+@pytest.mark.parametrize("with_param", (True, False))
+def test_initial_cache(
+    tmp_path: Path, with_param: bool
+) -> None:  # TODO unclear what happens
+    steps: list[tp.Any] = [
+        {"type": "Cache", "folder": tmp_path},
+        {"type": "Add", "value": 12},
+    ]
+    inputs: tp.Any = (np.random.rand(),)
+    if not with_param:
+        steps = [{"type": "RandInput"}] + steps
+        inputs = ()
+    seq = Chain(steps=steps)
+    out = seq.forward(*inputs)
+    out2 = seq.forward(*inputs)
+    assert out2 == out
+    _ = _extract_caches(tmp_path)
+
+
+def test_subseq_cache(tmp_path: Path) -> None:
+    substeps: tp.Any = [
+        {"type": "Mult", "coeff": 3},
+        {"type": "Add", "value": 12},
+        "Cache",
+    ]
+    seq = Chain(steps=[substeps[1], Cache(), {"type": "Chain", "steps": substeps, "folder": tmp_path}], folder=tmp_path)  # type: ignore
+    out = seq.forward(1)
+    assert out == 51
+    expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
+    assert seq.with_input(1)._chain_hash() == expected
+    _ = _extract_caches(tmp_path)
+
+
+class Xp(pydantic.BaseModel):
+    steps: Step
+    infra: exca.TaskInfra = exca.TaskInfra()
+
+    @infra.apply
+    def run(self) -> float:
+        return self.steps.forward(12)
+
+
+def test_step_in_xp(tmp_path: Path) -> None:
+    steps = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
+    chain: tp.Any = {"type": "Chain", "steps": steps, "folder": tmp_path / "steps"}
+    infra: tp.Any = {"folder": tmp_path / "cache"}
+    xp = Xp(steps=chain, infra=infra)
+    uid = xp.infra.uid()
+    expected = "exca.chain.test_steps.Xp.run,0/steps.steps=({coeff=3,type=Mult},{type=Add,value=12})-2f739f76"
+    assert uid == expected
+    assert xp.run() == 48
