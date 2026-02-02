@@ -225,13 +225,35 @@ class Chain(Cache):
                     step.folder = self.folder
             previous = step
         # Second pass: clear caches from first force onwards
+        # Subchains already handled their own caches in first pass via _init()
+        # We only need to clear this chain's direct Cache steps and propagate force_found
         if not self._computed:
-            force_found = False
-            for step in self._aligned_chain(with_cache=True):
-                if isinstance(step, Cache):
+            force_found = self.mode == "force"
+            for step in self._step_sequence():
+                if isinstance(step, Chain):
+                    # Check if subchain has force anywhere (recursively)
+                    # Don't clear - subchain's _init() already handled it
+                    force_found |= step._has_force()
+                elif isinstance(step, Cache):
                     force_found |= step.mode == "force"
                     if force_found:
-                        Cache.clear_cache(step)
+                        step.clear_cache()
+            # Also clear the chain's own cache if force was found
+            if force_found:
+                Cache.clear_cache(self)
+
+    def _has_force(self) -> bool:
+        """Check if this chain or any of its caches (recursively) has mode='force'."""
+        if self.mode == "force":
+            return True
+        for step in self._step_sequence():
+            if isinstance(step, Chain):
+                if step._has_force():
+                    return True
+            elif isinstance(step, Cache):
+                if step.mode == "force":
+                    return True
+        return False
 
     def forward(self, *params: tp.Any) -> tp.Any:
         # get initial parameter (used for caching)

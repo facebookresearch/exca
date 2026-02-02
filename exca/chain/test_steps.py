@@ -223,8 +223,7 @@ def test_cache_mode_force(tmp_path: Path) -> None:
     # Third run with force mode - should recompute
     seq = Chain(steps=steps, folder=tmp_path, mode="force")
     out3 = seq.forward()
-    # Result might be different due to random (with high probability)
-    # But more importantly, it should run without error
+    assert out3 != out1
 
 
 def test_cache_mode_force_propagation(tmp_path: Path) -> None:
@@ -390,6 +389,60 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
     assert (
         count_cached(caches2) == 3
     ), f"Expected 3 caches after run 2, got {count_cached(caches2)}"
+
+
+def test_cache_mode_force_preserves_earlier_caches_in_subchain(tmp_path: Path) -> None:
+    """Test that force inside subchain only clears from force onwards, not earlier caches."""
+    # Setup: SubChain[Cache1 -> Mult(*10) -> Cache2(force) -> Mult(*2) -> Cache3]
+    # Only Cache2 and Cache3 inside subchain should be cleared, not Cache1
+    subchain_with_internal_force: tp.Any = {
+        "type": "Chain",
+        "folder": str(tmp_path),
+        "steps": [
+            {"type": "RandInput"},
+            "Cache",  # CacheA - BEFORE force, should NOT be cleared
+            {"type": "Mult", "coeff": 10},
+            {"type": "Cache", "mode": "force"},  # CacheB(force) - should be cleared
+            {"type": "Mult", "coeff": 2},
+            "Cache",  # CacheC - AFTER force, should be cleared
+        ],
+    }
+    steps: tp.Any = [
+        subchain_with_internal_force,
+        "Cache",  # CacheD - after subchain, should be cleared (force propagates)
+    ]
+
+    def get_caches(chain: Chain) -> list[Cache]:
+        return [
+            s
+            for s in chain._aligned_chain(with_cache=True)
+            if isinstance(s, Cache) and not isinstance(s, Chain)
+        ]
+
+    def count_cached(caches: list[Cache]) -> int:
+        return sum(not isinstance(c.cached(), NoValue) for c in caches)
+
+    # First run - populate all caches
+    seq1 = Chain(steps=steps, folder=tmp_path)
+    chain1 = seq1.with_input()
+    out1 = chain1.forward()
+
+    caches1 = get_caches(chain1)
+    assert len(caches1) == 4, f"Expected 4 Cache steps, got {len(caches1)}"
+    assert count_cached(caches1) == 4, "All 4 caches should have values after run 1"
+
+    # Second run - force inside subchain should only clear CacheB, CacheC, CacheD
+    # CacheA (before force in subchain) should remain
+    seq2 = Chain(steps=steps, folder=tmp_path)
+    chain2 = seq2.with_input()
+
+    caches2 = get_caches(chain2)
+    cached_count = count_cached(caches2)
+    assert cached_count == 1, f"Expected 1 cache (CacheA) after init, got {cached_count}"
+
+    out2 = chain2.forward()
+    # CacheA preserved the random value, so output should be same
+    assert out1 == out2, "CacheA before force should preserve value"
 
 
 def test_subchain_folder_not_propagated(tmp_path: Path) -> None:
