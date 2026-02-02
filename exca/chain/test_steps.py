@@ -350,11 +350,8 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
 
     # build the cache
     chain = Chain(steps=steps_cached, folder=tmp_path)
-    import copy
-
-    tmp = copy.deepcopy(chain)
-    tmp.steps[2].steps[1].mode = "cached"
-    cache_steps = get_caches(tmp.with_input(), include_chains=True)
+    # get cache steps (use with_inputs to have initialized folders)
+    cache_steps = get_caches(chain.with_input(), include_chains=True)
     _ = chain.forward()  # Run forward - creates all caches
     assert cache_array(cache_steps) == (True, True, True, True)
 
