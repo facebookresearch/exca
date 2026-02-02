@@ -231,20 +231,25 @@ def test_step_in_xp(tmp_path: Path) -> None:
     assert xp.run() == 48
 
 
-def test_cache_mode_force(tmp_path: Path) -> None:
+def test_cache_modes(tmp_path: Path) -> None:
     """Test that mode='force' bypasses cache and recomputes"""
     steps: tp.Any = [{"type": "RandInput"}, "Cache", {"type": "Mult", "coeff": 10}]
     # First run - cache the result
-    seq = Chain(steps=steps, folder=tmp_path)
-    out1 = seq.forward()
-    # Second run - should use cached value
-    seq = Chain(steps=steps, folder=tmp_path)
-    out2 = seq.forward()
-    assert out1 == out2
-    # Third run with force mode - should recompute
-    seq = Chain(steps=steps, folder=tmp_path, mode="force")
-    out3 = seq.forward()
-    assert out3 != out1
+    modes = ["read-only", "cached", "read-only", "retry", "force"]
+    outputs = []
+    for mode in modes:
+        seq = Chain(steps=steps, folder=tmp_path, mode=mode)  # type: ignore
+        try:
+            outputs.append(seq.forward())
+        except RuntimeError:
+            outputs.append(-12)
+    assert outputs[0] == -12  # read-only failed
+    assert outputs[1] == outputs[2]  # cached
+    assert outputs[1] == outputs[3]  # retry without anythig to retry
+    assert outputs[1] != outputs[4]
+    # Second call on same instance - should use cache (not recompute)
+    second_call = seq.forward()
+    assert second_call == outputs[-1]
 
 
 def test_cache_mode_force_propagation(tmp_path: Path) -> None:
@@ -495,14 +500,3 @@ def test_cache_mode_read_only_with_cache(tmp_path: Path) -> None:
     seq_r = Chain(steps=steps, folder=tmp_path, mode="read-only")
     out_r = seq_r.forward()
     assert out == out_r
-
-
-def test_cache_mode_force_same_instance_uses_cache(tmp_path: Path) -> None:
-    """Test that calling forward twice on same instance with mode='force' uses cache on second call"""
-    steps: tp.Any = [{"type": "RandInput"}, {"type": "Mult", "coeff": 10}]
-    seq = Chain(steps=steps, folder=tmp_path, mode="force")
-    # First call - should compute and cache
-    out1 = seq.forward()
-    # Second call on same instance - should use cache (not recompute)
-    out2 = seq.forward()
-    assert out1 == out2  # same instance should return cached result
