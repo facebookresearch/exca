@@ -162,6 +162,7 @@ def test_error_cache(tmp_path: Path) -> None:
         seq.forward(2)  # error should be cached
     seq.with_input(2).clear_cache()
     assert seq.forward(2) == 21
+    # TODO use retry instead
 
 
 def _extract_caches(folder: Path) -> tuple[str, ...]:
@@ -229,6 +230,26 @@ def test_step_in_xp(tmp_path: Path) -> None:
     expected = "exca.chain.test_steps.Xp.run,0/steps.steps=({coeff=3,type=Mult},{type=Add,value=12})-2f739f76"
     assert uid == expected
     assert xp.run() == 48
+
+
+def test_folder_not_propagated_to_chains(tmp_path: Path) -> None:
+    """Test that folder is NOT propagated to subchains - they must set their own."""
+    subchain: tp.Any = {
+        "type": "Chain",  # Note: no folder specified
+        "steps": [
+            {"type": "Mult", "coeff": 10},
+            "Cache",  # Cache inside subchain - should NOT get folder
+        ],
+    }
+    steps: tp.Any = [{"type": "RandInput"}, "Cache", subchain]
+    seq = Chain(steps=steps, folder=tmp_path)
+    chain = seq.with_input()
+    # Check folder propagation
+    caches = get_caches(chain, include_chains=True)
+    has_folders = tuple(c.folder is not None for c in caches)
+    # cache of main chain should have one, not the one inside the subchain nor the
+    # subchain itself, and finally the main chain should have one
+    assert has_folders == (True, False, False, True)
 
 
 def test_cache_modes(tmp_path: Path) -> None:
@@ -452,36 +473,3 @@ def test_cache_mode_force_preserves_earlier_caches_in_subchain(tmp_path: Path) -
     out2 = chain2.forward()
     # CacheA preserved the random value, so output should be same
     assert out1 == out2, "CacheA before force should preserve value"
-
-
-def test_subchain_folder_not_propagated(tmp_path: Path) -> None:
-    """Test that folder is NOT propagated to subchains - they must set their own."""
-    subchain: tp.Any = {
-        "type": "Chain",
-        "steps": [
-            {"type": "Mult", "coeff": 10},
-            "Cache",  # Cache inside subchain - should NOT get folder
-        ],
-        # Note: no folder specified
-    }
-    steps: tp.Any = [
-        {"type": "RandInput"},
-        "Cache",  # Cache in parent - should get folder
-        subchain,
-        "Cache",  # Cache in parent - should get folder
-    ]
-
-    seq = Chain(steps=steps, folder=tmp_path)
-    chain = seq.with_input()
-
-    # Check folder propagation
-    step_seq = list(chain._step_sequence())
-    # Cache1 (step 1) should have folder
-    assert step_seq[1].folder == tmp_path
-    # Subchain (step 2) should NOT have folder
-    assert step_seq[2].folder is None
-    # Cache inside subchain should NOT have folder
-    subchain_cache = list(step_seq[2]._step_sequence())[1]
-    assert subchain_cache.folder is None
-    # Cache2 (step 3) should have folder
-    assert step_seq[3].folder == tmp_path
