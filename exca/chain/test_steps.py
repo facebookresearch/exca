@@ -334,31 +334,30 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
         "type": "Chain",
         "folder": str(tmp_path),  # Must explicitly set folder for subchain caching
         "steps": [
-            {"type": "Mult", "coeff": 10},
             {"type": "Cache", "mode": "force"},  # Force INSIDE subchain
+            {"type": "Mult", "coeff": 10},
         ],
     }
     steps_cached: tp.Any = [
         {"type": "RandInput"},  # Random without seed
-        "Cache",  # Cache1 BEFORE subchain - should NOT be cleared
+        "Cache",  # BEFORE subchain - should NOT be cleared
         subchain_with_force,
         {"type": "Mult", "coeff": 2},
     ]
 
-    def cache_array(caches: list[Cache]) -> int:
+    def cache_array(caches: list[Cache]) -> tuple[bool, ...]:
         """Count how many cache steps have a cached value."""
         return tuple(not isinstance(c.cached(), NoValue) for c in caches)
 
-    # First run using mode="cached" to build the cache
+    # build the cache
     chain = Chain(steps=steps_cached, folder=tmp_path)
     _ = chain.forward()  # Run forward - creates all caches
     cache_steps = get_caches(chain, include_chains=True)
     assert cache_array(cache_steps) == (True, True, True, True)
 
-    # Second run - force inside subchain should clear caches from force onwards
+    # Trigger clear caching through "with_input"
     chain = Chain(steps=steps_cached, folder=tmp_path)
-    _ = chain.with_input()  # triggers _init which clears caches after force
-
+    _ = chain.with_input()
     # Only first cache should stay active
     assert cache_array(cache_steps) == (True, False, False, False)
 
