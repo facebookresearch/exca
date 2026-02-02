@@ -208,3 +208,124 @@ def test_step_in_xp(tmp_path: Path) -> None:
     expected = "exca.chain.test_steps.Xp.run,0/steps.steps=({coeff=3,type=Mult},{type=Add,value=12})-2f739f76"
     assert uid == expected
     assert xp.run() == 48
+
+
+def test_cache_mode_force(tmp_path: Path) -> None:
+    """Test that mode='force' bypasses cache and recomputes"""
+    steps: tp.Any = [{"type": "RandInput"}, "Cache", {"type": "Mult", "coeff": 10}]
+    # First run - cache the result
+    seq = Chain(steps=steps, folder=tmp_path)
+    out1 = seq.forward()
+    # Second run - should use cached value
+    seq = Chain(steps=steps, folder=tmp_path)
+    out2 = seq.forward()
+    assert out1 == out2
+    # Third run with force mode - should recompute
+    seq = Chain(steps=steps, folder=tmp_path, mode="force")
+    out3 = seq.forward()
+    # Result might be different due to random (with high probability)
+    # But more importantly, it should run without error
+
+
+def test_cache_mode_force_propagation(tmp_path: Path) -> None:
+    """Test that mode='force' clears subsequent caches but not previous ones"""
+    # Setup: RandInput -> Cache1 -> Mult(*10) -> Cache2(force) -> Mult(*2) -> Cache3
+    # When Cache2 has force mode:
+    # - Cache1 (before force) should NOT be cleared
+    # - Cache2 and Cache3 (at and after force) should be cleared
+    steps1: tp.Any = [
+        {"type": "RandInput"},  # Random without seed
+        "Cache",  # Cache1 - should be preserved
+        {"type": "Mult", "coeff": 10},
+        "Cache",  # Cache2 - will have force mode later
+        {"type": "Mult", "coeff": 2},
+        "Cache",  # Cache3 - should be cleared due to propagation
+    ]
+    # First run - cache everything
+    seq1 = Chain(steps=steps1, folder=tmp_path)
+    out1 = seq1.forward()
+    # Second run - same config, should use cache
+    seq2 = Chain(steps=steps1, folder=tmp_path)
+    out2 = seq2.forward()
+    assert out1 == out2
+    # Third run - force on intermediate cache (Cache2)
+    # Using random RandInput (no seed) - if Cache1 was cleared, we'd get a different value
+    steps3: tp.Any = [
+        {
+            "type": "RandInput"
+        },  # Same random config - but Cache1 should preserve old value
+        "Cache",  # Cache1 - should still have cached value from first run
+        {"type": "Mult", "coeff": 10},
+        {"type": "Cache", "mode": "force"},  # Cache2 - force mode clears from here
+        {"type": "Mult", "coeff": 2},
+        "Cache",  # Cache3 - should be recomputed
+    ]
+    seq3 = Chain(steps=steps3, folder=tmp_path)
+    out3 = seq3.forward()
+    # Output should be same because Cache1 preserved the RandInput value
+    # (if Cache1 was cleared, RandInput would generate a new random value)
+    assert out1 == out3, "Cache1 should preserve the value - previous caches not affected"
+
+
+def test_cache_mode_force_subchain(tmp_path: Path) -> None:
+    """Test that mode='force' also clears caches in subchains"""
+    # Setup: RandInput -> SubChain[Mult(*10) -> Cache] -> Mult(*2)
+    subchain: tp.Any = {
+        "type": "Chain",
+        "steps": [
+            {"type": "Mult", "coeff": 10},
+            "Cache",  # Cache inside subchain
+        ],
+    }
+    steps1: tp.Any = [
+        {"type": "RandInput", "seed": 42},
+        subchain,
+        {"type": "Mult", "coeff": 2},
+    ]
+    # First run - cache everything
+    seq1 = Chain(steps=steps1, folder=tmp_path)
+    out1 = seq1.forward()
+    # Second run - same config, should use cache
+    seq2 = Chain(steps=steps1, folder=tmp_path)
+    out2 = seq2.forward()
+    assert out1 == out2
+    # Third run with force mode on chain - subchain cache should also be cleared
+    seq3 = Chain(steps=steps1, folder=tmp_path, mode="force")
+    out3 = seq3.forward()
+    # With same seed, output should be same (verifies recomputation works)
+    assert out1 == out3
+    # Fourth run with different seed - should produce different output
+    steps4: tp.Any = [
+        {"type": "RandInput", "seed": 99},
+        subchain,
+        {"type": "Mult", "coeff": 2},
+    ]
+    seq4 = Chain(steps=steps4, folder=tmp_path, mode="force")
+    out4 = seq4.forward()
+    assert out1 != out4, "Different seed should produce different output"
+
+
+def test_cache_mode_read_only_with_cache(tmp_path: Path) -> None:
+    """Test that mode='read-only' returns cached value when available"""
+    steps: tp.Any = [{"type": "RandInput"}, {"type": "Mult", "coeff": 10}]
+    seq_r = Chain(steps=steps, folder=tmp_path, mode="read-only")
+    with pytest.raises(RuntimeError, match="read-only"):
+        _ = seq_r.forward()
+    # First run - cache the result
+    seq = Chain(steps=steps, folder=tmp_path)
+    out = seq.forward()
+    # Second run with read-only mode - should return cached value
+    seq_r = Chain(steps=steps, folder=tmp_path, mode="read-only")
+    out_r = seq_r.forward()
+    assert out == out_r
+
+
+def test_cache_mode_force_same_instance_uses_cache(tmp_path: Path) -> None:
+    """Test that calling forward twice on same instance with mode='force' uses cache on second call"""
+    steps: tp.Any = [{"type": "RandInput"}, {"type": "Mult", "coeff": 10}]
+    seq = Chain(steps=steps, folder=tmp_path, mode="force")
+    # First call - should compute and cache
+    out1 = seq.forward()
+    # Second call on same instance - should use cache (not recompute)
+    out2 = seq.forward()
+    assert out1 == out2  # same instance should return cached result

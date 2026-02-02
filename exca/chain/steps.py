@@ -21,6 +21,8 @@ from . import backends
 
 logger = logging.getLogger(__name__)
 
+Mode = tp.Literal["cached", "retry", "force", "read-only"]
+
 
 class NoValue:
     pass
@@ -49,6 +51,16 @@ class Step(exca.helpers.DiscriminatedModel):
 class Cache(Step):
     folder: Path | None = None
     cache_type: str | None = None
+    # mode among:
+    # - cached: cache is returned if available, otherwise computed (and cached)
+    # - retry: cache is returned if available except if it's an error,
+    #          otherwise (re)computed (and cached)
+    # - force: cache is ignored, and result is (re)computed (and cached)
+    # - read-only: never compute anything
+    mode: Mode = "cached"
+
+    # tracks if computation was already run (to avoid recomputing twice with same instance)
+    _computed: bool = False
 
     def _chain_folder(self) -> Path:
         if self.folder is None:
@@ -94,7 +106,10 @@ class Cache(Step):
 
     def forward(self, *param: tp.Any) -> tp.Any:
         out = self._unique_param_check(param)
+        if self.mode == "read-only":
+            raise RuntimeError("mode='read-only' but cache is not available")
         self._dump(out)
+        self._computed = True
         return out
 
     def _dump(self, value: tp.Any) -> None:
@@ -104,7 +119,7 @@ class Cache(Step):
             return
         cd = self._cache_dict()
         if "result" in cd:
-            logger.debug("Result already witten in folder: %s", cd.folder)
+            logger.debug("Result already written in folder: %s", cd.folder)
             return  # do nothing
         with cd.writer() as w:
             w["result"] = value
@@ -125,12 +140,6 @@ class Chain(Cache):
     steps: tp.Sequence[_Step] | collections.OrderedDict[str, _Step]
     folder: Path | None = None
     backend: backends.Backend | None = None
-
-    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = (
-        "folder",
-        "backend",
-        "cache_type",
-    )
 
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
@@ -168,8 +177,11 @@ class Chain(Cache):
         steps: list[tp.Any] = [s.model_dump() for s in self._step_sequence()]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
-        chain = type(self)(steps=steps, folder=self.folder, backend=self.backend)
+        chain = type(self)(
+            steps=steps, folder=self.folder, backend=self.backend, mode=self.mode
+        )
         chain._previous = self._previous
+        chain._computed = self._computed  # preserve computed flag before _init
         chain._init()
         return chain
 
@@ -177,14 +189,29 @@ class Chain(Cache):
         previous = self._previous
         if self.backend is not None:
             self.backend._folder = self.folder
+        # Track when we hit a force step - only clear caches from that point onwards
+        force_mode = self.mode == "force"
         for step in self._step_sequence():
             step._previous = previous
-            if isinstance(step, Chain):
-                step._init()
-            elif isinstance(step, Cache):
+            if isinstance(step, Cache):  # includes Chain since Chain is a Cache
                 if step.folder is None:
                     step.folder = self.folder
+                force_mode |= step.mode == "force"
+                # Clear cache for this step and subsequent steps if in force mode
+                if force_mode and not self._computed:
+                    step.clear_cache()
+                    if isinstance(step, Chain):
+                        step._clear_all_caches()
+                if isinstance(step, Chain):
+                    step._init()
             previous = step
+        # Clear the chain's own cache if force mode
+        if force_mode and not self._computed:
+            if self.folder is not None:
+                cache = self._chain_folder() / "cache"
+                if cache.exists():
+                    logger.debug("Removing cache folder: %s", cache)
+                    shutil.rmtree(cache)
 
     def forward(self, *params: tp.Any) -> tp.Any:
         # get initial parameter (used for caching)
@@ -215,6 +242,7 @@ class Chain(Cache):
                 logger.debug("Dumping job into: %s", pkl.parent)
                 with pkl.open("wb") as f:
                     pickle.dump(job, f)
+        self._computed = True  # to ignore mode force/retry from now on
         out = job.result()
         if not isinstance(out, NoValue):  # output was not cached
             return out
@@ -223,6 +251,20 @@ class Chain(Cache):
             msg = "Output value should have been cached, something went wrong"
             raise RuntimeError(msg)
         return out
+
+    def _clear_all_caches(self) -> None:
+        """Clear all caches without recursive chain setup (used during _init)"""
+        for step in self._step_sequence():
+            if isinstance(step, Cache):
+                step.clear_cache()
+            if isinstance(step, Chain):
+                step._clear_all_caches()
+        # Clear the chain's own cache
+        if self.folder is not None:
+            cache = self._chain_folder() / "cache"
+            if cache.exists():
+                logger.debug("Removing cache folder: %s", cache)
+                shutil.rmtree(cache)
 
     def clear_cache(self, recursive: bool = True) -> None:
         """Clears the chain cache, and all intermediate cache if recursive=True"""
