@@ -279,38 +279,25 @@ def test_cache_mode_force_propagation(tmp_path: Path) -> None:
     # When Cache2 has force mode:
     # - Cache1 (before force) should NOT be cleared
     # - Cache2 and Cache3 (at and after force) should be cleared
-    steps1: tp.Any = [
+    steps: tp.Any = [
         {"type": "RandInput"},  # Random without seed
         "Cache",  # Cache1 - should be preserved
         {"type": "Mult", "coeff": 10},
-        "Cache",  # Cache2 - will have force mode later
+        {"type": "Cache"},  # Cache2 - will have force mode later
         {"type": "Mult", "coeff": 2},
         "Cache",  # Cache3 - should be cleared due to propagation
     ]
-    # First run - cache everything
-    seq1 = Chain(steps=steps1, folder=tmp_path)
-    out1 = seq1.forward()
-    # Second run - same config, should use cache
-    seq2 = Chain(steps=steps1, folder=tmp_path)
-    out2 = seq2.forward()
-    assert out1 == out2
+    # cache everything in first run, use cache in second
+    vals = [Chain(steps=steps, folder=tmp_path).forward() for _ in range(2)]
+    assert vals[0] == vals[1]
     # Third run - force on intermediate cache (Cache2)
     # Using random RandInput (no seed) - if Cache1 was cleared, we'd get a different value
-    steps3: tp.Any = [
-        {
-            "type": "RandInput"
-        },  # Same random config - but Cache1 should preserve old value
-        "Cache",  # Cache1 - should still have cached value from first run
-        {"type": "Mult", "coeff": 10},
-        {"type": "Cache", "mode": "force"},  # Cache2 - force mode clears from here
-        {"type": "Mult", "coeff": 2},
-        "Cache",  # Cache3 - should be recomputed
-    ]
-    seq3 = Chain(steps=steps3, folder=tmp_path)
-    out3 = seq3.forward()
-    # Output should be same because Cache1 preserved the RandInput value
-    # (if Cache1 was cleared, RandInput would generate a new random value)
-    assert out1 == out3, "Cache1 should preserve the value - previous caches not affected"
+    steps[3]["mode"] = "force"
+    seq = Chain(steps=steps, folder=tmp_path)
+    out = seq.forward()
+    assert (
+        out == vals[0]
+    ), "Cache1 should preserve the value - previous caches not affected"
 
 
 def test_cache_mode_force_subchain(tmp_path: Path) -> None:
