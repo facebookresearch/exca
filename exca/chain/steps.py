@@ -55,20 +55,20 @@ class Cache(Step):
     ----------
     folder
         Directory path where cache files are stored. If None, caching is disabled
-        and results are only kept in RAM.
-    cache_type
-        Optional cache type identifier passed to CacheDict for custom serialization.
+        or can be inherited from the Chain.folder holding the cache instance
     mode
         Cache behavior mode:
         - "cached": returns cache if available, otherwise computes and caches
         - "retry": returns cache unless it's an error, otherwise recomputes
         - "force": ignores existing cache, recomputes and caches (propagates to subsequent caches)
         - "read-only": never computes, raises error if cache unavailable
+    cache_type
+        Optional cache type identifier passed to CacheDict for custom serialization.
     """
 
     folder: Path | None = None
-    cache_type: str | None = None
     mode: Mode = "cached"
+    cache_type: str | None = None
 
     # tracks if computation was already run (to avoid recomputing twice with same instance)
     _computed: bool = False
@@ -196,51 +196,35 @@ class Chain(Cache):
         chain._init()
         return chain
 
-    def _init(self) -> None:
-        """Set up _previous links, propagate folder to caches, and clear caches after force."""
-        # First pass: set up _previous links and folder
+    def _init(self) -> bool:
+        """Set up _previous links, propagate folder to caches, and clear caches after force.
+
+        Returns:
+            True if force mode was encountered in this chain or any subchain,
+            False otherwise. This allows parent chains to know if they need to
+            clear subsequent caches.
+        """
         previous = self._previous
         if self.backend is not None:
             self.backend._folder = self.folder
+        # force_found tracks if we've seen a force mode - once True, all subsequent caches cleared
+        force_found = self.mode == "force" if not self._computed else False
         for step in self._step_sequence():
             step._previous = previous
             if isinstance(step, Chain):
-                # Subchains manage their own folder, don't propagate
-                step._init()
+                # Subchains manage their own folder; recursive _init returns their force status
+                force_found |= step._init()
             elif isinstance(step, Cache):
                 if step.folder is None:
                     step.folder = self.folder
+                force_found |= step.mode == "force"
+                if force_found and not self._computed:
+                    step.clear_cache()
             previous = step
-        # Second pass: clear caches from first force onwards
-        # Subchains already handled their own caches in first pass via _init()
-        # We only need to clear this chain's direct Cache steps and propagate force_found
-        if not self._computed:
-            force_found = self.mode == "force"
-            for step in self._step_sequence():
-                if isinstance(step, Chain):
-                    # Check if subchain has force anywhere (recursively)
-                    # Don't clear - subchain's _init() already handled it
-                    force_found |= step._has_force()
-                elif isinstance(step, Cache):
-                    force_found |= step.mode == "force"
-                    if force_found:
-                        step.clear_cache()
-            # Also clear the chain's own cache if force was found
-            if force_found:
-                Cache.clear_cache(self)
-
-    def _has_force(self) -> bool:
-        """Check if this chain or any of its caches (recursively) has mode='force'."""
-        if self.mode == "force":
-            return True
-        for step in self._step_sequence():
-            if isinstance(step, Chain):
-                if step._has_force():
-                    return True
-            elif isinstance(step, Cache):
-                if step.mode == "force":
-                    return True
-        return False
+        # Clear the chain's own cache if force was found
+        if force_found and not self._computed:
+            Cache.clear_cache(self)
+        return force_found
 
     def forward(self, *params: tp.Any) -> tp.Any:
         # get initial parameter (used for caching)
