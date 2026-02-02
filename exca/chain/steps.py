@@ -31,16 +31,12 @@ class NoValue:
 class Step(exca.helpers.DiscriminatedModel):
     _previous: tp.Union["Step", None] = None
 
-    def _aligned_step(self, with_cache: bool = False) -> list["Step"]:
+    def _aligned_step(self) -> list["Step"]:
         return [self]
 
-    def _aligned_chain(self, with_cache: bool = False) -> list["Step"]:
-        base = (
-            []
-            if self._previous is None
-            else self._previous._aligned_chain(with_cache=with_cache)
-        )
-        return base + self._aligned_step(with_cache=with_cache)
+    def _aligned_chain(self) -> list["Step"]:
+        base = [] if self._previous is None else self._previous._aligned_chain()
+        return base + self._aligned_step()
 
     def _unique_param_check(self, param: tuple[tp.Any, ...]) -> tp.Any:
         if len(param) != 1:
@@ -116,9 +112,7 @@ class Cache(Step):
         folder = self._chain_folder() / "cache"
         return exca.cachedict.CacheDict(folder=folder, cache_type=self.cache_type)
 
-    def _aligned_step(self, with_cache: bool = False) -> list[Step]:
-        if with_cache:
-            return [self]
+    def _aligned_step(self) -> list[Step]:
         return []
 
     def forward(self, *param: tp.Any) -> tp.Any:
@@ -181,15 +175,8 @@ class Chain(Cache):
                 cfg["steps"] = cfg["steps"][1:]
         return cfg
 
-    def _aligned_step(self, with_cache: bool = False) -> list[Step]:
-        aligned = [
-            s
-            for step in self._step_sequence()
-            for s in step._aligned_step(with_cache=with_cache)
-        ]
-        if with_cache:
-            aligned.append(self)  # Chain is itself a Cache
-        return aligned
+    def _aligned_step(self) -> list[Step]:
+        return [s for step in self._step_sequence() for s in step._aligned_step()]
 
     def with_input(self, value: tp.Any = NoValue()) -> "Chain":
         """Add an input step with the provided value

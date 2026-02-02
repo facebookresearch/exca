@@ -20,6 +20,27 @@ from .steps import Cache, Chain, NoValue, Step
 logging.getLogger("exca").setLevel(logging.DEBUG)
 
 
+def get_caches(chain: Chain, include_chains: bool = False) -> list[Cache]:
+    """Get all Cache instances from a chain recursively.
+
+    Args:
+        chain: The chain to search
+        include_chains: If True, include Chain instances (which are also Caches).
+                       If False (default), only include leaf Cache steps.
+    """
+    caches: list[Cache] = []
+    for step in chain._step_sequence():
+        if isinstance(step, Chain):
+            # Recurse into subchain - the recursive call will add the subchain itself
+            # if include_chains is True (via the append at the end)
+            caches.extend(get_caches(step, include_chains=include_chains))
+        elif isinstance(step, Cache):
+            caches.append(step)
+    if include_chains:
+        caches.append(chain)
+    return caches
+
+
 class Mult(Step):
     coeff: float = 2
 
@@ -307,7 +328,7 @@ def test_cache_mode_force_subchain(tmp_path: Path) -> None:
 def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
     """Test that mode='force' on a cache INSIDE a subchain propagates correctly.
 
-    Uses with_cache=True on _aligned_chain to see all caches and verify behavior.
+    Uses get_caches() helper to collect all caches and verify behavior.
     Note: Subchains do NOT get the parent folder propagated - they must set their own.
     """
     # Setup: RandInput -> Cache1 -> SubChain[Mult(*10) -> Cache(force)] -> Mult(*2) -> Cache2
@@ -330,14 +351,6 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
         "Cache",  # Cache2 AFTER subchain - SHOULD be cleared due to force propagation
     ]
 
-    def get_caches(chain: Chain) -> list[Cache]:
-        """Get all Cache steps (excluding Chain which inherits from Cache)."""
-        return [
-            s
-            for s in chain._aligned_chain(with_cache=True)
-            if isinstance(s, Cache) and not isinstance(s, Chain)
-        ]
-
     def count_cached(caches: list[Cache]) -> int:
         """Count how many cache steps have a cached value."""
         return sum(not isinstance(c.cached(), NoValue) for c in caches)
@@ -346,10 +359,8 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
     seq1 = Chain(steps=steps_cached, folder=tmp_path)
     chain1 = seq1.with_input()  # triggers _init which clears caches after force
 
-    # Verify aligned caches: Cache1, Cache(force), Chain(subchain), Cache2, Chain(outer)
-    all_cache_steps = [
-        s for s in chain1._aligned_chain(with_cache=True) if isinstance(s, Cache)
-    ]
+    # Verify all caches including Chain instances: Cache1, Cache(force), Chain(subchain), Cache2, Chain(outer)
+    all_cache_steps = get_caches(chain1, include_chains=True)
     assert (
         len(all_cache_steps) == 5
     ), f"Expected 5 cache steps, got {len(all_cache_steps)}"
@@ -411,13 +422,6 @@ def test_cache_mode_force_preserves_earlier_caches_in_subchain(tmp_path: Path) -
         subchain_with_internal_force,
         "Cache",  # CacheD - after subchain, should be cleared (force propagates)
     ]
-
-    def get_caches(chain: Chain) -> list[Cache]:
-        return [
-            s
-            for s in chain._aligned_chain(with_cache=True)
-            if isinstance(s, Cache) and not isinstance(s, Chain)
-        ]
 
     def count_cached(caches: list[Cache]) -> int:
         return sum(not isinstance(c.cached(), NoValue) for c in caches)
