@@ -31,12 +31,16 @@ class NoValue:
 class Step(exca.helpers.DiscriminatedModel):
     _previous: tp.Union["Step", None] = None
 
-    def _aligned_step(self) -> list["Step"]:
+    def _aligned_step(self, with_cache: bool = False) -> list["Step"]:
         return [self]
 
-    def _aligned_chain(self) -> list["Step"]:
-        base = [] if self._previous is None else self._previous._aligned_chain()
-        return base + self._aligned_step()
+    def _aligned_chain(self, with_cache: bool = False) -> list["Step"]:
+        base = (
+            []
+            if self._previous is None
+            else self._previous._aligned_chain(with_cache=with_cache)
+        )
+        return base + self._aligned_step(with_cache=with_cache)
 
     def _unique_param_check(self, param: tuple[tp.Any, ...]) -> tp.Any:
         if len(param) != 1:
@@ -101,7 +105,9 @@ class Cache(Step):
         folder = self._chain_folder() / "cache"
         return exca.cachedict.CacheDict(folder=folder, cache_type=self.cache_type)
 
-    def _aligned_step(self) -> list[Step]:
+    def _aligned_step(self, with_cache: bool = False) -> list[Step]:
+        if with_cache:
+            return [self]
         return []
 
     def forward(self, *param: tp.Any) -> tp.Any:
@@ -164,8 +170,15 @@ class Chain(Cache):
                 cfg["steps"] = cfg["steps"][1:]
         return cfg
 
-    def _aligned_step(self) -> list[Step]:
-        return [s for step in self._step_sequence() for s in step._aligned_step()]
+    def _aligned_step(self, with_cache: bool = False) -> list[Step]:
+        aligned = [
+            s
+            for step in self._step_sequence()
+            for s in step._aligned_step(with_cache=with_cache)
+        ]
+        if with_cache:
+            aligned.append(self)  # Chain is itself a Cache
+        return aligned
 
     def with_input(self, value: tp.Any = NoValue()) -> "Chain":
         """Add an input step with the provided value
@@ -186,32 +199,26 @@ class Chain(Cache):
         return chain
 
     def _init(self) -> None:
+        # First pass: set up _previous links and folder
         previous = self._previous
         if self.backend is not None:
             self.backend._folder = self.folder
-        # Track when we hit a force step - only clear caches from that point onwards
-        force_mode = self.mode == "force"
         for step in self._step_sequence():
             step._previous = previous
             if isinstance(step, Cache):  # includes Chain since Chain is a Cache
                 if step.folder is None:
                     step.folder = self.folder
-                force_mode |= step.mode == "force"
-                # Clear cache for this step and subsequent steps if in force mode
-                if force_mode and not self._computed:
-                    step.clear_cache()
-                    if isinstance(step, Chain):
-                        step._clear_all_caches()
                 if isinstance(step, Chain):
                     step._init()
             previous = step
-        # Clear the chain's own cache if force mode
-        if force_mode and not self._computed:
-            if self.folder is not None:
-                cache = self._chain_folder() / "cache"
-                if cache.exists():
-                    logger.debug("Removing cache folder: %s", cache)
-                    shutil.rmtree(cache)
+        # Second pass: clear caches from first force onwards
+        if not self._computed:
+            force_found = False
+            for step in self._aligned_chain(with_cache=True):
+                if isinstance(step, Cache):
+                    force_found |= step.mode == "force"
+                    if force_found:
+                        Cache.clear_cache(step)
 
     def forward(self, *params: tp.Any) -> tp.Any:
         # get initial parameter (used for caching)
@@ -251,20 +258,6 @@ class Chain(Cache):
             msg = "Output value should have been cached, something went wrong"
             raise RuntimeError(msg)
         return out
-
-    def _clear_all_caches(self) -> None:
-        """Clear all caches without recursive chain setup (used during _init)"""
-        for step in self._step_sequence():
-            if isinstance(step, Cache):
-                step.clear_cache()
-            if isinstance(step, Chain):
-                step._clear_all_caches()
-        # Clear the chain's own cache
-        if self.folder is not None:
-            cache = self._chain_folder() / "cache"
-            if cache.exists():
-                logger.debug("Removing cache folder: %s", cache)
-                shutil.rmtree(cache)
 
     def clear_cache(self, recursive: bool = True) -> None:
         """Clears the chain cache, and all intermediate cache if recursive=True"""

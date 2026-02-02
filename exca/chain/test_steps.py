@@ -305,6 +305,82 @@ def test_cache_mode_force_subchain(tmp_path: Path) -> None:
     assert out1 != out4, "Different seed should produce different output"
 
 
+def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
+    """Test that mode='force' on a cache INSIDE a subchain propagates correctly.
+
+    Uses with_cache=True on _aligned_chain to see all caches and verify behavior.
+    """
+    # Setup: RandInput -> Cache1 -> SubChain[Mult(*10) -> Cache(force)] -> Mult(*2) -> Cache2
+    # Force is inside the subchain - should affect caches AFTER the subchain
+    # but NOT the cache BEFORE the subchain
+    subchain_with_force: tp.Any = {
+        "type": "Chain",
+        "steps": [
+            {"type": "Mult", "coeff": 10},
+            {"type": "Cache", "mode": "force"},  # Force INSIDE subchain
+        ],
+    }
+    steps_cached: tp.Any = [
+        {"type": "RandInput"},  # Random without seed
+        "Cache",  # Cache1 BEFORE subchain - should NOT be cleared
+        subchain_with_force,
+        {"type": "Mult", "coeff": 2},
+        "Cache",  # Cache2 AFTER subchain - SHOULD be cleared due to force propagation
+    ]
+
+    # First run using mode="cached" to build the cache
+    seq1 = Chain(steps=steps_cached, folder=tmp_path)
+    chain1 = seq1.with_input()  # triggers _init which clears caches after force
+
+    # Verify: can we see the aligned caches using with_cache=True?
+    aligned_caches = chain1._aligned_chain(with_cache=True)
+    cache_steps = [s for s in aligned_caches if isinstance(s, Cache)]
+    # Should have: Cache1, Cache(force), Chain (subchain as cache), Cache2, Chain (outer as cache)
+    assert (
+        len(cache_steps) >= 4
+    ), f"Expected at least 4 cache steps, got {len(cache_steps)}"
+
+    # Check which caches were cleared by _init
+    # Since force is inside subchain, only Cache1 (before force) should remain
+    cache_folders_after_init = list(tmp_path.rglob("cache"))
+    # No caches exist yet since this is first run
+    assert (
+        len(cache_folders_after_init) == 0
+    ), f"Expected 0 caches before first run, got {len(cache_folders_after_init)}"
+
+    # Run forward - creates all caches
+    out1 = chain1.forward()
+
+    # After run 1: 3 caches should exist (Cache1, subchain cache, Cache2)
+    cache_folders_run1 = list(tmp_path.rglob("cache"))
+    assert (
+        len(cache_folders_run1) == 3
+    ), f"Expected 3 caches after run 1, got {len(cache_folders_run1)}"
+
+    # Second run - force inside subchain should clear caches from force onwards
+    seq2 = Chain(steps=steps_cached, folder=tmp_path)
+    chain2 = seq2.with_input()  # triggers _init which clears caches after force
+
+    # Check which caches were cleared by _init (before forward runs)
+    cache_folders_after_init2 = list(tmp_path.rglob("cache"))
+    # Cache1 should still exist (before force), subchain and cache2 should be cleared
+    assert (
+        len(cache_folders_after_init2) == 1
+    ), f"Expected only 1 cache after init, got {len(cache_folders_after_init2)}: {[str(p.relative_to(tmp_path)) for p in cache_folders_after_init2]}"
+
+    # Now run forward - caches get recreated
+    out2 = chain2.forward()
+
+    # Cache1 preserved the random value, so output should be same
+    assert out1 == out2, "Cache1 before subchain should preserve value"
+
+    # Verify all caches exist again after forward
+    cache_folders_run2 = list(tmp_path.rglob("cache"))
+    assert (
+        len(cache_folders_run2) == 3
+    ), f"Expected 3 caches after run 2, got {len(cache_folders_run2)}"
+
+
 def test_cache_mode_read_only_with_cache(tmp_path: Path) -> None:
     """Test that mode='read-only' returns cached value when available"""
     steps: tp.Any = [{"type": "RandInput"}, {"type": "Mult", "coeff": 10}]
