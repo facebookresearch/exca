@@ -205,11 +205,12 @@ class Chain(Cache):
             self.backend._folder = self.folder
         for step in self._step_sequence():
             step._previous = previous
-            if isinstance(step, Cache):  # includes Chain since Chain is a Cache
+            if isinstance(step, Chain):
+                # Subchains manage their own folder, don't propagate
+                step._init()
+            elif isinstance(step, Cache):
                 if step.folder is None:
                     step.folder = self.folder
-                if isinstance(step, Chain):
-                    step._init()
             previous = step
         # Second pass: clear caches from first force onwards
         if not self._computed:

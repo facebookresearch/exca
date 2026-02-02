@@ -309,12 +309,15 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
     """Test that mode='force' on a cache INSIDE a subchain propagates correctly.
 
     Uses with_cache=True on _aligned_chain to see all caches and verify behavior.
+    Note: Subchains do NOT get the parent folder propagated - they must set their own.
     """
     # Setup: RandInput -> Cache1 -> SubChain[Mult(*10) -> Cache(force)] -> Mult(*2) -> Cache2
     # Force is inside the subchain - should affect caches AFTER the subchain
     # but NOT the cache BEFORE the subchain
+    # Note: subchain has its own folder explicitly set
     subchain_with_force: tp.Any = {
         "type": "Chain",
+        "folder": str(tmp_path),  # Must explicitly set folder for subchain caching
         "steps": [
             {"type": "Mult", "coeff": 10},
             {"type": "Cache", "mode": "force"},  # Force INSIDE subchain
@@ -379,6 +382,39 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
     assert (
         len(cache_folders_run2) == 3
     ), f"Expected 3 caches after run 2, got {len(cache_folders_run2)}"
+
+
+def test_subchain_folder_not_propagated(tmp_path: Path) -> None:
+    """Test that folder is NOT propagated to subchains - they must set their own."""
+    subchain: tp.Any = {
+        "type": "Chain",
+        "steps": [
+            {"type": "Mult", "coeff": 10},
+            "Cache",  # Cache inside subchain - should NOT get folder
+        ],
+        # Note: no folder specified
+    }
+    steps: tp.Any = [
+        {"type": "RandInput"},
+        "Cache",  # Cache in parent - should get folder
+        subchain,
+        "Cache",  # Cache in parent - should get folder
+    ]
+
+    seq = Chain(steps=steps, folder=tmp_path)
+    chain = seq.with_input()
+
+    # Check folder propagation
+    step_seq = list(chain._step_sequence())
+    # Cache1 (step 1) should have folder
+    assert step_seq[1].folder == tmp_path
+    # Subchain (step 2) should NOT have folder
+    assert step_seq[2].folder is None
+    # Cache inside subchain should NOT have folder
+    subchain_cache = list(step_seq[2]._step_sequence())[1]
+    assert subchain_cache.folder is None
+    # Cache2 (step 3) should have folder
+    assert step_seq[3].folder == tmp_path
 
 
 def test_cache_mode_read_only_with_cache(tmp_path: Path) -> None:
