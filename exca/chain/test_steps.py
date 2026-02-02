@@ -295,9 +295,7 @@ def test_cache_mode_force_propagation(tmp_path: Path) -> None:
     steps[3]["mode"] = "force"
     seq = Chain(steps=steps, folder=tmp_path)
     out = seq.forward()
-    assert (
-        out == vals[0]
-    ), "Cache1 should preserve the value - previous caches not affected"
+    assert out == vals[0], "cache1 should keep the rand val"
 
 
 def test_cache_mode_force_subchain(tmp_path: Path) -> None:
@@ -334,6 +332,7 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
         "type": "Chain",
         "folder": str(tmp_path),  # Must explicitly set folder for subchain caching
         "steps": [
+            {"type": "Mult", "coeff": 10},
             {"type": "Cache", "mode": "force"},  # Force INSIDE subchain
             {"type": "Mult", "coeff": 10},
         ],
@@ -351,8 +350,12 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
 
     # build the cache
     chain = Chain(steps=steps_cached, folder=tmp_path)
+    import copy
+
+    tmp = copy.deepcopy(chain)
+    tmp.steps[2].steps[1].mode = "cached"
+    cache_steps = get_caches(tmp.with_input(), include_chains=True)
     _ = chain.forward()  # Run forward - creates all caches
-    cache_steps = get_caches(chain, include_chains=True)
     assert cache_array(cache_steps) == (True, True, True, True)
 
     # Trigger clear caching through "with_input"
