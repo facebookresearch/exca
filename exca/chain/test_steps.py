@@ -306,36 +306,22 @@ def test_cache_mode_force_subchain(tmp_path: Path) -> None:
     subchain: tp.Any = {
         "type": "Chain",
         "steps": [
-            {"type": "Mult", "coeff": 10},
             "Cache",  # Cache inside subchain
+            {"type": "Mult", "coeff": 10},
         ],
     }
-    steps1: tp.Any = [
-        {"type": "RandInput", "seed": 42},
+    steps: tp.Any = [
+        {"type": "RandInput"},
         subchain,
         {"type": "Mult", "coeff": 2},
     ]
-    # First run - cache everything
-    seq1 = Chain(steps=steps1, folder=tmp_path)
-    out1 = seq1.forward()
-    # Second run - same config, should use cache
-    seq2 = Chain(steps=steps1, folder=tmp_path)
-    out2 = seq2.forward()
-    assert out1 == out2
+    # cache everything in first run, use cache in second
+    vals = [Chain(steps=steps, folder=tmp_path).forward() for _ in range(2)]
+    assert vals[0] == vals[1]
     # Third run with force mode on chain - subchain cache should also be cleared
-    seq3 = Chain(steps=steps1, folder=tmp_path, mode="force")
-    out3 = seq3.forward()
-    # With same seed, output should be same (verifies recomputation works)
-    assert out1 == out3
-    # Fourth run with different seed - should produce different output
-    steps4: tp.Any = [
-        {"type": "RandInput", "seed": 99},
-        subchain,
-        {"type": "Mult", "coeff": 2},
-    ]
-    seq4 = Chain(steps=steps4, folder=tmp_path, mode="force")
-    out4 = seq4.forward()
-    assert out1 != out4, "Different seed should produce different output"
+    seq = Chain(steps=steps, folder=tmp_path, mode="force")
+    out = seq.forward()
+    assert out != vals[0]
 
 
 def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
