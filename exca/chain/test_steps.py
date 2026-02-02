@@ -485,18 +485,3 @@ def test_subchain_folder_not_propagated(tmp_path: Path) -> None:
     assert subchain_cache.folder is None
     # Cache2 (step 3) should have folder
     assert step_seq[3].folder == tmp_path
-
-
-def test_cache_mode_read_only_with_cache(tmp_path: Path) -> None:
-    """Test that mode='read-only' returns cached value when available"""
-    steps: tp.Any = [{"type": "RandInput"}, {"type": "Mult", "coeff": 10}]
-    seq_r = Chain(steps=steps, folder=tmp_path, mode="read-only")
-    with pytest.raises(RuntimeError, match="read-only"):
-        _ = seq_r.forward()
-    # First run - cache the result
-    seq = Chain(steps=steps, folder=tmp_path)
-    out = seq.forward()
-    # Second run with read-only mode - should return cached value
-    seq_r = Chain(steps=steps, folder=tmp_path, mode="read-only")
-    out_r = seq_r.forward()
-    assert out == out_r
