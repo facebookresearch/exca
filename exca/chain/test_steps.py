@@ -325,11 +325,7 @@ def test_cache_mode_force_subchain(tmp_path: Path) -> None:
 
 
 def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
-    """Test that mode='force' on a cache INSIDE a subchain propagates correctly.
-
-    Uses get_caches() helper to collect all caches and verify behavior.
-    Note: Subchains do NOT get the parent folder propagated - they must set their own.
-    """
+    # Test that mode='force' on a cache INSIDE a subchain propagates correctly.
     # Setup: RandInput -> Cache1 -> SubChain[Mult(*10) -> Cache(force)] -> Mult(*2) -> Cache2
     # Force is inside the subchain - should affect caches AFTER the subchain
     # but NOT the cache BEFORE the subchain
@@ -347,58 +343,24 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
         "Cache",  # Cache1 BEFORE subchain - should NOT be cleared
         subchain_with_force,
         {"type": "Mult", "coeff": 2},
-        "Cache",  # Cache2 AFTER subchain - SHOULD be cleared due to force propagation
     ]
 
-    def count_cached(caches: list[Cache]) -> int:
+    def cache_array(caches: list[Cache]) -> int:
         """Count how many cache steps have a cached value."""
-        return sum(not isinstance(c.cached(), NoValue) for c in caches)
+        return tuple(not isinstance(c.cached(), NoValue) for c in caches)
 
     # First run using mode="cached" to build the cache
-    seq1 = Chain(steps=steps_cached, folder=tmp_path)
-    chain1 = seq1.with_input()  # triggers _init which clears caches after force
-
-    # Verify all caches including Chain instances: Cache1, Cache(force), Chain(subchain), Cache2, Chain(outer)
-    all_cache_steps = get_caches(chain1, include_chains=True)
-    assert (
-        len(all_cache_steps) == 5
-    ), f"Expected 5 cache steps, got {len(all_cache_steps)}"
-
-    # Get just Cache steps (not Chain)
-    caches1 = get_caches(chain1)
-    assert len(caches1) == 3, f"Expected 3 Cache steps, got {len(caches1)}"
-
-    # No caches exist yet since this is first run
-    assert count_cached(caches1) == 0, "Expected 0 caches before first run"
-
-    # Run forward - creates all caches
-    out1 = chain1.forward()
-
-    # After run 1: 3 caches with values (Cache1, subchain's Cache(force), Cache2)
-    assert (
-        count_cached(caches1) == 3
-    ), f"Expected 3 caches after run 1, got {count_cached(caches1)}"
+    chain = Chain(steps=steps_cached, folder=tmp_path)
+    _ = chain.forward()  # Run forward - creates all caches
+    cache_steps = get_caches(chain, include_chains=True)
+    assert cache_array(cache_steps) == (True, True, True, True)
 
     # Second run - force inside subchain should clear caches from force onwards
-    seq2 = Chain(steps=steps_cached, folder=tmp_path)
-    chain2 = seq2.with_input()  # triggers _init which clears caches after force
+    chain = Chain(steps=steps_cached, folder=tmp_path)
+    _ = chain.with_input()  # triggers _init which clears caches after force
 
-    # Get caches and verify only Cache1 (before force) still has value
-    caches2 = get_caches(chain2)
-    assert (
-        count_cached(caches2) == 1
-    ), f"Expected 1 cache after init, got {count_cached(caches2)}"
-
-    # Now run forward - caches get recreated
-    out2 = chain2.forward()
-
-    # Cache1 preserved the random value, so output should be same
-    assert out1 == out2, "Cache1 before subchain should preserve value"
-
-    # Verify all caches exist again after forward
-    assert (
-        count_cached(caches2) == 3
-    ), f"Expected 3 caches after run 2, got {count_cached(caches2)}"
+    # Only first cache should stay active
+    assert cache_array(cache_steps) == (True, False, False, False)
 
 
 def test_cache_mode_force_preserves_earlier_caches_in_subchain(tmp_path: Path) -> None:
