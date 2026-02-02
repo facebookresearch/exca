@@ -15,7 +15,7 @@ import submitit
 
 import exca
 
-from .steps import Cache, Chain, Step
+from .steps import Cache, Chain, NoValue, Step
 
 logging.getLogger("exca").setLevel(logging.DEBUG)
 
@@ -331,45 +331,54 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
         "Cache",  # Cache2 AFTER subchain - SHOULD be cleared due to force propagation
     ]
 
+    def get_caches(chain: Chain) -> list[Cache]:
+        """Get all Cache steps (excluding Chain which inherits from Cache)."""
+        return [
+            s
+            for s in chain._aligned_chain(with_cache=True)
+            if isinstance(s, Cache) and not isinstance(s, Chain)
+        ]
+
+    def count_cached(caches: list[Cache]) -> int:
+        """Count how many cache steps have a cached value."""
+        return sum(not isinstance(c.cached(), NoValue) for c in caches)
+
     # First run using mode="cached" to build the cache
     seq1 = Chain(steps=steps_cached, folder=tmp_path)
     chain1 = seq1.with_input()  # triggers _init which clears caches after force
 
-    # Verify: can we see the aligned caches using with_cache=True?
-    aligned_caches = chain1._aligned_chain(with_cache=True)
-    cache_steps = [s for s in aligned_caches if isinstance(s, Cache)]
-    # Should have: Cache1, Cache(force), Chain (subchain as cache), Cache2, Chain (outer as cache)
+    # Verify aligned caches: Cache1, Cache(force), Chain(subchain), Cache2, Chain(outer)
+    all_cache_steps = [
+        s for s in chain1._aligned_chain(with_cache=True) if isinstance(s, Cache)
+    ]
     assert (
-        len(cache_steps) >= 4
-    ), f"Expected at least 4 cache steps, got {len(cache_steps)}"
+        len(all_cache_steps) == 5
+    ), f"Expected 5 cache steps, got {len(all_cache_steps)}"
 
-    # Check which caches were cleared by _init
-    # Since force is inside subchain, only Cache1 (before force) should remain
-    cache_folders_after_init = list(tmp_path.rglob("cache"))
+    # Get just Cache steps (not Chain)
+    caches1 = get_caches(chain1)
+    assert len(caches1) == 3, f"Expected 3 Cache steps, got {len(caches1)}"
+
     # No caches exist yet since this is first run
-    assert (
-        len(cache_folders_after_init) == 0
-    ), f"Expected 0 caches before first run, got {len(cache_folders_after_init)}"
+    assert count_cached(caches1) == 0, "Expected 0 caches before first run"
 
     # Run forward - creates all caches
     out1 = chain1.forward()
 
-    # After run 1: 3 caches should exist (Cache1, subchain cache, Cache2)
-    cache_folders_run1 = list(tmp_path.rglob("cache"))
+    # After run 1: 3 caches with values (Cache1, subchain's Cache(force), Cache2)
     assert (
-        len(cache_folders_run1) == 3
-    ), f"Expected 3 caches after run 1, got {len(cache_folders_run1)}"
+        count_cached(caches1) == 3
+    ), f"Expected 3 caches after run 1, got {count_cached(caches1)}"
 
     # Second run - force inside subchain should clear caches from force onwards
     seq2 = Chain(steps=steps_cached, folder=tmp_path)
     chain2 = seq2.with_input()  # triggers _init which clears caches after force
 
-    # Check which caches were cleared by _init (before forward runs)
-    cache_folders_after_init2 = list(tmp_path.rglob("cache"))
-    # Cache1 should still exist (before force), subchain and cache2 should be cleared
+    # Get caches and verify only Cache1 (before force) still has value
+    caches2 = get_caches(chain2)
     assert (
-        len(cache_folders_after_init2) == 1
-    ), f"Expected only 1 cache after init, got {len(cache_folders_after_init2)}: {[str(p.relative_to(tmp_path)) for p in cache_folders_after_init2]}"
+        count_cached(caches2) == 1
+    ), f"Expected 1 cache after init, got {count_cached(caches2)}"
 
     # Now run forward - caches get recreated
     out2 = chain2.forward()
@@ -378,10 +387,9 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
     assert out1 == out2, "Cache1 before subchain should preserve value"
 
     # Verify all caches exist again after forward
-    cache_folders_run2 = list(tmp_path.rglob("cache"))
     assert (
-        len(cache_folders_run2) == 3
-    ), f"Expected 3 caches after run 2, got {len(cache_folders_run2)}"
+        count_cached(caches2) == 3
+    ), f"Expected 3 caches after run 2, got {count_cached(caches2)}"
 
 
 def test_subchain_folder_not_propagated(tmp_path: Path) -> None:

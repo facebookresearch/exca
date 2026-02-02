@@ -53,14 +53,25 @@ class Step(exca.helpers.DiscriminatedModel):
 
 
 class Cache(Step):
+    """A caching step that stores and retrieves computation results.
+
+    Parameters
+    ----------
+    folder
+        Directory path where cache files are stored. If None, caching is disabled
+        and results are only kept in RAM.
+    cache_type
+        Optional cache type identifier passed to CacheDict for custom serialization.
+    mode
+        Cache behavior mode:
+        - "cached": returns cache if available, otherwise computes and caches
+        - "retry": returns cache unless it's an error, otherwise recomputes
+        - "force": ignores existing cache, recomputes and caches (propagates to subsequent caches)
+        - "read-only": never computes, raises error if cache unavailable
+    """
+
     folder: Path | None = None
     cache_type: str | None = None
-    # mode among:
-    # - cached: cache is returned if available, otherwise computed (and cached)
-    # - retry: cache is returned if available except if it's an error,
-    #          otherwise (re)computed (and cached)
-    # - force: cache is ignored, and result is (re)computed (and cached)
-    # - read-only: never compute anything
     mode: Mode = "cached"
 
     # tracks if computation was already run (to avoid recomputing twice with same instance)
@@ -190,15 +201,16 @@ class Chain(Cache):
         steps: list[tp.Any] = [s.model_dump() for s in self._step_sequence()]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
-        chain = type(self)(
-            steps=steps, folder=self.folder, backend=self.backend, mode=self.mode
-        )
+        params = self.model_dump()
+        params["steps"] = steps
+        chain = type(self)(**params)
         chain._previous = self._previous
         chain._computed = self._computed  # preserve computed flag before _init
         chain._init()
         return chain
 
     def _init(self) -> None:
+        """Set up _previous links, propagate folder to caches, and clear caches after force."""
         # First pass: set up _previous links and folder
         previous = self._previous
         if self.backend is not None:
