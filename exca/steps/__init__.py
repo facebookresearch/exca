@@ -25,17 +25,7 @@ Example:
     >>> result = chain.forward(5.0)  # Returns 30.0
 """
 
-from .backends import (
-    Auto,
-    Backend,
-    Cached,
-    JobLike,
-    LocalProcess,
-    ModeType,
-    ResultJob,
-    Slurm,
-    SubmititDebug,
-)
+from .backends import Auto, Backend, Cached, LocalProcess, ModeType, Slurm, SubmititDebug
 from .base import Chain, Input, NoInput, Step
 
 __all__ = [
@@ -52,7 +42,5 @@ __all__ = [
     "Auto",
     "SubmititDebug",
     # Types
-    "JobLike",
-    "ResultJob",
     "ModeType",
 ]
