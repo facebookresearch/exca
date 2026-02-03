@@ -2,16 +2,16 @@
 
 ## Overview
 
-The `steps` module provides a redesigned implementation where **each Step has its own infrastructure** (execution backend + caching), rather than having infrastructure only at the Chain level. The `Chain` itself becomes a specific type of `Step`, enabling more flexible and composable pipelines.
+The `steps` module provides a redesigned pipeline implementation where **each Step has its own infrastructure** (execution backend + caching), rather than having infrastructure only at the Chain level. The `Chain` itself becomes a specific type of `Step`, enabling more flexible and composable pipelines.
 
 ## Goals
 
 1. **Per-step infrastructure**: Each step can specify its own compute backend and caching
 2. **Composability**: Chains are Steps, enabling nested compositions
 3. **Unified API**: Same interface for Steps and Chains
-4. **Clean inheritance**: All backends inherit from `Cached`, so all have caching
+4. **Clean inheritance**: All backends inherit from `Backend`, all have caching
 5. **User-friendly**: Use dict syntax for infra, no need to import backend classes
-6. **Simple backend API**: `infra.submit(func, *args)` - no context managers needed
+6. **Error caching**: Both results and errors are cached for reproducibility
 
 ## Core Concepts
 
@@ -20,21 +20,36 @@ The `steps` module provides a redesigned implementation where **each Step has it
 A `Step` is the fundamental unit that:
 - Produces output via `_forward()` (generator) or `_forward(input) -> output` (transformer)
 - Has an optional `infra` for execution backend and caching
-- Has `with_input(value)` to attach an input for cache key computation
 - Uses `forward(input)` as the main entry point (handles caching/backend)
+- Detects generator vs transformer via signature inspection
+
+### NoInput Sentinel
+
+`NoInput` is a sentinel class used to distinguish "no input provided" from `None`:
+- `Input(value=NoInput())` marks a step as configured but without input
+- `Input(value=X)` marks a step as configured with input X
+- `_previous = None` means unconfigured
 
 ### Backend (Discriminated Model)
 
 `Backend` is a discriminated model with `discriminator_key="backend"`:
-- **Cached**: Just caching, inline execution (base class)
-- **LocalProcess**: Subprocess execution + caching (inherits from Cached)
-- **Slurm**: Cluster execution + caching (inherits from Cached)
-- **Auto**: Auto-detect + caching (inherits from Cached)
+- **Cached**: Inline execution + caching (base class for all)
+- **LocalProcess**: Subprocess execution via submitit
+- **SubmititDebug**: Debug executor (inline but simulates submitit)
+- **Slurm**: Cluster execution via submitit
+- **Auto**: Auto-detect executor (inherits from Slurm)
 
-All backends inherit from `Cached`, so all have:
-- `folder`: Path for cache storage
+All backends have:
+- `folder`: Path for cache storage (optional, can be propagated from Chain)
 - `cache_type`: Serialization format
 - `mode`: Execution mode (cached/force/read-only/retry)
+
+### Cache Status
+
+Cache can be in three states:
+- `"success"`: Result cached successfully
+- `"error"`: Error cached (will be re-raised on load)
+- `None`: No cache exists
 
 ### Chain
 
@@ -49,23 +64,33 @@ A `Chain` is a specialized `Step` that composes multiple steps sequentially.
 │  │  config  │  │    infra (Backend)    │  │  _forward()  │ │
 │  │ (params) │  │  (discriminated)      │  │  -> output   │ │
 │  └──────────┘  └───────────────────────┘  └──────────────┘ │
+│                         │                                   │
+│                         ▼                                   │
+│              ┌─────────────────────┐                       │
+│              │ _step (back-ref)    │                       │
+│              │ for cache key comp  │                       │
+│              └─────────────────────┘                       │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
 │              Backend (discriminated by "backend")           │
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  Cached (base)                                        │  │
+│  │  Backend (base)                                       │  │
 │  │  - folder, cache_type, mode                           │  │
-│  │  - inline execution                                   │  │
+│  │  - run(), has_cache(), clear_cache(), job()          │  │
 │  └──────────────────────────────────────────────────────┘  │
 │              │                                              │
 │    ┌─────────┴─────────┬─────────────────┐                 │
 │    ▼                   ▼                 ▼                 │
 │  ┌──────────┐    ┌───────────┐    ┌───────────┐           │
-│  │LocalProc │    │   Slurm   │    │   Auto    │           │
-│  │+ submitit│    │+ slurm opt│    │+ auto det │           │
-│  └──────────┘    └───────────┘    └───────────┘           │
+│  │ Cached   │    │LocalProc  │    │   Slurm   │           │
+│  │ (inline) │    │+ submitit │    │+ slurm opt│           │
+│  └──────────┘    └───────────┘    └─────┬─────┘           │
+│                                         │                  │
+│                                    ┌────▼────┐             │
+│                                    │  Auto   │             │
+│                                    └─────────┘             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -75,36 +100,47 @@ A `Chain` is a specialized `Step` that composes multiple steps sequentially.
 
 ```python
 class Backend(DiscriminatedModel, discriminator_key="backend"):
-    """Base class for backends. Use subclasses."""
-    
-    def submit(self, func, *args, **kwargs) -> JobLike:
-        """Submit function for execution."""
-        ...
-
-
-class Cached(Backend):
-    """Just caching, inline execution."""
-    folder: Path
+    """Base class for backends with integrated caching."""
+    folder: Path | None = None
     cache_type: str | None = None
     mode: Literal["cached", "force", "read-only", "retry"] = "cached"
     
-    def submit(self, func, *args, **kwargs) -> ResultJob:
-        return ResultJob(func(*args, **kwargs))
+    _step: Step | None = None  # Back-reference for cache key computation
+    
+    def run(self, func, *args, **kwargs) -> Any:
+        """Execute function with caching based on mode."""
+        ...
+    
+    def has_cache(self) -> bool: ...
+    def cached_result(self) -> Any: ...
+    def clear_cache(self) -> None: ...
+    def job(self) -> Job | None: ...
 
 
-class LocalProcess(Cached):
+class Cached(Backend):
+    """Inline execution + caching."""
+    ...
+
+
+class LocalProcess(Backend):
     """Subprocess execution + caching."""
     timeout_min: int | None = None
     cpus_per_task: int | None = None
     mem_gb: float | None = None
+    ...
 
 
-class Slurm(Cached):
+class Slurm(Backend):
     """Cluster execution + caching."""
     gpus_per_node: int | None = None
-    mem_gb: float | None = None
     slurm_partition: str | None = None
     slurm_account: str | None = None
+    ...
+
+
+class Auto(Slurm):
+    """Auto-detect executor (local or Slurm)."""
+    ...
 ```
 
 ### Step Base Class
@@ -117,23 +153,66 @@ class Step(DiscriminatedModel):
     _previous: Step | None = None
     
     def _forward(self, ...) -> Any:
-        """Override in subclasses. Signature depends on step type:
+        """Override in subclasses. Signature determines step type:
         - Generator: def _forward(self) -> Output
         - Transformer: def _forward(self, input: Input) -> Output
         """
         raise NotImplementedError
     
-    def forward(self, input: Any = NoInput) -> Any:
+    def _is_generator(self) -> bool:
+        """Check if _forward has no required parameters (generator step)."""
+        ...
+    
+    def forward(self, input: Any = NoInput()) -> Any:
         """Execute with caching and backend handling."""
         ...
     
-    def with_input(self, value: Any = NoInput) -> "Step":
-        """Create a copy with input configured.
-        - with_input(value): adds _previous = Input(value)
-        - with_input(): initializes without Input step
-        """
+    def with_input(self, value: Any = NoInput()) -> "Step":
+        """Create a copy with input configured."""
+        ...
+    
+    def has_cache(self) -> bool: ...
+    def clear_cache(self) -> None: ...
+    def job(self) -> Any: ...
+```
+
+### Input Step
+
+```python
+class Input(Step):
+    """Step that provides a fixed value (or NoInput sentinel)."""
+    value: Any
+    
+    def _aligned_step(self) -> list[Step]:
+        # Invisible in chain hash when holding NoInput
+        return [] if isinstance(self.value, NoInput) else [self]
+```
+
+### Chain
+
+```python
+class Chain(Step):
+    """Composes multiple steps sequentially."""
+    steps: Sequence[Step] | OrderedDict[str, Step]
+    propagate_folder: bool = True
+    
+    def _is_generator(self) -> bool:
+        """Chain is a generator if its first step is a generator."""
+        ...
+    
+    def clear_cache(self, recursive: bool = True) -> None:
+        """Clear cache, optionally including sub-steps."""
         ...
 ```
+
+## Execution Modes
+
+| Mode | Behavior |
+|------|----------|
+| `cached` | Return cached result if exists, else compute and cache |
+| `force` | Clear cache, recompute, and cache new result |
+| `read-only` | Return cached result, raise error if not cached |
+| `retry` | Return cached if success, clear and recompute if error |
 
 ## Usage Examples
 
@@ -154,26 +233,26 @@ step = Multiply(
     infra={"backend": "Cached", "folder": "/tmp/cache"}
 )
 result = step.forward(5.0)  # Returns 15.0
+
+# Cache operations
+assert step.with_input(5.0).has_cache()
+step.with_input(5.0).clear_cache()
 ```
 
-### Example 2: Step with Slurm Backend
+### Example 2: Generator Step
 
 ```python
-from exca.steps import Step
-
-class TrainModel(Step):
-    epochs: int = 10
+class LoadData(Step):
+    path: str
     
-    def _forward(self, dataset) -> dict:
-        return train_model(dataset, self.epochs)
+    def _forward(self) -> np.ndarray:  # No input parameter = generator
+        return np.load(self.path)
 
-# Pass infra at instantiation (dict syntax)
-step = TrainModel(
-    epochs=20,
-    infra={"backend": "Slurm", "folder": "/data/models", 
-           "gpus_per_node": 4, "slurm_partition": "gpu"}
-)
-model = step.forward(my_dataset)
+step = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
+data = step.forward()  # No input needed
+
+# Cache operations work directly on generators
+assert step.has_cache()  # Auto-configures with NoInput
 ```
 
 ### Example 3: Chain with Mixed Infrastructure
@@ -183,13 +262,11 @@ from exca.steps import Chain, Step
 
 class LoadData(Step):
     path: str
-    
     def _forward(self) -> np.ndarray:
         return load_dataset(self.path)
 
 class Train(Step):
     epochs: int = 10
-    
     def _forward(self, data: np.ndarray) -> dict:
         return train_model(data, self.epochs)
 
@@ -199,47 +276,35 @@ pipeline = Chain(
         LoadData(path="/data/train.csv"),
         Train(
             epochs=50,
-            infra={"backend": "Slurm", "folder": "/models", "gpus_per_node": 8}
+            infra={"backend": "Slurm", "gpus_per_node": 8}  # folder propagated
         ),
     ],
     infra={"backend": "Cached", "folder": "/cache/pipeline"},
-    propagate_folder=True,  # Steps without infra get Cached with this folder
+    propagate_folder=True,  # Propagates folder to steps with infra but no folder
 )
 
-result = pipeline.forward()  # No input needed
+result = pipeline.forward()
 ```
 
-### Example 4: YAML Configuration
-
-```yaml
-# pipeline.yaml
-type: Chain
-infra:
-  backend: Cached
-  folder: /cache/experiment
-  mode: cached
-propagate_folder: true
-steps:
-  - type: LoadData
-    path: /data/train.csv
-    
-  - type: Train
-    epochs: 50
-    infra:
-      backend: Slurm
-      folder: /cache/models
-      gpus_per_node: 4
-      mem_gb: 32
-      slurm_partition: gpu
-```
+### Example 4: Error Caching and Retry
 
 ```python
-from exca import ConfDict
-from exca.steps import Step
+# Errors are cached and re-raised on subsequent calls
+step = MyStep(infra={"backend": "Cached", "folder": "/cache"})
+try:
+    step.forward(bad_input)  # Raises and caches error
+except ValueError:
+    pass
 
-config = ConfDict.from_yaml("pipeline.yaml")
-pipeline = Step.model_validate(config.to_dict())
-result = pipeline.forward()  # No input - LoadData generates data
+# Same error re-raised from cache
+try:
+    step.forward(bad_input)  # Raises cached error
+except ValueError:
+    pass
+
+# Retry mode clears cached errors
+step_retry = MyStep(infra={"backend": "Cached", "folder": "/cache", "mode": "retry"})
+result = step_retry.forward(bad_input)  # Recomputes
 ```
 
 ## Execution Flow
@@ -248,32 +313,26 @@ When `step.forward(input)` is called:
 
 ```
 1. Configure input:
-   - forward(value): step = step.with_input(value) → adds Input step
-   - forward(): step = step.with_input() → no Input step
+   - step = step.with_input(input)
+   - Sets _previous = Input(value=input) or Input(value=NoInput())
 
 2. Determine how to call _forward:
-   - If Input step exists: call _forward(input_value)
-   - If no Input step: call _forward() with no args
+   - If Input holds actual value: call _forward(value)
+   - If Input holds NoInput: call _forward() with no args
 
 3. If no infra:
    └─> Execute _forward() directly, return result
 
-4. Check mode:
-   - "read-only": Return cached or raise error
-   - "cached": Return cached if exists, else continue
-   - "force": Skip cache check, continue
-   - "retry": Return cached if successful, else continue
-
-5. If cache not available:
-   ├─> Check if job.pkl exists (interrupted job)
-   │   └─> If yes, re-attach and wait for result
-   └─> Submit step._forward to infra.submit()
-       └─> Save job.pkl (if not ResultJob)
-       └─> Wait for job completion
-
-6. Store result in cache
-
-7. Return result
+4. Backend.run() handles caching:
+   a. Check cache status (without loading)
+   b. Handle mode:
+      - "read-only": Return cache or raise
+      - "cached": Return cache if success, else continue
+      - "force": Clear cache, continue
+      - "retry": Clear if error, continue
+   c. Submit job (inline for Cached, subprocess for others)
+   d. Cache result/error from within job
+   e. Return cached result (or raise cached error)
 ```
 
 ## Key Differences from chain v1
@@ -282,44 +341,32 @@ When `step.forward(input)` is called:
 |--------|----------|-------|
 | Infrastructure location | Only on Chain | On any Step |
 | Infrastructure model | `folder` + `backend` separate fields | `Backend` discriminated model (all-in-one) |
-| Caching | Separate `Cache` step class | All backends inherit from `Cached` |
+| Caching | Separate `Cache` step class | All backends have caching |
+| Error caching | Via submitit | Native (both result and error cached) |
 | User method | Override `forward()` | Override `_forward()` |
+| Generator detection | Manual | Automatic via signature inspection |
 | Public API | `step.forward(input)` | `step.forward(input)` (same) |
-| Backend API | `submission_context()` + `submit()` | Just `submit()` |
-
-## Decisions Log
-
-1. **Backend as discriminated model**: Clean YAML serialization, each backend only has its relevant options.
-
-2. **All backends inherit from Cached**: Every backend has caching built-in.
-
-3. **`_forward()` for user logic**: Users override `_forward()`, public `forward()` handles infra.
-
-4. **Dict syntax for infra**: `infra={"backend": "Slurm", "folder": "..."}` - no imports needed, pydantic handles instantiation.
-
-5. **Folder propagation**: `propagate_folder=True` on Chain creates `Cached(folder=...)` for steps without infra.
-
-6. **Simplified backend API**: No `submission_context()` needed - each step has its own folder, so `submit()` handles everything.
+| Backend API | `submission_context()` + `submit()` | Just `run()` |
+| folder | Required | Optional, can be propagated |
 
 ## Implementation Status
 
-1. **Phase 1: Core abstractions** ✓
-   - [x] `Backend` discriminated model
-   - [x] `Cached` base backend
-   - [x] `LocalProcess`, `Slurm`, `Auto` backend classes
-   - [x] `Step` base class with `_forward()` and `forward()`
-   - [x] `Input` step
-   - [x] Cache key via `_chain_hash()`
+- [x] `Backend` discriminated model with `run()`
+- [x] `Cached` backend (inline execution)
+- [x] `LocalProcess`, `SubmititDebug`, `Slurm`, `Auto` backends
+- [x] `Step` base class with `_forward()` and `forward()`
+- [x] `Input` step with NoInput handling
+- [x] `NoInput` sentinel
+- [x] Cache key via `_chain_hash()`
+- [x] `Chain` step with `propagate_folder`
+- [x] `with_input()` on all steps
+- [x] `_is_generator()` detection
+- [x] Error caching
+- [x] All modes: cached, force, read-only, retry
+- [x] Job recovery from job.pkl
+- [x] Unit tests (20 tests passing)
 
-2. **Phase 2: Chain implementation** ✓
-   - [x] `Chain` step
-   - [x] `with_input()` on all steps
-   - [x] `propagate_folder` logic
+## Future Work
 
-3. **Phase 3: Testing**
-   - [ ] Unit tests
-   - [ ] Integration tests with submitit
-
-4. **Phase 4: Polish**
-   - [ ] Documentation
-   - [ ] Migration guide from chain v1
+- [ ] Force mode propagation to subsequent caches (like chain v1)
+- [ ] Migration guide from chain v1
