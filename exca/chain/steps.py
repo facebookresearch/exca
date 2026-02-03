@@ -197,7 +197,7 @@ class Chain(Cache):
         return chain
 
     def _init(self) -> bool:
-        """Set up _previous links, propagate folder to caches, and clear caches after force.
+        """Set up _previous links, propagate folder/mode to caches, and clear caches after force.
 
         Returns:
             True if force mode was encountered in this chain or any subchain,
@@ -212,6 +212,9 @@ class Chain(Cache):
         for step in self._step_sequence():
             step._previous = previous
             if isinstance(step, Chain):
+                # Propagate retry mode to subchains so they can clear failed jobs
+                if self.mode == "retry" and step.mode == "cached":
+                    step.mode = "retry"
                 # Subchains manage their own folder; recursive _init returns their force status
                 force_found |= step._init()
             elif isinstance(step, Cache):
@@ -261,6 +264,7 @@ class Chain(Cache):
                 job = backend.submit(chain._detached_forward, *params)
             if pkl is not None and not isinstance(job, backends.ResultJob):
                 logger.debug("Dumping job into: %s", pkl.parent)
+                pkl.parent.mkdir(exist_ok=True, parents=True)
                 with pkl.open("wb") as f:
                     pickle.dump(job, f)
         self._computed = True  # to ignore mode force/retry from now on

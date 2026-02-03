@@ -361,3 +361,29 @@ def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
     _ = chain.with_input()
     # Only first cache should stay active
     assert cache_array(cache_steps) == (True, True, False, False, False)
+
+
+def test_retry_with_subchain(tmp_path: Path) -> None:
+    subchain: tp.Any = {
+        "type": "Chain",
+        "folder": str(tmp_path),
+        "steps": [
+            {"type": "Mult", "coeff": 10},
+            {"type": "ErrorAdd", "value": 1, "error": True},
+        ],
+    }
+    steps: tp.Any = [
+        {"type": "Add", "value": 5},
+        "Cache",
+        subchain,
+    ]
+    # First run - should fail (error inside subchain)
+    seq = Chain(steps=steps, folder=tmp_path)
+    with pytest.raises(ValueError):
+        seq.forward(2)
+    # Second run with retry and error=False - should succeed
+    steps[2]["steps"][1]["error"] = False
+    seq = Chain(steps=steps, folder=tmp_path, mode="retry")
+    result = seq.forward(2)
+    # (2 + 5) * 10 + 1 = 71
+    assert result == 71
