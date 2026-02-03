@@ -17,8 +17,6 @@ import collections
 import logging
 import typing as tp
 
-import pydantic
-
 import exca
 
 from . import backends
@@ -131,9 +129,6 @@ class Input(Step):
         return self.value
 
 
-_Step = pydantic.SerializeAsAny[Step]
-
-
 class Chain(Step):
     """
     Composes multiple steps sequentially.
@@ -146,7 +141,7 @@ class Chain(Step):
         result = chain.forward()
     """
 
-    steps: tp.Sequence[_Step] | collections.OrderedDict[str, _Step]
+    steps: tp.Sequence[Step] | collections.OrderedDict[str, Step]
     propagate_folder: bool = True
     _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra", "propagate_folder")
 
@@ -186,18 +181,7 @@ class Chain(Step):
                 step._init()
             previous = step
 
-    def _forward(self, *args: tp.Any) -> tp.Any:
-        return self._run_steps()
-
-    def forward(self, input: tp.Any = NoInput()) -> tp.Any:
-        chain = self.with_input(input) if self._previous is None else self
-
-        if chain.infra is None:
-            return chain._run_steps()
-
-        return chain.infra.run(chain._run_steps)
-
-    def _run_steps(self) -> tp.Any:
+    def _forward(self) -> tp.Any:
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
@@ -226,6 +210,14 @@ class Chain(Step):
                 result = step._forward(result)
 
         return result
+
+    def forward(self, input: tp.Any = NoInput()) -> tp.Any:
+        chain = self.with_input(input) if self._previous is None else self
+
+        if chain.infra is None:
+            return chain._forward()
+
+        return chain.infra.run(chain._forward)
 
     def _aligned_step(self) -> list[Step]:
         return [s for step in self._step_sequence() for s in step._aligned_step()]
