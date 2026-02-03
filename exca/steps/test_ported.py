@@ -196,6 +196,7 @@ def test_error_cache(tmp_path: Path) -> None:
         infra={"backend": "LocalProcess", "folder": tmp_path},
     )
 
+    # First call: submitit wraps the error in FailedJobError
     with pytest.raises(submitit.core.utils.FailedJobError):
         seq.forward(2)
 
@@ -207,7 +208,8 @@ def test_error_cache(tmp_path: Path) -> None:
         infra={"backend": "LocalProcess", "folder": tmp_path},
     )
 
-    with pytest.raises(submitit.core.utils.FailedJobError):
+    # Second call: error is cached, raises directly as ValueError
+    with pytest.raises(ValueError, match="Triggered an error"):
         seq2.forward(2)  # error should be cached
 
     # Clear and retry

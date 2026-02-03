@@ -30,10 +30,11 @@ if tp.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ModeType = tp.Literal["cached", "force", "read-only", "retry"]
+CacheStatus = tp.Literal["success", "error", None]
 
 
 class _CachingCall:
-    """Wrapper that caches result from within the job."""
+    """Wrapper that caches result (or error) from within the job."""
 
     def __init__(
         self, func: tp.Callable[..., tp.Any], cache_folder: Path, cache_type: str | None
@@ -43,10 +44,16 @@ class _CachingCall:
         self.cache_type = cache_type
 
     def __call__(self, *args: tp.Any, **kwargs: tp.Any) -> None:
-        result = self.func(*args, **kwargs)
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=self.cache_folder, cache_type=self.cache_type
         )
+        try:
+            result = self.func(*args, **kwargs)
+        except Exception as e:
+            if "error" not in cd:
+                with cd.writer() as w:
+                    w["error"] = e
+            raise
         if "result" not in cd:  # Only write if not already cached
             with cd.writer() as w:
                 w["result"] = result
@@ -107,10 +114,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def has_cache(self) -> bool:
         """Check if result is cached."""
-        return self._load_cache() is not None
+        return self._cache_status() is not None
 
     def cached_result(self) -> tp.Any:
-        """Load cached result, or None if not cached."""
+        """Load cached result (raises if cached error)."""
+        if self._cache_status() is None:
+            return None
         return self._load_cache()
 
     def clear_cache(self) -> None:
@@ -128,14 +137,28 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 return pickle.load(f)
         return None
 
-    def _load_cache(self) -> tp.Any | None:
-        """Load from cache, or None if not cached."""
+    def _cache_status(self) -> CacheStatus:
+        """Check cache status without loading value."""
+        folder = self._cache_folder()
+        cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
+            folder=folder, cache_type=self.cache_type
+        )
+        if "result" in cd:
+            return "success"
+        if "error" in cd:
+            return "error"
+        return None
+
+    def _load_cache(self) -> tp.Any:
+        """Load cached result, or raise cached error."""
         folder = self._cache_folder()
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=folder, cache_type=self.cache_type
         )
         if "result" in cd:
             return cd["result"]
+        if "error" in cd:
+            raise cd["error"]
         return None
 
     # =========================================================================
@@ -148,17 +171,22 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """Execute function with caching based on mode."""
         cache_folder = self._cache_folder()
 
-        # Check cache
-        cached = self._load_cache()
+        # Check cache status (without loading value)
+        status = self._cache_status()
         if self.mode == "read-only":
-            if cached is None:
+            if status is None:
                 raise RuntimeError(f"No cache in read-only mode: {self._cache_key()}")
-            return cached
-        if cached is not None and self.mode not in ("force", "retry"):
+            return self._load_cache()  # Raises if error
+        if status is not None and self.mode not in ("force", "retry"):
             logger.debug("Cache hit: %s", self._cache_key())
-            return cached
+            return self._load_cache()  # Raises if error
 
-        # Check job recovery
+        # Retry mode: clear cached errors
+        if self.mode == "retry" and status == "error":
+            logger.warning("Retrying failed step: %s", self._cache_key())
+            self.clear_cache()
+
+        # Check job recovery (for submitit backends)
         job_pkl = cache_folder / "job.pkl"
         job: tp.Any = None
         if job_pkl.exists() and self.mode != "force":
@@ -179,7 +207,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             job = self._submit(wrapper, job_pkl, *args, **kwargs)
 
         job.result()  # Wait (result is cached, not returned)
-        return self._load_cache()
+        return self._load_cache()  # Raises if error
 
     def _submit(
         self, wrapper: _CachingCall, job_pkl: Path, *args: tp.Any, **kwargs: tp.Any
