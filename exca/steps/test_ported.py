@@ -218,6 +218,76 @@ def test_error_cache(tmp_path: Path) -> None:
 
 
 # =============================================================================
+# Mode tests
+# =============================================================================
+
+
+def test_cache_modes(tmp_path: Path) -> None:
+    """Test all cache modes: read-only, cached, retry, force."""
+    # read-only on empty cache should fail
+    chain_ro = Chain(
+        steps=[RandInput(), Mult(coeff=10)],
+        infra={"backend": "Cached", "folder": tmp_path / "ro", "mode": "read-only"},
+    )
+    with pytest.raises(RuntimeError, match="read-only"):
+        chain_ro.forward()
+
+    # cached mode - first call computes, second uses cache
+    chain_cached = Chain(
+        steps=[
+            RandInput(infra={"backend": "Cached", "folder": tmp_path / "gen"}),
+            Mult(coeff=10),
+        ],
+        infra={"backend": "Cached", "folder": tmp_path / "cached"},
+    )
+    out1 = chain_cached.forward()
+    out2 = chain_cached.forward()
+    assert out1 == out2
+
+    # read-only after caching works
+    chain_ro2 = Chain(
+        steps=[
+            RandInput(infra={"backend": "Cached", "folder": tmp_path / "gen"}),
+            Mult(coeff=10),
+        ],
+        infra={"backend": "Cached", "folder": tmp_path / "cached", "mode": "read-only"},
+    )
+    out3 = chain_ro2.forward()
+    assert out3 == out1
+
+    # retry without error - same as cached
+    chain_retry = Chain(
+        steps=[
+            RandInput(infra={"backend": "Cached", "folder": tmp_path / "gen"}),
+            Mult(coeff=10),
+        ],
+        infra={"backend": "Cached", "folder": tmp_path / "cached", "mode": "retry"},
+    )
+    out4 = chain_retry.forward()
+    assert out4 == out1
+
+    # force mode - recomputes (generator is still cached so same gen value)
+    chain_force = Chain(
+        steps=[
+            RandInput(infra={"backend": "Cached", "folder": tmp_path / "gen"}),
+            Mult(coeff=10),
+        ],
+        infra={"backend": "Cached", "folder": tmp_path / "cached", "mode": "force"},
+    )
+    out5 = chain_force.forward()
+    assert out5 == out1  # Same because generator is cached
+
+    # force on chain with uncached generator - new value each time
+    chain_force2 = Chain(
+        steps=[RandInput(), Mult(coeff=10)],
+        infra={"backend": "Cached", "folder": tmp_path / "force2", "mode": "force"},
+    )
+    out6 = chain_force2.forward()
+    out7 = chain_force2.forward()
+    assert out6 != out7  # Force recomputes each time
+
+
+# =============================================================================
 # Nested chain tests
 # =============================================================================
 

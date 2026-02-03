@@ -181,9 +181,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             logger.debug("Cache hit: %s", self._cache_key())
             return self._load_cache()  # Raises if error
 
-        # Retry mode: clear cached errors
+        # Retry mode: clear cached errors; Force mode: clear all cache
         if self.mode == "retry" and status == "error":
             logger.warning("Retrying failed step: %s", self._cache_key())
+            self.clear_cache()
+        elif self.mode == "force" and status is not None:
             self.clear_cache()
 
         # Check job recovery (for submitit backends)
