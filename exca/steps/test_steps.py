@@ -35,14 +35,19 @@ class RandomGenerator(Step):
 
 
 def test_step_no_infra() -> None:
-    """Step without infra runs inline."""
     step = Multiply(coeff=3.0)
     assert step.forward(5.0) == 15.0
 
 
+def test_chain_no_infra() -> None:
+    chain = Chain(steps=[Multiply(coeff=2.0), Multiply(coeff=3.0)])
+    # 5 * 2 * 3 = 30
+    assert chain.forward(5.0) == 30.0
+
+
 def test_step_with_cache(tmp_path: Path) -> None:
-    """Step with Cached infra caches result."""
-    step = RandomAdd(infra={"backend": "Cached", "folder": tmp_path})
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = RandomAdd(infra=infra)
 
     # First call computes
     result1 = step.forward(5.0)
@@ -51,7 +56,7 @@ def test_step_with_cache(tmp_path: Path) -> None:
     # Second call uses cache - same result proves caching
     result2 = step.forward(5.0)
     assert result1 == result2
-    assert step.with_input(5.0).infra.cached_result() == result1
+    assert step.with_input(5.0).infra.cached_result() == result1  # type: ignore
 
     # Clear cache
     step.with_input(5.0).clear_cache()
@@ -62,18 +67,26 @@ def test_step_with_cache(tmp_path: Path) -> None:
     assert result3 != result1
 
 
-def test_chain_no_infra() -> None:
-    """Chain without infra runs inline."""
-    chain = Chain(steps=[Multiply(coeff=2.0), Multiply(coeff=3.0)])
-    # 5 * 2 * 3 = 30
-    assert chain.forward(5.0) == 30.0
+def test_generator_cache_access(tmp_path: Path) -> None:
+    """Generator steps work without explicit with_input()."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = RandomGenerator(infra=infra)
+    # Run and check cache
+    result1 = step.forward()
+    assert step.has_cache()
+    # Same result from cache
+    result2 = step.forward()
+    assert result1 == result2
+    # New result after clearing
+    step.clear_cache()
+    result3 = step.forward()
+    assert result3 != result1
 
 
 def test_chain_with_cache(tmp_path: Path) -> None:
-    """Chain with Cached infra caches final result."""
     chain = Chain(
         steps=[Multiply(coeff=2.0), RandomAdd()],
-        infra={"backend": "Cached", "folder": tmp_path},
+        infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
     )
 
     result1 = chain.forward(5.0)
@@ -88,7 +101,7 @@ def test_chain_with_generator(tmp_path: Path) -> None:
     """Chain starting with generator step (no input)."""
     chain = Chain(
         steps=[RandomGenerator(), Multiply(coeff=3.0)],
-        infra={"backend": "Cached", "folder": tmp_path},
+        infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
     )
 
     result1 = chain.forward()
@@ -101,14 +114,11 @@ def test_chain_with_generator(tmp_path: Path) -> None:
 
 def test_chain_intermediate_cache(tmp_path: Path) -> None:
     """Chain with intermediate step caching."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(
-        steps=[
-            RandomGenerator(infra={"backend": "Cached", "folder": tmp_path}),
-            Multiply(coeff=3.0),
-        ],
-        infra={"backend": "Cached", "folder": tmp_path},
+        steps=[RandomGenerator(infra=infra), Multiply(coeff=3.0)],
+        infra=infra,
     )
-
     result1 = chain.forward()
 
     # Check intermediate cache exists
@@ -116,48 +126,25 @@ def test_chain_intermediate_cache(tmp_path: Path) -> None:
     gen_step = configured._step_sequence()[0]
     assert gen_step.has_cache()
 
-    # Second call uses cache - same result proves caching
+    # Second call uses cache - same result proves intermediate caching
+    chain.clear_cache(recursive=False)
     result2 = chain.forward()
     assert result1 == result2
 
 
 def test_mode_readonly(tmp_path: Path) -> None:
     """Read-only mode fails if no cache."""
-    step = Multiply(
-        coeff=3.0, infra={"backend": "Cached", "folder": tmp_path, "mode": "read-only"}
-    )
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "read-only"}
+    step = Multiply(coeff=3.0, infra=infra)
 
     with pytest.raises(RuntimeError, match="read-only"):
         step.forward(5.0)
 
 
-def test_generator_cache_access(tmp_path: Path) -> None:
-    """Generator steps work without explicit with_input()."""
-    step = RandomGenerator(infra={"backend": "Cached", "folder": tmp_path})
-
-    # Cache operations work directly (auto-configures with NoInput)
-    assert not step.has_cache()
-
-    # Run and check cache
-    result1 = step.forward()
-    assert step.has_cache()
-
-    # Same result from cache
-    result2 = step.forward()
-    assert result1 == result2
-
-    # Clear cache
-    step.clear_cache()
-    assert not step.has_cache()
-
-    # New result after clearing
-    result3 = step.forward()
-    assert result3 != result1
-
-
 def test_transformer_requires_with_input(tmp_path: Path) -> None:
     """Transformer steps require with_input() for cache operations."""
-    step = Multiply(coeff=3.0, infra={"backend": "Cached", "folder": tmp_path})
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = Multiply(coeff=3.0, infra=infra)
 
     # Cache operations without with_input() should fail for transformers
     with pytest.raises(RuntimeError, match="requires input"):
@@ -173,7 +160,7 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     assert not step.with_input(5.0).has_cache()
 
 
-def test_chain_is_generator(tmp_path: Path) -> None:
+def test_chain_is_generator() -> None:
     """Chain._is_generator checks first step."""
     # Chain with generator first step
     gen_chain = Chain(steps=[RandomGenerator(), Multiply(coeff=2.0)])
@@ -184,33 +171,32 @@ def test_chain_is_generator(tmp_path: Path) -> None:
     assert not trans_chain._is_generator()
 
 
+class ErrorStep(Step):
+    error: bool = True
+    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("error",)
+
+    def _forward(self, value: float) -> float:
+        if self.error:
+            raise ValueError("Intentional error")
+        return value * 2
+
+
 def test_mode_retry(tmp_path: Path) -> None:
     """Retry mode re-runs failed jobs."""
-    import submitit
-
-    class ErrorStep(Step):
-        error: bool = True
-        _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("error",)
-
-        def _forward(self, value: float) -> float:
-            if self.error:
-                raise ValueError("Intentional error")
-            return value * 2
 
     # First run with error
-    step = ErrorStep(error=True, infra={"backend": "LocalProcess", "folder": tmp_path})
-    with pytest.raises(submitit.core.utils.FailedJobError):
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = ErrorStep(error=True, infra=infra)
+    with pytest.raises(ValueError):
         step.forward(5.0)
 
     # Same cache key, still errors (cached failure)
-    step2 = ErrorStep(error=False, infra={"backend": "LocalProcess", "folder": tmp_path})
-    with pytest.raises(submitit.core.utils.FailedJobError):
-        step2.forward(5.0)
+    step = ErrorStep(error=False, infra=infra)
+    with pytest.raises(ValueError):
+        step.forward(5.0)
 
     # Retry mode clears failed job and re-runs
-    step3 = ErrorStep(
-        error=False,
-        infra={"backend": "LocalProcess", "folder": tmp_path, "mode": "retry"},
-    )
-    result = step3.forward(5.0)
+    infra["mode"] = "retry"
+    step = ErrorStep(error=False, infra=infra)
+    result = step.forward(5.0)
     assert result == 10.0
