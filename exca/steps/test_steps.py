@@ -19,15 +19,15 @@ class Multiply(Step):
         return value * self.coeff
 
 
-class Add(Step):
-    amount: float = 0.0
+class RandomAdd(Step):
+    """Adds random noise - useful to verify caching."""
 
     def _forward(self, value: float) -> float:
-        return value + self.amount
+        return value + random.random()
 
 
 class RandomGenerator(Step):
-    """Generates a random value - useful to verify caching works."""
+    """Generates a random value - useful to verify caching."""
 
     def _forward(self) -> float:
         return random.random()
@@ -41,45 +41,46 @@ def test_step_no_infra() -> None:
 
 def test_step_with_cache(tmp_path: Path) -> None:
     """Step with Cached infra caches result."""
-    step = Multiply(coeff=3.0, infra={"backend": "Cached", "folder": tmp_path})
+    step = RandomAdd(infra={"backend": "Cached", "folder": tmp_path})
 
     # First call computes
     result1 = step.forward(5.0)
-    assert result1 == 15.0
     assert step.with_input(5.0).has_cache()
 
-    # Second call uses cache
+    # Second call uses cache - same result proves caching
     result2 = step.forward(5.0)
-    assert result2 == 15.0
-    assert step.with_input(5.0).cached_result() == 15.0
+    assert result1 == result2
+    assert step.with_input(5.0).cached_result() == result1
 
     # Clear cache
     step.with_input(5.0).clear_cache()
     assert not step.with_input(5.0).has_cache()
 
+    # After clearing, new computation gives different result
+    result3 = step.forward(5.0)
+    assert result3 != result1
+
 
 def test_chain_no_infra() -> None:
     """Chain without infra runs inline."""
-    chain = Chain(steps=[Multiply(coeff=2.0), Add(amount=10.0)])
-    # 5 * 2 + 10 = 20
-    assert chain.forward(5.0) == 20.0
+    chain = Chain(steps=[Multiply(coeff=2.0), Multiply(coeff=3.0)])
+    # 5 * 2 * 3 = 30
+    assert chain.forward(5.0) == 30.0
 
 
 def test_chain_with_cache(tmp_path: Path) -> None:
     """Chain with Cached infra caches final result."""
     chain = Chain(
-        steps=[Multiply(coeff=2.0), Add(amount=10.0)],
+        steps=[Multiply(coeff=2.0), RandomAdd()],
         infra={"backend": "Cached", "folder": tmp_path},
     )
 
-    # 5 * 2 + 10 = 20
     result1 = chain.forward(5.0)
-    assert result1 == 20.0
     assert chain.with_input(5.0).has_cache()
 
-    # Second call uses cache
+    # Second call uses cache - same result proves caching
     result2 = chain.forward(5.0)
-    assert result2 == 20.0
+    assert result1 == result2
 
 
 def test_chain_with_generator(tmp_path: Path) -> None:
@@ -89,11 +90,10 @@ def test_chain_with_generator(tmp_path: Path) -> None:
         infra={"backend": "Cached", "folder": tmp_path},
     )
 
-    # First call computes random * 3
     result1 = chain.forward()
     assert chain.with_input().has_cache()
 
-    # Second call uses cache - same result proves caching works
+    # Second call uses cache - same result proves caching
     result2 = chain.forward()
     assert result1 == result2
 
@@ -112,10 +112,10 @@ def test_chain_intermediate_cache(tmp_path: Path) -> None:
 
     # Check intermediate cache exists
     configured = chain.with_input()
-    gen_step = configured._step_sequence()[0]  # RandomGenerator
+    gen_step = configured._step_sequence()[0]
     assert gen_step.has_cache()
 
-    # Second call uses cache
+    # Second call uses cache - same result proves caching
     result2 = chain.forward()
     assert result1 == result2
 
