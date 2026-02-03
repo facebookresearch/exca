@@ -73,14 +73,18 @@ class Step(exca.helpers.DiscriminatedModel):
     def forward(self, input: tp.Any = NoInput()) -> tp.Any:
         """Execute with caching and backend handling."""
         step = self.with_input(input) if self._previous is None else self
-        has_input = isinstance(step._previous, Input)
+        prev = step._previous
 
+        if not isinstance(prev, Input):
+            # No input - call _forward without args
+            if step.infra is None:
+                return step._forward()
+            return step.infra.run(step._forward)
+
+        # Has input - call _forward with value
         if step.infra is None:
-            return step._forward(step._previous.value) if has_input else step._forward()
-
-        if has_input:
-            return step.infra.run(step._forward, step._previous.value)
-        return step.infra.run(step._forward)
+            return step._forward(prev.value)
+        return step.infra.run(step._forward, prev.value)
 
     # =========================================================================
     # Cache key computation
@@ -111,10 +115,6 @@ class Step(exca.helpers.DiscriminatedModel):
         """Clear cached result. Call with_input() first if needed."""
         if self.infra:
             self.infra.clear_cache()
-
-    def cached_result(self) -> tp.Any:
-        """Load cached result. Call with_input() first if needed."""
-        return self.infra.cached_result() if self.infra else None
 
     def job(self) -> tp.Any:
         """Get submitit job. Call with_input() first if needed."""

@@ -44,7 +44,7 @@ class _CachingCall:
 
     def __call__(self, *args: tp.Any, **kwargs: tp.Any) -> None:
         result = self.func(*args, **kwargs)
-        cd = exca.cachedict.CacheDict(
+        cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=self.cache_folder, cache_type=self.cache_type
         )
         if "result" not in cd:  # Only write if not already cached
@@ -75,13 +75,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """Compute cache key from owning step."""
         if self._step is None:
             raise RuntimeError("Backend not attached to a Step")
-        # Import here to avoid circular import at module level
-        from .base import NoInput
-
-        step = self._step
-        if step._previous is None:
-            step = step.with_input(NoInput())
-        return step._chain_hash()
+        return self._step._chain_hash()
 
     def _cache_folder(self) -> Path:
         """Get cache folder for this step."""
@@ -119,7 +113,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _load_cache(self) -> tp.Any | None:
         """Load from cache, or None if not cached."""
         folder = self._cache_folder()
-        cd = exca.cachedict.CacheDict(folder=folder, cache_type=self.cache_type)
+        cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
+            folder=folder, cache_type=self.cache_type
+        )
         if "result" in cd:
             return cd["result"]
         return None
@@ -164,19 +160,21 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         raise NotImplementedError
 
 
+class _InlineJob:
+    """Dummy job for inline execution."""
+
+    def result(self) -> None:
+        pass
+
+
 class Cached(Backend):
     """Inline execution + caching."""
 
     def _submit(
         self, wrapper: _CachingCall, job_pkl: Path, *args: tp.Any, **kwargs: tp.Any
-    ) -> tp.Any:
+    ) -> _InlineJob:
         wrapper(*args, **kwargs)
-
-        class _Done:
-            def result(self) -> None:
-                pass
-
-        return _Done()
+        return _InlineJob()
 
 
 class _SubmititBackend(Backend):
@@ -216,17 +214,6 @@ class _SubmititBackend(Backend):
 
         return job
 
-    def list_jobs(self) -> list[submitit.Job[tp.Any]]:
-        """List all jobs in this folder."""
-        logs = self.folder / f"logs/{getpass.getuser()}"
-        jobs: list[submitit.Job[tp.Any]] = []
-        if not logs.exists():
-            return jobs
-        folders = [sub for sub in logs.iterdir() if "%" not in sub.name]
-        for sub in sorted(folders, key=lambda s: s.stat().st_mtime):
-            jobs.append(self._EXECUTOR_CLS.job_class(sub, sub.name))
-        return jobs
-
 
 class LocalProcess(_SubmititBackend):
     """Subprocess execution + caching."""
@@ -253,14 +240,7 @@ class Slurm(_SubmititBackend):
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.SlurmExecutor
 
 
-class Auto(_SubmititBackend):
+class Auto(Slurm):
     """Auto-detect executor (local or Slurm)."""
-
-    slurm_constraint: str | None = None
-    slurm_partition: str | None = None
-    slurm_account: str | None = None
-    slurm_qos: str | None = None
-    slurm_use_srun: bool = False
-    slurm_additional_parameters: dict[str, int | str | float | bool] | None = None
 
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.AutoExecutor  # type: ignore

@@ -50,7 +50,7 @@ def test_step_with_cache(tmp_path: Path) -> None:
     # Second call uses cache - same result proves caching
     result2 = step.forward(5.0)
     assert result1 == result2
-    assert step.with_input(5.0).cached_result() == result1
+    assert step.with_input(5.0).infra.cached_result() == result1
 
     # Clear cache
     step.with_input(5.0).clear_cache()
