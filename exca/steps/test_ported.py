@@ -102,6 +102,12 @@ def test_multi_sequence_hash() -> None:
 # =============================================================================
 
 
+def _extract_cache_folders(folder: Path) -> tuple[str, ...]:
+    """Extract all cache folder paths relative to base folder."""
+    caches = (str(x.relative_to(folder))[:-6] for x in folder.rglob("**/cache"))
+    return tuple(sorted(caches))
+
+
 def test_cache(tmp_path: Path) -> None:
     """Chain caching behavior - intermediate and final."""
     # First step generates random, second multiplies
@@ -161,6 +167,22 @@ def test_cache(tmp_path: Path) -> None:
     seq.with_input().clear_cache(recursive=True)
     out_new = seq.forward()
     assert out_new != pytest.approx(out, abs=1e-9)  # all cleared, new random
+
+    # Verify cache folder structure
+    gen_caches = _extract_cache_folders(tmp_path / "gen")
+    # Generator step caches: without input and with input=1
+    assert len(gen_caches) == 2
+    assert gen_caches[0] == "type=RandInput-b1ed70f1"
+    assert gen_caches[1] == "value=1,type=Input-0b6b7c99/type=RandInput-b1ed70f1"
+
+    chain_caches = _extract_cache_folders(tmp_path / "chain")
+    # Chain caches: one without input, one with input=1
+    assert len(chain_caches) == 2
+    assert chain_caches[0] == "type=RandInput-b1ed70f1/coeff=10,type=Mult-98baeffc"
+    assert (
+        chain_caches[1]
+        == "value=1,type=Input-0b6b7c99/type=RandInput-b1ed70f1/coeff=10,type=Mult-98baeffc"
+    )
 
 
 # =============================================================================
