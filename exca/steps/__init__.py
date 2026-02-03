@@ -11,36 +11,20 @@ Each Step has its own infrastructure (backend) for caching and execution.
 Chain is a specialized Step that composes multiple steps sequentially.
 
 Example:
-    >>> from exca.steps import Step, Chain
-    >>> 
-    >>> class Multiply(Step):
+    >>> from exca import steps
+    >>>
+    >>> class Multiply(steps.Step):
     ...     coeff: float = 2.0
     ...     def _forward(self, value):
     ...         return value * self.coeff
-    >>> 
-    >>> chain = Chain(
+    >>>
+    >>> chain = steps.Chain(
     ...     steps=[Multiply(coeff=2), Multiply(coeff=3)],
     ...     infra={"backend": "Cached", "folder": "/tmp/cache"}
     ... )
     >>> result = chain.forward(5.0)  # Returns 30.0
 """
 
-from .backends import Auto, Backend, Cached, LocalProcess, ModeType, Slurm, SubmititDebug
-from .base import Chain, Input, NoInput, Step
-
-__all__ = [
-    # Core classes
-    "Step",
-    "Chain",
-    "Input",
-    "NoInput",
-    # Backends
-    "Backend",
-    "Cached",
-    "LocalProcess",
-    "Slurm",
-    "Auto",
-    "SubmititDebug",
-    # Types
-    "ModeType",
-]
+from . import backends
+from .base import Chain as Chain
+from .base import Step as Step

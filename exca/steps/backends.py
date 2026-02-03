@@ -134,7 +134,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         pkl = self._cache_folder() / "job.pkl"
         if pkl.exists():
             with pkl.open("rb") as f:
-                return pickle.load(f)
+                return pickle.load(f)  # type: ignore
         return None
 
     def _cache_status(self) -> CacheStatus:
@@ -300,4 +300,4 @@ class Slurm(_SubmititBackend):
 class Auto(Slurm):
     """Auto-detect executor (local or Slurm)."""
 
-    _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.AutoExecutor  # type: ignore
+    _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.AutoExecutor
