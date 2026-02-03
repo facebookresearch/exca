@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import random
+import typing as tp
 from pathlib import Path
 
 import pytest
@@ -170,3 +171,46 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     assert step.with_input(5.0).has_cache()
     step.with_input(5.0).clear_cache()
     assert not step.with_input(5.0).has_cache()
+
+
+def test_chain_is_generator(tmp_path: Path) -> None:
+    """Chain._is_generator checks first step."""
+    # Chain with generator first step
+    gen_chain = Chain(steps=[RandomGenerator(), Multiply(coeff=2.0)])
+    assert gen_chain._is_generator()
+
+    # Chain with transformer first step
+    trans_chain = Chain(steps=[Multiply(coeff=2.0), RandomAdd()])
+    assert not trans_chain._is_generator()
+
+
+def test_mode_retry(tmp_path: Path) -> None:
+    """Retry mode re-runs failed jobs."""
+    import submitit
+
+    class ErrorStep(Step):
+        error: bool = True
+        _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("error",)
+
+        def _forward(self, value: float) -> float:
+            if self.error:
+                raise ValueError("Intentional error")
+            return value * 2
+
+    # First run with error
+    step = ErrorStep(error=True, infra={"backend": "LocalProcess", "folder": tmp_path})
+    with pytest.raises(submitit.core.utils.FailedJobError):
+        step.forward(5.0)
+
+    # Same cache key, still errors (cached failure)
+    step2 = ErrorStep(error=False, infra={"backend": "LocalProcess", "folder": tmp_path})
+    with pytest.raises(submitit.core.utils.FailedJobError):
+        step2.forward(5.0)
+
+    # Retry mode clears failed job and re-runs
+    step3 = ErrorStep(
+        error=False,
+        infra={"backend": "LocalProcess", "folder": tmp_path, "mode": "retry"},
+    )
+    result = step3.forward(5.0)
+    assert result == 10.0

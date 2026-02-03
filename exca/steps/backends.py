@@ -61,7 +61,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     - Provide cache operations: has_cache(), clear_cache(), job(), etc.
     """
 
-    folder: Path
+    folder: Path | None = None
     cache_type: str | None = None
     mode: ModeType = "cached"
 
@@ -71,17 +71,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Cache key and folder
     # =========================================================================
 
-    def _ensure_configured(self) -> None:
-        """Ensure step is configured, auto-configuring generators."""
+    def _configured_step(self) -> "Step":
+        """Get configured step, auto-configuring generators."""
         if self._step is None:
             raise RuntimeError("Backend not attached to a Step")
         if self._step._previous is not None:
-            return  # Already configured
+            return self._step  # Already configured
 
         if self._step._is_generator():
-            # Auto-configure generator with NoInput
-            configured = self._step.with_input()
-            self._step = configured
+            # Auto-configure generator with NoInput (returns new step, doesn't mutate)
+            return self._step.with_input()
         else:
             raise RuntimeError(
                 "Step requires input but with_input() was not called. "
@@ -90,12 +89,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _cache_key(self) -> str:
         """Compute cache key from owning step."""
-        self._ensure_configured()
-        assert self._step is not None
-        return self._step._chain_hash()
+        return self._configured_step()._chain_hash()
 
     def _cache_folder(self) -> Path:
         """Get cache folder for this step."""
+        if self.folder is None:
+            raise RuntimeError(
+                "Backend folder not set. Set folder on infra or use propagate_folder."
+            )
         folder = self.folder / self._cache_key() / "cache"
         folder.mkdir(exist_ok=True, parents=True)
         return folder
@@ -153,17 +154,27 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             if cached is None:
                 raise RuntimeError(f"No cache in read-only mode: {self._cache_key()}")
             return cached
-        if cached is not None and self.mode != "force":
+        if cached is not None and self.mode not in ("force", "retry"):
             logger.debug("Cache hit: %s", self._cache_key())
             return cached
 
         # Check job recovery
         job_pkl = cache_folder / "job.pkl"
-        if job_pkl.exists():
+        job: tp.Any = None
+        if job_pkl.exists() and self.mode != "force":
             logger.debug("Recovering job: %s", job_pkl)
             with job_pkl.open("rb") as f:
                 job = pickle.load(f)
-        else:
+            # Retry mode: clear failed jobs
+            if self.mode == "retry" and job.done():
+                try:
+                    job.result()  # Check if it failed
+                except Exception:
+                    logger.warning("Retrying failed job: %s", job_pkl)
+                    job = None
+                    job_pkl.unlink()
+
+        if job is None:
             wrapper = _CachingCall(func, cache_folder, self.cache_type)
             job = self._submit(wrapper, job_pkl, *args, **kwargs)
 
@@ -210,6 +221,7 @@ class _SubmititBackend(Backend):
     def _submit(
         self, wrapper: _CachingCall, job_pkl: Path, *args: tp.Any, **kwargs: tp.Any
     ) -> tp.Any:
+        assert self.folder is not None  # Validated in _cache_folder
         log_folder = self.folder / f"logs/{getpass.getuser()}/%j"
         executor = self._EXECUTOR_CLS(folder=log_folder)
 

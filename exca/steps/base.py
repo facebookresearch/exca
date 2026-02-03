@@ -172,6 +172,11 @@ class Chain(Step):
     def _step_sequence(self) -> tuple[Step, ...]:
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
 
+    def _is_generator(self) -> bool:
+        """Chain is a generator if its first step is a generator."""
+        steps = self._step_sequence()
+        return steps[0]._is_generator() if steps else True
+
     def with_input(self, value: tp.Any = NoInput()) -> "Chain":
         """Create copy with optional Input prepended."""
         if self._previous is not None:
