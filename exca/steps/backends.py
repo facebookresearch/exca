@@ -200,7 +200,7 @@ class _SubmititBackend(Backend):
 
         params = {
             k: getattr(self, k)
-            for k in self.model_fields
+            for k in type(self).model_fields
             if k not in ("folder", "cache_type", "mode") and getattr(self, k) is not None
         }
         if "job_name" in params:

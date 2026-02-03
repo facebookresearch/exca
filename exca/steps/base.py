@@ -18,6 +18,7 @@ import logging
 import typing as tp
 
 import exca
+from exca import utils
 
 from . import backends
 
@@ -173,21 +174,23 @@ class Chain(Step):
 
         for step in self._step_sequence():
             step._previous = previous
-            if self.propagate_folder and folder and step.infra is None:
-                step.infra = backends.Cached(folder=folder)
+            # Only propagate folder to steps that have infra but no folder set
+            if self.propagate_folder and folder and step.infra is not None:
+                if step.infra.folder is None:
+                    step.infra = step.infra.model_copy(update={"folder": folder})
             if step.infra is not None:
                 step.infra._step = step
             if isinstance(step, Chain):
                 step._init()
             previous = step
 
-    def _forward(self) -> tp.Any:
+    def _forward(self, input: tp.Any = NoInput()) -> tp.Any:
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
         # Find latest cached result
         start_idx = 0
-        result: tp.Any = None
+        result: tp.Any = input
         for k, step in enumerate(reversed(steps)):
             if step.infra is not None and step.infra.has_cache():
                 result = step.infra.cached_result()
@@ -200,11 +203,11 @@ class Chain(Step):
                 result = step.value
             elif step.infra is not None:
                 # Use infra.run() to cache intermediate results
-                if result is None:
+                if isinstance(result, NoInput):
                     result = step.infra.run(step._forward)
                 else:
                     result = step.infra.run(step._forward, result)
-            elif result is None:
+            elif isinstance(result, NoInput):
                 result = step._forward()
             else:
                 result = step._forward(result)
@@ -221,6 +224,20 @@ class Chain(Step):
 
     def _aligned_step(self) -> list[Step]:
         return [s for step in self._step_sequence() for s in step._aligned_step()]
+
+    def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
+        """Flatten chain for UID export (match old Chain behavior)."""
+        chain = type(self)(steps=tuple(self._aligned_chain()))
+        exporter = utils.ConfigExporter(
+            uid=True, exclude_defaults=True, ignore_first_override=True
+        )
+        cfg = {"steps": exporter.apply(chain)["steps"]}
+        if cfg["steps"]:
+            key = chain._step_sequence()[0]._exca_discriminator_key
+            if cfg["steps"][0][key] == "Input":
+                cfg["input"] = cfg["steps"][0]["value"]
+                cfg["steps"] = cfg["steps"][1:]
+        return cfg
 
     def clear_cache(self, recursive: bool = True) -> None:
         """Clear cache, optionally including sub-steps."""
