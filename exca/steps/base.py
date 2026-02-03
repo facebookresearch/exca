@@ -14,6 +14,7 @@ Backend holds a reference to its owning Step for cache key computation.
 from __future__ import annotations
 
 import collections
+import inspect
 import logging
 import typing as tp
 
@@ -58,13 +59,22 @@ class Step(exca.helpers.DiscriminatedModel):
         """Override in subclasses."""
         raise NotImplementedError
 
+    def _is_generator(self) -> bool:
+        """Check if step is a generator (no required input in _forward)."""
+        sig = inspect.signature(self._forward)
+        for name, param in sig.parameters.items():
+            if name == "self":
+                continue
+            if param.default is inspect.Parameter.empty:
+                return False  # Has required parameter
+        return True
+
     def with_input(self, value: tp.Any = NoInput()) -> "Step":
-        """Create copy with optional Input step as _previous."""
+        """Create copy with Input as _previous (Input holds value or NoInput)."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
         step = self.model_copy(deep=True)
-        if not isinstance(value, NoInput):
-            step._previous = Input(value=value)
+        step._previous = Input(value=value)
         # Re-attach infra to new step
         if step.infra is not None:
             step.infra._step = step
@@ -75,7 +85,11 @@ class Step(exca.helpers.DiscriminatedModel):
         step = self.with_input(input) if self._previous is None else self
         prev = step._previous
 
+        # prev is always Input after with_input()
         if not isinstance(prev, Input):
+            raise RuntimeError("Step not properly configured")
+
+        if isinstance(prev.value, NoInput):
             # No input - call _forward without args
             if step.infra is None:
                 return step._forward()
@@ -104,30 +118,34 @@ class Step(exca.helpers.DiscriminatedModel):
         return "/".join(exca.ConfDict.from_model(s, **opts).to_uid() for s in steps)
 
     # =========================================================================
-    # Cache operations (call with_input() first to configure)
+    # Cache operations (backend auto-configures generators, errors for transformers)
     # =========================================================================
 
     def has_cache(self) -> bool:
-        """Check if result is cached. Call with_input() first if needed."""
+        """Check if result is cached."""
         return self.infra.has_cache() if self.infra else False
 
     def clear_cache(self) -> None:
-        """Clear cached result. Call with_input() first if needed."""
+        """Clear cached result."""
         if self.infra:
             self.infra.clear_cache()
 
     def job(self) -> tp.Any:
-        """Get submitit job. Call with_input() first if needed."""
+        """Get submitit job."""
         return self.infra.job() if self.infra else None
 
 
 class Input(Step):
-    """Step that provides a fixed value."""
+    """Step that provides a fixed value (or NoInput sentinel)."""
 
     value: tp.Any
 
     def _forward(self) -> tp.Any:
         return self.value
+
+    def _aligned_step(self) -> list["Step"]:
+        # Invisible in chain hash when holding NoInput
+        return [] if isinstance(self.value, NoInput) else [self]
 
 
 class Chain(Step):
@@ -164,6 +182,7 @@ class Chain(Step):
         chain = type(self)(
             steps=steps, infra=self.infra, propagate_folder=self.propagate_folder
         )
+        chain._previous = Input(value=NoInput())  # Mark chain as configured
         chain._init()
         return chain
 
@@ -173,7 +192,8 @@ class Chain(Step):
         folder = self.infra.folder if self.infra else None
 
         for step in self._step_sequence():
-            step._previous = previous
+            # First step gets Input(NoInput()) if no previous, marking it as configured
+            step._previous = previous if previous is not None else Input(value=NoInput())
             # Only propagate folder to steps that have infra but no folder set
             if self.propagate_folder and folder and step.infra is not None:
                 if step.infra.folder is None:

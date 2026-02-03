@@ -128,3 +128,45 @@ def test_mode_readonly(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="read-only"):
         step.forward(5.0)
+
+
+def test_generator_cache_access(tmp_path: Path) -> None:
+    """Generator steps work without explicit with_input()."""
+    step = RandomGenerator(infra={"backend": "Cached", "folder": tmp_path})
+
+    # Cache operations work directly (auto-configures with NoInput)
+    assert not step.has_cache()
+
+    # Run and check cache
+    result1 = step.forward()
+    assert step.has_cache()
+
+    # Same result from cache
+    result2 = step.forward()
+    assert result1 == result2
+
+    # Clear cache
+    step.clear_cache()
+    assert not step.has_cache()
+
+    # New result after clearing
+    result3 = step.forward()
+    assert result3 != result1
+
+
+def test_transformer_requires_with_input(tmp_path: Path) -> None:
+    """Transformer steps require with_input() for cache operations."""
+    step = Multiply(coeff=3.0, infra={"backend": "Cached", "folder": tmp_path})
+
+    # Cache operations without with_input() should fail for transformers
+    with pytest.raises(RuntimeError, match="requires input"):
+        step.has_cache()
+
+    # forward() works (it calls with_input internally)
+    result = step.forward(5.0)
+    assert result == 15.0
+
+    # With explicit with_input() - works
+    assert step.with_input(5.0).has_cache()
+    step.with_input(5.0).clear_cache()
+    assert not step.with_input(5.0).has_cache()

@@ -71,10 +71,27 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Cache key and folder
     # =========================================================================
 
-    def _cache_key(self) -> str:
-        """Compute cache key from owning step."""
+    def _ensure_configured(self) -> None:
+        """Ensure step is configured, auto-configuring generators."""
         if self._step is None:
             raise RuntimeError("Backend not attached to a Step")
+        if self._step._previous is not None:
+            return  # Already configured
+
+        if self._step._is_generator():
+            # Auto-configure generator with NoInput
+            configured = self._step.with_input()
+            self._step = configured
+        else:
+            raise RuntimeError(
+                "Step requires input but with_input() was not called. "
+                "Use step.with_input(value).has_cache() or step.forward(value)."
+            )
+
+    def _cache_key(self) -> str:
+        """Compute cache key from owning step."""
+        self._ensure_configured()
+        assert self._step is not None
         return self._step._chain_hash()
 
     def _cache_folder(self) -> Path:
