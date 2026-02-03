@@ -240,16 +240,24 @@ class Chain(Cache):
         if chain.folder is not None:
             pkl = chain._chain_folder() / "cache" / "job.pkl"
         backend = chain.backend
+        job: backends.JobLike | None = None
         if pkl is not None and pkl.exists():
             logger.debug("Reloading job in: %s", pkl.parent)
             with pkl.open("rb") as f:
                 job = pickle.load(f)
-        else:
+            # For retry mode, check if job failed and discard it
+            if chain.mode == "retry" and job.done():
+                try:
+                    job.result()  # This will raise if job failed
+                except Exception:
+                    logger.debug("Job failed, retrying due to mode='retry'")
+                    self.clear_cache(recursive=False)
+                    job = None
+        if job is None:
             if backend is None:
                 backend = backends._None()
-            with backend.submission_context(
-                folder=None if pkl is None else pkl.parents[1]
-            ):
+            folder: Path | None = None if pkl is None else pkl.parents[1]
+            with backend.submission_context(folder=folder):
                 job = backend.submit(chain._detached_forward, *params)
             if pkl is not None and not isinstance(job, backends.ResultJob):
                 logger.debug("Dumping job into: %s", pkl.parent)

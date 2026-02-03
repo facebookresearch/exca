@@ -160,9 +160,10 @@ def test_error_cache(tmp_path: Path) -> None:
     seq.steps[1].error = False  # type: ignore
     with pytest.raises(submitit.core.utils.FailedJobError):
         seq.forward(2)  # error should be cached
-    seq.with_input(2).clear_cache()
+    # Create new chain with error=False in the steps definition (pydantic copies steps)
+    steps[1]["error"] = False
+    seq = Chain(steps=steps, folder=tmp_path, backend={"type": "LocalProcess"}, mode="retry")  # type: ignore
     assert seq.forward(2) == 21
-    # TODO use retry instead
 
 
 def _extract_caches(folder: Path) -> tuple[str, ...]:
