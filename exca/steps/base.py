@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-Core step classes for chain2.
+Core step classes.
 
 This module provides:
 - Step: Base class for all pipeline steps
@@ -26,7 +26,7 @@ import pydantic
 
 import exca
 
-from . import infra as infra_module
+from . import backends
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class Step(exca.helpers.DiscriminatedModel):
     Base class for all pipeline steps.
 
     A Step is a unit of computation that:
-    - Takes an input and produces an output via _forward()
+    - Produces output via _forward() (generator) or _forward(input) (transformer)
     - Can optionally have infrastructure for caching and distributed execution
     - Has with_input(value) to attach input for cache key computation
     - Uses forward(input) as the main entry point (handles caching/backend)
@@ -62,14 +62,14 @@ class Step(exca.helpers.DiscriminatedModel):
 
     Parameters
     ----------
-    infra : StepInfra, optional
+    infra : Backend, optional
         Infrastructure configuration. Use one of:
         - Cached: Just caching, inline execution
         - LocalProcess: Subprocess + caching
         - Slurm: Cluster + caching
     """
 
-    infra: infra_module.StepInfra | None = None
+    infra: backends.Backend | None = None
 
     # Internal state
     _previous: tp.Union["Step", None] = None
@@ -163,7 +163,7 @@ class Step(exca.helpers.DiscriminatedModel):
         return result
 
     # =========================================================================
-    # Cache key computation (uses _chain_hash like chain v1)
+    # Cache key computation
     # =========================================================================
 
     def _aligned_step(self) -> list["Step"]:
@@ -189,7 +189,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         Compute cache key from full chain (including _previous steps).
 
-        Uses ConfDict.to_uid() for deterministic hashing (not Python's hash()).
+        Uses ConfDict.to_uid() for deterministic hashing.
 
         Returns a path-like string: "step1_uid/step2_uid/step3_uid"
         """
@@ -246,8 +246,6 @@ class Step(exca.helpers.DiscriminatedModel):
         if self.infra is None:
             raise RuntimeError("No infra configured")
 
-        folder = self._chain_folder()
-
         # Check for existing job (recovery)
         pkl = self._cache_folder() / "job.pkl"
         if pkl.exists():
@@ -257,15 +255,14 @@ class Step(exca.helpers.DiscriminatedModel):
             return job.result()
 
         # Submit via infra
-        with self.infra.submission_context(folder=folder):
-            if has_input:
-                input_value = self._previous.value  # type: ignore
-                job = self.infra.submit(self._forward, input_value)
-            else:
-                job = self.infra.submit(self._forward)
+        if has_input:
+            input_value = self._previous.value  # type: ignore
+            job = self.infra.submit(self._forward, input_value)
+        else:
+            job = self.infra.submit(self._forward)
 
         # Save job for recovery (if not immediate result)
-        if not isinstance(job, infra_module.ResultJob):
+        if not isinstance(job, backends.ResultJob):
             pkl.parent.mkdir(parents=True, exist_ok=True)
             logger.debug("Dumping job into: %s", pkl)
             with pkl.open("wb") as f:
@@ -316,7 +313,7 @@ class Chain(Step):
     ----------
     steps : Sequence[Step] or OrderedDict[str, Step]
         The steps to execute in sequence
-    infra : StepInfra, optional
+    infra : Backend, optional
         Infrastructure for the chain's final result caching
     propagate_folder : bool
         If True, steps without infra inherit folder from chain's infra
@@ -397,7 +394,7 @@ class Chain(Step):
             # Propagate folder if needed: create Cached infra for steps without infra
             if self.propagate_folder and chain_folder is not None:
                 if step.infra is None:
-                    step.infra = infra_module.Cached(folder=chain_folder)
+                    step.infra = backends.Cached(folder=chain_folder)
 
             # Recurse into nested chains
             if isinstance(step, Chain):

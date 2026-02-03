@@ -1,8 +1,8 @@
-# Chain2 Specification
+# Steps Module Specification
 
 ## Overview
 
-`chain2` is a redesigned implementation of the chain module where **each Step has its own infrastructure** (execution backend + caching), rather than having infrastructure only at the Chain level. The `Chain` itself becomes a specific type of `Step`, enabling more flexible and composable pipelines.
+The `steps` module provides a redesigned implementation where **each Step has its own infrastructure** (execution backend + caching), rather than having infrastructure only at the Chain level. The `Chain` itself becomes a specific type of `Step`, enabling more flexible and composable pipelines.
 
 ## Goals
 
@@ -11,6 +11,7 @@
 3. **Unified API**: Same interface for Steps and Chains
 4. **Clean inheritance**: All backends inherit from `Cached`, so all have caching
 5. **User-friendly**: Use dict syntax for infra, no need to import backend classes
+6. **Simple backend API**: `infra.submit(func, *args)` - no context managers needed
 
 ## Core Concepts
 
@@ -22,15 +23,15 @@ A `Step` is the fundamental unit that:
 - Has `with_input(value)` to attach an input for cache key computation
 - Uses `forward(input)` as the main entry point (handles caching/backend)
 
-### StepInfra (Discriminated Model)
+### Backend (Discriminated Model)
 
-`StepInfra` is a discriminated model with `discriminator_key="backend"`:
+`Backend` is a discriminated model with `discriminator_key="backend"`:
 - **Cached**: Just caching, inline execution (base class)
 - **LocalProcess**: Subprocess execution + caching (inherits from Cached)
 - **Slurm**: Cluster execution + caching (inherits from Cached)
 - **Auto**: Auto-detect + caching (inherits from Cached)
 
-All infra classes inherit from `Cached`, so all have:
+All backends inherit from `Cached`, so all have:
 - `folder`: Path for cache storage
 - `cache_type`: Serialization format
 - `mode`: Execution mode (cached/force/read-only/retry)
@@ -45,13 +46,13 @@ A `Chain` is a specialized `Step` that composes multiple steps sequentially.
 ┌─────────────────────────────────────────────────────────────┐
 │                          Step                               │
 │  ┌──────────┐  ┌───────────────────────┐  ┌──────────────┐ │
-│  │  config  │  │    infra (StepInfra)  │  │  _forward()  │ │
+│  │  config  │  │    infra (Backend)    │  │  _forward()  │ │
 │  │ (params) │  │  (discriminated)      │  │  -> output   │ │
 │  └──────────┘  └───────────────────────┘  └──────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│              StepInfra (discriminated by "backend")         │
+│              Backend (discriminated by "backend")           │
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  Cached (base)                                        │  │
@@ -70,24 +71,29 @@ A `Chain` is a specialized `Step` that composes multiple steps sequentially.
 
 ## API Design
 
-### StepInfra Classes
+### Backend Classes
 
 ```python
-class StepInfra(DiscriminatedModel, discriminator_key="backend"):
-    """Base class for infrastructure. Use subclasses."""
-    pass
+class Backend(DiscriminatedModel, discriminator_key="backend"):
+    """Base class for backends. Use subclasses."""
+    
+    def submit(self, func, *args, **kwargs) -> JobLike:
+        """Submit function for execution."""
+        ...
 
 
-class Cached(StepInfra):
+class Cached(Backend):
     """Just caching, inline execution."""
     folder: Path
     cache_type: str | None = None
     mode: Literal["cached", "force", "read-only", "retry"] = "cached"
+    
+    def submit(self, func, *args, **kwargs) -> ResultJob:
+        return ResultJob(func(*args, **kwargs))
 
 
 class LocalProcess(Cached):
     """Subprocess execution + caching."""
-    # Inherits folder, cache_type, mode
     timeout_min: int | None = None
     cpus_per_task: int | None = None
     mem_gb: float | None = None
@@ -95,13 +101,10 @@ class LocalProcess(Cached):
 
 class Slurm(Cached):
     """Cluster execution + caching."""
-    # Inherits folder, cache_type, mode
-    timeout_min: int | None = None
     gpus_per_node: int | None = None
     mem_gb: float | None = None
     slurm_partition: str | None = None
     slurm_account: str | None = None
-    # ... other slurm options
 ```
 
 ### Step Base Class
@@ -110,7 +113,7 @@ class Slurm(Cached):
 class Step(DiscriminatedModel):
     """Base class for all pipeline steps."""
     
-    infra: StepInfra | None = None
+    infra: Backend | None = None
     _previous: Step | None = None
     
     def _forward(self, ...) -> Any:
@@ -137,7 +140,7 @@ class Step(DiscriminatedModel):
 ### Example 1: Simple Step with Caching
 
 ```python
-from exca.chain2 import Step
+from exca.steps import Step
 
 class Multiply(Step):
     coeff: float = 2.0
@@ -156,7 +159,7 @@ result = step.forward(5.0)  # Returns 15.0
 ### Example 2: Step with Slurm Backend
 
 ```python
-from exca.chain2 import Step
+from exca.steps import Step
 
 class TrainModel(Step):
     epochs: int = 10
@@ -176,7 +179,7 @@ model = step.forward(my_dataset)
 ### Example 3: Chain with Mixed Infrastructure
 
 ```python
-from exca.chain2 import Chain, Step
+from exca.steps import Chain, Step
 
 class LoadData(Step):
     path: str
@@ -232,7 +235,7 @@ steps:
 
 ```python
 from exca import ConfDict
-from exca.chain2 import Step
+from exca.steps import Step
 
 config = ConfDict.from_yaml("pipeline.yaml")
 pipeline = Step.model_validate(config.to_dict())
@@ -275,17 +278,18 @@ When `step.forward(input)` is called:
 
 ## Key Differences from chain v1
 
-| Aspect | chain v1 | chain2 |
-|--------|----------|--------|
+| Aspect | chain v1 | steps |
+|--------|----------|-------|
 | Infrastructure location | Only on Chain | On any Step |
-| Infrastructure model | `folder` + `backend` separate fields | `StepInfra` discriminated model (all-in-one) |
-| Caching | Separate `Cache` step class | All infra inherits from `Cached` |
+| Infrastructure model | `folder` + `backend` separate fields | `Backend` discriminated model (all-in-one) |
+| Caching | Separate `Cache` step class | All backends inherit from `Cached` |
 | User method | Override `forward()` | Override `_forward()` |
 | Public API | `step.forward(input)` | `step.forward(input)` (same) |
+| Backend API | `submission_context()` + `submit()` | Just `submit()` |
 
 ## Decisions Log
 
-1. **StepInfra as discriminated model**: Clean YAML serialization, each backend only has its relevant options.
+1. **Backend as discriminated model**: Clean YAML serialization, each backend only has its relevant options.
 
 2. **All backends inherit from Cached**: Every backend has caching built-in.
 
@@ -293,16 +297,16 @@ When `step.forward(input)` is called:
 
 4. **Dict syntax for infra**: `infra={"backend": "Slurm", "folder": "..."}` - no imports needed, pydantic handles instantiation.
 
-5. **Type hint `StepInfra`**: Use `infra: StepInfra = {...}` to allow any backend.
+5. **Folder propagation**: `propagate_folder=True` on Chain creates `Cached(folder=...)` for steps without infra.
 
-6. **Folder propagation**: `propagate_folder=True` on Chain creates `Cached(folder=...)` for steps without infra.
+6. **Simplified backend API**: No `submission_context()` needed - each step has its own folder, so `submit()` handles everything.
 
 ## Implementation Status
 
 1. **Phase 1: Core abstractions** ✓
-   - [x] `StepInfra` discriminated model
-   - [x] `Cached` base infra
-   - [x] `LocalProcess`, `Slurm`, `Auto` infra classes
+   - [x] `Backend` discriminated model
+   - [x] `Cached` base backend
+   - [x] `LocalProcess`, `Slurm`, `Auto` backend classes
    - [x] `Step` base class with `_forward()` and `forward()`
    - [x] `Input` step
    - [x] Cache key via `_chain_hash()`

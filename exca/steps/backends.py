@@ -5,9 +5,9 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-Infrastructure classes for chain2 steps.
+Backend classes for step execution.
 
-StepInfra is a discriminated model with discriminator_key="backend":
+Backend is a discriminated model with discriminator_key="backend":
 - Cached: Just caches results (inline execution)
 - LocalProcess: Subprocess execution + caching
 - Slurm: Cluster execution + caching
@@ -17,7 +17,6 @@ All backends inherit from Cached, so all have caching capabilities.
 
 from __future__ import annotations
 
-import contextlib
 import getpass
 import logging
 import typing as tp
@@ -33,10 +32,6 @@ X_co = tp.TypeVar("X_co", covariant=True)
 
 # Execution mode
 ModeType = tp.Literal["cached", "force", "read-only", "retry"]
-
-
-class Sentinel:
-    pass
 
 
 class JobLike(tp.Protocol[X_co]):
@@ -66,9 +61,9 @@ class ResultJob(tp.Generic[X_co]):
         pass
 
 
-class StepInfra(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
+class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     """
-    Base class for step infrastructure configuration.
+    Base class for step execution backends.
 
     Discriminated by "backend" key. Subclasses define different execution backends.
     All backends inherit caching capabilities.
@@ -85,18 +80,13 @@ class StepInfra(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """Submit a function for execution. Override in subclasses."""
         raise NotImplementedError
 
-    @contextlib.contextmanager
-    def submission_context(self, folder: str | Path | None = None) -> tp.Iterator[None]:
-        """Context manager for batch submissions."""
-        yield None
 
-
-class Cached(StepInfra):
+class Cached(Backend):
     """
-    Infrastructure with caching only (inline execution).
+    Backend with caching only (inline execution).
 
     Executes the step directly in the current process and caches results.
-    This is the simplest infrastructure - use when you just want caching
+    This is the simplest backend - use when you just want caching
     without remote execution.
 
     Parameters
@@ -125,7 +115,7 @@ class Cached(StepInfra):
         return ResultJob(result)
 
 
-class _SubmititInfra(Cached):
+class _SubmititBackend(Cached):
     """
     Base class for submitit-based backends.
 
@@ -140,52 +130,35 @@ class _SubmititInfra(Cached):
     cpus_per_task: int | None = None
     gpus_per_node: int | None = None
     mem_gb: float | None = None
-    max_pickle_size_gb: float | None = None
 
-    # Internals
-    _executor: submitit.Executor | None = None
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]]
+
+    def _log_folder(self) -> Path:
+        return self.folder / f"logs/{getpass.getuser()}/%j"
+
+    def _get_executor_params(self) -> dict[str, tp.Any]:
+        """Get parameters for submitit executor."""
+        non_submitit = {"folder", "cache_type", "mode"}
+        fields = set(self.__class__.model_fields) - non_submitit
+        params = {name: getattr(self, name, None) for name in fields}
+        params = {name: val for name, val in params.items() if val is not None}
+        # Rename job_name -> name for submitit
+        if "job_name" in params:
+            params["name"] = params.pop("job_name")
+        return params
 
     def submit(
         self, func: tp.Callable[..., X_co], *args: tp.Any, **kwargs: tp.Any
     ) -> JobLike[X_co]:
-        if self._executor is None:
-            raise RuntimeError("not within a submission_context")
-        return self._executor.submit(func, *args, **kwargs)
-
-    def __getstate__(self) -> tp.Dict[str, tp.Any]:
-        out = super().__getstate__()
-        # do not dump executor which holds job references
-        out["__pydantic_private__"].pop("_executor", None)
-        return out
-
-    def _log_folder(self) -> Path:
-        folder = self.folder / f"logs/{getpass.getuser()}/%j"
-        return folder
-
-    @contextlib.contextmanager
-    def submission_context(self, folder: str | Path | None = None) -> tp.Iterator[None]:
-        logs = self._log_folder()
-        non_submitit = {"max_pickle_size_gb", "folder", "cache_type", "mode"}
-        fields = set(self.__class__.model_fields) - non_submitit
-        _missing = Sentinel()
-        params = {name: getattr(self, name, _missing) for name in fields}
-        params = {name: y for name, y in params.items() if y is not _missing}
-        params["name"] = params.pop("job_name", None)
-        params = {name: val for name, val in params.items() if val is not None}
-        if self._executor is not None:
-            raise RuntimeError("An executor context is already open.")
-        try:
-            self._executor = self._EXECUTOR_CLS(folder=logs)
-            self._executor.update_parameters(**params)
-            with submitit.helpers.clean_env():
-                with self._executor.batch():
-                    yield None
-        finally:
-            self._executor = None
+        """Submit via submitit executor."""
+        executor = self._EXECUTOR_CLS(folder=self._log_folder())
+        executor.update_parameters(**self._get_executor_params())
+        with submitit.helpers.clean_env():
+            return executor.submit(func, *args, **kwargs)
 
     @classmethod
     def list_jobs(cls, folder: Path) -> list[submitit.Job[tp.Any]]:
+        """List jobs submitted from this folder."""
         logs = folder / f"logs/{getpass.getuser()}"
         jobs: list[submitit.Job[tp.Any]] = []
         if not logs.exists():
@@ -196,9 +169,9 @@ class _SubmititInfra(Cached):
         return jobs
 
 
-class LocalProcess(_SubmititInfra):
+class LocalProcess(_SubmititBackend):
     """
-    Infrastructure with subprocess execution + caching.
+    Backend with subprocess execution + caching.
 
     Uses submitit's LocalExecutor to run functions in separate processes.
     Useful for:
@@ -212,7 +185,7 @@ class LocalProcess(_SubmititInfra):
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.LocalExecutor
 
 
-class SubmititDebug(_SubmititInfra):
+class SubmititDebug(_SubmititBackend):
     """
     Debug executor that runs inline but simulates submitit behavior.
 
@@ -222,9 +195,9 @@ class SubmititDebug(_SubmititInfra):
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.DebugExecutor
 
 
-class Slurm(_SubmititInfra):
+class Slurm(_SubmititBackend):
     """
-    Infrastructure with Slurm cluster execution + caching.
+    Backend with Slurm cluster execution + caching.
 
     Submits jobs to Slurm for execution on cluster nodes.
     Supports GPU allocation, memory limits, and other Slurm features.
@@ -245,7 +218,6 @@ class Slurm(_SubmititInfra):
         Slurm partition to use.
     slurm_account : str, optional
         Slurm account for billing.
-    ... and other slurm options
     """
 
     slurm_constraint: str | None = None
@@ -258,7 +230,7 @@ class Slurm(_SubmititInfra):
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.SlurmExecutor
 
 
-class Auto(_SubmititInfra):
+class Auto(_SubmititBackend):
     """
     Auto-detect executor (local or Slurm based on environment).
 
