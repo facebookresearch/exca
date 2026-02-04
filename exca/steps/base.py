@@ -94,7 +94,7 @@ class Step(exca.helpers.DiscriminatedModel):
         if self.infra is not None:
             reset_mode = self.infra.mode in ("force", "force-forward")
 
-        args = () if isinstance(prev.value, NoInput) else (prev.value,)
+        args: tp.Any = () if isinstance(prev.value, NoInput) else (prev.value,)
         if step.infra is None:
             result = step._forward(*args)
         else:
@@ -229,18 +229,15 @@ class Chain(Step):
 
         # Find latest cached result to skip already-computed steps
         start_idx = 0
-        result: tp.Any = input
+        args: tp.Any = () if isinstance(input, NoInput) else (input,)
         for k, step in enumerate(reversed(steps)):
             if step.infra is not None and step.infra.has_cache():
-                result = step.infra.cached_result()
+                args = (step.infra.cached_result(),)
                 start_idx = len(steps) - k
                 break
 
         # Run remaining steps
         for step in steps[start_idx:]:
-            if isinstance(step, Input):
-                args = (step.value,)
-                continue
             if step.infra is not None:
                 args = (step.infra.run(step._forward, *args),)
             else:
@@ -266,7 +263,7 @@ class Chain(Step):
             result = chain._forward()
         else:
             # If any internal step has force-forward, clear chain's cache first
-            if any(s.infra.mode == "force-forward" for s in force_steps):
+            if any(s.infra.mode == "force-forward" for s in force_steps):  # type: ignore
                 chain.infra.clear_cache()
             result = chain.infra.run(chain._forward)
 

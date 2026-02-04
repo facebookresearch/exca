@@ -110,23 +110,19 @@ def test_force_with_taskinfra(tmp_path: Path) -> None:
         infra=step_infra,
     )
     infra: tp.Any = {"folder": tmp_path / "cache"}
-
     xp = Experiment(steps=chain, infra=infra)
 
     out1 = xp.run()
 
-    # Force recomputation requires clearing both cache layers:
-    # 1. Clear step cache (need with_input to match the cached path)
-    xp.steps.with_input(12).clear_cache(recursive=True)
-    # 2. Clear TaskInfra cache
+    # clear TaskInfra cache and recreate an instance with force on a step
     xp.infra.clear_job()
-    object.__setattr__(xp.infra, "_computed", False)
-
+    xp = xp.infra.clone_obj()  # reset
+    xp.steps.steps[0].infra.mode = "force-forward"  # type: ignore
+    # this should run even though it freezes the steps (which update the mode in-place)
     out2 = xp.run()
-
     # Should get different result (forced recompute)
     assert out1 != out2
-
     # Third call should use cache (mode was reset after run)
+    xp.infra.clear_job()
     out3 = xp.run()
     assert out2 == out3
