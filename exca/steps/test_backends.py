@@ -96,13 +96,9 @@ def test_step_in_taskinfra(tmp_path: Path) -> None:
 
 
 def test_force_with_taskinfra(tmp_path: Path) -> None:
-    """Force mode should work correctly with TaskInfra wrapping.
-
-    When using TaskInfra, both caching layers need to be handled:
-    - TaskInfra caches the entire method result
-    - Step/Chain infra caches intermediate step results
-
-    To force recomputation, both caches must be cleared.
+    """Force mode should work correctly with TaskInfra wrapping,
+    in particular, config freeze in TaskInfra prevents mode from
+    being modified through simple assignation
     """
     step_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "steps"}
     chain = Chain(
