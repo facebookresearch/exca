@@ -366,9 +366,7 @@ When `step.forward(input)` is called:
 - [x] Error caching
 - [x] All modes: cached, force, force-forward, read-only, retry
 - [x] Job recovery from job.pkl
-- [x] Unit tests (20 tests passing)
+- [x] Unit tests (38 tests passing)
 
 ## Future Work
-
-- [ ] Force mode propagation to subsequent caches (like chain v1)
 - [ ] Migration guide from chain v1

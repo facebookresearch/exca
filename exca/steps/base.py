@@ -89,16 +89,22 @@ class Step(exca.helpers.DiscriminatedModel):
         if not isinstance(prev, Input):
             raise RuntimeError("Step not properly configured")
 
-        if isinstance(prev.value, NoInput):
-            # No input - call _forward without args
-            if step.infra is None:
-                return step._forward()
-            return step.infra.run(step._forward)
+        # Track if we need to reset mode on original step after run
+        reset_mode = False
+        if self.infra is not None:
+            reset_mode = self.infra.mode in ("force", "force-forward")
 
-        # Has input - call _forward with value
+        args = () if isinstance(prev.value, NoInput) else (prev.value,)
         if step.infra is None:
-            return step._forward(prev.value)
-        return step.infra.run(step._forward, prev.value)
+            result = step._forward(*args)
+        else:
+            result = step.infra.run(step._forward, *args)
+
+        # Reset force modes on original step (use object.__setattr__ for frozen models)
+        if reset_mode:
+            object.__setattr__(self.infra, "mode", "cached")
+
+        return result
 
     # =========================================================================
     # Cache key computation
@@ -213,52 +219,34 @@ class Chain(Step):
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
-        # Check if any step has force-forward (need to process from that step)
-        force_from_idx = None
-        for i, step in enumerate(steps):
+        # Clear caches from force-forward step onwards (propagate force)
+        force_active = False
+        for step in steps:
             if step.infra is not None and step.infra.mode == "force-forward":
-                force_from_idx = i
-                break
+                force_active = True
+            if force_active:
+                step.clear_cache()
 
         # Find latest cached result to skip already-computed steps
-        # But don't skip past a force-forward step
         start_idx = 0
         result: tp.Any = input
-        if force_from_idx is None:
-            for k, step in enumerate(reversed(steps)):
-                if step.infra is not None and step.infra.has_cache():
-                    result = step.infra.cached_result()
-                    start_idx = len(steps) - k
-                    break
-        else:
-            # Start from force-forward step or earlier cached step
-            for k, step in enumerate(reversed(steps[:force_from_idx])):
-                if step.infra is not None and step.infra.has_cache():
-                    result = step.infra.cached_result()
-                    start_idx = force_from_idx - k
-                    break
+        for k, step in enumerate(reversed(steps)):
+            if step.infra is not None and step.infra.has_cache():
+                result = step.infra.cached_result()
+                start_idx = len(steps) - k
+                break
 
-        # Run remaining steps, propagating force-forward by clearing caches
-        force_remaining = False
+        # Run remaining steps
         for step in steps[start_idx:]:
             if isinstance(step, Input):
-                result = step.value
-            elif step.infra is not None:
-                if step.infra.mode == "force-forward":
-                    force_remaining = True
-                # Clear cache if force-forward propagation is active
-                if force_remaining and step.has_cache():
-                    step.clear_cache()
-                if isinstance(result, NoInput):
-                    result = step.infra.run(step._forward)
-                else:
-                    result = step.infra.run(step._forward, result)
-            elif isinstance(result, NoInput):
-                result = step._forward()
+                args = (step.value,)
+                continue
+            if step.infra is not None:
+                args = (step.infra.run(step._forward, *args),)
             else:
-                result = step._forward(result)
+                args = (step._forward(*args),)
 
-        return result
+        return args[0]
 
     def forward(self, input: tp.Any = NoInput()) -> tp.Any:
         chain = self.with_input(input) if self._previous is None else self
@@ -283,7 +271,7 @@ class Chain(Step):
             result = chain.infra.run(chain._forward)
 
         # Reset force modes on original steps and chain after successful run
-        # Use object.__setattr__ to bypass frozen model validation
+        # Use object.__setattr__ to bypass frozen model validation (TaskInfra case)
         for step in force_steps:
             object.__setattr__(step.infra, "mode", "cached")
         if reset_chain_infra:
