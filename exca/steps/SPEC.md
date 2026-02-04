@@ -42,7 +42,7 @@ A `Step` is the fundamental unit that:
 All backends have:
 - `folder`: Path for cache storage (optional, can be propagated from Chain)
 - `cache_type`: Serialization format
-- `mode`: Execution mode (cached/force/read-only/retry)
+- `mode`: Execution mode (cached/force/force-forward/read-only/retry)
 
 ### Cache Status
 
@@ -103,7 +103,7 @@ class Backend(DiscriminatedModel, discriminator_key="backend"):
     """Base class for backends with integrated caching."""
     folder: Path | None = None
     cache_type: str | None = None
-    mode: Literal["cached", "force", "read-only", "retry"] = "cached"
+    mode: Literal["cached", "force", "force-forward", "read-only", "retry"] = "cached"
     
     _step: Step | None = None  # Back-reference for cache key computation
     
@@ -211,6 +211,7 @@ class Chain(Step):
 |------|----------|
 | `cached` | Return cached result if exists, else compute and cache |
 | `force` | Clear cache, recompute, and cache new result |
+| `force-forward` | Like `force`, but also forces all downstream steps in the chain |
 | `read-only` | Return cached result, raise error if not cached |
 | `retry` | Return cached if success, clear and recompute if error |
 
@@ -329,6 +330,7 @@ When `step.forward(input)` is called:
       - "read-only": Return cache or raise
       - "cached": Return cache if success, else continue
       - "force": Clear cache, continue
+      - "force-forward": Clear cache, continue, and propagate force to downstream steps
       - "retry": Clear if error, continue
    c. Submit job (inline for Cached, subprocess for others)
    d. Cache result/error from within job
@@ -362,11 +364,9 @@ When `step.forward(input)` is called:
 - [x] `with_input()` on all steps
 - [x] `_is_generator()` detection
 - [x] Error caching
-- [x] All modes: cached, force, read-only, retry
+- [x] All modes: cached, force, force-forward, read-only, retry
 - [x] Job recovery from job.pkl
-- [x] Unit tests (20 tests passing)
+- [x] Unit tests (38 tests passing)
 
 ## Future Work
-
-- [ ] Force mode propagation to subsequent caches (like chain v1)
 - [ ] Migration guide from chain v1

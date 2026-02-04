@@ -93,3 +93,32 @@ def test_step_in_taskinfra(tmp_path: Path) -> None:
     expected = "exca.steps.test_backends.Experiment.run,0/steps.steps=({coeff=3,type=Mult},{type=Add,value=12})-2f739f76"
     assert uid == expected
     assert xp.run() == 48  # 12 * 3 + 12
+
+
+def test_force_with_taskinfra(tmp_path: Path) -> None:
+    """Force mode should work correctly with TaskInfra wrapping,
+    in particular, config freeze in TaskInfra prevents mode from
+    being modified through simple assignation
+    """
+    step_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "steps"}
+    chain = Chain(
+        steps=[conftest.RandomGenerator(infra=step_infra), conftest.Mult(coeff=10)],
+        infra=step_infra,
+    )
+    infra: tp.Any = {"folder": tmp_path / "cache"}
+    xp = Experiment(steps=chain, infra=infra)
+
+    out1 = xp.run()
+
+    # clear TaskInfra cache and recreate an instance with force on a step
+    xp.infra.clear_job()
+    xp = xp.infra.clone_obj()  # reset
+    xp.steps.steps[0].infra.mode = "force-forward"  # type: ignore
+    # this should run even though it freezes the steps (which update the mode in-place)
+    out2 = xp.run()
+    # Should get different result (forced recompute)
+    assert out1 != out2
+    # Third call should use cache (mode was reset after run)
+    xp.infra.clear_job()
+    out3 = xp.run()
+    assert out2 == out3

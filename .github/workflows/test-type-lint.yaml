@@ -76,8 +76,8 @@ jobs:
         sed -i 's/cluster: slurm/cluster: null/g' docs/infra/*.md
         sed -i 's/\"auto\"/None/g' README.md
         # on Mac: sed -i '' 's/cluster: slurm/cluster: null/g' docs/infra/*.md
-        # check readmes
-        pytest --markdown-docs -m markdown-docs `**/*.md`
+        # check readmes (only README.md and docs/ folder, not internal specs)
+        pytest --markdown-docs -m markdown-docs README.md docs/
 
     - name: Run basic pylint
       run: |

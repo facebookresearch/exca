@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from . import conftest
-from .base import Chain
+from .base import Chain, Step
 
 # =============================================================================
 # Basic caching
@@ -172,15 +172,94 @@ def test_mode_readonly_with_cache(tmp_path: Path) -> None:
     assert out2 == out1
 
 
-def test_mode_force(tmp_path: Path) -> None:
-    """Force mode recomputes every time."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force"}
-    chain = Chain(
-        steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)], infra=infra
-    )
-    out1 = chain.forward()
-    out2 = chain.forward()
+@pytest.mark.parametrize("chain", [True, False])
+@pytest.mark.parametrize("mode", ["force", "force-forward"])
+def test_mode_force(tmp_path: Path, mode: str, chain: bool) -> None:
+    """Force modes recompute once, then use cache."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    if chain:
+        seq = [conftest.RandomGenerator(), conftest.Mult(coeff=10)]
+        step: Step = Chain(steps=seq, infra=infra)
+    else:
+        step = conftest.RandomGenerator(infra=infra)
+    out1 = step.forward()  # populate cache
+
+    step.infra.mode = mode  # type: ignore
+    out2 = step.forward()  # forces recompute
     assert out1 != out2
+
+    out3 = step.forward()  # uses cache (mode reset to "cached")
+    assert out2 == out3
+
+
+def test_force_vs_force_forward(tmp_path: Path) -> None:
+    """Force only affects its step, force-forward propagates downstream."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(
+        steps=[
+            conftest.RandomGenerator(infra=infra),
+            conftest.Mult(coeff=10, infra=infra),  # deterministic
+            conftest.Add(randomize=True, infra=infra),
+        ],
+        infra=infra,
+    )
+
+    out1 = chain.forward()  # populate caches
+
+    # force on intermediate: only that step recomputes, downstream uses cache
+    chain2 = chain.model_copy(deep=True)
+    chain2._step_sequence()[1].infra.mode = "force"  # type: ignore
+    out2 = chain2.forward()
+    assert out1 == out2  # add still uses its cache
+
+    # force-forward on intermediate: that step AND downstream recompute
+    chain3 = chain.model_copy(deep=True)
+    chain3._step_sequence()[1].infra.mode = "force-forward"  # type: ignore
+    out3 = chain3.forward()
+    assert out3 != out1  # add recomputed due to force-forward propagation
+
+    # After force-forward, subsequent calls use cache (mode resets)
+    out4 = chain3.forward()
+    assert out3 == out4
+
+
+def test_force_forward_nested_chains(tmp_path: Path) -> None:
+    """Force-forward propagates through nested chains and steps without infra."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+
+    # Nested structure: gen -> mult(no infra) -> inner(mult, add_rand) -> add(no infra)
+    inner = Chain(
+        steps=[conftest.Mult(coeff=10), conftest.Add(randomize=True, infra=infra)],
+        infra=infra,
+    )
+    outer = Chain(
+        steps=[
+            conftest.RandomGenerator(infra=infra),
+            conftest.Mult(coeff=2),  # no infra
+            inner,
+            conftest.Add(value=1),  # no infra
+        ],
+        infra=infra,
+    )
+
+    out1 = outer.forward()
+
+    # force-forward on gen propagates through inner chain
+    outer._step_sequence()[0].infra.mode = "force-forward"  # type: ignore
+    out2 = outer.forward()
+    assert out1 != out2  # inner's add_random recomputed
+
+    # Subsequent call uses cache (mode reset)
+    out3 = outer.forward()
+    assert out2 == out3
+
+    # force-forward on inner chain also propagates to downstream
+    outer2 = outer.model_copy(deep=True)
+    outer2._step_sequence()[2].infra.mode = "force-forward"  # type: ignore
+    # infra mode in firt step should have been reverted to cached
+    assert outer._step_sequence()[0].infra.mode == "cached"  # type: ignore
+    out4 = outer2.forward()
+    assert out4 != out3  # downstream recomputed
 
 
 def test_mode_retry(tmp_path: Path) -> None:
@@ -233,20 +312,6 @@ def test_cache_folder_structure(tmp_path: Path) -> None:
 # =============================================================================
 # Nested chains
 # =============================================================================
-
-
-def test_nested_chain_cache(tmp_path: Path) -> None:
-    """Nested chains cache correctly."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    substeps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-
-    subchain = Chain(steps=substeps, infra=infra)
-    chain = Chain(steps=[conftest.Add(value=12), subchain], infra=infra)
-    out = chain.forward(1)
-    assert out == 51  # (1 + 12) * 3 + 12
-
-    expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
-    assert chain.with_input(1)._chain_hash() == expected
 
 
 def test_clear_cache_recursive(tmp_path: Path) -> None:

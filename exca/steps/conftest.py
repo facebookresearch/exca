@@ -11,7 +11,15 @@ Test guidelines:
 - Reuse the same infra dict across a test when possible (shorter, easier to follow)
 - Use tuple comparison for cache checks: `assert result == expected` not length + items
 - Keep test classes minimal - only add parameters when needed for specific tests
-- improve these guidelines when necessary, but keep it simple and readable
+- Use `chain.model_copy(deep=True)` to create test variants, then update parameters
+
+Test consolidation:
+- Merge tests covering related scenarios into a single test function when they share
+  setup code and test similar behaviors (e.g., force vs force-forward, nested chains)
+- Use `pytest.mark.parametrize` for tests that run the same logic with different inputs
+  (e.g., `@pytest.mark.parametrize("mode", ("force", "force-forward"))`)
+- Avoid duplicating test code - if two tests differ only in one parameter, consolidate
+- Balance: keep tests readable; don't over-consolidate if it obscures what's being tested
 """
 
 import random
@@ -55,7 +63,7 @@ class Add(Step):
     value: float = 2.0
     randomize: bool = False
     error: bool = False
-    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("error",)
+    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra", "error")
 
     def _forward(self, value: float) -> float:
         if self.error:

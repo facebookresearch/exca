@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for Step and Chain basic functionality (no caching)."""
+"""Tests for Step and Chain basic functionality (no caching tests here, see test_cache.py)."""
 
 import pickle
 import typing as tp
@@ -22,21 +22,15 @@ from .base import Chain
 # =============================================================================
 
 
-def test_step_forward() -> None:
+def test_step_no_infra() -> None:
     step = conftest.Mult(coeff=3.0)
     assert step.forward(5.0) == 15.0
 
 
-def test_chain_forward() -> None:
+def test_chain_no_infra() -> None:
     chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Mult(coeff=3.0)])
-    assert chain.forward(5.0) == 30.0  # 5 * 2 * 3
-
-
-def test_chain_with_dict_config() -> None:
-    """Chain accepts dict config for steps."""
-    steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-    chain = Chain(steps=steps)
-    assert chain.forward(1) == 15  # 1 * 3 + 12
+    # 5 * 2 * 3 = 30
+    assert chain.forward(5.0) == 30.0
 
 
 # =============================================================================
@@ -44,16 +38,13 @@ def test_chain_with_dict_config() -> None:
 # =============================================================================
 
 
-def test_is_generator() -> None:
-    assert conftest.RandomGenerator()._is_generator()
-    assert not conftest.Mult()._is_generator()
-
-
 def test_chain_is_generator() -> None:
     """Chain._is_generator checks first step."""
+    # Chain with generator first step
     gen_chain = Chain(steps=[conftest.RandomGenerator(), conftest.Mult(coeff=2.0)])
     assert gen_chain._is_generator()
 
+    # Chain with transformer first step
     trans_chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Add(randomize=True)])
     assert not trans_chain._is_generator()
 
@@ -63,34 +54,28 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.Mult(coeff=3.0, infra=infra)
 
+    # Cache operations without with_input() should fail for transformers
     with pytest.raises(RuntimeError, match="requires input"):
         step.has_cache()
 
-    # forward() works (calls with_input internally)
-    assert step.forward(5.0) == 15.0
+    # forward() works (it calls with_input internally)
+    result = step.forward(5.0)
+    assert result == 15.0
 
-    # Explicit with_input() works
+    # With explicit with_input() - works
     assert step.with_input(5.0).has_cache()
+    step.with_input(5.0).clear_cache()
 
 
 # =============================================================================
-# Chain hash computation
+# Chain hash and uid computation
 # =============================================================================
-
-
-def test_chain_hash() -> None:
-    """Chain hash is computed from step sequence."""
-    chain = Chain(steps=[conftest.Mult(coeff=3), conftest.Add(value=12)])
-    configured = chain.with_input(1)
-    hash_val = configured._chain_hash()
-    assert "type=Mult" in hash_val
-    assert "type=Add" in hash_val
 
 
 def test_nested_chain_hash() -> None:
     """Nested chains flatten for hash computation."""
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-    chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])
+    chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])  # type: ignore
     expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     assert chain.with_input(1)._chain_hash() == expected
 
@@ -98,7 +83,7 @@ def test_nested_chain_hash() -> None:
 def test_chain_uid_export() -> None:
     """Chain exports to ConfDict/YAML correctly."""
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-    chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])
+    chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])  # type: ignore
     yaml = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_yaml()
     expected = """steps:
 - type: Add
@@ -112,12 +97,12 @@ def test_chain_uid_export() -> None:
 
 
 # =============================================================================
-# Equality and pickling
+# Safety checks for recursion risks - Equality and pickling
 # =============================================================================
 
 
 def test_equality(tmp_path: Path) -> None:
-    """Steps with same config are equal."""
+    """Steps with same config are equal (no infinite recursion from infra back-ref)."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     steps = [conftest.RandomGenerator(infra=infra) for _ in range(2)]
     assert steps[0] == steps[1]
@@ -125,20 +110,28 @@ def test_equality(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("configured", [True, False])
-@pytest.mark.parametrize("with_infra", [True, False])
-def test_pickle_roundtrip(tmp_path: Path, with_infra: bool, configured: bool) -> None:
+@pytest.mark.parametrize("cached", [True, False])
+def test_pickle_roundtrip(tmp_path: Path, cached: bool, configured: bool) -> None:
     """Pickle roundtrip preserves step functionality."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    if not cached:
+        infra = None
     step = conftest.RandomGenerator(seed=42, infra=infra)
     original = step.with_input() if configured else step
 
-    loaded = pickle.loads(pickle.dumps(original))
+    data = pickle.dumps(original)
+    loaded = pickle.loads(data)
 
+    # Attributes preserved
     assert loaded.seed == 42
-    assert (loaded.infra is not None) == with_infra
-    assert (loaded._previous is not None) == configured
-    if with_infra:
+    assert (loaded.infra is not None) is cached
+    # Infra should be attached to the loaded step
+    if cached:
         assert loaded.infra._step is loaded
+    # only the configured step should have _previous
+    assert (loaded._previous is not None) is configured
 
-    expected = original.forward()
-    assert loaded.forward() == pytest.approx(expected, rel=1e-9)
+    # Step should be functional
+    expected = 0.639
+    assert original.forward() == pytest.approx(expected, rel=1e-3)
+    assert loaded.forward() == pytest.approx(expected, rel=1e-3)
