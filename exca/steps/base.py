@@ -17,6 +17,7 @@ import collections
 import inspect
 import logging
 import typing as tp
+from pathlib import Path
 
 import pydantic
 
@@ -240,10 +241,11 @@ class Chain(Step):
         chain._init()
         return chain
 
-    def _init(self) -> None:
+    def _init(self, parent_folder: Path | None = None) -> None:
         """Set up _previous links and propagate folder."""
         previous: Step | None = self._previous
-        folder = self.infra.folder if self.infra else None
+        # Use own folder if set, otherwise use parent's folder
+        folder = self.infra.folder if self.infra and self.infra.folder else parent_folder
 
         for step in self._step_sequence():
             # First step gets Input(NoValue()) if no previous, marking it as configured
@@ -255,7 +257,8 @@ class Chain(Step):
             if step.infra is not None:
                 step.infra._step = step
             if isinstance(step, Chain):
-                step._init()
+                # Pass folder to nested chain for further propagation
+                step._init(parent_folder=folder if self.propagate_folder else None)
             previous = step
 
     def _forward(self, value: tp.Any = NoValue()) -> tp.Any:

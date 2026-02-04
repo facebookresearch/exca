@@ -189,4 +189,34 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
     # timeout_min propagates if target type has it (LocalProcess, Slurm share it via _SubmititBackend)
     if target_backend in ("LocalProcess", "Slurm"):
         assert step.infra.timeout_min == 30, "shared field should propagate"
-    # Cached doesn't have timeout_min - nothing to check
+
+    # Explicit None should bypass default
+    step_none = MyStep(value=5, infra=None)
+    assert step_none.infra is None, "explicit None should not use default"
+
+
+def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
+    """Folder should propagate to steps in nested chains."""
+    inner_chain = Chain(
+        steps=[conftest.Add(value=1, infra={"backend": "Cached"})]  # No folder set
+    )
+    outer_chain = Chain(
+        steps=[inner_chain, conftest.Mult(coeff=2.0, infra={"backend": "Cached"})],
+        infra={"backend": "Cached", "folder": tmp_path},
+    )
+
+    # Execute to trigger _init()
+    result = outer_chain.forward(5.0)
+    assert result == 12.0  # (5 + 1) * 2
+
+    # Check folder propagated to nested chain's step
+    # with_input() prepends Input to outer chain: [Input, inner_chain, Mult]
+    configured = outer_chain.with_input(5.0)
+    inner = configured._step_sequence()[1]  # Index 1 = inner_chain
+    assert isinstance(inner, Chain)
+    # inner_chain's _step_sequence() is just [Add] (no Input prepended to inner)
+    inner_step = inner._step_sequence()[0]  # Index 0 = Add
+    assert inner_step.infra is not None
+    assert (
+        inner_step.infra.folder == tmp_path
+    ), "folder should propagate to nested chain steps"
