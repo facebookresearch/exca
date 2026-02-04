@@ -22,12 +22,9 @@ import exca
 from exca import utils
 
 from . import backends
+from .backends import NoValue
 
 logger = logging.getLogger(__name__)
-
-
-class NoInput:
-    """Sentinel for no input provided."""
 
 
 class Step(exca.helpers.DiscriminatedModel):
@@ -69,8 +66,8 @@ class Step(exca.helpers.DiscriminatedModel):
                 return False  # Has required parameter
         return True
 
-    def with_input(self, value: tp.Any = NoInput()) -> "Step":
-        """Create copy with Input as _previous (Input holds value or NoInput)."""
+    def with_input(self, value: tp.Any = NoValue()) -> "Step":
+        """Create copy with Input as _previous (Input holds value or NoValue)."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
         step = self.model_copy(deep=True)
@@ -80,7 +77,7 @@ class Step(exca.helpers.DiscriminatedModel):
             step.infra._step = step
         return step
 
-    def forward(self, value: tp.Any = NoInput()) -> tp.Any:
+    def forward(self, value: tp.Any = NoValue()) -> tp.Any:
         """Execute with caching and backend handling."""
         step = self.with_input(value) if self._previous is None else self
         prev = step._previous
@@ -89,14 +86,16 @@ class Step(exca.helpers.DiscriminatedModel):
         if not isinstance(prev, Input):
             raise RuntimeError("Step not properly configured")
 
-        args: tp.Any = () if isinstance(prev.value, NoInput) else (prev.value,)
+        args: tp.Any = () if isinstance(prev.value, NoValue) else (prev.value,)
         if step.infra is None:
             result = step._forward(*args)
         else:
             result = step.infra.run(step._forward, *args)
 
-        # Remove force modes on original step (use object.__setattr__ for frozen models)
+        # Sync state back to original step's infra (with_input creates a copy)
         if self.infra is not None:
+            self.infra._ram_cache = step.infra._ram_cache
+            # Reset force modes (use object.__setattr__ for frozen TaskInfra models)
             if self.infra.mode in ("force", "force-forward"):
                 object.__setattr__(self.infra, "mode", "cached")
 
@@ -138,7 +137,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
 
 class Input(Step):
-    """Step that provides a fixed value (or NoInput sentinel)."""
+    """Step that provides a fixed value (or NoValue sentinel)."""
 
     value: tp.Any
 
@@ -146,8 +145,8 @@ class Input(Step):
         return self.value
 
     def _aligned_step(self) -> list["Step"]:
-        # Invisible in chain hash when holding NoInput
-        return [] if isinstance(self.value, NoInput) else [self]
+        # Invisible in chain hash when holding NoValue
+        return [] if isinstance(self.value, NoValue) else [self]
 
 
 class Chain(Step):
@@ -179,17 +178,17 @@ class Chain(Step):
         steps = self._step_sequence()
         return steps[0]._is_generator() if steps else True
 
-    def with_input(self, value: tp.Any = NoInput()) -> "Chain":
+    def with_input(self, value: tp.Any = NoValue()) -> "Chain":
         """Create copy with optional Input prepended."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
         steps: list[tp.Any] = [s.model_dump() for s in self._step_sequence()]
-        if not isinstance(value, NoInput):
+        if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
         chain = type(self)(
             steps=steps, infra=self.infra, propagate_folder=self.propagate_folder
         )
-        chain._previous = Input(value=NoInput())  # Mark chain as configured
+        chain._previous = Input(value=NoValue())  # Mark chain as configured
         chain._init()
         return chain
 
@@ -199,8 +198,8 @@ class Chain(Step):
         folder = self.infra.folder if self.infra else None
 
         for step in self._step_sequence():
-            # First step gets Input(NoInput()) if no previous, marking it as configured
-            step._previous = previous if previous is not None else Input(value=NoInput())
+            # First step gets Input(NoValue()) if no previous, marking it as configured
+            step._previous = previous if previous is not None else Input(value=NoValue())
             # Only propagate folder to steps that have infra but no folder set
             if self.propagate_folder and folder and step.infra is not None:
                 if step.infra.folder is None:
@@ -211,7 +210,7 @@ class Chain(Step):
                 step._init()
             previous = step
 
-    def _forward(self, value: tp.Any = NoInput()) -> tp.Any:
+    def _forward(self, value: tp.Any = NoValue()) -> tp.Any:
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
@@ -225,7 +224,7 @@ class Chain(Step):
 
         # Find latest cached result to skip already-computed steps
         start_idx = 0
-        args: tp.Any = () if isinstance(value, NoInput) else (value,)
+        args: tp.Any = () if isinstance(value, NoValue) else (value,)
         for k, step in enumerate(reversed(steps)):
             if step.infra is not None and step.infra.has_cache():
                 args = (step.infra.cached_result(),)
@@ -233,15 +232,19 @@ class Chain(Step):
                 break
 
         # Run remaining steps
-        for step in steps[start_idx:]:
+        total = len(steps)
+        for i, step in enumerate(steps[start_idx:], start=start_idx + 1):
+            step_name = type(step).__name__
+            logger.debug("Running step %d/%d: %s", i, total, step_name)
             if step.infra is not None:
                 args = (step.infra.run(step._forward, *args),)
             else:
                 args = (step._forward(*args),)
+            logger.debug("Completed step %d/%d: %s", i, total, step_name)
 
         return args[0]
 
-    def forward(self, value: tp.Any = NoInput()) -> tp.Any:
+    def forward(self, value: tp.Any = NoValue()) -> tp.Any:
         chain = self.with_input(value) if self._previous is None else self
 
         # Track steps with force modes to reset after run

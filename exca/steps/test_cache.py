@@ -6,6 +6,7 @@
 
 """Tests for caching behavior (modes, cache paths, intermediate caches)."""
 
+import shutil
 import typing as tp
 from pathlib import Path
 
@@ -294,3 +295,48 @@ def test_clear_cache_recursive(tmp_path: Path) -> None:
     chain.with_input().clear_cache(recursive=True)
     out3 = chain.forward()
     assert out3 != pytest.approx(out1, abs=1e-9)  # New random value
+
+
+def test_keep_in_ram(tmp_path: Path) -> None:
+    """Test RAM caching behavior."""
+    step = conftest.Add(
+        value=10,
+        randomize=True,
+        infra={"backend": "Cached", "folder": tmp_path, "keep_in_ram": True},
+    )
+
+    # First call: computes and caches in both disk and RAM
+    out1 = step.forward()
+    assert step.infra is not None
+    assert step.infra.has_cache()
+
+    # Second call: should use RAM cache (we can verify by deleting disk)
+    cache_folder = step.infra._cache_folder()
+    shutil.rmtree(cache_folder)
+    assert not step.infra.has_cache()  # Disk cache gone
+
+    # But RAM cache still works
+    out2 = step.forward()
+    assert out2 == out1  # Same value from RAM
+
+    # clear_cache() clears both disk and RAM
+    step.infra.clear_cache()
+    out3 = step.forward()
+    assert out3 != out1  # New random value (RAM was cleared)
+
+
+def test_keep_in_ram_force_mode(tmp_path: Path) -> None:
+    """Test that force mode clears RAM cache."""
+    step = conftest.Add(
+        value=10,
+        randomize=True,
+        infra={"backend": "Cached", "folder": tmp_path, "keep_in_ram": True},
+    )
+
+    out1 = step.forward()
+    assert step.infra is not None
+
+    # Force mode should clear RAM cache and recompute
+    step.infra.mode = "force"
+    out2 = step.forward()
+    assert out2 != out1  # New value (force cleared RAM too)

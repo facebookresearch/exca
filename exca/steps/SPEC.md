@@ -23,10 +23,10 @@ A `Step` is the fundamental unit that:
 - Uses `forward(input)` as the main entry point (handles caching/backend)
 - Detects generator vs transformer via signature inspection
 
-### NoInput Sentinel
+### NoValue Sentinel
 
-`NoInput` is a sentinel class used to distinguish "no input provided" from `None`:
-- `Input(value=NoInput())` marks a step as configured but without input
+`NoValue` is a sentinel class used to distinguish "no input provided" from `None`:
+- `Input(value=NoValue())` marks a step as configured but without input
 - `Input(value=X)` marks a step as configured with input X
 - `_previous = None` means unconfigured
 
@@ -163,11 +163,11 @@ class Step(DiscriminatedModel):
         """Check if _forward has no required parameters (generator step)."""
         ...
     
-    def forward(self, input: Any = NoInput()) -> Any:
+    def forward(self, input: Any = NoValue()) -> Any:
         """Execute with caching and backend handling."""
         ...
     
-    def with_input(self, value: Any = NoInput()) -> "Step":
+    def with_input(self, value: Any = NoValue()) -> "Step":
         """Create a copy with input configured."""
         ...
     
@@ -180,12 +180,12 @@ class Step(DiscriminatedModel):
 
 ```python
 class Input(Step):
-    """Step that provides a fixed value (or NoInput sentinel)."""
+    """Step that provides a fixed value (or NoValue sentinel)."""
     value: Any
     
     def _aligned_step(self) -> list[Step]:
-        # Invisible in chain hash when holding NoInput
-        return [] if isinstance(self.value, NoInput) else [self]
+        # Invisible in chain hash when holding NoValue
+        return [] if isinstance(self.value, NoValue) else [self]
 ```
 
 ### Chain
@@ -253,7 +253,7 @@ step = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"}
 data = step.forward()  # No input needed
 
 # Cache operations work directly on generators
-assert step.has_cache()  # Auto-configures with NoInput
+assert step.has_cache()  # Auto-configures with NoValue
 ```
 
 ### Example 3: Chain with Mixed Infrastructure
@@ -315,11 +315,11 @@ When `step.forward(input)` is called:
 ```
 1. Configure input:
    - step = step.with_input(input)
-   - Sets _previous = Input(value=input) or Input(value=NoInput())
+   - Sets _previous = Input(value=input) or Input(value=NoValue())
 
 2. Determine how to call _forward:
    - If Input holds actual value: call _forward(value)
-   - If Input holds NoInput: call _forward() with no args
+   - If Input holds NoValue: call _forward() with no args
 
 3. If no infra:
    └─> Execute _forward() directly, return result
@@ -357,8 +357,8 @@ When `step.forward(input)` is called:
 - [x] `Cached` backend (inline execution)
 - [x] `LocalProcess`, `SubmititDebug`, `Slurm`, `Auto` backends
 - [x] `Step` base class with `_forward()` and `forward()`
-- [x] `Input` step with NoInput handling
-- [x] `NoInput` sentinel
+- [x] `Input` step with NoValue handling
+- [x] `NoValue` sentinel
 - [x] Cache key via `_chain_hash()`
 - [x] `Chain` step with `propagate_folder`
 - [x] `with_input()` on all steps

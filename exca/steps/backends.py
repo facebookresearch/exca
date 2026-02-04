@@ -20,6 +20,7 @@ import shutil
 import typing as tp
 from pathlib import Path
 
+import pydantic
 import submitit
 
 import exca
@@ -28,6 +29,11 @@ if tp.TYPE_CHECKING:
     from .base import Step
 
 logger = logging.getLogger(__name__)
+
+
+class NoValue:
+    """Sentinel for unset/missing value."""
+
 
 ModeType = tp.Literal["cached", "force", "force-forward", "read-only", "retry"]
 CacheStatus = tp.Literal["success", "error", None]
@@ -71,8 +77,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     folder: Path | None = None
     cache_type: str | None = None
     mode: ModeType = "cached"
+    keep_in_ram: bool = False
 
     _step: tp.Union["Step", None] = None
+    _ram_cache: tp.Any = pydantic.PrivateAttr(default_factory=NoValue)
 
     def __eq__(self, other: tp.Any) -> bool:
         """Compare backends by model fields only, excluding _step to avoid recursion."""
@@ -98,7 +106,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             return self._step  # Already configured
 
         if self._step._is_generator():
-            # Auto-configure generator with NoInput (returns new step, doesn't mutate)
+            # Auto-configure generator with NoValue (returns new step, doesn't mutate)
             return self._step.with_input()
         else:
             raise RuntimeError(
@@ -135,7 +143,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return self._load_cache()
 
     def clear_cache(self) -> None:
-        """Delete cached result."""
+        """Delete cached result (both disk and RAM)."""
+        self._ram_cache = NoValue()
         folder = self._cache_folder()
         if folder.exists():
             logger.debug("Clearing cache: %s", folder)
@@ -163,12 +172,19 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _load_cache(self) -> tp.Any:
         """Load cached result, or raise cached error."""
+        # Check RAM cache first (only for successful results)
+        if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
+            return self._ram_cache
+
         folder = self._cache_folder()
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=folder, cache_type=self.cache_type
         )
         if "result" in cd:
-            return cd["result"]
+            result = cd["result"]
+            if self.keep_in_ram:
+                self._ram_cache = result
+            return result
         if "error" in cd:
             raise cd["error"]
         return None
@@ -182,6 +198,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     ) -> tp.Any:
         """Execute function with caching based on mode."""
         cache_folder = self._cache_folder()
+
+        # Check RAM cache first (survives disk deletion)
+        if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
+            if self.mode not in ("force", "force-forward"):
+                return self._ram_cache
 
         # Check cache status (without loading value)
         status = self._cache_status()
@@ -269,20 +290,27 @@ class _SubmititBackend(Backend):
     cpus_per_task: int | None = None
     gpus_per_node: int | None = None
     mem_gb: float | None = None
+    logs: str = "{folder}/logs/{user}/%j"
 
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]]
+
+    def _log_folder(self) -> Path:
+        """Compute log folder from template."""
+        if self.folder is None:
+            raise RuntimeError("folder must be set for submitit backends")
+        return Path(self.logs.format(folder=self.folder, user=getpass.getuser()))
 
     def _submit(
         self, wrapper: _CachingCall, job_pkl: Path, *args: tp.Any, **kwargs: tp.Any
     ) -> tp.Any:
-        assert self.folder is not None  # Validated in _cache_folder
-        log_folder = self.folder / f"logs/{getpass.getuser()}/%j"
-        executor = self._EXECUTOR_CLS(folder=log_folder)
+        executor = self._EXECUTOR_CLS(folder=self._log_folder())
 
+        # Get only submitit-specific fields (exclude Backend fields)
+        submitit_fields = (
+            set(type(self).model_fields) - set(Backend.model_fields) - {"logs"}
+        )
         params = {
-            k: getattr(self, k)
-            for k in type(self).model_fields
-            if k not in ("folder", "cache_type", "mode") and getattr(self, k) is not None
+            k: getattr(self, k) for k in submitit_fields if getattr(self, k) is not None
         }
         if "job_name" in params:
             params["name"] = params.pop("job_name")
@@ -313,12 +341,12 @@ class SubmititDebug(_SubmititBackend):
 class Slurm(_SubmititBackend):
     """Slurm cluster execution + caching."""
 
-    slurm_constraint: str | None = None
-    slurm_partition: str | None = None
-    slurm_account: str | None = None
-    slurm_qos: str | None = None
-    slurm_use_srun: bool = False
-    slurm_additional_parameters: dict[str, int | str | float | bool] | None = None
+    constraint: str | None = None
+    partition: str | None = None
+    account: str | None = None
+    qos: str | None = None
+    use_srun: bool = False
+    additional_parameters: dict[str, int | str | float | bool] | None = None
 
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.SlurmExecutor
 
