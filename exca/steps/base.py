@@ -18,6 +18,8 @@ import inspect
 import logging
 import typing as tp
 
+import pydantic
+
 import exca
 from exca import utils
 
@@ -25,6 +27,46 @@ from . import backends
 from .backends import NoValue
 
 logger = logging.getLogger(__name__)
+
+
+@pydantic.model_validator(mode="before")
+def _infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
+    """Convert Backend instances to dicts to prevent sharing."""
+    if not isinstance(obj, dict):
+        return obj
+    infra = obj.get("infra")
+    if infra is None:
+        return obj
+
+    # Convert Backend instance to dict (prevents sharing)
+    if isinstance(infra, backends.Backend):
+        data = {k: getattr(infra, k) for k in infra.model_fields_set}
+        data[type(infra)._exca_discriminator_key] = type(infra).__name__
+        obj["infra"] = data
+
+    return obj
+
+
+@pydantic.model_validator(mode="after")
+def _infra_validator_after(self: tp.Any) -> tp.Any:
+    """Propagate default infra fields that exist on the target type."""
+    infra = getattr(self, "infra", None)
+    if infra is None:
+        return self
+
+    default_field = type(self).model_fields.get("infra")
+    if default_field is None or not isinstance(default_field.default, backends.Backend):
+        return self
+
+    default_infra = default_field.default
+    target_fields = set(type(infra).model_fields.keys())
+
+    # Propagate fields that exist on target and were set on default (but not overridden)
+    for field in default_infra.model_fields_set & target_fields:
+        if field not in infra.model_fields_set:
+            setattr(infra, field, getattr(default_infra, field))
+
+    return self
 
 
 class Step(exca.helpers.DiscriminatedModel):
@@ -42,6 +84,10 @@ class Step(exca.helpers.DiscriminatedModel):
             def _forward(self, data):
                 return data * self.coeff
     """
+
+    # Validators for infra handling (prevent sharing, propagate defaults)
+    _infra_validator_before = _infra_validator_before
+    _infra_validator_after = _infra_validator_after
 
     infra: backends.Backend | None = None
     _previous: tp.Union["Step", None] = None
@@ -94,6 +140,8 @@ class Step(exca.helpers.DiscriminatedModel):
 
         # Sync state back to original step's infra (with_input creates a copy)
         if self.infra is not None:
+            if step.infra is None:
+                raise RuntimeError("step.infra is None but self.infra is not")
             self.infra._ram_cache = step.infra._ram_cache
             # Reset force modes (use object.__setattr__ for frozen TaskInfra models)
             if self.infra.mode in ("force", "force-forward"):

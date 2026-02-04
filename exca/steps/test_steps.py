@@ -14,8 +14,8 @@ import pytest
 
 import exca
 
-from . import conftest
-from .base import Chain, Input
+from . import backends, conftest
+from .base import Chain, Input, Step
 
 # =============================================================================
 # Basic execution (no infra)
@@ -151,3 +151,42 @@ def test_pickle_roundtrip(tmp_path: Path, cached: bool, configured: bool) -> Non
     expected = 0.639
     assert original.forward() == pytest.approx(expected, rel=1e-3)
     assert loaded.forward() == pytest.approx(expected, rel=1e-3)
+
+
+def test_infra_not_shared(tmp_path: Path) -> None:
+    """Test that passing same infra instance to multiple steps creates copies."""
+    infra = backends.Cached(folder=tmp_path)
+    step1 = conftest.Add(value=1, infra=infra)
+    step2 = conftest.Add(value=2, infra=infra)
+    # Each step should have its own infra instance (not shared)
+    assert step1.infra is not step2.infra, "Infra instances should not be shared"
+
+
+@pytest.mark.parametrize("target_backend", ["LocalProcess", "Cached", "Slurm"])
+def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
+    """Test that shared fields propagate when switching backend types.
+
+    Fields propagate if they exist on both the default and target backend types.
+    """
+
+    class MyStep(Step):
+        value: int = 0
+        # LocalProcess has timeout_min (from _SubmititBackend) that Cached doesn't have
+        infra: backends.Backend | None = backends.LocalProcess(
+            folder=tmp_path, timeout_min=30
+        )
+
+        def _forward(self) -> int:
+            return self.value
+
+    # Switch backend type - shared fields propagate
+    step = MyStep(value=5, infra={"backend": target_backend, "mode": "force"})
+
+    assert step.infra is not None
+    assert type(step.infra).__name__ == target_backend
+    assert step.infra.folder == tmp_path, "folder (Backend field) should propagate"
+    assert step.infra.mode == "force", "explicitly set mode should be preserved"
+    # timeout_min propagates if target type has it (LocalProcess, Slurm share it via _SubmititBackend)
+    if target_backend in ("LocalProcess", "Slurm"):
+        assert step.infra.timeout_min == 30, "shared field should propagate"
+    # Cached doesn't have timeout_min - nothing to check
