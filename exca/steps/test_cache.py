@@ -28,12 +28,12 @@ def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
 
     # Base step: transformer (needs input) or generator (no input)
-    step: Step = conftest.Add(randomize=True)
+    step: Step = conftest.RandomGenerator()
+    if use_input:
+        step = conftest.Add(randomize=True)
     if use_chain:
         step = Chain(steps=[step, conftest.Mult(coeff=2.0)])
-    step = type(step).model_validate(
-        {**step.model_dump(), "infra": {"backend": "Cached", "folder": tmp_path}}
-    )
+    step = type(step).model_validate({**step.model_dump(), "infra": infra})
 
     # Run with or without input
     args = (5.0,) if use_input else ()
@@ -250,21 +250,22 @@ def test_mode_retry(tmp_path: Path) -> None:
 def test_cache_folder_structure(tmp_path: Path) -> None:
     """Cache folders follow step chain hash structure."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+
+    # Transformer / generator chain
     chain = Chain(
-        steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=10)],
+        steps=[conftest.Add(infra=infra), conftest.Mult(coeff=10)],
         infra=infra,
     )
-
-    chain.forward()  # No input
-    chain.forward(1)  # With input
+    chain.forward()
+    chain.forward(1)
 
     expected = (
-        # Generator caches
-        "type=RandomGenerator-1a8d0db1",
-        "type=RandomGenerator-1a8d0db1/coeff=10,type=Mult-98baeffc",
-        # With input=1
-        "value=1,type=Input-0b6b7c99/type=RandomGenerator-1a8d0db1",
-        "value=1,type=Input-0b6b7c99/type=RandomGenerator-1a8d0db1/coeff=10,type=Mult-98baeffc",
+        # As generator (no input)
+        "type=Add-c4eb5f00",
+        "type=Add-c4eb5f00/coeff=10,type=Mult-98baeffc",
+        # As transformer (with input=1)
+        "value=1,type=Input-0b6b7c99/type=Add-c4eb5f00",
+        "value=1,type=Input-0b6b7c99/type=Add-c4eb5f00/coeff=10,type=Mult-98baeffc",
     )
     assert conftest.extract_cache_folders(tmp_path) == expected
 

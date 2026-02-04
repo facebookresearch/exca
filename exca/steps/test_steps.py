@@ -67,6 +67,21 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     step.with_input(5.0).clear_cache()
 
 
+@pytest.mark.parametrize(
+    "steps",
+    [
+        [conftest.RandomGenerator(), conftest.Mult(coeff=10)],  # generator with input
+        [conftest.Add(), conftest.RandomGenerator()],  # generator as non-first step
+    ],
+)
+def test_pure_generator_errors(tmp_path: Path, steps: list) -> None:
+    """Pure generators (no input parameter) raise TypeError when receiving input."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=steps, infra=infra)
+    with pytest.raises(TypeError, match=r"RandomGenerator._forward\(\)"):
+        chain.forward(1)
+
+
 # =============================================================================
 # Chain hash and uid computation
 # =============================================================================

@@ -28,7 +28,7 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     """Submitit backends execute and cache correctly."""
     infra: tp.Any = {"backend": backend, "folder": tmp_path}
     chain = Chain(
-        steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)], infra=infra
+        steps=[conftest.Add(randomize=True), conftest.Mult(coeff=10)], infra=infra
     )
 
     out1 = chain.forward(1)
@@ -102,7 +102,7 @@ def test_force_with_taskinfra(tmp_path: Path) -> None:
     """
     step_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "steps"}
     chain = Chain(
-        steps=[conftest.RandomGenerator(infra=step_infra), conftest.Mult(coeff=10)],
+        steps=[conftest.Add(randomize=True, infra=step_infra), conftest.Mult(coeff=10)],
         infra=step_infra,
     )
     infra: tp.Any = {"folder": tmp_path / "cache"}

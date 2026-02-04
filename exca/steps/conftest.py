@@ -54,11 +54,18 @@ class Mult(Step):
         return value * self.coeff
 
 
+# =============================================================================
+# Transformer with default (can be used as generator))
+# =============================================================================
+
+
 class Add(Step):
     """Adds a value to input.
 
     - randomize=True: adds random noise instead of fixed value
     - error=True: raises ValueError (for testing error caching)
+
+    Can be used as generator (no input, uses value=0) or transformer (with input).
     """
 
     value: float = 2.0
@@ -66,7 +73,7 @@ class Add(Step):
     error: bool = False
     _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra", "error")
 
-    def _forward(self, value: float) -> float:
+    def _forward(self, value: float = 0) -> float:
         if self.error:
             raise ValueError("Triggered an error")
         if self.randomize:
@@ -75,18 +82,17 @@ class Add(Step):
 
 
 # =============================================================================
-# Generator steps (no required input)
+# Pure generator steps (no input allowed)
 # =============================================================================
 
 
 class RandomGenerator(Step):
     """Generates a random value - useful to verify caching.
 
-    Accepts optional input (ignored) so it can be used as first step in a chain
-    that receives input.
+    Pure generator: raises TypeError if called with input.
     """
 
     seed: int | None = None
 
-    def _forward(self, _input: float | None = None) -> float:
+    def _forward(self) -> float:
         return random.Random(self.seed).random()
