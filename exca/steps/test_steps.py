@@ -68,7 +68,7 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# Chain hash computation
+# Chain hash and uid computation
 # =============================================================================
 
 
