@@ -172,20 +172,23 @@ def test_mode_readonly_with_cache(tmp_path: Path) -> None:
     assert out2 == out1
 
 
+@pytest.mark.parametrize("chain", [True, False])
 @pytest.mark.parametrize("mode", ["force", "force-forward"])
-def test_mode_force(tmp_path: Path, mode: str) -> None:
+def test_mode_force(tmp_path: Path, mode: str, chain: bool) -> None:
     """Force modes recompute once, then use cache."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(
-        steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)], infra=infra
-    )
-    out1 = chain.forward()  # populate cache
+    if chain:
+        seq = [conftest.RandomGenerator(), conftest.Mult(coeff=10)]
+        step = Chain(steps=seq, infra=infra)
+    else:
+        step = conftest.RandomGenerator(infra=infra)
+    out1 = step.forward()  # populate cache
 
-    chain.infra.mode = mode  # type: ignore
-    out2 = chain.forward()  # forces recompute
+    step.infra.mode = mode  # type: ignore
+    out2 = step.forward()  # forces recompute
     assert out1 != out2
 
-    out3 = chain.forward()  # uses cache (mode reset to "cached")
+    out3 = step.forward()  # uses cache (mode reset to "cached")
     assert out2 == out3
 
 

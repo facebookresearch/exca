@@ -89,20 +89,16 @@ class Step(exca.helpers.DiscriminatedModel):
         if not isinstance(prev, Input):
             raise RuntimeError("Step not properly configured")
 
-        # Track if we need to reset mode on original step after run
-        reset_mode = False
-        if self.infra is not None:
-            reset_mode = self.infra.mode in ("force", "force-forward")
-
         args: tp.Any = () if isinstance(prev.value, NoInput) else (prev.value,)
         if step.infra is None:
             result = step._forward(*args)
         else:
             result = step.infra.run(step._forward, *args)
 
-        # Reset force modes on original step (use object.__setattr__ for frozen models)
-        if reset_mode:
-            object.__setattr__(self.infra, "mode", "cached")
+        # Remove force modes on original step (use object.__setattr__ for frozen models)
+        if self.infra is not None:
+            if self.infra.mode in ("force", "force-forward"):
+                object.__setattr__(self.infra, "mode", "cached")
 
         return result
 
