@@ -80,9 +80,9 @@ class Step(exca.helpers.DiscriminatedModel):
             step.infra._step = step
         return step
 
-    def forward(self, input: tp.Any = NoInput()) -> tp.Any:
+    def forward(self, value: tp.Any = NoInput()) -> tp.Any:
         """Execute with caching and backend handling."""
-        step = self.with_input(input) if self._previous is None else self
+        step = self.with_input(value) if self._previous is None else self
         prev = step._previous
 
         # prev is always Input after with_input()
@@ -211,7 +211,7 @@ class Chain(Step):
                 step._init()
             previous = step
 
-    def _forward(self, input: tp.Any = NoInput()) -> tp.Any:
+    def _forward(self, value: tp.Any = NoInput()) -> tp.Any:
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
@@ -225,7 +225,7 @@ class Chain(Step):
 
         # Find latest cached result to skip already-computed steps
         start_idx = 0
-        args: tp.Any = () if isinstance(input, NoInput) else (input,)
+        args: tp.Any = () if isinstance(value, NoInput) else (value,)
         for k, step in enumerate(reversed(steps)):
             if step.infra is not None and step.infra.has_cache():
                 args = (step.infra.cached_result(),)
@@ -241,8 +241,8 @@ class Chain(Step):
 
         return args[0]
 
-    def forward(self, input: tp.Any = NoInput()) -> tp.Any:
-        chain = self.with_input(input) if self._previous is None else self
+    def forward(self, value: tp.Any = NoInput()) -> tp.Any:
+        chain = self.with_input(value) if self._previous is None else self
 
         # Track steps with force modes to reset after run
         force_steps = [
