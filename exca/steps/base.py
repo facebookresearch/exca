@@ -283,10 +283,11 @@ class Chain(Step):
             result = chain.infra.run(chain._forward)
 
         # Reset force modes on original steps and chain after successful run
+        # Use object.__setattr__ to bypass frozen model validation
         for step in force_steps:
-            step.infra.mode = "cached"  # type: ignore
+            object.__setattr__(step.infra, "mode", "cached")
         if reset_chain_infra:
-            self.infra.mode = "cached"  # type: ignore
+            object.__setattr__(self.infra, "mode", "cached")
 
         return result
 

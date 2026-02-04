@@ -93,3 +93,40 @@ def test_step_in_taskinfra(tmp_path: Path) -> None:
     expected = "exca.steps.test_backends.Experiment.run,0/steps.steps=({coeff=3,type=Mult},{type=Add,value=12})-2f739f76"
     assert uid == expected
     assert xp.run() == 48  # 12 * 3 + 12
+
+
+def test_force_with_taskinfra(tmp_path: Path) -> None:
+    """Force mode should work correctly with TaskInfra wrapping.
+
+    When using TaskInfra, both caching layers need to be handled:
+    - TaskInfra caches the entire method result
+    - Step/Chain infra caches intermediate step results
+
+    To force recomputation, both caches must be cleared.
+    """
+    step_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "steps"}
+    chain = Chain(
+        steps=[conftest.RandomGenerator(infra=step_infra), conftest.Mult(coeff=10)],
+        infra=step_infra,
+    )
+    infra: tp.Any = {"folder": tmp_path / "cache"}
+
+    xp = Experiment(steps=chain, infra=infra)
+
+    out1 = xp.run()
+
+    # Force recomputation requires clearing both cache layers:
+    # 1. Clear step cache (need with_input to match the cached path)
+    xp.steps.with_input(12).clear_cache(recursive=True)
+    # 2. Clear TaskInfra cache
+    xp.infra.clear_job()
+    object.__setattr__(xp.infra, "_computed", False)
+
+    out2 = xp.run()
+
+    # Should get different result (forced recompute)
+    assert out1 != out2
+
+    # Third call should use cache (mode was reset after run)
+    out3 = xp.run()
+    assert out2 == out3
