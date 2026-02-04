@@ -15,7 +15,7 @@ import pytest
 import exca
 
 from . import conftest
-from .base import Chain
+from .base import Chain, Input
 
 # =============================================================================
 # Basic execution (no infra)
@@ -67,25 +67,41 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     step.with_input(5.0).clear_cache()
 
 
+@pytest.mark.parametrize(
+    "steps,match",
+    [
+        ([conftest.RandomGenerator(), conftest.Mult(coeff=10)], "RandomGenerator"),
+        ([conftest.Add(), conftest.RandomGenerator()], "RandomGenerator"),
+        # with the special "Input" step type
+        ([conftest.Add(), Input(value=99)], "Input"),
+        ([Input(value=5), conftest.Mult(coeff=2)], "Input"),
+    ],
+)
+def test_pure_generator_errors(tmp_path: Path, steps: list, match: str) -> None:
+    """Pure generators (no input parameter) raise TypeError when receiving input."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=steps, infra=infra)
+    with pytest.raises(TypeError, match=rf"{match}._forward\(\)"):
+        chain.forward(1)
+
+
 # =============================================================================
 # Chain hash and uid computation
 # =============================================================================
 
 
-def test_nested_chain_hash() -> None:
-    """Nested chains flatten for hash computation."""
+def test_chain_hash_and_uid() -> None:
+    """Nested chains flatten for hash and UID computation."""
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
     chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])  # type: ignore
-    expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
-    assert chain.with_input(1)._chain_hash() == expected
 
+    # Hash computation
+    expected_hash = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
+    assert chain.with_input(1)._chain_hash() == expected_hash
 
-def test_chain_uid_export() -> None:
-    """Chain exports to ConfDict/YAML correctly."""
-    steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-    chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])  # type: ignore
+    # UID export to YAML
     yaml = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_yaml()
-    expected = """steps:
+    expected_yaml = """steps:
 - type: Add
   value: 12.0
 - coeff: 3.0
@@ -93,7 +109,7 @@ def test_chain_uid_export() -> None:
 - type: Add
   value: 12.0
 """
-    assert yaml == expected
+    assert yaml == expected_yaml
 
 
 # =============================================================================

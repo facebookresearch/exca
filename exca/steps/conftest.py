@@ -14,12 +14,13 @@ Test guidelines:
 - Use `chain.model_copy(deep=True)` to create test variants, then update parameters
 
 Test consolidation:
-- Merge tests covering related scenarios into a single test function when they share
-  setup code and test similar behaviors (e.g., force vs force-forward, nested chains)
-- Use `pytest.mark.parametrize` for tests that run the same logic with different inputs
-  (e.g., `@pytest.mark.parametrize("mode", ("force", "force-forward"))`)
-- Avoid duplicating test code - if two tests differ only in one parameter, consolidate
-- Balance: keep tests readable; don't over-consolidate if it obscures what's being tested
+- Use `pytest.mark.parametrize` when tests differ on only a few aspects
+  (e.g., mode, step type, with/without input)
+- Merge sequential tests that build on each other into one
+  (e.g., "no cache -> fails" then "with cache -> works" can be one test)
+- Prefer fewer lines of test code - easier to maintain
+- When refactoring tests, move old versions to test_old.py temporarily; if they fail
+  while new tests pass, investigate if functionality was lost; otherwise delete them
 """
 
 import random
@@ -53,11 +54,18 @@ class Mult(Step):
         return value * self.coeff
 
 
+# =============================================================================
+# Transformer with default (can be used as generator))
+# =============================================================================
+
+
 class Add(Step):
     """Adds a value to input.
 
     - randomize=True: adds random noise instead of fixed value
     - error=True: raises ValueError (for testing error caching)
+
+    Can be used as generator (no input, uses value=0) or transformer (with input).
     """
 
     value: float = 2.0
@@ -65,7 +73,7 @@ class Add(Step):
     error: bool = False
     _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra", "error")
 
-    def _forward(self, value: float) -> float:
+    def _forward(self, value: float = 0) -> float:
         if self.error:
             raise ValueError("Triggered an error")
         if self.randomize:
@@ -74,18 +82,17 @@ class Add(Step):
 
 
 # =============================================================================
-# Generator steps (no required input)
+# Pure generator steps (no input allowed)
 # =============================================================================
 
 
 class RandomGenerator(Step):
     """Generates a random value - useful to verify caching.
 
-    Accepts optional input (ignored) so it can be used as first step in a chain
-    that receives input.
+    Pure generator: raises TypeError if called with input.
     """
 
     seed: int | None = None
 
-    def _forward(self, _input: float | None = None) -> float:
+    def _forward(self) -> float:
         return random.Random(self.seed).random()

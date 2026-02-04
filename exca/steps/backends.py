@@ -203,18 +203,30 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         # Check job recovery (for submitit backends)
         job_pkl = cache_folder / "job.pkl"
         job: tp.Any = None
-        if job_pkl.exists() and self.mode not in ("force", "force-forward"):
-            logger.debug("Recovering job: %s", job_pkl)
+        if job_pkl.exists():
             with job_pkl.open("rb") as f:
                 job = pickle.load(f)
-            # Retry mode: clear failed jobs
-            if self.mode == "retry" and job.done():
+            # Force modes: cancel existing job if running
+            if self.mode in ("force", "force-forward"):
+                if not job.done():
+                    try:
+                        job.cancel()
+                        msg = "Cancelled running job for force mode: %s"
+                        logger.warning(msg, job_pkl)
+                    except Exception as e:
+                        logger.warning("Failed to cancel job %s: %s", job_pkl, e)
+                job = None
+                job_pkl.unlink()
+            # Retry mode: clear failed jobs only
+            elif self.mode == "retry" and job.done():
                 try:
                     job.result()  # Check if it failed
                 except Exception:
                     logger.warning("Retrying failed job: %s", job_pkl)
                     job = None
                     job_pkl.unlink()
+            else:
+                logger.debug("Recovering job: %s", job_pkl)
 
         if job is None:
             wrapper = _CachingCall(func, cache_folder, self.cache_type)
