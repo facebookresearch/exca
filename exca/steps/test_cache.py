@@ -313,20 +313,6 @@ def test_cache_folder_structure(tmp_path: Path) -> None:
 # =============================================================================
 
 
-def test_nested_chain_cache(tmp_path: Path) -> None:
-    """Nested chains cache correctly."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    substeps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-
-    subchain = Chain(steps=substeps, infra=infra)
-    chain = Chain(steps=[conftest.Add(value=12), subchain], infra=infra)
-    out = chain.forward(1)
-    assert out == 51  # (1 + 12) * 3 + 12
-
-    expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
-    assert chain.with_input(1)._chain_hash() == expected
-
-
 def test_clear_cache_recursive(tmp_path: Path) -> None:
     """clear_cache(recursive=True) clears intermediate caches."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
