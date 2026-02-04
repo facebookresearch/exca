@@ -256,6 +256,7 @@ def test_force_forward_nested_chains(tmp_path: Path) -> None:
     # force-forward on inner chain also propagates to downstream
     outer2 = outer.model_copy(deep=True)
     outer2._step_sequence()[2].infra.mode = "force-forward"  # type: ignore
+    assert outer._step_sequence()[0].infra.mode == "cached", "should have been reverted"
     out4 = outer2.forward()
     assert out4 != out3  # downstream recomputed
 
