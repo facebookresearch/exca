@@ -789,6 +789,78 @@ Cleanest separation of concerns:
 
 ---
 
+## Patterns to Reuse from MapInfra
+
+MapInfra (`exca/map.py`) has patterns we can reuse:
+
+### 1. JobChecker for tracking running jobs
+
+```python
+class JobChecker:
+    def __init__(self, folder):
+        self.folder = folder / "running-jobs"
+    
+    def add(self, jobs):
+        for job in jobs:
+            if not job.done():
+                with (self.folder / f"{uuid}.pkl").open("wb") as f:
+                    pickle.dump(job, f)
+    
+    def wait(self):
+        for fp in self.folder.glob("*.pkl"):
+            job = pickle.load(fp)
+            if not job.done():
+                job.wait()
+            fp.unlink()
+```
+
+- Separate `running-jobs/` folder for tracking
+- Allows waiting for jobs from other processes
+- Clean up when done
+
+### 2. `_recomputed` tracking for force mode
+
+```python
+self._recomputed: Set[str] = set()
+
+if self.mode == "force":
+    to_remove = set(items) - set(missing) - self._recomputed
+    for uid in to_remove:
+        del cache[uid]
+    self._recomputed |= set(missing)
+```
+
+- Avoids re-deleting items in same session
+
+### 3. `to_chunks()` for job distribution
+
+Already exists in `exca/map.py`, can reuse directly.
+
+### 4. CacheDict integration
+
+MapInfra already uses CacheDict with `item_uid` - our design is very similar,
+just with `item_uid` on Step class instead of decorator param.
+
+### Proposed cache structure
+
+```
+folder/
+  {step_uid}/
+    items/              # CacheDict folder
+      {item_uid_1}.pkl
+      {item_uid_2}.pkl
+      ...-info.jsonl
+    running-jobs/       # JobChecker folder (temporary)
+      {uuid}.pkl
+```
+
+---
+
+**Note:** Array computation (running steps with varying parameters) is covered
+in a separate report: `ARRAY_OPTIONS_REPORT.md`
+
+---
+
 ## Drawback: CacheDict and Force Recomputation
 
 ### The Problem
