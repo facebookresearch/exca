@@ -74,6 +74,18 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     _step: tp.Union["Step", None] = None
 
+    def __eq__(self, other: tp.Any) -> bool:
+        """Compare backends by model fields only, excluding _step to avoid recursion."""
+        if not isinstance(other, Backend):
+            return NotImplemented
+        if type(self) != type(other):
+            return False
+        # Compare only declared model fields, not private _step
+        for field in type(self).model_fields:
+            if getattr(self, field) != getattr(other, field):
+                return False
+        return True
+
     # =========================================================================
     # Cache key and folder
     # =========================================================================

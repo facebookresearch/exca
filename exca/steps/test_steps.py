@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import pickle
 import random
 import typing as tp
 from pathlib import Path
@@ -30,8 +31,11 @@ class RandomAdd(Step):
 class RandomGenerator(Step):
     """Generates a random value - useful to verify caching."""
 
+    seed: int | None = None
+
     def _forward(self) -> float:
-        return random.random()
+        gen = random.Random(self.seed)
+        return gen.random()
 
 
 def test_step_no_infra() -> None:
@@ -200,3 +204,42 @@ def test_mode_retry(tmp_path: Path) -> None:
     step = ErrorStep(error=False, infra=infra)
     result = step.forward(5.0)
     assert result == 10.0
+
+
+# =============================================================================
+# Safety checks for recursion risks - Equality an pickling
+# =============================================================================
+
+
+def test_equality(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    steps = [RandomGenerator(infra=infra) for _ in range(2)]
+    assert steps[0] == steps[1]
+    assert steps[0] in steps
+
+
+@pytest.mark.parametrize("configured", [True, False])
+@pytest.mark.parametrize("cached", [True, False])
+def test_pickle_roundtrip(tmp_path: Path, cached: bool, configured: bool) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    if not cached:
+        infra = None
+    step = RandomGenerator(seed=42, infra=infra)
+    original = step.with_input() if configured else step
+
+    data = pickle.dumps(original)
+    loaded = pickle.loads(data)
+
+    # Attributes preserved
+    assert loaded.seed == 42
+    assert (loaded.infra is not None) is cached
+    # Infra should be attached to the loaded step
+    if cached:
+        assert loaded.infra._step is loaded
+    # only the configured step should have _previous
+    assert (loaded._previous is not None) is configured
+
+    # Step should be functional
+    expected = 0.639
+    assert original.forward() == pytest.approx(expected, rel=1e-3)
+    assert loaded.forward() == pytest.approx(expected, rel=1e-3)
