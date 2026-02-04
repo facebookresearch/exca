@@ -170,13 +170,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             return "error"
         return None
 
-    def _load_cache(self) -> tp.Any:
+    def _load_cache(self, folder: Path | None = None) -> tp.Any:
         """Load cached result, or raise cached error."""
         # Check RAM cache first (only for successful results)
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
             return self._ram_cache
 
-        folder = self._cache_folder()
+        if folder is None:
+            folder = self._cache_folder()
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=folder, cache_type=self.cache_type
         )
@@ -254,7 +255,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             job = self._submit(wrapper, job_pkl, *args, **kwargs)
 
         job.result()  # Wait (result is cached, not returned)
-        return self._load_cache()  # Raises if error
+        return self._load_cache(cache_folder)  # Use pre-computed folder
 
     def _submit(
         self, wrapper: _CachingCall, job_pkl: Path, *args: tp.Any, **kwargs: tp.Any

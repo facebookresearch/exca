@@ -220,3 +220,25 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     assert (
         inner_step.infra.folder == tmp_path
     ), "folder should propagate to nested chain steps"
+
+
+def test_forward_mutation_cache_consistency(tmp_path: Path) -> None:
+    """Cache should work even if _forward mutates self (bug: cache key changes mid-execution)."""
+
+    class Counter(Step):
+        count: int = 0
+        infra: backends.Backend | None = None
+
+        def _forward(self) -> int:
+            self.count += 1  # Mutation during _forward changes cache key!
+            return self.count
+
+    counter = Counter(infra={"backend": "Cached", "folder": tmp_path})
+
+    # First forward - should cache result
+    result1 = counter.forward()
+    assert result1 == 1, "first call should return 1"
+
+    # Second forward - should return cached result, not None
+    result2 = counter.forward()
+    assert result2 == 1, "second call should return cached result (bug: returns None)"
