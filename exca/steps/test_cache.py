@@ -125,6 +125,7 @@ def test_mode_readonly(tmp_path: Path) -> None:
         chain.forward()
 
     # Populate cache, then read-only works
+    assert chain.infra is not None
     chain.infra.mode = "cached"
     out1 = chain.forward()
     chain.infra.mode = "read-only"
