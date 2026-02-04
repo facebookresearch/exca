@@ -29,7 +29,7 @@ if tp.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ModeType = tp.Literal["cached", "force", "read-only", "retry"]
+ModeType = tp.Literal["cached", "force", "force-forward", "read-only", "retry"]
 CacheStatus = tp.Literal["success", "error", None]
 
 
@@ -189,21 +189,21 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             if status is None:
                 raise RuntimeError(f"No cache in read-only mode: {self._cache_key()}")
             return self._load_cache()  # Raises if error
-        if status is not None and self.mode not in ("force", "retry"):
+        if status is not None and self.mode not in ("force", "force-forward", "retry"):
             logger.debug("Cache hit: %s", self._cache_key())
             return self._load_cache()  # Raises if error
 
-        # Retry mode: clear cached errors; Force mode: clear all cache
-        if self.mode == "retry" and status == "error":
-            logger.warning("Retrying failed step: %s", self._cache_key())
+        # Force modes: clear cache; Retry: clear only errors
+        if self.mode in ("force", "force-forward") and status is not None:
             self.clear_cache()
-        elif self.mode == "force" and status is not None:
+        elif self.mode == "retry" and status == "error":
+            logger.warning("Retrying failed step: %s", self._cache_key())
             self.clear_cache()
 
         # Check job recovery (for submitit backends)
         job_pkl = cache_folder / "job.pkl"
         job: tp.Any = None
-        if job_pkl.exists() and self.mode != "force":
+        if job_pkl.exists() and self.mode not in ("force", "force-forward"):
             logger.debug("Recovering job: %s", job_pkl)
             with job_pkl.open("rb") as f:
                 job = pickle.load(f)

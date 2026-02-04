@@ -213,7 +213,7 @@ class Chain(Step):
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
-        # Find latest cached result
+        # Find latest cached result to skip already-computed steps
         start_idx = 0
         result: tp.Any = input
         for k, step in enumerate(reversed(steps)):
@@ -222,12 +222,17 @@ class Chain(Step):
                 start_idx = len(steps) - k
                 break
 
-        # Run remaining steps
+        # Run remaining steps, propagating force-forward by clearing caches
+        force_remaining = False
         for step in steps[start_idx:]:
             if isinstance(step, Input):
                 result = step.value
             elif step.infra is not None:
-                # Use infra.run() to cache intermediate results
+                if step.infra.mode == "force-forward":
+                    force_remaining = True
+                # Clear cache if force-forward propagation is active
+                if force_remaining and step.has_cache():
+                    step.clear_cache()
                 if isinstance(result, NoInput):
                     result = step.infra.run(step._forward)
                 else:
@@ -244,6 +249,13 @@ class Chain(Step):
 
         if chain.infra is None:
             return chain._forward()
+
+        # If any internal step has force-forward, clear chain's cache first
+        if any(
+            s.infra is not None and s.infra.mode == "force-forward"
+            for s in chain._step_sequence()
+        ):
+            chain.infra.clear_cache()
 
         return chain.infra.run(chain._forward)
 

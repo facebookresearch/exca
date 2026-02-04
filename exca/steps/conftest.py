@@ -55,7 +55,7 @@ class Add(Step):
     value: float = 2.0
     randomize: bool = False
     error: bool = False
-    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("error",)
+    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra", "error")
 
     def _forward(self, value: float) -> float:
         if self.error:

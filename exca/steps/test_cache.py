@@ -172,15 +172,82 @@ def test_mode_readonly_with_cache(tmp_path: Path) -> None:
     assert out2 == out1
 
 
-def test_mode_force(tmp_path: Path) -> None:
-    """Force mode recomputes every time."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force"}
+@pytest.mark.parametrize("mode", ["force", "force-forward"])
+def test_mode_force(tmp_path: Path, mode: str) -> None:
+    """Force modes recompute every time."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": mode}
     chain = Chain(
         steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)], infra=infra
     )
     out1 = chain.forward()
     out2 = chain.forward()
     assert out1 != out2
+
+
+def test_mode_force_forward_propagates(tmp_path: Path) -> None:
+    """Force-forward propagates to downstream steps."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    infra_ff: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force-forward"}
+
+    # Chain: gen (force-forward) -> add (randomize)
+    # Both steps have infra, so both cache
+    chain = Chain(
+        steps=[
+            conftest.RandomGenerator(infra=infra_ff),
+            conftest.Add(randomize=True, infra=infra),
+        ],
+        infra=infra,
+    )
+
+    out1 = chain.forward()
+    out2 = chain.forward()
+
+    # Both should differ: gen recomputed due to force-forward,
+    # add recomputed because force-forward propagates
+    assert out1 != out2
+
+
+def test_force_forward_vs_force_intermediate(tmp_path: Path) -> None:
+    """Force-forward propagates through intermediate cached steps."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+
+    # First run: populate all caches
+    chain1 = Chain(
+        steps=[
+            conftest.RandomGenerator(infra=infra),
+            conftest.Mult(coeff=10, infra=infra),  # deterministic
+            conftest.Add(randomize=True, infra=infra),
+        ],
+        infra=infra,
+    )
+    out1 = chain1.forward()
+
+    # With force on mult: mult recomputes but uses same gen cache
+    # add's cache key unchanged (same upstream), so add uses cache
+    infra_force: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force"}
+    chain2 = Chain(
+        steps=[
+            conftest.RandomGenerator(infra=infra),
+            conftest.Mult(coeff=10, infra=infra_force),
+            conftest.Add(randomize=True, infra=infra),
+        ],
+        infra=infra,
+    )
+    out2 = chain2.forward()
+    assert out1 == out2  # add still uses its cache
+
+    # With force-forward on mult: mult and add both recompute
+    infra_ff: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force-forward"}
+    chain3 = Chain(
+        steps=[
+            conftest.RandomGenerator(infra=infra),
+            conftest.Mult(coeff=10, infra=infra_ff),
+            conftest.Add(randomize=True, infra=infra),
+        ],
+        infra=infra,
+    )
+    out3 = chain3.forward()
+    assert out3 != out1  # add recomputed due to force-forward propagation
 
 
 def test_mode_retry(tmp_path: Path) -> None:
