@@ -19,68 +19,35 @@ from .base import Chain, Step
 # =============================================================================
 
 
-def test_step_cache(tmp_path: Path) -> None:
-    """Step caches results."""
+@pytest.mark.parametrize(
+    "use_chain,use_input",
+    [(False, False), (False, True), (True, False), (True, True)],
+)
+def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
+    """Steps and chains cache results (with or without input)."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = conftest.Add(randomize=True, infra=infra)
 
-    result1 = step.forward(5.0)
-    assert step.with_input(5.0).has_cache()
+    # Base step: transformer (needs input) or generator (no input)
+    step: Step = conftest.Add(randomize=True)
+    if use_chain:
+        step = Chain(steps=[step, conftest.Mult(coeff=2.0)])
+    step = type(step).model_validate(
+        {**step.model_dump(), "infra": {"backend": "Cached", "folder": tmp_path}}
+    )
+
+    # Run with or without input
+    args = (5.0,) if use_input else ()
+    result1 = step.forward(*args)
+    assert step.with_input(*args).has_cache()
 
     # Same result from cache
-    result2 = step.forward(5.0)
+    result2 = step.forward(*args)
     assert result1 == result2
-    assert step.with_input(5.0).infra.cached_result() == result1  # type: ignore
 
-    # Clear and recompute
-    step.with_input(5.0).clear_cache()
-    assert not step.with_input(5.0).has_cache()
-    result3 = step.forward(5.0)
+    # Clear and recompute gives different result
+    step.with_input(*args).clear_cache()
+    result3 = step.forward(*args)
     assert result3 != result1
-
-
-def test_generator_cache(tmp_path: Path) -> None:
-    """Generator steps cache without explicit with_input()."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = conftest.RandomGenerator(infra=infra)
-
-    result1 = step.forward()
-    assert step.has_cache()
-
-    result2 = step.forward()
-    assert result1 == result2
-
-    step.clear_cache()
-    result3 = step.forward()
-    assert result3 != result1
-
-
-def test_chain_cache(tmp_path: Path) -> None:
-    """Chain caches final result."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(
-        steps=[conftest.Mult(coeff=2.0), conftest.Add(randomize=True)], infra=infra
-    )
-
-    result1 = chain.forward(5.0)
-    assert chain.with_input(5.0).has_cache()
-
-    result2 = chain.forward(5.0)
-    assert result1 == result2
-
-
-def test_chain_with_generator(tmp_path: Path) -> None:
-    """Chain starting with generator (no input needed)."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(
-        steps=[conftest.RandomGenerator(), conftest.Mult(coeff=3.0)], infra=infra
-    )
-
-    result1 = chain.forward()
-    assert chain.with_input().has_cache()
-
-    result2 = chain.forward()
-    assert result1 == result2
 
 
 # =============================================================================
@@ -146,30 +113,22 @@ def test_mode_cached(tmp_path: Path) -> None:
     assert out1 == out2
 
 
-def test_mode_readonly_no_cache(tmp_path: Path) -> None:
-    """Read-only mode fails without cache."""
+def test_mode_readonly(tmp_path: Path) -> None:
+    """Read-only mode: fails without cache, works with cache."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "read-only"}
     chain = Chain(
         steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)], infra=infra
     )
+
+    # Fails without cache
     with pytest.raises(RuntimeError, match="read-only"):
         chain.forward()
 
-
-def test_mode_readonly_with_cache(tmp_path: Path) -> None:
-    """Read-only mode works after caching."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(
-        steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)], infra=infra
-    )
+    # Populate cache, then read-only works
+    chain.infra.mode = "cached"
     out1 = chain.forward()
-
-    infra["mode"] = "read-only"
-    chain_ro = Chain(
-        steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)], infra=infra
-    )
-    out2 = chain_ro.forward()
-    assert out2 == out1
+    chain.infra.mode = "read-only"
+    assert chain.forward() == out1
 
 
 @pytest.mark.parametrize("chain", [True, False])

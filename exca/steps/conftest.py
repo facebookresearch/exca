@@ -14,12 +14,13 @@ Test guidelines:
 - Use `chain.model_copy(deep=True)` to create test variants, then update parameters
 
 Test consolidation:
-- Merge tests covering related scenarios into a single test function when they share
-  setup code and test similar behaviors (e.g., force vs force-forward, nested chains)
-- Use `pytest.mark.parametrize` for tests that run the same logic with different inputs
-  (e.g., `@pytest.mark.parametrize("mode", ("force", "force-forward"))`)
-- Avoid duplicating test code - if two tests differ only in one parameter, consolidate
-- Balance: keep tests readable; don't over-consolidate if it obscures what's being tested
+- Use `pytest.mark.parametrize` when tests differ on only a few aspects
+  (e.g., mode, step type, with/without input)
+- Merge sequential tests that build on each other into one
+  (e.g., "no cache -> fails" then "with cache -> works" can be one test)
+- Prefer fewer lines of test code - easier to maintain
+- When refactoring tests, move old versions to test_old.py temporarily; if they fail
+  while new tests pass, investigate if functionality was lost; otherwise delete them
 """
 
 import random

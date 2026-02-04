@@ -72,20 +72,18 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
 # =============================================================================
 
 
-def test_nested_chain_hash() -> None:
-    """Nested chains flatten for hash computation."""
+def test_chain_hash_and_uid() -> None:
+    """Nested chains flatten for hash and UID computation."""
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
     chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])  # type: ignore
-    expected = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
-    assert chain.with_input(1)._chain_hash() == expected
 
+    # Hash computation
+    expected_hash = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
+    assert chain.with_input(1)._chain_hash() == expected_hash
 
-def test_chain_uid_export() -> None:
-    """Chain exports to ConfDict/YAML correctly."""
-    steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-    chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])  # type: ignore
+    # UID export to YAML
     yaml = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_yaml()
-    expected = """steps:
+    expected_yaml = """steps:
 - type: Add
   value: 12.0
 - coeff: 3.0
@@ -93,7 +91,7 @@ def test_chain_uid_export() -> None:
 - type: Add
   value: 12.0
 """
-    assert yaml == expected
+    assert yaml == expected_yaml
 
 
 # =============================================================================
