@@ -15,7 +15,7 @@ import pytest
 import exca
 
 from . import conftest
-from .base import Chain
+from .base import Chain, Input
 
 # =============================================================================
 # Basic execution (no infra)
@@ -68,17 +68,20 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "steps",
+    "steps,match",
     [
-        [conftest.RandomGenerator(), conftest.Mult(coeff=10)],  # generator with input
-        [conftest.Add(), conftest.RandomGenerator()],  # generator as non-first step
+        ([conftest.RandomGenerator(), conftest.Mult(coeff=10)], "RandomGenerator"),
+        ([conftest.Add(), conftest.RandomGenerator()], "RandomGenerator"),
+        # with the special "Input" step type
+        ([conftest.Add(), Input(value=99)], "Input"),
+        ([Input(value=5), conftest.Mult(coeff=2)], "Input"),
     ],
 )
-def test_pure_generator_errors(tmp_path: Path, steps: list) -> None:
+def test_pure_generator_errors(tmp_path: Path, steps: list, match: str) -> None:
     """Pure generators (no input parameter) raise TypeError when receiving input."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(steps=steps, infra=infra)
-    with pytest.raises(TypeError, match=r"RandomGenerator._forward\(\)"):
+    with pytest.raises(TypeError, match=rf"{match}._forward\(\)"):
         chain.forward(1)
 
 
