@@ -247,17 +247,32 @@ class Chain(Step):
     def forward(self, input: tp.Any = NoInput()) -> tp.Any:
         chain = self.with_input(input) if self._previous is None else self
 
+        # Track steps with force modes to reset after run
+        force_steps = [
+            s
+            for s in self._step_sequence()
+            if s.infra is not None and s.infra.mode in ("force", "force-forward")
+        ]
+        reset_chain_infra = self.infra is not None and self.infra.mode in (
+            "force",
+            "force-forward",
+        )
+
         if chain.infra is None:
-            return chain._forward()
+            result = chain._forward()
+        else:
+            # If any internal step has force-forward, clear chain's cache first
+            if any(s.infra.mode == "force-forward" for s in force_steps):
+                chain.infra.clear_cache()
+            result = chain.infra.run(chain._forward)
 
-        # If any internal step has force-forward, clear chain's cache first
-        if any(
-            s.infra is not None and s.infra.mode == "force-forward"
-            for s in chain._step_sequence()
-        ):
-            chain.infra.clear_cache()
+        # Reset force modes on original steps and chain after successful run
+        for step in force_steps:
+            step.infra.mode = "cached"  # type: ignore
+        if reset_chain_infra:
+            self.infra.mode = "cached"  # type: ignore
 
-        return chain.infra.run(chain._forward)
+        return result
 
     def _aligned_step(self) -> list[Step]:
         return [s for step in self._step_sequence() for s in step._aligned_step()]

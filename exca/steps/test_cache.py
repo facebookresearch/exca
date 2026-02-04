@@ -174,37 +174,40 @@ def test_mode_readonly_with_cache(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("mode", ["force", "force-forward"])
 def test_mode_force(tmp_path: Path, mode: str) -> None:
-    """Force modes recompute every time."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": mode}
+    """Force modes recompute once, then use cache."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(
         steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)], infra=infra
     )
-    out1 = chain.forward()
-    out2 = chain.forward()
+    out1 = chain.forward()  # populate cache
+
+    chain.infra.mode = mode  # type: ignore
+    out2 = chain.forward()  # forces recompute
     assert out1 != out2
+
+    out3 = chain.forward()  # uses cache (mode reset to "cached")
+    assert out2 == out3
 
 
 def test_mode_force_forward_propagates(tmp_path: Path) -> None:
-    """Force-forward propagates to downstream steps."""
+    """Force-forward propagates to downstream steps, then uses cache."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    infra_ff: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force-forward"}
+    steps = [
+        conftest.RandomGenerator(infra=infra),
+        conftest.Add(randomize=True, infra=infra),
+    ]
+    chain = Chain(steps=steps, infra=infra)
 
-    # Chain: gen (force-forward) -> add (randomize)
-    # Both steps have infra, so both cache
-    chain = Chain(
-        steps=[
-            conftest.RandomGenerator(infra=infra_ff),
-            conftest.Add(randomize=True, infra=infra),
-        ],
-        infra=infra,
-    )
+    out1 = chain.forward()  # populate cache
 
-    out1 = chain.forward()
+    # Set force-forward on gen and run again
+    steps[0].infra.mode = "force-forward"  # type: ignore
     out2 = chain.forward()
+    assert out1 != out2  # both steps recomputed
 
-    # Both should differ: gen recomputed due to force-forward,
-    # add recomputed because force-forward propagates
-    assert out1 != out2
+    # Third call should use cache (force-forward doesn't mean "always force")
+    out3 = chain.forward()
+    assert out2 == out3  # uses cache from second run
 
 
 def test_force_forward_vs_force_intermediate(tmp_path: Path) -> None:
