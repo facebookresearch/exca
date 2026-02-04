@@ -4,6 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+"""Tests for Step and Chain basic functionality (no caching tests here, see test_cache.py)."""
+
 import pickle
 import typing as tp
 from pathlib import Path
@@ -12,6 +14,10 @@ import pytest
 
 from . import conftest
 from .base import Chain
+
+# =============================================================================
+# Basic execution (no infra)
+# =============================================================================
 
 
 def test_step_no_infra() -> None:
@@ -25,102 +31,20 @@ def test_chain_no_infra() -> None:
     assert chain.forward(5.0) == 30.0
 
 
-def test_step_with_cache(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = conftest.Add(randomize=True, infra=infra)
-
-    # First call computes
-    result1 = step.forward(5.0)
-    assert step.with_input(5.0).has_cache()
-
-    # Second call uses cache - same result proves caching
-    result2 = step.forward(5.0)
-    assert result1 == result2
-    assert step.with_input(5.0).infra.cached_result() == result1  # type: ignore
-
-    # Clear cache
-    step.with_input(5.0).clear_cache()
-    assert not step.with_input(5.0).has_cache()
-
-    # After clearing, new computation gives different result
-    result3 = step.forward(5.0)
-    assert result3 != result1
+# =============================================================================
+# Generator vs Transformer detection
+# =============================================================================
 
 
-def test_generator_cache_access(tmp_path: Path) -> None:
-    """Generator steps work without explicit with_input()."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = conftest.RandomGenerator(infra=infra)
-    # Run and check cache
-    result1 = step.forward()
-    assert step.has_cache()
-    # Same result from cache
-    result2 = step.forward()
-    assert result1 == result2
-    # New result after clearing
-    step.clear_cache()
-    result3 = step.forward()
-    assert result3 != result1
+def test_chain_is_generator() -> None:
+    """Chain._is_generator checks first step."""
+    # Chain with generator first step
+    gen_chain = Chain(steps=[conftest.RandomGenerator(), conftest.Mult(coeff=2.0)])
+    assert gen_chain._is_generator()
 
-
-def test_chain_with_cache(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(
-        steps=[conftest.Mult(coeff=2.0), conftest.Add(randomize=True)],
-        infra=infra,
-    )
-
-    result1 = chain.forward(5.0)
-    assert chain.with_input(5.0).has_cache()
-
-    # Second call uses cache - same result proves caching
-    result2 = chain.forward(5.0)
-    assert result1 == result2
-
-
-def test_chain_with_generator(tmp_path: Path) -> None:
-    """Chain starting with generator step (no input)."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(
-        steps=[conftest.RandomGenerator(), conftest.Mult(coeff=3.0)],
-        infra=infra,
-    )
-
-    result1 = chain.forward()
-    assert chain.with_input().has_cache()
-
-    # Second call uses cache - same result proves caching
-    result2 = chain.forward()
-    assert result1 == result2
-
-
-def test_chain_intermediate_cache(tmp_path: Path) -> None:
-    """Chain with intermediate step caching."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(
-        steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=3.0)],
-        infra=infra,
-    )
-    result1 = chain.forward()
-
-    # Check intermediate cache exists
-    configured = chain.with_input()
-    gen_step = configured._step_sequence()[0]
-    assert gen_step.has_cache()
-
-    # Second call uses cache - same result proves intermediate caching
-    chain.clear_cache(recursive=False)
-    result2 = chain.forward()
-    assert result1 == result2
-
-
-def test_mode_readonly(tmp_path: Path) -> None:
-    """Read-only mode fails if no cache."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "read-only"}
-    step = conftest.Mult(coeff=3.0, infra=infra)
-
-    with pytest.raises(RuntimeError, match="read-only"):
-        step.forward(5.0)
+    # Chain with transformer first step
+    trans_chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Add(randomize=True)])
+    assert not trans_chain._is_generator()
 
 
 def test_transformer_requires_with_input(tmp_path: Path) -> None:
@@ -142,44 +66,13 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     assert not step.with_input(5.0).has_cache()
 
 
-def test_chain_is_generator() -> None:
-    """Chain._is_generator checks first step."""
-    # Chain with generator first step
-    gen_chain = Chain(steps=[conftest.RandomGenerator(), conftest.Mult(coeff=2.0)])
-    assert gen_chain._is_generator()
-
-    # Chain with transformer first step
-    trans_chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Add(randomize=True)])
-    assert not trans_chain._is_generator()
-
-
-def test_mode_retry(tmp_path: Path) -> None:
-    """Retry mode re-runs failed jobs."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-
-    # First run with error
-    step = conftest.Add(value=1, error=True, infra=infra)
-    with pytest.raises(ValueError):
-        step.forward(5.0)
-
-    # Same cache key, still errors (cached failure)
-    step = conftest.Add(value=1, error=False, infra=infra)
-    with pytest.raises(ValueError):
-        step.forward(5.0)
-
-    # Retry mode clears failed job and re-runs
-    infra["mode"] = "retry"
-    step = conftest.Add(value=1, error=False, infra=infra)
-    result = step.forward(5.0)
-    assert result == 6.0  # 5 + 1
-
-
 # =============================================================================
 # Safety checks for recursion risks - Equality and pickling
 # =============================================================================
 
 
 def test_equality(tmp_path: Path) -> None:
+    """Steps with same config are equal (no infinite recursion from infra back-ref)."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     steps = [conftest.RandomGenerator(infra=infra) for _ in range(2)]
     assert steps[0] == steps[1]
@@ -189,6 +82,7 @@ def test_equality(tmp_path: Path) -> None:
 @pytest.mark.parametrize("configured", [True, False])
 @pytest.mark.parametrize("cached", [True, False])
 def test_pickle_roundtrip(tmp_path: Path, cached: bool, configured: bool) -> None:
+    """Pickle roundtrip preserves step functionality."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     if not cached:
         infra = None
