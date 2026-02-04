@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from . import conftest
-from .base import Chain
+from .base import Chain, Step
 
 # =============================================================================
 # Basic caching
@@ -177,6 +177,7 @@ def test_mode_readonly_with_cache(tmp_path: Path) -> None:
 def test_mode_force(tmp_path: Path, mode: str, chain: bool) -> None:
     """Force modes recompute once, then use cache."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step: Step
     if chain:
         seq = [conftest.RandomGenerator(), conftest.Mult(coeff=10)]
         step = Chain(steps=seq, infra=infra)
