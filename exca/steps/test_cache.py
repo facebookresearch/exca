@@ -258,6 +258,38 @@ def test_force_forward_nested_chain(tmp_path: Path) -> None:
     assert out1 != out2  # add_random recomputed due to inner's force-forward
 
 
+def test_force_forward_before_chain(tmp_path: Path) -> None:
+    """Force-forward before a chain propagates through it."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    # Inner chain with steps (some without infra)
+    inner = Chain(
+        steps=[conftest.Mult(coeff=10), conftest.Add(randomize=True, infra=infra)],
+        infra=infra,
+    )
+    # Outer: gen(ff) -> inner -> add (some steps without infra)
+    outer = Chain(
+        steps=[
+            conftest.RandomGenerator(infra=infra),
+            conftest.Mult(coeff=2),  # no infra
+            inner,
+            conftest.Add(value=1),  # no infra
+        ],
+        infra=infra,
+    )
+
+    out1 = outer.forward()
+
+    # Set force-forward on gen (before the inner chain)
+    outer._step_sequence()[0].infra.mode = "force-forward"  # type: ignore
+    out2 = outer.forward()
+
+    assert out1 != out2  # inner's add_random recomputed
+
+    # Third call uses cache
+    out3 = outer.forward()
+    assert out2 == out3
+
+
 def test_mode_retry(tmp_path: Path) -> None:
     """Retry mode clears cached errors."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
