@@ -189,29 +189,8 @@ def test_mode_force(tmp_path: Path, mode: str) -> None:
     assert out2 == out3
 
 
-def test_mode_force_forward_propagates(tmp_path: Path) -> None:
-    """Force-forward propagates to downstream steps, then uses cache."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    steps = [
-        conftest.RandomGenerator(infra=infra),
-        conftest.Add(randomize=True, infra=infra),
-    ]
-    chain = Chain(steps=steps, infra=infra)
-
-    out1 = chain.forward()  # populate cache
-
-    # Set force-forward on gen and run again
-    steps[0].infra.mode = "force-forward"  # type: ignore
-    out2 = chain.forward()
-    assert out1 != out2  # both steps recomputed
-
-    # Third call should use cache (force-forward doesn't mean "always force")
-    out3 = chain.forward()
-    assert out2 == out3  # uses cache from second run
-
-
-def test_force_forward_vs_force_intermediate(tmp_path: Path) -> None:
-    """Force-forward propagates through intermediate cached steps."""
+def test_force_vs_force_forward(tmp_path: Path) -> None:
+    """Force only affects its step, force-forward propagates downstream."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(
         steps=[
@@ -224,49 +203,32 @@ def test_force_forward_vs_force_intermediate(tmp_path: Path) -> None:
 
     out1 = chain.forward()  # populate caches
 
+    # force on intermediate: only that step recomputes, downstream uses cache
     chain2 = chain.model_copy(deep=True)
     chain2._step_sequence()[1].infra.mode = "force"  # type: ignore
-    out2 = chain2.forward()  # force mult, add uses cache
+    out2 = chain2.forward()
+    assert out1 == out2  # add still uses its cache
 
+    # force-forward on intermediate: that step AND downstream recompute
     chain3 = chain.model_copy(deep=True)
     chain3._step_sequence()[1].infra.mode = "force-forward"  # type: ignore
-    out3 = chain3.forward()  # force mult and downstream
-
-    assert out1 == out2  # add still uses its cache
+    out3 = chain3.forward()
     assert out3 != out1  # add recomputed due to force-forward propagation
 
+    # After force-forward, subsequent calls use cache (mode resets)
+    out4 = chain3.forward()
+    assert out3 == out4
 
-def test_force_forward_nested_chain(tmp_path: Path) -> None:
-    """Force-forward on inner chain propagates to outer's downstream steps."""
+
+def test_force_forward_nested_chains(tmp_path: Path) -> None:
+    """Force-forward propagates through nested chains and steps without infra."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    inner = Chain(steps=[conftest.Mult(coeff=10, infra=infra)], infra=infra)
-    outer = Chain(
-        steps=[
-            conftest.RandomGenerator(infra=infra),
-            inner,
-            conftest.Add(randomize=True, infra=infra),
-        ],
-        infra=infra,
-    )
 
-    out1 = outer.forward()
-
-    outer2 = outer.model_copy(deep=True)
-    outer2._step_sequence()[1].infra.mode = "force-forward"  # type: ignore
-    out2 = outer2.forward()
-
-    assert out1 != out2  # add_random recomputed due to inner's force-forward
-
-
-def test_force_forward_before_chain(tmp_path: Path) -> None:
-    """Force-forward before a chain propagates through it."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    # Inner chain with steps (some without infra)
+    # Nested structure: gen -> mult(no infra) -> inner(mult, add_rand) -> add(no infra)
     inner = Chain(
         steps=[conftest.Mult(coeff=10), conftest.Add(randomize=True, infra=infra)],
         infra=infra,
     )
-    # Outer: gen(ff) -> inner -> add (some steps without infra)
     outer = Chain(
         steps=[
             conftest.RandomGenerator(infra=infra),
@@ -279,15 +241,20 @@ def test_force_forward_before_chain(tmp_path: Path) -> None:
 
     out1 = outer.forward()
 
-    # Set force-forward on gen (before the inner chain)
+    # force-forward on gen propagates through inner chain
     outer._step_sequence()[0].infra.mode = "force-forward"  # type: ignore
     out2 = outer.forward()
-
     assert out1 != out2  # inner's add_random recomputed
 
-    # Third call uses cache
+    # Subsequent call uses cache (mode reset)
     out3 = outer.forward()
     assert out2 == out3
+
+    # force-forward on inner chain also propagates to downstream
+    outer2 = outer.model_copy(deep=True)
+    outer2._step_sequence()[2].infra.mode = "force-forward"  # type: ignore
+    out4 = outer2.forward()
+    assert out4 != out3  # downstream recomputed
 
 
 def test_mode_retry(tmp_path: Path) -> None:
