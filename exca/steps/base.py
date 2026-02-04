@@ -247,13 +247,9 @@ class Chain(Step):
         # Track steps with force modes to reset after run
         force_steps = [
             s
-            for s in self._step_sequence()
+            for s in self._step_sequence() + (self,)
             if s.infra is not None and s.infra.mode in ("force", "force-forward")
         ]
-        reset_chain_infra = self.infra is not None and self.infra.mode in (
-            "force",
-            "force-forward",
-        )
 
         if chain.infra is None:
             result = chain._forward()
@@ -267,8 +263,6 @@ class Chain(Step):
         # Use object.__setattr__ to bypass frozen model validation (TaskInfra case)
         for step in force_steps:
             object.__setattr__(step.infra, "mode", "cached")
-        if reset_chain_infra:
-            object.__setattr__(self.infra, "mode", "cached")
 
         return result
 
