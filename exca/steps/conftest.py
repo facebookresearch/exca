@@ -11,7 +11,8 @@ Test guidelines:
 - Reuse the same infra dict across a test when possible (shorter, easier to follow)
 - Use tuple comparison for cache checks: `assert result == expected` not length + items
 - Keep test classes minimal - only add parameters when needed for specific tests
-- improve these guidelines when necessary, but keep it simple and readable
+- Use `chain.model_copy(deep=True)` to create test variants, then update parameters
+- Improve these guidelines when necessary, but keep it simple and readable
 """
 
 import random
