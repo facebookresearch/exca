@@ -177,10 +177,9 @@ def test_mode_readonly_with_cache(tmp_path: Path) -> None:
 def test_mode_force(tmp_path: Path, mode: str, chain: bool) -> None:
     """Force modes recompute once, then use cache."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step: Step
     if chain:
         seq = [conftest.RandomGenerator(), conftest.Mult(coeff=10)]
-        step = Chain(steps=seq, infra=infra)
+        step: Step = Chain(steps=seq, infra=infra)
     else:
         step = conftest.RandomGenerator(infra=infra)
     out1 = step.forward()  # populate cache
