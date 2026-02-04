@@ -12,7 +12,14 @@ Test guidelines:
 - Use tuple comparison for cache checks: `assert result == expected` not length + items
 - Keep test classes minimal - only add parameters when needed for specific tests
 - Use `chain.model_copy(deep=True)` to create test variants, then update parameters
-- Improve these guidelines when necessary, but keep it simple and readable
+
+Test consolidation:
+- Merge tests covering related scenarios into a single test function when they share
+  setup code and test similar behaviors (e.g., force vs force-forward, nested chains)
+- Use `pytest.mark.parametrize` for tests that run the same logic with different inputs
+  (e.g., `@pytest.mark.parametrize("mode", ("force", "force-forward"))`)
+- Avoid duplicating test code - if two tests differ only in one parameter, consolidate
+- Balance: keep tests readable; don't over-consolidate if it obscures what's being tested
 """
 
 import random
