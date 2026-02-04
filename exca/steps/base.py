@@ -89,10 +89,6 @@ class Step(exca.helpers.DiscriminatedModel):
         if not isinstance(prev, Input):
             raise RuntimeError("Step not properly configured")
 
-        # Pure generators (no input parameter) should not receive input
-        # if step._is_pure_generator() and not isinstance(prev.value, NoInput):
-        #    raise TypeError(f"{type(step).__name__} is a pure generator and should not receive input")
-
         args: tp.Any = () if isinstance(prev.value, NoInput) else (prev.value,)
         if step.infra is None:
             result = step._forward(*args)
