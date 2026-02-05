@@ -55,7 +55,7 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     step = conftest.Mult(coeff=3.0, infra=infra)
 
     # Cache operations without with_input() should fail for transformers
-    with pytest.raises(RuntimeError, match="requires input"):
+    with pytest.raises(RuntimeError, match="not initialized"):
         step.has_cache()
 
     # forward() works (it calls with_input internally)
@@ -95,8 +95,10 @@ def test_chain_hash_and_uid() -> None:
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
     chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])  # type: ignore
 
-    # Hash computation
-    expected_hash = "value=1,type=Input-0b6b7c99/type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
+    # Hash computation (Input step excluded - Input._aligned_step returns empty list)
+    expected_hash = (
+        "type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
+    )
     assert chain.with_input(1)._chain_hash() == expected_hash
 
     # UID export to YAML
@@ -189,7 +191,7 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
     assert step.infra.mode == "force", "explicitly set mode should be preserved"
     # timeout_min propagates if target type has it (LocalProcess, Slurm share it via _SubmititBackend)
     if target_backend in ("LocalProcess", "Slurm"):
-        assert isinstance(target_backend, backends._SubmititBackend)
+        assert isinstance(step.infra, backends._SubmititBackend)
         assert step.infra.timeout_min == 30, "shared field should propagate"
 
     # Explicit None should bypass default
@@ -243,3 +245,13 @@ def test_forward_mutation_cache_consistency(tmp_path: Path) -> None:
     # Second forward - should return cached result, not None
     result2 = counter.forward()
     assert result2 == 1, "second call should return cached result (bug: returns None)"
+
+
+def test_none_as_valid_input() -> None:
+    """None should be a valid input value, not treated as 'no value provided'."""
+
+    class AcceptsNone(Step):
+        def _forward(self, value: tp.Any) -> str:
+            return f"received:{value}"
+
+    assert AcceptsNone().forward(None) == "received:None"
