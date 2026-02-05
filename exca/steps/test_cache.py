@@ -417,6 +417,30 @@ def test_none_as_valid_input(tmp_path: Path) -> None:
     assert result2 == "received:None"
 
 
+def test_complex_input_caching(tmp_path: Path) -> None:
+    """Complex input values (lists, dicts) should be cacheable via ConfDict uid."""
+
+    class Identity(Step):
+        _call_count: tp.ClassVar[int] = 0
+
+        def _forward(self, value: tp.Any) -> tp.Any:
+            Identity._call_count += 1
+            return value
+
+    step = Identity(infra={"backend": "Cached", "folder": tmp_path})
+    data: tp.Any = [1.0, {"a": 12}]
+
+    assert step.forward(data) == step.forward(data)
+    assert Identity._call_count == 1  # Only computed once
+    assert step.forward(data) != step.forward(12)
+
+    # Check the uid is deterministic
+    initialized = step.with_input(data)
+    assert initialized.infra is not None
+    uid = initialized.infra.paths.item_uid
+    assert uid == "value=(1,{a=12})-240df6f3", uid
+
+
 def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     """Force mode step should not prevent using earlier caches."""
     from collections import defaultdict

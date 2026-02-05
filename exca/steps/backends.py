@@ -335,10 +335,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         if self.mode == "read-only":
             if status is None:
-                raise RuntimeError(f"No cache in read-only mode: {self.paths.step_uid}")
+                raise RuntimeError(
+                    f"No cache in read-only mode: {self.paths.step_uid}[{self.paths.item_uid}]"
+                )
             return self._load_cache()  # Raises if error
         if status is not None and self.mode not in ("force", "force-forward", "retry"):
-            logger.debug("Cache hit: %s/%s", self.paths.step_uid, self.paths.item_uid)
+            logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
             return self._load_cache()  # Raises if error
 
         # Force modes: clear cache; Retry: clear only errors
@@ -346,7 +348,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             self.clear_cache()
         elif self.mode == "retry" and status == "error":
             logger.warning(
-                "Retrying failed step: %s/%s", self.paths.step_uid, self.paths.item_uid
+                "Retrying failed step: %s[%s]", self.paths.step_uid, self.paths.item_uid
             )
             self.clear_cache()
 
