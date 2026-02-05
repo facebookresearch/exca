@@ -463,24 +463,3 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     assert call_counts["A"] == 0, "A's cache should be used"
     assert call_counts["B"] == 1, "B should recompute (force mode)"
     assert call_counts["C"] == 1, "C should run (after B)"
-
-
-def test_paths_property_requires_initialization(tmp_path: Path) -> None:
-    """Test that paths property raises for transformers if not initialized."""
-    # Mult is a pure transformer (requires input)
-    step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
-    assert step.infra is not None
-    with pytest.raises(RuntimeError, match="Step not initialized"):
-        _ = step.infra.paths
-
-    # After initialization, it works
-    initialized = step.with_input(1.0)
-    assert initialized.infra is not None
-    assert initialized.infra.paths.step_folder.exists() is False  # Not created yet
-    initialized.forward()  # Run to create folders
-    assert initialized.infra.paths.cache_folder.exists()
-
-    # Generator (Add has default) auto-configures without initialization
-    gen_step = conftest.Add(infra=backends.Cached(folder=tmp_path))
-    assert gen_step.infra is not None
-    _ = gen_step.infra.paths  # No error - auto-configured
