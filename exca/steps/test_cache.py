@@ -247,12 +247,15 @@ def test_force_forward_deeply_nested(tmp_path: Path) -> None:
     out1 = outer.forward(10)
 
     # force-forward on internal step propagates to innermost
-    outer.steps[0].infra.mode = "force-forward"
+    first_step = outer._step_sequence()[0]
+    assert first_step.infra is not None
+    first_step.infra.mode = "force-forward"
     out2 = outer.forward(10)
     assert out1 != out2  # innermost recomputed
 
     # force-forward on chain itself also propagates to innermost
     outer2 = outer.model_copy(deep=True)
+    assert outer2.infra is not None
     outer2.infra.mode = "force-forward"
     out3 = outer2.forward(10)
     assert out3 != out2  # innermost recomputed again
@@ -447,11 +450,15 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     initialized = chain.with_input(backends.NoValue())
     for step in initialized._step_sequence():
         if step.infra is not None:
-            cd = exca.cachedict.CacheDict(folder=step.infra.paths.cache_folder)
+            cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
+                folder=step.infra.paths.cache_folder
+            )
             assert backends._NOINPUT_UID in cd
 
     call_counts.clear()
-    chain.steps[1].infra.mode = "force"
+    step_b = chain._step_sequence()[1]
+    assert step_b.infra is not None
+    step_b.infra.mode = "force"
 
     # Second run: A cached, B recomputes (force), C runs
     assert chain.forward() == 3
@@ -464,15 +471,18 @@ def test_paths_property_requires_initialization(tmp_path: Path) -> None:
     """Test that paths property raises for transformers if not initialized."""
     # Mult is a pure transformer (requires input)
     step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
+    assert step.infra is not None
     with pytest.raises(RuntimeError, match="Step not initialized"):
         _ = step.infra.paths
 
     # After initialization, it works
     initialized = step.with_input(1.0)
+    assert initialized.infra is not None
     assert initialized.infra.paths.step_folder.exists() is False  # Not created yet
     initialized.forward()  # Run to create folders
     assert initialized.infra.paths.cache_folder.exists()
 
     # Generator (Add has default) auto-configures without initialization
     gen_step = conftest.Add(infra=backends.Cached(folder=tmp_path))
+    assert gen_step.infra is not None
     _ = gen_step.infra.paths  # No error - auto-configured
