@@ -30,6 +30,15 @@ from .backends import NoValue
 logger = logging.getLogger(__name__)
 
 
+def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
+    """Recursively set mode on steps and all nested chain steps."""
+    for step in steps:
+        if step.infra is not None:
+            object.__setattr__(step.infra, "mode", mode)
+        if isinstance(step, Chain):
+            _set_mode_recursive(step._step_sequence(), mode)
+
+
 @pydantic.model_validator(mode="before")
 def _infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
     """Convert Backend instances to dicts to prevent sharing."""
@@ -261,14 +270,6 @@ class Chain(Step):
                 step._init(parent_folder=folder if self.propagate_folder else None)
             previous = step
 
-    def _set_force_recursive(self, step: "Step") -> None:
-        """Recursively set force mode on step and all nested chain steps."""
-        if step.infra is not None:
-            object.__setattr__(step.infra, "mode", "force")
-        if isinstance(step, Chain):
-            for inner_step in step._step_sequence():
-                self._set_force_recursive(inner_step)
-
     def _forward(self, value: tp.Any = NoValue()) -> tp.Any:
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
@@ -281,11 +282,9 @@ class Chain(Step):
                 force_active = True
                 # For nested chains with force-forward, propagate to internal steps
                 if isinstance(step, Chain):
-                    for inner_step in step._step_sequence():
-                        self._set_force_recursive(inner_step)
-            elif force_active and step.infra is not None:
-                # Temporarily set downstream step to force mode (recursively)
-                self._set_force_recursive(step)
+                    _set_mode_recursive(step._step_sequence(), "force")
+            elif force_active:
+                _set_mode_recursive([step], "force")
 
         # Find latest cached result to skip already-computed steps
         start_idx = 0
@@ -326,8 +325,7 @@ class Chain(Step):
 
         # If the chain itself has force-forward, propagate to all internal steps recursively
         if chain.infra is not None and chain.infra.mode == "force-forward":
-            for step in chain._step_sequence():
-                chain._set_force_recursive(step)
+            _set_mode_recursive(chain._step_sequence(), "force")
 
         if chain.infra is None:
             result = chain._forward()
