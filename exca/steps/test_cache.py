@@ -406,7 +406,7 @@ def test_complex_input_caching(tmp_path: Path) -> None:
             Identity._call_count += 1
             return value
 
-    step = Identity(infra={"backend": "Cached", "folder": tmp_path})
+    step = Identity(infra={"backend": "Cached", "folder": tmp_path})  # type: ignore
     data: tp.Any = [1.0, {"a": 12}]
 
     assert step.forward(data) == step.forward(data)
