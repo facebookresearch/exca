@@ -21,6 +21,8 @@ from . import backends
 
 logger = logging.getLogger(__name__)
 
+Mode = tp.Literal["cached", "retry", "force", "read-only"]
+
 
 class NoValue:
     pass
@@ -47,8 +49,29 @@ class Step(exca.helpers.DiscriminatedModel):
 
 
 class Cache(Step):
+    """A caching step that stores and retrieves computation results.
+
+    Parameters
+    ----------
+    folder
+        Directory path where cache files are stored. If None, caching is disabled
+        or can be inherited from the Chain.folder holding the cache instance
+    mode
+        Cache behavior mode:
+        - "cached": returns cache if available, otherwise computes and caches
+        - "retry": returns cache unless it's an error, otherwise recomputes
+        - "force": ignores existing cache, recomputes and caches (propagates to subsequent caches)
+        - "read-only": never computes, raises error if cache unavailable
+    cache_type
+        Optional cache type identifier passed to CacheDict for custom serialization.
+    """
+
     folder: Path | None = None
+    mode: Mode = "cached"
     cache_type: str | None = None
+
+    # tracks if computation was already run (to avoid recomputing twice with same instance)
+    _computed: bool = False
 
     def _chain_folder(self) -> Path:
         if self.folder is None:
@@ -94,7 +117,10 @@ class Cache(Step):
 
     def forward(self, *param: tp.Any) -> tp.Any:
         out = self._unique_param_check(param)
+        if self.mode == "read-only":
+            raise RuntimeError("mode='read-only' but cache is not available")
         self._dump(out)
+        self._computed = True
         return out
 
     def _dump(self, value: tp.Any) -> None:
@@ -104,7 +130,7 @@ class Cache(Step):
             return
         cd = self._cache_dict()
         if "result" in cd:
-            logger.debug("Result already witten in folder: %s", cd.folder)
+            logger.debug("Result already written in folder: %s", cd.folder)
             return  # do nothing
         with cd.writer() as w:
             w["result"] = value
@@ -125,12 +151,6 @@ class Chain(Cache):
     steps: tp.Sequence[_Step] | collections.OrderedDict[str, _Step]
     folder: Path | None = None
     backend: backends.Backend | None = None
-
-    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = (
-        "folder",
-        "backend",
-        "cache_type",
-    )
 
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
@@ -168,23 +188,46 @@ class Chain(Cache):
         steps: list[tp.Any] = [s.model_dump() for s in self._step_sequence()]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
-        chain = type(self)(steps=steps, folder=self.folder, backend=self.backend)
+        params = self.model_dump()
+        params["steps"] = steps
+        chain = type(self)(**params)
         chain._previous = self._previous
+        chain._computed = self._computed  # preserve computed flag before _init
         chain._init()
         return chain
 
-    def _init(self) -> None:
+    def _init(self) -> bool:
+        """Set up _previous links, propagate folder/mode to caches, and clear caches after force.
+
+        Returns:
+            True if force mode was encountered in this chain or any subchain,
+            False otherwise. This allows parent chains to know if they need to
+            clear subsequent caches.
+        """
         previous = self._previous
         if self.backend is not None:
             self.backend._folder = self.folder
+        # force_found tracks if we've seen a force mode - once True, all subsequent caches cleared
+        force_found = self.mode == "force" if not self._computed else False
         for step in self._step_sequence():
             step._previous = previous
             if isinstance(step, Chain):
-                step._init()
+                # Propagate retry mode to subchains so they can clear failed jobs
+                if self.mode == "retry" and step.mode == "cached":
+                    step.mode = "retry"
+                # Subchains manage their own folder; recursive _init returns their force status
+                force_found |= step._init()
             elif isinstance(step, Cache):
                 if step.folder is None:
                     step.folder = self.folder
+                force_found |= step.mode == "force"
+                if force_found and not self._computed:
+                    step.clear_cache()
             previous = step
+        # Clear the chain's own cache if force was found
+        if force_found and not self._computed:
+            Cache.clear_cache(self)
+        return force_found
 
     def forward(self, *params: tp.Any) -> tp.Any:
         # get initial parameter (used for caching)
@@ -200,21 +243,31 @@ class Chain(Cache):
         if chain.folder is not None:
             pkl = chain._chain_folder() / "cache" / "job.pkl"
         backend = chain.backend
+        job: backends.JobLike | None = None
         if pkl is not None and pkl.exists():
             logger.debug("Reloading job in: %s", pkl.parent)
             with pkl.open("rb") as f:
                 job = pickle.load(f)
-        else:
+            # For retry mode, check if job failed and discard it
+            if chain.mode == "retry" and job.done():
+                try:
+                    job.result()  # This will raise if job failed
+                except Exception:
+                    logger.debug("Job failed, retrying due to mode='retry'")
+                    self.clear_cache(recursive=False)
+                    job = None
+        if job is None:
             if backend is None:
                 backend = backends._None()
-            with backend.submission_context(
-                folder=None if pkl is None else pkl.parents[1]
-            ):
+            folder: Path | None = None if pkl is None else pkl.parents[1]
+            with backend.submission_context(folder=folder):
                 job = backend.submit(chain._detached_forward, *params)
             if pkl is not None and not isinstance(job, backends.ResultJob):
                 logger.debug("Dumping job into: %s", pkl.parent)
+                pkl.parent.mkdir(exist_ok=True, parents=True)
                 with pkl.open("wb") as f:
                     pickle.dump(job, f)
+        self._computed = True  # to ignore mode force/retry from now on
         out = job.result()
         if not isinstance(out, NoValue):  # output was not cached
             return out

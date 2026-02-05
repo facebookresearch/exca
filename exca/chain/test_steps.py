@@ -15,9 +15,30 @@ import submitit
 
 import exca
 
-from .steps import Cache, Chain, Step
+from .steps import Cache, Chain, NoValue, Step
 
 logging.getLogger("exca").setLevel(logging.DEBUG)
+
+
+def get_caches(chain: Chain, include_chains: bool = False) -> list[Cache]:
+    """Get all Cache instances from a chain recursively.
+
+    Args:
+        chain: The chain to search
+        include_chains: If True, include Chain instances (which are also Caches).
+                       If False (default), only include leaf Cache steps.
+    """
+    caches: list[Cache] = []
+    for step in chain._step_sequence():
+        if isinstance(step, Chain):
+            # Recurse into subchain - the recursive call will add the subchain itself
+            # if include_chains is True (via the append at the end)
+            caches.extend(get_caches(step, include_chains=include_chains))
+        elif isinstance(step, Cache):
+            caches.append(step)
+    if include_chains:
+        caches.append(chain)
+    return caches
 
 
 class Mult(Step):
@@ -139,7 +160,9 @@ def test_error_cache(tmp_path: Path) -> None:
     seq.steps[1].error = False  # type: ignore
     with pytest.raises(submitit.core.utils.FailedJobError):
         seq.forward(2)  # error should be cached
-    seq.with_input(2).clear_cache()
+    # Create new chain with error=False in the steps definition (pydantic copies steps)
+    steps[1]["error"] = False
+    seq = Chain(steps=steps, folder=tmp_path, backend={"type": "LocalProcess"}, mode="retry")  # type: ignore
     assert seq.forward(2) == 21
 
 
@@ -208,3 +231,159 @@ def test_step_in_xp(tmp_path: Path) -> None:
     expected = "exca.chain.test_steps.Xp.run,0/steps.steps=({coeff=3,type=Mult},{type=Add,value=12})-2f739f76"
     assert uid == expected
     assert xp.run() == 48
+
+
+def test_folder_not_propagated_to_chains(tmp_path: Path) -> None:
+    """Test that folder is NOT propagated to subchains - they must set their own."""
+    subchain: tp.Any = {
+        "type": "Chain",  # Note: no folder specified
+        "steps": [
+            {"type": "Mult", "coeff": 10},
+            "Cache",  # Cache inside subchain - should NOT get folder
+        ],
+    }
+    steps: tp.Any = [{"type": "RandInput"}, "Cache", subchain]
+    seq = Chain(steps=steps, folder=tmp_path)
+    chain = seq.with_input()
+    # Check folder propagation
+    caches = get_caches(chain, include_chains=True)
+    has_folders = tuple(c.folder is not None for c in caches)
+    # cache of main chain should have one, not the one inside the subchain nor the
+    # subchain itself, and finally the main chain should have one
+    assert has_folders == (True, False, False, True)
+
+
+def test_cache_modes(tmp_path: Path) -> None:
+    """Test that mode='force' bypasses cache and recomputes"""
+    steps: tp.Any = [{"type": "RandInput"}, "Cache", {"type": "Mult", "coeff": 10}]
+    # First run - cache the result
+    modes = ["read-only", "cached", "read-only", "retry", "force"]
+    outputs = []
+    for mode in modes:
+        seq = Chain(steps=steps, folder=tmp_path, mode=mode)  # type: ignore
+        try:
+            outputs.append(seq.forward())
+        except RuntimeError:
+            outputs.append(-12)
+    assert outputs[0] == -12  # read-only failed
+    assert outputs[1] == outputs[2]  # cached
+    assert outputs[1] == outputs[3]  # retry without anythig to retry
+    assert outputs[1] != outputs[4]
+    # Second call on same instance - should use cache (not recompute)
+    second_call = seq.forward()
+    assert second_call == outputs[-1]
+
+
+def test_cache_mode_force_propagation(tmp_path: Path) -> None:
+    """Test that mode='force' clears subsequent caches but not previous ones"""
+    # Setup: RandInput -> Cache1 -> Mult(*10) -> Cache2(force) -> Mult(*2) -> Cache3
+    # When Cache2 has force mode:
+    # - Cache1 (before force) should NOT be cleared
+    # - Cache2 and Cache3 (at and after force) should be cleared
+    steps: tp.Any = [
+        {"type": "RandInput"},  # Random without seed
+        "Cache",  # Cache1 - should be preserved
+        {"type": "Mult", "coeff": 10},
+        {"type": "Cache"},  # Cache2 - will have force mode later
+        {"type": "Mult", "coeff": 2},
+        "Cache",  # Cache3 - should be cleared due to propagation
+    ]
+    # cache everything in first run, use cache in second
+    vals = [Chain(steps=steps, folder=tmp_path).forward() for _ in range(2)]
+    assert vals[0] == vals[1]
+    # Third run - force on intermediate cache (Cache2)
+    # Using random RandInput (no seed) - if Cache1 was cleared, we'd get a different value
+    steps[3]["mode"] = "force"
+    seq = Chain(steps=steps, folder=tmp_path)
+    out = seq.forward()
+    assert out == vals[0], "cache1 should keep the rand val"
+
+
+def test_cache_mode_force_subchain(tmp_path: Path) -> None:
+    """Test that mode='force' also clears caches in subchains"""
+    # Setup: RandInput -> SubChain[Mult(*10) -> Cache] -> Mult(*2)
+    subchain: tp.Any = {
+        "type": "Chain",
+        "steps": [
+            "Cache",  # Cache inside subchain
+            {"type": "Mult", "coeff": 10},
+        ],
+    }
+    steps: tp.Any = [
+        {"type": "RandInput"},
+        subchain,
+        {"type": "Mult", "coeff": 2},
+    ]
+    # cache everything in first run, use cache in second
+    vals = [Chain(steps=steps, folder=tmp_path).forward() for _ in range(2)]
+    assert vals[0] == vals[1]
+    # Third run with force mode on chain - subchain cache should also be cleared
+    seq = Chain(steps=steps, folder=tmp_path, mode="force")
+    out = seq.forward()
+    assert out != vals[0]
+
+
+def test_cache_mode_force_inside_subchain(tmp_path: Path) -> None:
+    # Test that mode='force' on a cache INSIDE a subchain propagates correctly.
+    # Force is inside the subchain - should affect caches AFTER in in the subchain
+    # or after outside the subchain, but nothing before it
+    subchain_with_force: tp.Any = {
+        "type": "Chain",
+        "folder": str(tmp_path),  # Must explicitly set folder for subchain caching
+        "steps": [
+            {"type": "Add", "value": -1},
+            {"type": "Cache"},  # not cleared
+            {"type": "Mult", "coeff": 10},
+            {"type": "Cache", "mode": "force"},  # Force INSIDE subchain
+            {"type": "Mult", "coeff": 10},
+        ],
+    }
+    steps_cached: tp.Any = [
+        {"type": "RandInput"},  # Random without seed
+        "Cache",  # BEFORE subchain - should NOT be cleared
+        subchain_with_force,
+        {"type": "Mult", "coeff": 2},
+    ]
+
+    def cache_array(caches: list[Cache]) -> tuple[bool, ...]:
+        """Count how many cache steps have a cached value."""
+        return tuple(not isinstance(c.cached(), NoValue) for c in caches)
+
+    # build the cache
+    chain = Chain(steps=steps_cached, folder=tmp_path)
+    # get cache steps (use with_inputs to have initialized folders)
+    cache_steps = get_caches(chain.with_input(), include_chains=True)
+    _ = chain.forward()  # Run forward - creates all caches
+    assert cache_array(cache_steps) == (True, True, True, True, True)
+
+    # Trigger clear caching through "with_input"
+    chain = Chain(steps=steps_cached, folder=tmp_path)
+    _ = chain.with_input()
+    # Only first cache should stay active
+    assert cache_array(cache_steps) == (True, True, False, False, False)
+
+
+def test_retry_with_subchain(tmp_path: Path) -> None:
+    subchain: tp.Any = {
+        "type": "Chain",
+        "folder": str(tmp_path),
+        "steps": [
+            {"type": "Mult", "coeff": 10},
+            {"type": "ErrorAdd", "value": 1, "error": True},
+        ],
+    }
+    steps: tp.Any = [
+        {"type": "Add", "value": 5},
+        "Cache",
+        subchain,
+    ]
+    # First run - should fail (error inside subchain)
+    seq = Chain(steps=steps, folder=tmp_path)
+    with pytest.raises(ValueError):
+        seq.forward(2)
+    # Second run with retry and error=False - should succeed
+    steps[2]["steps"][1]["error"] = False
+    seq = Chain(steps=steps, folder=tmp_path, mode="retry")
+    result = seq.forward(2)
+    # (2 + 5) * 10 + 1 = 71
+    assert result == 71
