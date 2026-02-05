@@ -369,4 +369,55 @@ When `step.forward(input)` is called:
 - [x] Unit tests (38 tests passing)
 
 ## Future Work
+
 - [ ] Migration guide from chain v1
+
+### Safety Measures to Consider (from TaskInfra/MapInfra)
+
+The following safety measures exist in `TaskInfra`/`MapInfra` and may be worth adding:
+
+**High Priority:**
+
+1. **Config consistency checking** (`_check_configs` in `base.py:200-276`)
+   - Write `uid.yaml`, `full-uid.yaml`, `config.yaml` for debugging
+   - Detect corrupted config files (can happen with full storage)
+   - Verify UID configs match exactly across runs
+   - Warn if defaults change between runs
+
+2. **Concurrent submission detection** (`task.py:290-310`)
+   - Detect if `job.pkl` was created recently (<1s) by another process
+   - Cancel duplicate submission to avoid race conditions
+   - Reload pre-dumped job instead of resubmitting
+
+3. **JobChecker for concurrent job coordination** (`map.py:69-106`)
+   - Track running jobs in a `running-jobs/` folder
+   - Wait for completion before re-checking cache
+   - Prevents duplicate slurm submissions when multiple processes run same pipeline
+
+**Medium Priority:**
+
+4. **Status API** (`task.py:370-390`)
+   - Full status: `"not submitted"`, `"running"`, `"completed"`, `"failed"`
+   - Currently only `has_cache()` exists
+
+5. **Permissions handling** (`base.py:369-384`)
+   - `permissions: int | None = 0o777` field
+   - Apply to cache folders and job files for shared filesystem compatibility
+
+6. **Folder parent validation** (`map.py:200-203`)
+   - Validate parent folder exists before creating cache folder
+   - Clearer error messages than just creating with `parents=True`
+
+**Lower Priority:**
+
+7. **Single-item computation guard** (`map.py:351-358`)
+   - `forbid_single_item_computation` flag to prevent cluster overload
+   - Useful when items should be pre-computed
+
+8. **Mode transition safety** (`task.py:145-150`, `_effective_mode`)
+   - Automatic transition from `force`/`retry` to `cached` after first computation
+   - Currently done manually via `object.__setattr__`
+
+**Not Needed:**
+
+- **Object freezing** - Not critical because `with_input()` creates a deep copy before execution, so mutations to the original step don't affect cached results. This differs from TaskInfra where the same object is reused.
