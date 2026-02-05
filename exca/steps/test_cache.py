@@ -223,6 +223,39 @@ def test_force_forward_nested_chains(tmp_path: Path) -> None:
     assert out4 != out3  # downstream recomputed
 
 
+def test_force_forward_deeply_nested(tmp_path: Path) -> None:
+    """Force-forward propagates through 3+ levels of nested chains."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+
+    # 3 levels deep: outer -> middle -> innermost
+    # Deterministic intermediate steps ensure cache keys stay same
+    innermost = Chain(
+        steps=[conftest.Add(randomize=True, infra=infra)],
+        infra=infra,
+    )
+    middle = Chain(
+        steps=[conftest.Add(value=0, infra=infra), innermost],
+        infra=infra,
+    )
+    outer = Chain(
+        steps=[conftest.Add(value=0, infra=infra), middle],
+        infra=infra,
+    )
+
+    out1 = outer.forward(10)
+
+    # force-forward on internal step propagates to innermost
+    outer.steps[0].infra.mode = "force-forward"
+    out2 = outer.forward(10)
+    assert out1 != out2  # innermost recomputed
+
+    # force-forward on chain itself also propagates to innermost
+    outer2 = outer.model_copy(deep=True)
+    outer2.infra.mode = "force-forward"
+    out3 = outer2.forward(10)
+    assert out3 != out2  # innermost recomputed again
+
+
 def test_mode_retry(tmp_path: Path) -> None:
     """Retry mode clears cached errors."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
@@ -249,7 +282,7 @@ def test_mode_retry(tmp_path: Path) -> None:
 
 
 def test_cache_folder_structure(tmp_path: Path) -> None:
-    """Cache folders follow step chain hash structure."""
+    """Cache folders follow step_uid structure."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
 
     # Transformer / generator chain
@@ -260,15 +293,38 @@ def test_cache_folder_structure(tmp_path: Path) -> None:
     chain.forward()
     chain.forward(1)
 
+    # Nested folder structure based on step chain
+    # Input is not part of folder path - value is used as item_uid key instead
     expected = (
-        # As generator (no input)
-        "type=Add-c4eb5f00",
-        "type=Add-c4eb5f00/coeff=10,type=Mult-98baeffc",
-        # As transformer (with input=1)
-        "value=1,type=Input-0b6b7c99/type=Add-c4eb5f00",
-        "value=1,type=Input-0b6b7c99/type=Add-c4eb5f00/coeff=10,type=Mult-98baeffc",
+        "type=Add-c4eb5f00",  # intermediate Add step
+        "type=Add-c4eb5f00/coeff=10,type=Mult-98baeffc",  # chain final cache (nested)
     )
     assert conftest.extract_cache_folders(tmp_path) == expected
+
+
+def test_multiple_inputs_cache_separately(tmp_path: Path) -> None:
+    """Different inputs cache separately via item_uid keys in CacheDict."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    # Add with randomize=True: returns input + random (or just random if no input)
+    step = conftest.Add(randomize=True, infra=infra)
+
+    # Call with different inputs - each should cache separately
+    outs: dict[float | None, float] = {}
+    outs[None] = step.forward()  # Generator mode (no input)
+    outs[1.0] = step.forward(1.0)  # Transformer mode with input=1
+    outs[2.0] = step.forward(2.0)  # Transformer mode with input=2
+    # All should be different (random component)
+    assert len(set(outs.values())) == 3
+
+    # Second calls should return cached values (same as first calls)
+    assert step.forward() == outs[None]
+    assert step.forward(1.0) == outs[1.0]
+    assert step.forward(2.0) == outs[2.0]
+
+    # Only one folder (same step_uid), but 3 different item_uid keys in CacheDict
+    folders = conftest.extract_cache_folders(tmp_path)
+    assert len(folders) == 1
+    assert folders[0].startswith("type=Add,randomize=True-")
 
 
 # =============================================================================
@@ -334,3 +390,82 @@ def test_keep_in_ram_force_mode(tmp_path: Path) -> None:
     step.infra.mode = "force"
     out2 = step.forward()
     assert out2 != out1  # New value (force cleared RAM too)
+
+
+# =============================================================================
+# Edge cases
+# =============================================================================
+
+
+def test_none_as_valid_input(tmp_path: Path) -> None:
+    """None should be a valid input value, not treated as 'no value provided'."""
+
+    class AcceptsNone(Step):
+        """Step that accepts None as a valid input."""
+
+        def _forward(self, value: tp.Any) -> str:
+            return f"received:{value}"
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = AcceptsNone(infra=infra)
+
+    # Passing None should work and cache correctly
+    result = step.forward(None)
+    assert result == "received:None"
+
+    # Second call should return cached result
+    result2 = step.forward(None)
+    assert result2 == "received:None"
+
+
+def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
+    """Force mode step should not prevent using earlier caches.
+
+    Chain [A, B, C] where B has force mode should use A's cache,
+    then run B (force) and C, not re-run A.
+    """
+    call_counts: dict[str, int] = {"A": 0, "B": 0, "C": 0}
+
+    class StepA(Step):
+        def _forward(self) -> int:
+            call_counts["A"] += 1
+            return 1
+
+    class StepB(Step):
+        def _forward(self, x: int) -> int:
+            call_counts["B"] += 1
+            return x * 10
+
+    class StepC(Step):
+        def _forward(self, x: int) -> int:
+            call_counts["C"] += 1
+            return x + 1
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+
+    # Chain [A, B, C] - C has no infra (no caching)
+    chain = Chain(
+        steps=[
+            StepA(infra=infra),
+            StepB(infra=infra),
+            StepC(),  # No infra - not cached
+        ],
+    )
+
+    # First run: populate A and B caches
+    result1 = chain.forward()
+    assert result1 == 11  # 1 * 10 + 1
+    assert call_counts == {"A": 1, "B": 1, "C": 1}
+
+    # Reset counts
+    call_counts = {"A": 0, "B": 0, "C": 0}
+
+    # Set B to force mode
+    chain.steps[1].infra.mode = "force"
+
+    # Second run: A's cache should be used, B recomputes (force), C runs
+    result2 = chain.forward()
+    assert result2 == 11
+    assert call_counts["A"] == 0, "A's cache should be used"
+    assert call_counts["B"] == 1, "B should recompute (force mode)"
+    assert call_counts["C"] == 1, "C should run (after B)"

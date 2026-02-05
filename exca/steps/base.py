@@ -194,8 +194,8 @@ class Input(Step):
         return self.value
 
     def _aligned_step(self) -> list["Step"]:
-        # Invisible in chain hash when holding NoValue
-        return [] if isinstance(self.value, NoValue) else [self]
+        # Input is always invisible in folder path; value is used as item_uid instead
+        return []
 
 
 class Chain(Step):
@@ -261,23 +261,42 @@ class Chain(Step):
                 step._init(parent_folder=folder if self.propagate_folder else None)
             previous = step
 
+    def _set_force_recursive(self, step: "Step") -> None:
+        """Recursively set force mode on step and all nested chain steps."""
+        if step.infra is not None:
+            object.__setattr__(step.infra, "mode", "force")
+        if isinstance(step, Chain):
+            for inner_step in step._step_sequence():
+                self._set_force_recursive(inner_step)
+
     def _forward(self, value: tp.Any = NoValue()) -> tp.Any:
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
-        # Clear caches from force-forward step onwards (propagate force)
+        # Propagate force-forward: set downstream steps to "force" mode
+        # so they clear their cache when run with the actual input value
         force_active = False
         for step in steps:
             if step.infra is not None and step.infra.mode == "force-forward":
                 force_active = True
-            if force_active:
-                step.clear_cache()
+                # For nested chains with force-forward, propagate to internal steps
+                if isinstance(step, Chain):
+                    for inner_step in step._step_sequence():
+                        self._set_force_recursive(inner_step)
+            elif force_active and step.infra is not None:
+                # Temporarily set downstream step to force mode (recursively)
+                self._set_force_recursive(step)
 
         # Find latest cached result to skip already-computed steps
         start_idx = 0
         args: tp.Any = () if isinstance(value, NoValue) else (value,)
         for k, step in enumerate(reversed(steps)):
-            if step.infra is not None and step.infra.has_cache():
+            if step.infra is None:
+                continue
+            # Force mode steps will recompute anyway, keep searching for earlier caches
+            if step.infra.mode in ("force", "force-forward"):
+                continue
+            if step.infra.has_cache():
                 args = (step.infra.cached_result(),)
                 start_idx = len(steps) - k
                 break
@@ -304,6 +323,11 @@ class Chain(Step):
             for s in self._step_sequence() + (self,)
             if s.infra is not None and s.infra.mode in ("force", "force-forward")
         ]
+
+        # If the chain itself has force-forward, propagate to all internal steps recursively
+        if chain.infra is not None and chain.infra.mode == "force-forward":
+            for step in chain._step_sequence():
+                chain._set_force_recursive(step)
 
         if chain.infra is None:
             result = chain._forward()
