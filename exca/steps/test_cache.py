@@ -447,6 +447,6 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
 
     # Second run: A cached, B recomputes (force), C runs
     assert chain.forward() == 3
-    assert call_counts["StepA"] == 0, "A's cache should be used"
-    assert call_counts["StepB"] == 1, "B should recompute (force mode)"
-    assert call_counts["StepC"] == 1, "C should run (after B)"
+    assert call_counts["A"] == 0, "A's cache should be used"
+    assert call_counts["B"] == 1, "B should recompute (force mode)"
+    assert call_counts["C"] == 1, "C should run (after B)"

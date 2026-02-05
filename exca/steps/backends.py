@@ -47,6 +47,23 @@ class StepPaths:
     """Manages all path computations for a step execution.
 
     This class encapsulates all folder/file path logic, keeping Backend clean.
+
+    Folder structure::
+
+        {base_folder}/
+        └── {step_uid}/                    # Step folder (nested for chains)
+            ├── cache/                     # CacheDict folder for results
+            │   ├── *.jsonl                # CacheDict index (item_uid -> result)
+            │   └── *.npy|*.pkl|etc...     # Optional numpy arrays
+            ├── jobs/
+            │   └── {item_uid}/            # Per-input job folder
+            │       ├── job.pkl            # Submitit job metadata
+            │       └── error.pkl          # Pickled exception (if failed)
+            └── logs/
+                └── {job_id}/              # Submitit log files
+
+    - step_uid: Computed from _chain_hash(), gives nested structure for chains
+    - item_uid: Computed from input value, or "__exca_no_input__" for generators
     """
 
     base_folder: Path
