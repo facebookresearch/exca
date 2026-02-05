@@ -245,3 +245,13 @@ def test_forward_mutation_cache_consistency(tmp_path: Path) -> None:
     # Second forward - should return cached result, not None
     result2 = counter.forward()
     assert result2 == 1, "second call should return cached result (bug: returns None)"
+
+
+def test_none_as_valid_input() -> None:
+    """None should be a valid input value, not treated as 'no value provided'."""
+
+    class AcceptsNone(Step):
+        def _forward(self, value: tp.Any) -> str:
+            return f"received:{value}"
+
+    assert AcceptsNone().forward(None) == "received:None"

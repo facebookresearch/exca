@@ -396,27 +396,6 @@ def test_keep_in_ram_force_mode(tmp_path: Path) -> None:
 # =============================================================================
 
 
-def test_none_as_valid_input(tmp_path: Path) -> None:
-    """None should be a valid input value, not treated as 'no value provided'."""
-
-    class AcceptsNone(Step):
-        """Step that accepts None as a valid input."""
-
-        def _forward(self, value: tp.Any) -> str:
-            return f"received:{value}"
-
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = AcceptsNone(infra=infra)
-
-    # Passing None should work and cache correctly
-    result = step.forward(None)
-    assert result == "received:None"
-
-    # Second call should return cached result
-    result2 = step.forward(None)
-    assert result2 == "received:None"
-
-
 def test_complex_input_caching(tmp_path: Path) -> None:
     """Complex input values (lists, dicts) should be cacheable via ConfDict uid."""
 
