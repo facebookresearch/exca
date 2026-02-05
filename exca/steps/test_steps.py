@@ -180,14 +180,16 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
             return self.value
 
     # Switch backend type - shared fields propagate
-    step = MyStep(value=5, infra={"backend": target_backend, "mode": "force"})
+    step = MyStep(value=5, infra={"backend": target_backend, "mode": "force"})  # type: ignore
 
     assert step.infra is not None
     assert type(step.infra).__name__ == target_backend
+    assert step.infra.folder is not None, "folder (Backend field) should propagate"
     assert step.infra.folder == tmp_path, "folder (Backend field) should propagate"
     assert step.infra.mode == "force", "explicitly set mode should be preserved"
     # timeout_min propagates if target type has it (LocalProcess, Slurm share it via _SubmititBackend)
     if target_backend in ("LocalProcess", "Slurm"):
+        assert isinstance(target_backend, backends._SubmititBackend)
         assert step.infra.timeout_min == 30, "shared field should propagate"
 
     # Explicit None should bypass default
@@ -197,12 +199,11 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
 
 def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     """Folder should propagate to steps in nested chains."""
-    inner_chain = Chain(
-        steps=[conftest.Add(value=1, infra={"backend": "Cached"})]  # No folder set
-    )
+    infra: tp.Any = {"backend": "Cached"}  # No folder set
+    inner_chain: Step = Chain(steps=[conftest.Add(value=1, infra=infra)])
     outer_chain = Chain(
-        steps=[inner_chain, conftest.Mult(coeff=2.0, infra={"backend": "Cached"})],
-        infra={"backend": "Cached", "folder": tmp_path},
+        steps=[inner_chain, conftest.Mult(coeff=2.0, infra=infra)],
+        infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
     )
 
     # Execute to trigger _init()
@@ -233,7 +234,7 @@ def test_forward_mutation_cache_consistency(tmp_path: Path) -> None:
             self.count += 1  # Mutation during _forward changes cache key!
             return self.count
 
-    counter = Counter(infra={"backend": "Cached", "folder": tmp_path})
+    counter = Counter(infra={"backend": "Cached", "folder": tmp_path})  # type: ignore
 
     # First forward - should cache result
     result1 = counter.forward()

@@ -299,11 +299,8 @@ def test_clear_cache_recursive(tmp_path: Path) -> None:
 
 def test_keep_in_ram(tmp_path: Path) -> None:
     """Test RAM caching behavior."""
-    step = conftest.Add(
-        value=10,
-        randomize=True,
-        infra={"backend": "Cached", "folder": tmp_path, "keep_in_ram": True},
-    )
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
+    step = conftest.Add(value=10, randomize=True, infra=infra)
 
     # First call: computes and caches in both disk and RAM
     out1 = step.forward()
@@ -327,11 +324,8 @@ def test_keep_in_ram(tmp_path: Path) -> None:
 
 def test_keep_in_ram_force_mode(tmp_path: Path) -> None:
     """Test that force mode clears RAM cache."""
-    step = conftest.Add(
-        value=10,
-        randomize=True,
-        infra={"backend": "Cached", "folder": tmp_path, "keep_in_ram": True},
-    )
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
+    step = conftest.Add(value=10, randomize=True, infra=infra)
 
     out1 = step.forward()
     assert step.infra is not None
