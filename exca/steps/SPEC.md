@@ -1,5 +1,7 @@
 # Steps Module Specification
 
+**Note: this is an experimental API that could get deprecated fast**
+
 ## Overview
 
 The `steps` module provides a redesigned pipeline implementation where **each Step has its own infrastructure** (execution backend + caching), rather than having infrastructure only at the Chain level. The `Chain` itself becomes a specific type of `Step`, enabling more flexible and composable pipelines.

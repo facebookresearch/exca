@@ -4,8 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""
-Steps module for building computation pipelines.
+"""Experimental API of chainable steps with 1 input and 1 output
+Note: this API is unstable, use at your own risk
 
 Each Step has its own infrastructure (backend) for caching and execution.
 Chain is a specialized Step that composes multiple steps sequentially.
