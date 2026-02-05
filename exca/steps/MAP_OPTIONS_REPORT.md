@@ -412,22 +412,17 @@ folder/
 
 ## Key Implementation Details
 
-### Caching Pattern (NEW - different from `forward()`)
+### Caching Pattern (IMPLEMENTED)
 
-**Current `forward()` caching** (NOT suitable for map):
+The unified caching pattern is now implemented for `forward()`:
 ```
 folder/
-  value=5,type=Input-.../cache/result.pkl    # separate folder per input
-  value=10,type=Input-.../cache/result.pkl
-```
-
-**New `map()` caching** (like MapInfra):
-```
-folder/
-  {step_uid}/            # single folder for step config
-    {item_uid_1}.pkl     # items keyed by uid
-    {item_uid_2}.pkl
-    ...
+  {step_uid}/
+    cache/               # CacheDict folder
+      *.jsonl            # item_uid -> result mapping
+    jobs/{item_uid}/     # per-input job folder
+      job.pkl
+      error.pkl
 ```
 
 This uses `CacheDict` which:
@@ -921,47 +916,17 @@ def compact_jsonl(cache_folder):
 
 ---
 
-## Path to Explore: Unified step_uid (never include input)
+## Unified step_uid (IMPLEMENTED)
 
-Currently, when `item_uid` is NOT defined, the input is included in step_uid:
-```
-folder/{step_uid_WITH_input}/cache/result.pkl
-```
+The unified approach is now implemented:
+- `step_uid` never includes input value
+- `item_uid` is computed from input via `ConfDict(value=value).to_uid()` or `__exca_no_input__` for generators
+- Cache structure: `folder/{step_uid}/cache/` with CacheDict keying by `item_uid`
 
-When `item_uid` IS defined, the input is NOT included:
-```
-folder/{step_uid_WITHOUT_input}/items/{item_uid}.pkl
-```
-
-**Question: Should we ALWAYS exclude input from step_uid?**
-
-### Unified approach (input never in step_uid):
-```
-folder/{step_uid}/items/{item_uid}.pkl
-```
-
-Where `item_uid` is:
-- `self.item_uid(value)` if class defines it
-- `ConfDict(value=value).uid` otherwise (default)
-
-### Benefits:
-- **Simpler mental model** - one caching pattern, not two
-- **Consistent structure** - always `step_uid/items/item_uid.pkl`
-- **Easier migration** to batch processing - same cache works for single and batch
-- **No special cases** - `item_uid` is always used, just with different implementations
-
-### Concerns:
-- ~~**Breaking change** - existing caches would be invalidated~~ (not a concern)
-- **Folder structure changes** - `cache/result.pkl` → `items/{uid}.pkl`
-
-### Recommendation: GO WITH UNIFIED APPROACH
-
-Since breaking existing caches is acceptable, the unified model is the clear winner:
+This provides:
 - **One caching pattern** for everything
-- **Same structure** for single and batch: `folder/{step_uid}/items/{item_uid}.pkl`
 - **Simpler implementation** - no special cases
 - **Natural batch support** - single is just batch of size 1
 
-4. **Should `map()`/`Items` work without infra?**
-   - Yes: sequential processing, no caching
-   - Matches `forward()` behavior when `infra=None`
+**Remaining question for `map()`/`Items`:**
+- Should work without infra? Yes: sequential processing, no caching (matches `forward()` behavior)
