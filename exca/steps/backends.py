@@ -264,6 +264,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Cache operations
     # =========================================================================
 
+    def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":
+        """Get CacheDict for this step."""
+        return exca.cachedict.CacheDict(
+            folder=self.paths.cache_folder, cache_type=self.cache_type
+        )
+
     def has_cache(self) -> bool:
         """Check if result is cached."""
         return self._cache_status() is not None
@@ -288,22 +294,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _cache_status(self) -> CacheStatus:
         """Check cache status without loading value."""
-        # Check for error in job folder
         if self.paths.error_pkl.exists():
             return "error"
-        # Check for result in CacheDict
         if not self.paths.cache_folder.exists():
             return None
-        cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-            folder=self.paths.cache_folder, cache_type=self.cache_type
-        )
-        if self.paths.item_uid in cd:
+        if self.paths.item_uid in self._cache_dict():
             return "success"
         return None
 
     def _load_cache(self) -> tp.Any:
         """Load cached result, or raise cached error."""
-        # Check RAM cache first (only for successful results)
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
             return self._ram_cache
 
@@ -312,10 +312,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             with self.paths.error_pkl.open("rb") as f:
                 raise pickle.load(f)
 
-        # Check for result in CacheDict
-        cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-            folder=self.paths.cache_folder, cache_type=self.cache_type
-        )
+        cd = self._cache_dict()
         if self.paths.item_uid in cd:
             result = cd[self.paths.item_uid]
             if self.keep_in_ram:
@@ -334,20 +331,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             if self.mode not in ("force", "force-forward"):
                 return self._ram_cache
 
-        # Ensure cache folder exists (CacheDict needs it)
-        self.paths.cache_folder.mkdir(parents=True, exist_ok=True)
-
-        # Check for error in job folder
-        has_error = self.paths.error_pkl.exists()
-
-        # Check for result in CacheDict
-        cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-            folder=self.paths.cache_folder, cache_type=self.cache_type
-        )
-        has_result = self.paths.item_uid in cd
-        status: CacheStatus = (
-            "success" if has_result else ("error" if has_error else None)
-        )
+        status = self._cache_status()
 
         if self.mode == "read-only":
             if status is None:
@@ -359,20 +343,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         # Force modes: clear cache; Retry: clear only errors
         if self.mode in ("force", "force-forward") and status is not None:
-            self._ram_cache = NoValue()
-            self.paths.clear_cache()
+            self.clear_cache()
         elif self.mode == "retry" and status == "error":
             logger.warning(
                 "Retrying failed step: %s/%s", self.paths.step_uid, self.paths.item_uid
             )
-            self._ram_cache = NoValue()
-            self.paths.clear_cache()
+            self.clear_cache()
 
         # Check job recovery (for submitit backends)
-        job: tp.Any = None
-        if self.paths.job_pkl.exists():
-            with self.paths.job_pkl.open("rb") as f:
-                job = pickle.load(f)
+        job = self.job()
+        if job is not None:
             # Force modes: cancel existing job if running
             if self.mode in ("force", "force-forward"):
                 if not job.done():
