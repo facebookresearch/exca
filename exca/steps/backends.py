@@ -200,12 +200,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Path management
     # =========================================================================
 
-    def _get_paths(self, value: tp.Any) -> StepPaths:
-        """Get StepPaths helper for current step and input value.
-
-        Args:
-            value: Input value. Use NoValue() for generators or intermediate chain steps.
-        """
+    def _get_paths(self) -> StepPaths:
+        """Get StepPaths helper for current step and input value."""
         if self.folder is None:
             raise RuntimeError(
                 "Backend folder not set. Set folder on infra or use propagate_folder."
@@ -213,6 +209,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if self._step is None:
             raise RuntimeError("Backend not attached to a Step")
 
+        value = self._get_input_value()
         return StepPaths.from_step(self.folder, self._step, value)
 
     # Legacy methods for compatibility (used by has_cache, clear_cache, etc.)
@@ -234,7 +231,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _get_input_value(self) -> tp.Any:
         """Extract input value from configured step's Input predecessor."""
-        from .base import Input
+        from .base import Input  # Local import to avoid circular dependency
 
         step = self._configured_step()
         # Walk back to find Input step
@@ -247,8 +244,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _cache_folder(self) -> Path:
         """Get cache folder for this step. (Legacy compatibility method.)"""
-        value = self._get_input_value()
-        paths = self._get_paths(value)
+        paths = self._get_paths()
         paths.cache_folder.mkdir(parents=True, exist_ok=True)
         return paths.cache_folder
 
@@ -269,14 +265,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def clear_cache(self) -> None:
         """Delete cached result (both disk and RAM)."""
         self._ram_cache = NoValue()
-        value = self._get_input_value()
-        paths = self._get_paths(value)
+        paths = self._get_paths()
         paths.clear_cache()
 
     def job(self) -> submitit.Job[tp.Any] | None:
         """Get submitit job for this step, or None."""
-        value = self._get_input_value()
-        paths = self._get_paths(value)
+        paths = self._get_paths()
         if paths.job_pkl.exists():
             with paths.job_pkl.open("rb") as f:
                 return pickle.load(f)  # type: ignore
@@ -284,8 +278,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _cache_status(self) -> CacheStatus:
         """Check cache status without loading value."""
-        value = self._get_input_value()
-        paths = self._get_paths(value)
+        paths = self._get_paths()
         # Check for error in job folder
         if paths.error_pkl.exists():
             return "error"
@@ -306,8 +299,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             return self._ram_cache
 
         if paths is None:
-            value = self._get_input_value()
-            paths = self._get_paths(value)
+            paths = self._get_paths()
 
         # Check for error in job folder
         if paths.error_pkl.exists():
@@ -331,9 +323,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def run(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> tp.Any:
         """Execute function with caching based on mode."""
-        # Determine input value (NoValue for generators)
-        value = args[0] if args else NoValue()
-        paths = self._get_paths(value)
+        # Cache key uses initial input (not intermediate values which may not be hashable)
+        paths = self._get_paths()
 
         # Check RAM cache first (survives disk deletion)
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):

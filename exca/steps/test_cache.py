@@ -12,7 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from . import conftest
+import exca.cachedict
+
+from . import backends, conftest
 from .base import Chain, Step
 
 # =============================================================================
@@ -441,6 +443,14 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     # First run: populate caches
     assert chain.forward() == 3  # 0+1+1+1
     assert dict(call_counts) == {"A": 1, "B": 1, "C": 1}
+
+    # All caches use the no-input key (initial input for generators)
+    initialized = chain.with_input(backends.NoValue())
+    for step in initialized._step_sequence():
+        if step.infra is not None:
+            cache_folder = step.infra._get_paths().cache_folder
+            cd = exca.cachedict.CacheDict(folder=cache_folder)
+            assert backends._NOINPUT_UID in cd
 
     call_counts.clear()
     chain.steps[1].infra.mode = "force"
