@@ -230,34 +230,29 @@ def test_force_forward_deeply_nested(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
 
     # 3 levels deep: outer -> middle -> innermost
-    # Deterministic intermediate steps ensure cache keys stay same
-    innermost = Chain(
-        steps=[conftest.Add(randomize=True, infra=infra)],
-        infra=infra,
-    )
-    middle = Chain(
-        steps=[conftest.Add(value=0, infra=infra), innermost],
-        infra=infra,
-    )
-    outer = Chain(
-        steps=[conftest.Add(value=0, infra=infra), middle],
-        infra=infra,
-    )
+    # Deterministic intermediate steps
+    chain: Chain | None = None
+    for k in range(3):
+        steps: list[Step] = [conftest.Add(randomize=not k, infra=infra)]
+        if chain is not None:
+            steps.append(chain)
+        chain = Chain(steps=steps, infra=infra)
+    assert chain is not None
 
-    out1 = outer.forward(10)
+    out1 = chain.forward(10)
 
     # force-forward on internal step propagates to innermost
-    first_step = outer._step_sequence()[0]
+    first_step = chain._step_sequence()[0]
     assert first_step.infra is not None
     first_step.infra.mode = "force-forward"
-    out2 = outer.forward(10)
+    out2 = chain.forward(10)
     assert out1 != out2  # innermost recomputed
 
     # force-forward on chain itself also propagates to innermost
-    outer2 = outer.model_copy(deep=True)
-    assert outer2.infra is not None
-    outer2.infra.mode = "force-forward"
-    out3 = outer2.forward(10)
+    chain = chain.model_copy(deep=True)
+    assert chain.infra is not None
+    chain.infra.mode = "force-forward"
+    out3 = chain.forward(10)
     assert out3 != out2  # innermost recomputed again
 
 
