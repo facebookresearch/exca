@@ -419,53 +419,34 @@ def test_none_as_valid_input(tmp_path: Path) -> None:
 
 
 def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
-    """Force mode step should not prevent using earlier caches.
+    """Force mode step should not prevent using earlier caches."""
+    from collections import defaultdict
 
-    Chain [A, B, C] where B has force mode should use A's cache,
-    then run B (force) and C, not re-run A.
-    """
-    call_counts: dict[str, int] = {"A": 0, "B": 0, "C": 0}
+    call_counts: dict[str, int] = defaultdict(int)
 
     class StepA(Step):
-        def _forward(self) -> int:
-            call_counts["A"] += 1
-            return 1
-
-    class StepB(Step):
-        def _forward(self, x: int) -> int:
-            call_counts["B"] += 1
-            return x * 10
-
-    class StepC(Step):
-        def _forward(self, x: int) -> int:
-            call_counts["C"] += 1
+        def _forward(self, x: int = 0) -> int:
+            call_counts[type(self).__name__[-1]] += 1
             return x + 1
 
+    class StepB(StepA):
+        pass
+
+    class StepC(StepA):
+        pass
+
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=[StepA(infra=infra), StepB(infra=infra), StepC()])
 
-    # Chain [A, B, C] - C has no infra (no caching)
-    chain = Chain(
-        steps=[
-            StepA(infra=infra),
-            StepB(infra=infra),
-            StepC(),  # No infra - not cached
-        ],
-    )
+    # First run: populate caches
+    assert chain.forward() == 3  # 0+1+1+1
+    assert dict(call_counts) == {"A": 1, "B": 1, "C": 1}
 
-    # First run: populate A and B caches
-    result1 = chain.forward()
-    assert result1 == 11  # 1 * 10 + 1
-    assert call_counts == {"A": 1, "B": 1, "C": 1}
-
-    # Reset counts
-    call_counts = {"A": 0, "B": 0, "C": 0}
-
-    # Set B to force mode
+    call_counts.clear()
     chain.steps[1].infra.mode = "force"
 
-    # Second run: A's cache should be used, B recomputes (force), C runs
-    result2 = chain.forward()
-    assert result2 == 11
-    assert call_counts["A"] == 0, "A's cache should be used"
-    assert call_counts["B"] == 1, "B should recompute (force mode)"
-    assert call_counts["C"] == 1, "C should run (after B)"
+    # Second run: A cached, B recomputes (force), C runs
+    assert chain.forward() == 3
+    assert call_counts["StepA"] == 0, "A's cache should be used"
+    assert call_counts["StepB"] == 1, "B should recompute (force mode)"
+    assert call_counts["StepC"] == 1, "C should run (after B)"
