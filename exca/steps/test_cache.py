@@ -366,8 +366,7 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     assert step.infra.has_cache()
 
     # Second call: should use RAM cache (we can verify by deleting disk)
-    cache_folder = step.infra._cache_folder()
-    shutil.rmtree(cache_folder)
+    shutil.rmtree(step.infra.paths.cache_folder)
     assert not step.infra.has_cache()  # Disk cache gone
 
     # But RAM cache still works
@@ -448,8 +447,7 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     initialized = chain.with_input(backends.NoValue())
     for step in initialized._step_sequence():
         if step.infra is not None:
-            cache_folder = step.infra._get_paths().cache_folder
-            cd = exca.cachedict.CacheDict(folder=cache_folder)
+            cd = exca.cachedict.CacheDict(folder=step.infra.paths.cache_folder)
             assert backends._NOINPUT_UID in cd
 
     call_counts.clear()
@@ -460,3 +458,21 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     assert call_counts["A"] == 0, "A's cache should be used"
     assert call_counts["B"] == 1, "B should recompute (force mode)"
     assert call_counts["C"] == 1, "C should run (after B)"
+
+
+def test_paths_property_requires_initialization(tmp_path: Path) -> None:
+    """Test that paths property raises for transformers if not initialized."""
+    # Mult is a pure transformer (requires input)
+    step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
+    with pytest.raises(RuntimeError, match="Step not initialized"):
+        _ = step.infra.paths
+
+    # After initialization, it works
+    initialized = step.with_input(1.0)
+    assert initialized.infra.paths.step_folder.exists() is False  # Not created yet
+    initialized.forward()  # Run to create folders
+    assert initialized.infra.paths.cache_folder.exists()
+
+    # Generator (Add has default) auto-configures without initialization
+    gen_step = conftest.Add(infra=backends.Cached(folder=tmp_path))
+    _ = gen_step.infra.paths  # No error - auto-configured

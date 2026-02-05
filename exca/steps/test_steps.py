@@ -55,7 +55,7 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     step = conftest.Mult(coeff=3.0, infra=infra)
 
     # Cache operations without with_input() should fail for transformers
-    with pytest.raises(RuntimeError, match="requires input"):
+    with pytest.raises(RuntimeError, match="not initialized"):
         step.has_cache()
 
     # forward() works (it calls with_input internally)

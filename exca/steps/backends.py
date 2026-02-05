@@ -150,12 +150,13 @@ class _CachingCall:
         self.paths = paths
         self.cache_type = cache_type
 
-    def __call__(self, *args: tp.Any, **kwargs: tp.Any) -> None:
+    def __call__(self, *args: tp.Any) -> None:
+        self.paths.ensure_folders()  # Create folders before writing
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=self.paths.cache_folder, cache_type=self.cache_type
         )
         try:
-            result = self.func(*args, **kwargs)
+            result = self.func(*args)
         except Exception as e:
             # Store error in job folder
             if not self.paths.error_pkl.exists():
@@ -181,8 +182,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     mode: ModeType = "cached"
     keep_in_ram: bool = False
 
-    _step: tp.Union["Step", None] = None
+    _step: "Step" | None = None
     _ram_cache: tp.Any = pydantic.PrivateAttr(default_factory=NoValue)
+    _paths: StepPaths | None = pydantic.PrivateAttr(default=None)
 
     def __eq__(self, other: tp.Any) -> bool:
         """Compare backends by model fields only, excluding _step to avoid recursion."""
@@ -200,17 +202,33 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Path management
     # =========================================================================
 
-    def _get_paths(self) -> StepPaths:
-        """Get StepPaths helper for current step and input value."""
+    @property
+    def paths(self) -> StepPaths:
+        """Get StepPaths for this step (cached).
+
+        Auto-configures generators (no input). For transformers, requires
+        initialization via with_input().
+        """
+        if self._paths is not None:
+            return self._paths
         if self.folder is None:
             raise RuntimeError(
                 "Backend folder not set. Set folder on infra or use propagate_folder."
             )
         if self._step is None:
             raise RuntimeError("Backend not attached to a Step")
-
+        # Auto-configure generators; require initialization for transformers
+        if self._step._previous is None:
+            if self._step._is_generator():
+                # Use _configured_step to get auto-configured version
+                pass  # _get_input_value handles this via _configured_step
+            else:
+                raise RuntimeError(
+                    "Step not initialized. Use step.with_input(value) first."
+                )
         value = self._get_input_value()
-        return StepPaths.from_step(self.folder, self._step, value)
+        self._paths = StepPaths.from_step(self.folder, self._step, value)
+        return self._paths
 
     # Legacy methods for compatibility (used by has_cache, clear_cache, etc.)
     def _configured_step(self) -> "Step":
@@ -242,12 +260,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             current = current._previous
         return NoValue()  # Generator case
 
-    def _cache_folder(self) -> Path:
-        """Get cache folder for this step. (Legacy compatibility method.)"""
-        paths = self._get_paths()
-        paths.cache_folder.mkdir(parents=True, exist_ok=True)
-        return paths.cache_folder
-
     # =========================================================================
     # Cache operations
     # =========================================================================
@@ -265,53 +277,47 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def clear_cache(self) -> None:
         """Delete cached result (both disk and RAM)."""
         self._ram_cache = NoValue()
-        paths = self._get_paths()
-        paths.clear_cache()
+        self.paths.clear_cache()
 
     def job(self) -> submitit.Job[tp.Any] | None:
         """Get submitit job for this step, or None."""
-        paths = self._get_paths()
-        if paths.job_pkl.exists():
-            with paths.job_pkl.open("rb") as f:
+        if self.paths.job_pkl.exists():
+            with self.paths.job_pkl.open("rb") as f:
                 return pickle.load(f)  # type: ignore
         return None
 
     def _cache_status(self) -> CacheStatus:
         """Check cache status without loading value."""
-        paths = self._get_paths()
         # Check for error in job folder
-        if paths.error_pkl.exists():
+        if self.paths.error_pkl.exists():
             return "error"
         # Check for result in CacheDict
-        if not paths.cache_folder.exists():
+        if not self.paths.cache_folder.exists():
             return None
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-            folder=paths.cache_folder, cache_type=self.cache_type
+            folder=self.paths.cache_folder, cache_type=self.cache_type
         )
-        if paths.item_uid in cd:
+        if self.paths.item_uid in cd:
             return "success"
         return None
 
-    def _load_cache(self, paths: StepPaths | None = None) -> tp.Any:
+    def _load_cache(self) -> tp.Any:
         """Load cached result, or raise cached error."""
         # Check RAM cache first (only for successful results)
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
             return self._ram_cache
 
-        if paths is None:
-            paths = self._get_paths()
-
         # Check for error in job folder
-        if paths.error_pkl.exists():
-            with paths.error_pkl.open("rb") as f:
+        if self.paths.error_pkl.exists():
+            with self.paths.error_pkl.open("rb") as f:
                 raise pickle.load(f)
 
         # Check for result in CacheDict
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-            folder=paths.cache_folder, cache_type=self.cache_type
+            folder=self.paths.cache_folder, cache_type=self.cache_type
         )
-        if paths.item_uid in cd:
-            result = cd[paths.item_uid]
+        if self.paths.item_uid in cd:
+            result = cd[self.paths.item_uid]
             if self.keep_in_ram:
                 self._ram_cache = result
             return result
@@ -323,49 +329,49 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def run(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> tp.Any:
         """Execute function with caching based on mode."""
-        # Cache key uses initial input (not intermediate values which may not be hashable)
-        paths = self._get_paths()
-
         # Check RAM cache first (survives disk deletion)
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
             if self.mode not in ("force", "force-forward"):
                 return self._ram_cache
 
-        # Check cache status (without loading value)
-        paths.ensure_folders()
+        # Ensure cache folder exists (CacheDict needs it)
+        self.paths.cache_folder.mkdir(parents=True, exist_ok=True)
+
         # Check for error in job folder
-        has_error = paths.error_pkl.exists()
+        has_error = self.paths.error_pkl.exists()
 
         # Check for result in CacheDict
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-            folder=paths.cache_folder, cache_type=self.cache_type
+            folder=self.paths.cache_folder, cache_type=self.cache_type
         )
-        has_result = paths.item_uid in cd
+        has_result = self.paths.item_uid in cd
         status: CacheStatus = (
             "success" if has_result else ("error" if has_error else None)
         )
 
         if self.mode == "read-only":
             if status is None:
-                raise RuntimeError(f"No cache in read-only mode: {paths.step_uid}")
-            return self._load_cache(paths)  # Raises if error
+                raise RuntimeError(f"No cache in read-only mode: {self.paths.step_uid}")
+            return self._load_cache()  # Raises if error
         if status is not None and self.mode not in ("force", "force-forward", "retry"):
-            logger.debug("Cache hit: %s/%s", paths.step_uid, paths.item_uid)
-            return self._load_cache(paths)  # Raises if error
+            logger.debug("Cache hit: %s/%s", self.paths.step_uid, self.paths.item_uid)
+            return self._load_cache()  # Raises if error
 
         # Force modes: clear cache; Retry: clear only errors
         if self.mode in ("force", "force-forward") and status is not None:
             self._ram_cache = NoValue()
-            paths.clear_cache()
+            self.paths.clear_cache()
         elif self.mode == "retry" and status == "error":
-            logger.warning("Retrying failed step: %s/%s", paths.step_uid, paths.item_uid)
+            logger.warning(
+                "Retrying failed step: %s/%s", self.paths.step_uid, self.paths.item_uid
+            )
             self._ram_cache = NoValue()
-            paths.clear_cache()
+            self.paths.clear_cache()
 
         # Check job recovery (for submitit backends)
         job: tp.Any = None
-        if paths.job_pkl.exists():
-            with paths.job_pkl.open("rb") as f:
+        if self.paths.job_pkl.exists():
+            with self.paths.job_pkl.open("rb") as f:
                 job = pickle.load(f)
             # Force modes: cancel existing job if running
             if self.mode in ("force", "force-forward"):
@@ -373,30 +379,32 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     try:
                         job.cancel()
                         msg = "Cancelled running job for force mode: %s"
-                        logger.warning(msg, paths.job_pkl)
+                        logger.warning(msg, self.paths.job_pkl)
                     except Exception as e:
-                        logger.warning("Failed to cancel job %s: %s", paths.job_pkl, e)
+                        logger.warning(
+                            "Failed to cancel job %s: %s", self.paths.job_pkl, e
+                        )
                 job = None
-                paths.job_pkl.unlink()
+                self.paths.job_pkl.unlink()
             # Retry mode: clear failed jobs only
             elif self.mode == "retry" and job.done():
                 try:
                     job.result()  # Check if it failed
                 except Exception:
-                    logger.warning("Retrying failed job: %s", paths.job_pkl)
+                    logger.warning("Retrying failed job: %s", self.paths.job_pkl)
                     job = None
-                    paths.job_pkl.unlink()
+                    self.paths.job_pkl.unlink()
             else:
-                logger.debug("Recovering job: %s", paths.job_pkl)
+                logger.debug("Recovering job: %s", self.paths.job_pkl)
 
         if job is None:
-            wrapper = _CachingCall(func, paths, self.cache_type)
-            job = self._submit(wrapper, paths, *args)
+            wrapper = _CachingCall(func, self.paths, self.cache_type)
+            job = self._submit(wrapper, *args)
 
         job.result()  # Wait (result is cached, not returned)
-        return self._load_cache(paths)
+        return self._load_cache()
 
-    def _submit(self, wrapper: _CachingCall, paths: StepPaths, *args: tp.Any) -> tp.Any:
+    def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
         """Submit wrapper for execution. Override in subclasses."""
         raise NotImplementedError
 
@@ -411,9 +419,7 @@ class _InlineJob:
 class Cached(Backend):
     """Inline execution + caching."""
 
-    def _submit(
-        self, wrapper: _CachingCall, paths: StepPaths, *args: tp.Any
-    ) -> _InlineJob:
+    def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> _InlineJob:
         wrapper(*args)
         return _InlineJob()
 
@@ -431,8 +437,9 @@ class _SubmititBackend(Backend):
 
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]]
 
-    def _submit(self, wrapper: _CachingCall, paths: StepPaths, *args: tp.Any) -> tp.Any:
-        executor = self._EXECUTOR_CLS(folder=paths.logs_folder)
+    def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
+        wrapper.paths.ensure_folders()  # Create folders before writing job.pkl
+        executor = self._EXECUTOR_CLS(folder=wrapper.paths.logs_folder)
 
         # Get only submitit-specific fields (exclude Backend fields)
         submitit_fields = set(type(self).model_fields) - set(Backend.model_fields)
@@ -446,8 +453,8 @@ class _SubmititBackend(Backend):
         with submitit.helpers.clean_env():
             job = executor.submit(wrapper, *args)
 
-        logger.debug("Saving job: %s", paths.job_pkl)
-        with paths.job_pkl.open("wb") as f:
+        logger.debug("Saving job: %s", wrapper.paths.job_pkl)
+        with wrapper.paths.job_pkl.open("wb") as f:
             pickle.dump(job, f)
 
         return job
