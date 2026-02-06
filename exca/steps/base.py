@@ -347,6 +347,9 @@ class Chain(Step):
             # If any internal step has force-forward, clear chain's cache first
             if any(s.infra.mode == "force-forward" for s in force_steps):  # type: ignore
                 chain.infra.clear_cache()
+            # Note: if the last step also has infra, it shares the same cache entry
+            # (same step_uid from _aligned_step flattening, same item_uid from original
+            # input). The last step writes first, chain finds cache hit - no duplication.
             result = chain.infra.run(chain._forward)
 
         # Reset force modes on original steps and chain after successful run
@@ -357,6 +360,10 @@ class Chain(Step):
         return result
 
     def _aligned_step(self) -> list[Step]:
+        # Flatten to contained steps - chain itself is not in the UID.
+        # This means chain and its last step share the same step_uid (cache folder).
+        # Combined with same item_uid (from original input), they share the same
+        # cache entry when both have infra - no duplicate storage occurs.
         return [s for step in self._step_sequence() for s in step._aligned_step()]
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any]:

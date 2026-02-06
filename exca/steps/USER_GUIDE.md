@@ -92,6 +92,8 @@ pipeline = Chain(
 )
 ```
 
+> **Note:** If both the chain and its last step have infra (with the same folder), they share the same cache entry - no duplicate storage occurs. The last step writes the result, and the chain finds it already cached.
+
 **Shorthand:** Anywhere a `Step` is expected, a list auto-converts to a Chain (without infra):
 
 ```python
@@ -144,7 +146,7 @@ Control caching behavior via the `mode` field:
 | Mode | Behavior |
 |------|----------|
 | `cached` (default) | Use cache if exists, else compute |
-| `force` | Recompute and overwrite cache |
+| `force` | Clears the cache and recompute if no downstream cache exists |
 | `force-forward` | Force this step AND all downstream steps |
 | `read-only` | Require cache to exist (fail otherwise) |
 | `retry` | Recompute only if previous run errored |
