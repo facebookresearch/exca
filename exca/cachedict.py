@@ -102,19 +102,14 @@ class CacheDict(tp.Generic[X]):
         permissions: int | None = 0o777,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
-        self.permissions = permissions
+        self._permission_setter = utils.PermissionSetter(permissions)
         self.cache_type = cache_type
         self._keep_in_ram = keep_in_ram
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
         if self.folder is not None:
             self.folder.mkdir(exist_ok=True)
-            if self.permissions is not None:
-                try:
-                    Path(self.folder).chmod(self.permissions)
-                except Exception as e:
-                    msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
-                    logger.warning(msg)
+            self._permission_setter.set(self.folder)
         # file cache access and RAM cache
         self._ram_data: dict[str, X] = {}
         self._key_info: dict[str, DumpInfo] = {}
@@ -308,8 +303,8 @@ class CacheDictWriter:
                 t = time.time()  # make sure the modified time is updated:
                 os.utime(cd.folder, times=(t, t))
             fp2 = self._info_filepath
-            if cd.permissions is not None and fp2 is not None and fp2.exists():
-                fp2.chmod(cd.permissions)
+            if fp2 is not None and fp2.exists():
+                cd._permission_setter.set(fp2)
             self._exit_stack = None
             self._info_filepath = None
             self._info_handle = None
@@ -369,12 +364,8 @@ class CacheDictWriter:
             cd._jsonl_readers.setdefault(fp.name, JsonlReader(fp))._last = last
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
-            if cd.permissions is not None:
-                for fp in files:
-                    try:
-                        fp.chmod(cd.permissions)
-                    except Exception:  # pylint: disable=broad-except
-                        pass  # avoid issues in case of overlapping processes
+            for fp in files:
+                cd._permission_setter.set(fp)
             os.utime(cd.folder)  # make sure the modified time is updated
 
 

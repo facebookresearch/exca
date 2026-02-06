@@ -693,3 +693,52 @@ class ConfigDump:
                     continue
                 with temporary_save_path(fp) as tmp:
                     Path(tmp).write_text(self._to_yaml(name), encoding="utf8")
+
+
+class PermissionSetter:
+    """Utility for setting file/directory permissions for shared access.
+
+    Parameters
+    ----------
+    permissions: int | None
+        chmod-compatible permission bits (e.g., 0o777 for full shared access).
+        Use None to disable permission setting.
+
+    Example
+    -------
+    >>> ps = PermissionSetter(0o777)
+    >>> folder.mkdir(parents=True, exist_ok=True)
+    >>> ps.set(folder)  # single path
+    >>> ps.set("/shared/folder", recursive=True)  # fix entire tree
+    """
+
+    def __init__(self, permissions: int | None = 0o777) -> None:
+        self.permissions = permissions
+
+    def set(self, path: Path | str, recursive: bool = False) -> None:
+        """Set permissions on a file or directory.
+
+        Parameters
+        ----------
+        path: File or directory path
+        recursive: If True, also set permissions on all contents (for directories)
+        """
+        if self.permissions is None:
+            return
+        path = Path(path)
+        try:
+            path.chmod(self.permissions)
+        except Exception as e:
+            logger.warning(
+                f"Failed to set permissions {oct(self.permissions)} on {path}: {e}"
+            )
+            return
+        if not recursive:
+            return
+        if not path.is_dir():
+            return
+        for p in path.rglob("*"):
+            try:
+                p.chmod(self.permissions)
+            except Exception:
+                pass  # silently skip children if they fail

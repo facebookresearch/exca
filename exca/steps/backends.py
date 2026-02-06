@@ -115,10 +115,15 @@ class StepPaths:
         """Returns template string for submitit (with %j placeholder)."""
         return str(self.step_folder / "logs" / "%j")
 
-    def ensure_folders(self) -> None:
+    def ensure_folders(
+        self, permission_setter: utils.PermissionSetter | None = None
+    ) -> None:
         """Create necessary directories."""
         self.cache_folder.mkdir(parents=True, exist_ok=True)
         self.job_folder.mkdir(parents=True, exist_ok=True)
+        if permission_setter is not None:
+            permission_setter.set(self.cache_folder)
+            permission_setter.set(self.job_folder)
 
     def clear_cache(self) -> None:
         """Clear cache and job folder for this item."""
@@ -146,15 +151,22 @@ class _CachingCall:
         func: tp.Callable[..., tp.Any],
         paths: StepPaths,
         cache_type: str | None,
+        permission_setter: utils.PermissionSetter | None = None,
     ):
         self.func = func
         self.paths = paths
         self.cache_type = cache_type
+        self.permission_setter = permission_setter
 
     def __call__(self, *args: tp.Any) -> None:
-        self.paths.ensure_folders()  # Create folders before writing
+        self.paths.ensure_folders(self.permission_setter)  # Create folders before writing
+        permissions = (
+            None if self.permission_setter is None else self.permission_setter.permissions
+        )
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-            folder=self.paths.cache_folder, cache_type=self.cache_type
+            folder=self.paths.cache_folder,
+            cache_type=self.cache_type,
+            permissions=permissions,
         )
         try:
             result = self.func(*args)
@@ -163,6 +175,8 @@ class _CachingCall:
             if not self.paths.error_pkl.exists():
                 with self.paths.error_pkl.open("wb") as f:
                     pickle.dump(e, f)
+                if self.permission_setter is not None:
+                    self.permission_setter.set(self.paths.error_pkl)
             raise
         if self.paths.item_uid not in cd:  # Only write if not already cached
             with cd.writer() as w:
@@ -180,17 +194,22 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     @classmethod
     def _exclude_from_cls_uid(cls) -> list[str]:
-        return ["."]  # force ignored in uid
+        return ["."]
 
     folder: Path | None = None
     cache_type: str | None = None
     mode: ModeType = "cached"
     keep_in_ram: bool = False
+    permissions: int | None = 0o777
 
     _step: "Step" | None = None
     _ram_cache: tp.Any = pydantic.PrivateAttr(default_factory=NoValue)
     _paths: StepPaths | None = pydantic.PrivateAttr(default=None)
     _checked_configs: bool = pydantic.PrivateAttr(default=False)
+    _permission_setter: utils.PermissionSetter = pydantic.PrivateAttr()
+
+    def model_post_init(self, log__: tp.Any) -> None:
+        self._permission_setter = utils.PermissionSetter(self.permissions)
 
     def __eq__(self, other: tp.Any) -> bool:
         """Compare backends by model fields only, excluding _step to avoid recursion."""
@@ -280,10 +299,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         step = self._configured_step()
         folder = self.paths.step_folder
         folder.mkdir(exist_ok=True, parents=True)
+        self._permission_setter.set(folder)
 
         # Use the full aligned chain as the config (list of steps)
         # This ensures consistent configs whether written by chain or step
-        utils.ConfigDump(model=step._aligned_chain()).check_and_write(folder, write=write)
+        dump = utils.ConfigDump(model=step._aligned_chain())
+        dump.check_and_write(folder, write=write)
         self._checked_configs = True
 
     # =========================================================================
@@ -293,7 +314,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":
         """Get CacheDict for this step."""
         return exca.cachedict.CacheDict(
-            folder=self.paths.cache_folder, cache_type=self.cache_type
+            folder=self.paths.cache_folder,
+            cache_type=self.cache_type,
+            permissions=self.permissions,
         )
 
     def has_cache(self) -> bool:
@@ -410,7 +433,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 logger.debug("Recovering job: %s", self.paths.job_pkl)
 
         if job is None:
-            wrapper = _CachingCall(func, self.paths, self.cache_type)
+            wrapper = _CachingCall(
+                func, self.paths, self.cache_type, self._permission_setter
+            )
             job = self._submit(wrapper, *args)
 
         job.result()  # Wait (result is cached, not returned)
@@ -447,7 +472,9 @@ class _SubmititBackend(Backend):
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]]
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
-        wrapper.paths.ensure_folders()  # Create folders before writing job.pkl
+        wrapper.paths.ensure_folders(
+            self._permission_setter
+        )  # Create folders before writing job.pkl
         executor = self._EXECUTOR_CLS(folder=wrapper.paths.logs_folder)
 
         # Get only submitit-specific fields (exclude Backend fields)

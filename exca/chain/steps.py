@@ -69,15 +69,22 @@ class Cache(Step):
     folder: Path | None = None
     mode: Mode = "cached"
     cache_type: str | None = None
+    permissions: int | None = 0o777
 
     # tracks if computation was already run (to avoid recomputing twice with same instance)
     _computed: bool = False
+    _permission_setter: utils.PermissionSetter | None = None
+
+    def model_post_init(self, log__: tp.Any) -> None:
+        self._permission_setter = utils.PermissionSetter(self.permissions)
 
     def _chain_folder(self) -> Path:
         if self.folder is None:
             raise RuntimeError("No folder provided")
         folder = self.folder / self._chain_hash()
-        folder.mkdir(exist_ok=True, parents=True)  # TODO permissions
+        folder.mkdir(exist_ok=True, parents=True)
+        if self._permission_setter is not None:
+            self._permission_setter.set(folder)
         return folder
 
     def _chain_hash(self) -> str:
@@ -110,7 +117,9 @@ class Cache(Step):
         if self.folder is None:
             return exca.cachedict.CacheDict(folder=None, keep_in_ram=True)
         folder = self._chain_folder() / "cache"
-        return exca.cachedict.CacheDict(folder=folder, cache_type=self.cache_type)
+        return exca.cachedict.CacheDict(
+            folder=folder, cache_type=self.cache_type, permissions=self.permissions
+        )
 
     def _aligned_step(self) -> list[Step]:
         return []
@@ -265,8 +274,12 @@ class Chain(Cache):
             if pkl is not None and not isinstance(job, backends.ResultJob):
                 logger.debug("Dumping job into: %s", pkl.parent)
                 pkl.parent.mkdir(exist_ok=True, parents=True)
+                if self._permission_setter is not None:
+                    self._permission_setter.set(pkl.parent)
                 with pkl.open("wb") as f:
                     pickle.dump(job, f)
+                if self._permission_setter is not None:
+                    self._permission_setter.set(pkl)
         self._computed = True  # to ignore mode force/retry from now on
         out = job.result()
         if not isinstance(out, NoValue):  # output was not cached

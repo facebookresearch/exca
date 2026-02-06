@@ -231,10 +231,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 raise RuntimeError(f"Infra was not applied: {self!r}")
             cache_type = imethod.cache_type
             cache_path = self.uid_folder(create=True)
-            if isinstance(self.permissions, str):
-                self._set_permissions(None)
-            if isinstance(self.permissions, str):
-                raise RuntimeError("infra.permissions should have been an integer")
             self._cache_dict = CacheDict(
                 folder=cache_path,
                 keep_in_ram=self.keep_in_ram,
