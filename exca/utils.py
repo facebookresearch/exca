@@ -598,10 +598,7 @@ DEFAULT_CHECK_SKIPS: tp.List[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
 
 
 class ConfigDump:
-    """Config dump for cache consistency checks.
-
-    Create with a model (configs auto-filled) or provide configs directly.
-    """
+    """Config dump for cache consistency checks."""
 
     def __init__(
         self,
@@ -632,10 +629,7 @@ class ConfigDump:
         return _yaml.safe_dump(data, sort_keys=True)
 
     def _error(self, msg: str) -> RuntimeError:
-        """Create error with model info if available."""
-        if self.model is not None:
-            msg += f"\n\n(this is for object: {self.model!r})"
-        return RuntimeError(msg)
+        return RuntimeError(f"{msg}\n\n(this is for object: {self.model!r})")
 
     def check_and_write(self, folder: Path, *, write: bool = True) -> None:
         """Check config consistency and optionally write files.
