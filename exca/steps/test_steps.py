@@ -91,10 +91,17 @@ def test_pure_generator_errors(tmp_path: Path, steps: list, match: str) -> None:
 # =============================================================================
 
 
-def test_chain_hash_and_uid() -> None:
+@pytest.mark.parametrize("with_infra", (True, False))
+def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
     """Nested chains flatten for hash and UID computation."""
-    steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-    chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}])  # type: ignore
+    infra: tp.Any = {}
+    if with_infra:
+        infra = {"infra": {"backend": "Cached", "folder": tmp_path}}
+    steps: tp.Any = [
+        {"type": "Mult", "coeff": 3} | infra,
+        {"type": "Add", "value": 12} | infra,
+    ]
+    chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}], **infra)  # type: ignore
 
     # Hash computation (Input step excluded - Input._aligned_step returns empty list)
     expected_hash = (

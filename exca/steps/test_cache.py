@@ -112,6 +112,8 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     # Both share cache folder and cache_type is propagated from last step
     configured = chain.with_input()
     last_step = configured._step_sequence()[-1]
+    assert confirgured.infra is not None
+    assert last_step.infra is not None
     assert configured.infra.paths.step_folder == last_step.infra.paths.step_folder
     assert configured.infra.cache_type == "Pickle"
 

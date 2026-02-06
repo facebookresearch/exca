@@ -177,6 +177,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     - Provide cache operations: has_cache(), clear_cache(), job(), etc.
     """
 
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return ["."]  # force ignored in uid
+
     folder: Path | None = None
     cache_type: str | None = None
     mode: ModeType = "cached"
@@ -387,8 +391,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return self._load_cache()
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
-        """Submit wrapper for execution. Override in subclasses."""
-        raise NotImplementedError
+        """Submit wrapper for execution. Default: inline execution."""
+        wrapper(*args)
+        return _InlineJob()
 
 
 class _InlineJob:
@@ -399,11 +404,7 @@ class _InlineJob:
 
 
 class Cached(Backend):
-    """Inline execution + caching."""
-
-    def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> _InlineJob:
-        wrapper(*args)
-        return _InlineJob()
+    """Inline execution + caching (same as Backend, kept for backward compatibility)."""
 
 
 class _SubmititBackend(Backend):

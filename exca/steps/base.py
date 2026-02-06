@@ -107,7 +107,6 @@ class Step(exca.helpers.DiscriminatedModel):
 
     infra: backends.Backend | None = None
     _previous: tp.Union["Step", None] = None
-    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra",)
 
     @pydantic.model_validator(mode="wrap")
     @classmethod
@@ -237,7 +236,6 @@ class Chain(Step):
     """
 
     steps: tp.Sequence[Step] | collections.OrderedDict[str, Step]
-    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra",)
 
     def model_post_init(self, __context: tp.Any) -> None:
         super().model_post_init(__context)

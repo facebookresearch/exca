@@ -85,9 +85,8 @@ def test_step_in_taskinfra(tmp_path: Path) -> None:
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
     step_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "steps"}
     chain: tp.Any = {"type": "Chain", "steps": steps, "infra": step_infra}
-    infra: tp.Any = {"folder": tmp_path / "cache"}
 
-    xp = Experiment(steps=chain, infra=infra)
+    xp = Experiment(steps=chain, infra={"folder": tmp_path / "cache"})  # type: ignore
 
     uid = xp.infra.uid()
     expected = "exca.steps.test_backends.Experiment.run,0/steps.steps=({coeff=3,type=Mult},{type=Add,value=12})-2f739f76"
