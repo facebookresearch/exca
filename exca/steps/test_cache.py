@@ -100,6 +100,22 @@ def test_intermediate_cache_reuse(tmp_path: Path) -> None:
     assert out2 == pytest.approx(10 * out1, abs=1e-9)
 
 
+def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
+    """When both chain and last step have infra, they share cache entry and cache_type."""
+    step_infra: tp.Any = {"backend": "Cached", "cache_type": "Pickle"}
+    chain = Chain(
+        steps=[conftest.Add(value=1), conftest.Mult(coeff=2, infra=step_infra)],
+        infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
+    )
+    assert chain.forward() == 2.0  # (0 + 1) * 2
+
+    # Both share cache folder and cache_type is propagated from last step
+    configured = chain.with_input()
+    last_step = configured._step_sequence()[-1]
+    assert configured.infra.paths.step_folder == last_step.infra.paths.step_folder
+    assert configured.infra.cache_type == "Pickle"
+
+
 # =============================================================================
 # Cache modes
 # =============================================================================

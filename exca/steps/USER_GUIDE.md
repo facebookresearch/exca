@@ -92,7 +92,7 @@ pipeline = Chain(
 )
 ```
 
-> **Note:** If both the chain and its last step have infra (with the same folder), they share the same cache entry - no duplicate storage occurs. The last step writes the result, and the chain finds it already cached.
+> **Note:** If both the chain and its last step have infra (with the same folder), they share the same cache entry - no duplicate storage occurs. The last step writes the result, and the chain finds it already cached. The chain's `cache_type` is automatically set to match the last step's to ensure format compatibility.
 
 **Shorthand:** Anywhere a `Step` is expected, a list auto-converts to a Chain (without infra):
 

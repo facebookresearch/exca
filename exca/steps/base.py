@@ -262,6 +262,10 @@ class Chain(Step):
         chain = type(self)(steps=steps, infra=self.infra)
         chain._previous = Input(value=NoValue())  # Mark chain as configured
         chain._init()
+        # Sync cache_type: chain and last step share cache entry, must use same format
+        last_step = chain._step_sequence()[-1]
+        if chain.infra and last_step.infra and last_step.infra.cache_type:
+            chain.infra.cache_type = last_step.infra.cache_type
         return chain
 
     def _init(self, parent_folder: Path | None = None) -> None:
