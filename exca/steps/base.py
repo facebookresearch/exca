@@ -237,8 +237,7 @@ class Chain(Step):
     """
 
     steps: tp.Sequence[Step] | collections.OrderedDict[str, Step]
-    propagate_folder: bool = True
-    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra", "propagate_folder")
+    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra",)
 
     def model_post_init(self, __context: tp.Any) -> None:
         super().model_post_init(__context)
@@ -260,9 +259,7 @@ class Chain(Step):
         steps: list[tp.Any] = [s.model_dump() for s in self._step_sequence()]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps
-        chain = type(self)(
-            steps=steps, infra=self.infra, propagate_folder=self.propagate_folder
-        )
+        chain = type(self)(steps=steps, infra=self.infra)
         chain._previous = Input(value=NoValue())  # Mark chain as configured
         chain._init()
         return chain
@@ -277,14 +274,14 @@ class Chain(Step):
             # First step gets Input(NoValue()) if no previous, marking it as configured
             step._previous = previous if previous is not None else Input(value=NoValue())
             # Only propagate folder to steps that have infra but no folder set
-            if self.propagate_folder and folder and step.infra is not None:
+            if folder and step.infra is not None:
                 if step.infra.folder is None:
                     step.infra = step.infra.model_copy(update={"folder": folder})
             if step.infra is not None:
                 step.infra._step = step
             if isinstance(step, Chain):
                 # Pass folder to nested chain for further propagation
-                step._init(parent_folder=folder if self.propagate_folder else None)
+                step._init(parent_folder=folder)
             previous = step
 
     def _forward(self, value: tp.Any = NoValue()) -> tp.Any:

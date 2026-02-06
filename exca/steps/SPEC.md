@@ -196,7 +196,6 @@ class Input(Step):
 class Chain(Step):
     """Composes multiple steps sequentially."""
     steps: Sequence[Step] | OrderedDict[str, Step]
-    propagate_folder: bool = True
     
     def _is_generator(self) -> bool:
         """Chain is a generator if its first step is a generator."""
@@ -279,11 +278,10 @@ pipeline = Chain(
         LoadData(path="/data/train.csv"),
         Train(
             epochs=50,
-            infra={"backend": "Slurm", "gpus_per_node": 8}  # folder propagated
+            infra={"backend": "Slurm", "gpus_per_node": 8}  # folder propagated from Chain
         ),
     ],
     infra={"backend": "Cached", "folder": "/cache/pipeline"},
-    propagate_folder=True,  # Propagates folder to steps with infra but no folder
 )
 
 result = pipeline.forward()
@@ -362,7 +360,7 @@ When `step.forward(input)` is called:
 - [x] `Input` step with NoValue handling
 - [x] `NoValue` sentinel
 - [x] Cache key via `_chain_hash()`
-- [x] `Chain` step with `propagate_folder`
+- [x] `Chain` step with folder propagation
 - [x] `with_input()` on all steps
 - [x] `_is_generator()` detection
 - [x] Error caching

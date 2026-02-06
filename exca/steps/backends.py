@@ -213,7 +213,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             return self._paths
         if self.folder is None:
             raise RuntimeError(
-                "Backend folder not set. Set folder on infra or use propagate_folder."
+                "Backend folder not set. Set folder on infra or on the parent Chain."
             )
         if self._step is None:
             raise RuntimeError("Backend not attached to a Step")
