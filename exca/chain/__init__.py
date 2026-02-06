@@ -5,6 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 """Experimental API of chainable steps with 1 input and 1 output
 Note: this API is unstable, use at your own risk
+
+WILL PROBABLY BE DEPRECATED IN FAVOR OF STEPS SUBPACKAGE
 """
 
 from . import backends as backends
