@@ -142,3 +142,50 @@ def test_paths_property_requires_initialization(tmp_path: Path) -> None:
     gen_step = conftest.Add(infra=backends.Cached(folder=tmp_path))
     assert gen_step.infra is not None
     _ = gen_step.infra.paths  # No error - auto-configured
+
+
+# =============================================================================
+# Config checking (uid.yaml, full-uid.yaml, config.yaml)
+# =============================================================================
+
+
+def test_config_files_and_consistency(tmp_path: Path) -> None:
+    """Config files are created, checked for consistency, and corrupted files are handled."""
+    step = conftest.Mult(coeff=3.0, infra=backends.Cached(folder=tmp_path))
+    assert step.forward(10.0) == 30.0
+
+    # Check config files exist with correct content (list format)
+    step_folder = step.with_input(10.0).infra.paths.step_folder  # type: ignore
+    expected_uid = "- coeff: 3.0\n  type: Mult\n"
+    assert (step_folder / "uid.yaml").read_text() == expected_uid
+    assert (step_folder / "full-uid.yaml").read_text() == expected_uid
+    assert (step_folder / "config.yaml").exists()
+
+    # Inconsistent uid.yaml raises error
+    (step_folder / "uid.yaml").write_text("- coeff: 999.0\n  type: Mult\n")
+    step.with_input(10.0).clear_cache()
+    with pytest.raises(RuntimeError, match="Inconsistent uid config"):
+        step.forward(10.0)
+
+    # Corrupted config is deleted and recreated
+    (step_folder / "uid.yaml").write_text("invalid: yaml: {{{{")
+    assert step.forward(10.0) == 30.0
+    assert (step_folder / "uid.yaml").read_text() == expected_uid
+
+
+def test_config_consistency_chain_and_step(tmp_path: Path) -> None:
+    """Chain and its last step write identical configs when sharing cache folder."""
+    chain = Chain(
+        steps=[conftest.Add(value=1), conftest.Mult(coeff=2, infra=backends.Cached())],
+        infra=backends.Cached(folder=tmp_path),
+    )
+    assert chain.forward() == 2.0  # (0 + 1) * 2
+
+    # Only one uid.yaml should exist (chain and last step share folder)
+    uid_files = list(tmp_path.rglob("uid.yaml"))
+    assert len(uid_files) == 1
+
+    # Config should contain the full chain (as a list)
+    # Note: coeff=2.0 is the default for Mult, so it's excluded from uid
+    expected = "- type: Add\n  value: 1.0\n- type: Mult\n"
+    assert uid_files[0].read_text() == expected

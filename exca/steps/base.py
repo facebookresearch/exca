@@ -7,8 +7,8 @@
 """
 Core step classes.
 
-Step handles computation logic, Backend handles execution + caching.
-Backend holds a reference to its owning Step for cache key computation.
+Step handles computation logic, backends handles execution + caching.
+Backends holds a reference to its owning Step for cache key computation.
 """
 
 from __future__ import annotations
@@ -41,14 +41,14 @@ def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
 
 @pydantic.model_validator(mode="before")
 def _infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
-    """Convert Backend instances to dicts to prevent sharing."""
+    """Convert backend instances to dicts to prevent sharing."""
     if not isinstance(obj, dict):
         return obj
     infra = obj.get("infra")
     if infra is None:
         return obj
 
-    # Convert Backend instance to dict (prevents sharing)
+    # Convert backend instance to dict (prevents sharing)
     if isinstance(infra, backends.Backend):
         data = {k: getattr(infra, k) for k in infra.model_fields_set}
         data[type(infra)._exca_discriminator_key] = type(infra).__name__
@@ -107,6 +107,9 @@ class Step(exca.helpers.DiscriminatedModel):
 
     infra: backends.Backend | None = None
     _previous: tp.Union["Step", None] = None
+
+    def _exclude_from_cls_uid(cls) -> listr[str]:
+        return ["infra"]
 
     @pydantic.model_validator(mode="wrap")
     @classmethod

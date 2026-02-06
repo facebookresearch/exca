@@ -179,7 +179,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     @classmethod
     def _exclude_from_cls_uid(cls) -> list[str]:
-        return ["."]  # force ignored in uid
+        return ["."]
 
     folder: Path | None = None
     cache_type: str | None = None
@@ -189,6 +189,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     _step: "Step" | None = None
     _ram_cache: tp.Any = pydantic.PrivateAttr(default_factory=NoValue)
     _paths: StepPaths | None = pydantic.PrivateAttr(default=None)
+    _checked_configs: bool = pydantic.PrivateAttr(default=False)
 
     def __eq__(self, other: tp.Any) -> bool:
         """Compare backends by model fields only, excluding _step to avoid recursion."""
@@ -264,6 +265,30 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             current = current._previous
         return NoValue()  # Generator case
 
+    def _check_configs(self, write: bool = True) -> None:
+        """Check and write config files for cache consistency.
+
+        The config represents the full computation path (aligned chain), not just
+        this step. This ensures chain and its last step write identical configs
+        when sharing the same cache folder.
+        """
+        if self._checked_configs:
+            return
+        if self.folder is None:
+            return
+        step = self._configured_step()
+        folder = self.paths.step_folder
+        folder.mkdir(exist_ok=True, parents=True)
+
+        # Use the full aligned chain as the config (list of steps)
+        # This ensures consistent configs whether written by chain or step
+        aligned_steps = step._aligned_chain()
+
+        from exca import utils
+
+        utils.check_configs(aligned_steps, folder, write=write)
+        self._checked_configs = True
+
     # =========================================================================
     # Cache operations
     # =========================================================================
@@ -330,6 +355,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def run(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> tp.Any:
         """Execute function with caching based on mode."""
+        # Check config consistency before running
+        self._check_configs(write=True)
+
         # Check RAM cache first (survives disk deletion)
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
             if self.mode not in ("force", "force-forward"):
@@ -404,7 +432,7 @@ class _InlineJob:
 
 
 class Cached(Backend):
-    """Inline execution + caching (same as Backend, kept for backward compatibility)."""
+    """Inline execution + caching."""
 
 
 class _SubmititBackend(Backend):
