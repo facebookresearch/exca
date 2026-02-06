@@ -185,6 +185,25 @@ class CacheDict(tp.Generic[X]):
                 futures.append(executor.submit(reader.read))
             for future in futures:
                 self._key_info.update(future.result())
+        self._cleanup_orphaned_jsonl_files()
+
+    def _cleanup_orphaned_jsonl_files(self) -> None:
+        """Remove jsonl files and their associated data files when they have no valid items."""
+        if self.folder is None:
+            return
+        folder = Path(self.folder)
+        referenced = {info.jsonl.name for info in self._key_info.values()}
+        for name, reader in list(self._jsonl_readers.items()):
+            # Skip if: still referenced, not initialized, or only has metadata (still being written)
+            if name in referenced or not reader._meta or not reader._has_content:
+                continue
+            prefix = name.removesuffix("-info.jsonl")
+            for path in folder.glob(f"{prefix}.*"):  # data files (.data, .txt, etc.)
+                with utils.fast_unlink(path, missing_ok=True):
+                    pass
+            with utils.fast_unlink(reader._fp, missing_ok=True):  # jsonl file
+                pass
+            del self._jsonl_readers[name]
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
@@ -366,7 +385,9 @@ class CacheDictWriter:
             )
             cd._key_info[key] = dinfo
             last = self._info_handle.tell()
-            cd._jsonl_readers.setdefault(fp.name, JsonlReader(fp))._last = last
+            reader = cd._jsonl_readers.setdefault(fp.name, JsonlReader(fp))
+            reader._last = last
+            reader._has_content = True
             # reading will reload to in-memory cache if need be
             # (since dumping may have loaded the underlying data, let's not keep it)
             if cd.permissions is not None:
@@ -384,6 +405,7 @@ class JsonlReader:
         self._last = 0
         self._meta: dict[str, tp.Any] = {}
         self.readings = 0
+        self._has_content = False  # True once we've seen lines after metadata
 
     def read(self) -> dict[str, DumpInfo]:
         out: dict[str, DumpInfo] = {}
@@ -413,6 +435,7 @@ class JsonlReader:
                 f.seek(self._last)
                 last = self._last
             for line in f:
+                self._has_content = True  # we've seen at least one line after metadata
                 if fail:
                     msg = f"Failed to read non-last line in {self._fp}:\n{fail!r}"
                     raise RuntimeError(msg)

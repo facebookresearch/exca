@@ -137,9 +137,10 @@ def test_specialized_dump(
         assert not files, "No file should remain open"
 
 
-def _setval(cache: cd.CacheDict[tp.Any], key: str, val: tp.Any) -> None:
+def _write_items(cache: cd.CacheDict[tp.Any], keys: list[str], data: tp.Any) -> None:
     with cache.writer() as writer:
-        writer[key] = val
+        for key in keys:
+            writer[key] = data
 
 
 @pytest.mark.parametrize("process", (False,))  # add True for more (slower) tests
@@ -148,9 +149,9 @@ def test_info_jsonl(tmp_path: Path, process: bool) -> None:
     Pool = futures.ProcessPoolExecutor if process else futures.ThreadPoolExecutor
     jobs = []
     with Pool(max_workers=2) as ex:
-        jobs.append(ex.submit(_setval, cache, "x", 12))
-        jobs.append(ex.submit(_setval, cache, "y", 3))
-        jobs.append(ex.submit(_setval, cache, "z", 24))
+        jobs.append(ex.submit(_write_items, cache, ["x"], 12))
+        jobs.append(ex.submit(_write_items, cache, ["y"], 3))
+        jobs.append(ex.submit(_write_items, cache, ["z"], 24))
     for j in jobs:
         j.result()
     # check files
@@ -238,3 +239,39 @@ def test_2_caches_memmap(tmp_path: Path) -> None:
     _ = cache2["blublu2"]
     assert "blublu" in cache2._ram_data
     _ = cache2["blublu"]
+
+
+@pytest.mark.parametrize("cache_type", ["MemmapArrayFile", "String"])
+def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
+    """Test that data files are cleaned up when all items are deleted.
+
+    Uses multiple concurrent writers to create multiple jsonl/data file pairs.
+    Also tests that files with only metadata (still being written to) are not deleted.
+    """
+    data: tp.Any = np.random.rand(3, 12) if cache_type == "MemmapArrayFile" else "hello"
+    suffix = ".data" if cache_type == "MemmapArrayFile" else ".txt"
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(
+        folder=tmp_path, keep_in_ram=False, cache_type=cache_type
+    )
+    # Create a metadata-only file pair (simulates a writer that just started)
+    meta_files = [tmp_path / "fake-writer-info.jsonl", tmp_path / f"fake-writer{suffix}"]
+    meta_files[0].write_text(f'metadata={{"cache_type": "{cache_type}"}}\n')
+    meta_files[1].write_bytes(b"")
+    # Use multiple threads to create multiple jsonl/data file pairs
+    with futures.ThreadPoolExecutor(max_workers=3) as ex:
+        for c in "abc":
+            ex.submit(_write_items, cache, [f"{c}1", f"{c}2"], data)
+    # Verify file counts (3 from threads + 1 metadata-only = 4 pairs)
+    count_files = lambda pat: len(list(tmp_path.glob(pat)))
+    assert count_files("*-info.jsonl") == 4
+    assert count_files(f"*{suffix}") == 4
+    # Delete all items from one writer, files still exist (cleanup is lazy)
+    for key in ["a1", "a2"]:
+        del cache[key]
+    assert count_files("*-info.jsonl") == 4
+    # Trigger cleanup via keys()
+    assert set(cache.keys()) == {"b1", "b2", "c1", "c2"}
+    # One pair deleted (orphaned), metadata-only preserved
+    assert count_files("*-info.jsonl") == 3
+    assert count_files(f"*{suffix}") == 3
+    assert all(f.exists() for f in meta_files)
