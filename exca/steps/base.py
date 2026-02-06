@@ -93,6 +93,12 @@ class Step(exca.helpers.DiscriminatedModel):
             coeff: float = 1.0
             def _forward(self, data):
                 return data * self.coeff
+
+    Note
+    ----
+    A list/tuple of steps is automatically converted to a Chain:
+
+        step: Step = [Mult(coeff=2), Mult(coeff=3)]  # -> Chain(steps=[...])
     """
 
     # Validators for infra handling (prevent sharing, propagate defaults)
@@ -102,6 +108,17 @@ class Step(exca.helpers.DiscriminatedModel):
     infra: backends.Backend | None = None
     _previous: tp.Union["Step", None] = None
     _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra",)
+
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _convert_sequence_to_chain(
+        cls, value: tp.Any, handler: pydantic.ValidatorFunctionWrapHandler
+    ) -> "Step":
+        """Convert list/tuple to Chain automatically."""
+        if isinstance(value, (list, tuple)):
+            key = cls._exca_discriminator_key
+            value = {key: "Chain", "steps": value}
+        return handler(value)
 
     def model_post_init(self, __context: tp.Any) -> None:
         super().model_post_init(__context)

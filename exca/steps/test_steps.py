@@ -10,6 +10,7 @@ import pickle
 import typing as tp
 from pathlib import Path
 
+import pydantic
 import pytest
 
 import exca
@@ -255,3 +256,30 @@ def test_none_as_valid_input() -> None:
             return f"received:{value}"
 
     assert AcceptsNone().forward(None) == "received:None"
+
+
+# =============================================================================
+# Automatic list/tuple -> Chain conversion
+# =============================================================================
+
+
+class StepContainer(pydantic.BaseModel):
+    """Helper model for testing Step field validation."""
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+    step: Step
+
+
+@pytest.mark.parametrize(
+    "steps,expected",
+    [
+        ([conftest.Mult(coeff=2), conftest.Mult(coeff=3)], 30),  # list
+        ((conftest.Mult(coeff=2), {"type": "Add", "value": 10}), 20),  # tuple
+        ([conftest.Add(value=1), [conftest.Mult(coeff=2)]], 12),  # nested
+    ],
+)
+def test_sequence_to_chain_conversion(steps: tp.Any, expected: float) -> None:
+    """List/tuple of steps should be automatically converted to a Chain."""
+    container = StepContainer(step=steps)
+    assert isinstance(container.step, Chain)
+    assert container.step.forward(5) == expected
