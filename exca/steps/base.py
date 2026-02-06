@@ -108,7 +108,7 @@ class Step(exca.helpers.DiscriminatedModel):
     infra: backends.Backend | None = None
     _previous: tp.Union["Step", None] = None
 
-    def _exclude_from_cls_uid(cls) -> listr[str]:
+    def _exclude_from_cls_uid(cls) -> list[str]:
         return ["infra"]
 
     @pydantic.model_validator(mode="wrap")

@@ -24,6 +24,7 @@ import pydantic
 import submitit
 
 import exca
+from exca import utils
 
 if tp.TYPE_CHECKING:
     from .base import Step
@@ -282,11 +283,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         # Use the full aligned chain as the config (list of steps)
         # This ensures consistent configs whether written by chain or step
-        aligned_steps = step._aligned_chain()
-
-        from exca import utils
-
-        utils.check_configs(aligned_steps, folder, write=write)
+        utils.ConfigDump(model=step._aligned_chain()).check_and_write(folder, write=write)
         self._checked_configs = True
 
     # =========================================================================

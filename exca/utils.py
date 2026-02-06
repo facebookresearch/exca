@@ -597,81 +597,103 @@ def environment_variables(**kwargs: tp.Any) -> tp.Iterator[None]:
 DEFAULT_CHECK_SKIPS: tp.List[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
 
 
-def check_configs(
-    model: tp.Any,
-    folder: Path,
-    *,
-    write: bool = True,
-) -> None:
-    """Check and write config files (uid.yaml, full-uid.yaml, config.yaml) for cache consistency.
+class ConfigDump:
+    """Config dump for cache consistency checks.
 
-    Raises RuntimeError if uid.yaml doesn't match (cache collision) or defaults changed incompatibly.
-    To skip specific default mismatches, append to DEFAULT_CHECK_SKIPS.
+    Create with a model (configs auto-filled) or provide configs directly.
     """
-    from .confdict import ConfDict  # avoid circular import
 
-    def as_confdict(data: tp.Any) -> ConfDict:
-        """Wrap in ConfDict, adding {"_": ...} only for non-dict data."""
-        return ConfDict(data if isinstance(data, dict) else {"_": data})
+    def __init__(
+        self,
+        model: tp.Any,
+        *,
+        uid: tp.Any = None,
+        full_uid: tp.Any = None,
+        config: tp.Any = None,
+    ) -> None:
+        self.model = model
 
-    def to_yaml(name: str) -> str:
-        return _yaml.safe_dump(configs[name], sort_keys=True)
+        def export(provided: tp.Any, uid_flag: bool, exclude_defaults: bool) -> tp.Any:
+            if provided is not None:
+                return provided
+            return ConfigExporter(
+                uid=uid_flag, exclude_defaults=exclude_defaults
+            ).recursive_apply(model)
 
-    def read_file(name: str) -> str | None:
-        fp = folder / f"{name}.yaml"
-        if not fp.exists():
-            return None
-        try:
-            content = fp.read_text("utf8")
-            _yaml.safe_load(content)  # validate yaml
-            return content
-        except Exception as e:
-            logger.warning("Deleting corrupted config '%s': %s", fp, e)
-            fp.unlink()
-            return None
+        self.uid = export(uid, uid_flag=True, exclude_defaults=True)
+        self.full_uid = export(full_uid, uid_flag=True, exclude_defaults=False)
+        self.config = export(config, uid_flag=False, exclude_defaults=False)
 
-    # Export model configs
-    configs = {
-        "uid": ConfigExporter(uid=True, exclude_defaults=True).recursive_apply(model),
-        "full-uid": ConfigExporter(uid=True, exclude_defaults=False).recursive_apply(
-            model
-        ),
-        "config": ConfigExporter(uid=False, exclude_defaults=False).recursive_apply(
-            model
-        ),
-    }
-    # uid.yaml must match exactly (cache collision detection)
-    prev_uid = read_file("uid")
-    if prev_uid is not None and (curr_uid := to_yaml("uid")) != prev_uid:
-        diff = "\n".join(difflib.ndiff(curr_uid.splitlines(), prev_uid.splitlines()))
-        uid = as_confdict(configs["uid"]).to_uid()
-        raise RuntimeError(
-            f"Inconsistent uid config for {uid} in '{folder / 'uid.yaml'}':\n"
-            f"* got:\n{curr_uid!r}\n\n* but uid file contains:\n{prev_uid!r}\n\n(diff:\n{diff})"
-        )
+    def _to_yaml(self, name: str) -> str:
+        """Convert a config to yaml string."""
+        data = getattr(self, name.replace("-", "_"))
+        if hasattr(data, "to_yaml"):
+            return data.to_yaml()  # ConfDict with OrderedDict support
+        return _yaml.safe_dump(data, sort_keys=True)
 
-    # Check full-uid for incompatible default changes
-    prev_full = read_file("full-uid")
-    skip_write = prev_full is not None
-    if prev_full is not None:
-        curr = as_confdict(_yaml.safe_load(to_yaml("full-uid"))).flat()
-        prev = as_confdict(_yaml.safe_load(prev_full)).flat()
-        nondefaults = set(as_confdict(configs["uid"]).flat())
-        for key, val in curr.items():
-            if key in nondefaults or key not in prev or val == prev[key]:
-                continue
-            if any(skip(key, val, prev[key]) for skip in DEFAULT_CHECK_SKIPS):
-                continue
-            fp = folder / "full-uid.yaml"
-            raise RuntimeError(
-                f"Default {val!r} for {key} seems incompatible (was {prev[key]!r})\n(to ignore, remove {fp})"
+    def _error(self, msg: str) -> RuntimeError:
+        """Create error with model info if available."""
+        if self.model is not None:
+            msg += f"\n\n(this is for object: {self.model!r})"
+        return RuntimeError(msg)
+
+    def check_and_write(self, folder: Path, *, write: bool = True) -> None:
+        """Check config consistency and optionally write files.
+
+        Raises RuntimeError if uid.yaml doesn't match (cache collision)
+        or defaults changed incompatibly.
+        """
+        from .confdict import ConfDict  # avoid circular import
+
+        def as_confdict(data: tp.Any) -> ConfDict:
+            return ConfDict(data if isinstance(data, dict) else {"_": data})
+
+        def read_file(name: str) -> str | None:
+            fp = folder / f"{name}.yaml"
+            if not fp.exists():
+                return None
+            try:
+                content = fp.read_text("utf8")
+                _yaml.safe_load(content)  # validate yaml
+                return content
+            except Exception as e:
+                logger.warning("Deleting corrupted config '%s': %s", fp, e)
+                fp.unlink()
+                return None
+
+        # uid.yaml must match exactly (cache collision detection)
+        prev_uid = read_file("uid")
+        curr_uid = self._to_yaml("uid")
+        if prev_uid is not None and curr_uid != prev_uid:
+            diff = "\n".join(difflib.ndiff(curr_uid.splitlines(), prev_uid.splitlines()))
+            uid_str = as_confdict(self.uid).to_uid()
+            raise self._error(
+                f"Inconsistent uid config for {uid_str} in '{folder / 'uid.yaml'}':\n"
+                f"* got:\n{curr_uid!r}\n\n* but uid file contains:\n{prev_uid!r}\n\n(diff:\n{diff})"
             )
 
-    # Write configs
-    if write:
-        for name in configs:
-            fp = folder / f"{name}.yaml"
-            if fp.exists() and (name == "uid" or skip_write):
-                continue
-            with temporary_save_path(fp) as tmp:
-                Path(tmp).write_text(to_yaml(name), encoding="utf8")
+        # Check full-uid for incompatible default changes
+        prev_full = read_file("full-uid")
+        skip_write = prev_full is not None
+        if prev_full is not None:
+            curr = as_confdict(self.full_uid).flat()
+            prev = as_confdict(_yaml.safe_load(prev_full)).flat()
+            nondefaults = set(as_confdict(self.uid).flat())
+            for key, val in curr.items():
+                if key in nondefaults or key not in prev or val == prev[key]:
+                    continue
+                if any(skip(key, val, prev[key]) for skip in DEFAULT_CHECK_SKIPS):
+                    continue
+                fp = folder / "full-uid.yaml"
+                raise self._error(
+                    f"Default {val!r} for {key} seems incompatible (was {prev[key]!r})\n(to ignore, remove {fp})"
+                )
+
+        # Write configs
+        if write:
+            for name in ("uid", "full-uid", "config"):
+                fp = folder / f"{name}.yaml"
+                if fp.exists() and (name == "uid" or skip_write):
+                    continue
+                with temporary_save_path(fp) as tmp:
+                    Path(tmp).write_text(self._to_yaml(name), encoding="utf8")
