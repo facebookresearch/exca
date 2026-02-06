@@ -180,7 +180,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     @classmethod
     def _exclude_from_cls_uid(cls) -> list[str]:
-        return ["."]
+        return ["."]  # force ignored in uid
 
     folder: Path | None = None
     cache_type: str | None = None
