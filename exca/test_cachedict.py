@@ -243,35 +243,67 @@ def test_2_caches_memmap(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("cache_type", ["MemmapArrayFile", "String"])
 def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
-    """Test that data files are cleaned up when all items are deleted.
-
-    Uses multiple concurrent writers to create multiple jsonl/data file pairs.
-    Also tests that files with only metadata (still being written to) are not deleted.
-    """
+    """Test that orphaned data files are cleaned up when all items are deleted."""
     data: tp.Any = np.random.rand(3, 12) if cache_type == "MemmapArrayFile" else "hello"
-    suffix = ".data" if cache_type == "MemmapArrayFile" else ".txt"
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, cache_type=cache_type
     )
-    # Create a metadata-only file pair (simulates a writer that just started)
-    meta_files = [tmp_path / "fake-writer-info.jsonl", tmp_path / f"fake-writer{suffix}"]
-    meta_files[0].write_text(f'metadata={{"cache_type": "{cache_type}"}}\n')
-    meta_files[1].write_bytes(b"")
     # Use multiple threads to create multiple jsonl/data file pairs
     with futures.ThreadPoolExecutor(max_workers=3) as ex:
         for c in "abc":
             ex.submit(_write_items, cache, [f"{c}1", f"{c}2"], data)
-    # Verify file counts (3 from threads + 1 metadata-only = 4 pairs)
-    count_files = lambda pat: len(list(tmp_path.glob(pat)))
-    assert count_files("*-info.jsonl") == 4
-    assert count_files(f"*{suffix}") == 4
+    assert len(list(tmp_path.glob("*-info.jsonl"))) == 3
     # Delete all items from one writer, files still exist (cleanup is lazy)
-    for key in ["a1", "a2"]:
+    for key in ["a1", "a2", "c1", "b2"]:
         del cache[key]
-    assert count_files("*-info.jsonl") == 4
-    # Trigger cleanup via keys()
-    assert set(cache.keys()) == {"b1", "b2", "c1", "c2"}
-    # One pair deleted (orphaned), metadata-only preserved
-    assert count_files("*-info.jsonl") == 3
-    assert count_files(f"*{suffix}") == 3
-    assert all(f.exists() for f in meta_files)
+    assert len(list(tmp_path.glob("*-info.jsonl"))) == 3
+    # Trigger cleanup via keys() - orphaned pair should be deleted
+    assert set(cache.keys()) == {"b1", "c2"}
+    assert len(list(tmp_path.glob("*-info.jsonl"))) == 2
+
+
+@pytest.mark.parametrize(
+    "content,should_delete",
+    [
+        ('metadata={"cache_type":', False),  # writting metadata
+        ('metadata={"cache_type": "MemmapArrayFile"}\n', False),  # metadata only
+        (
+            'metadata={"cache_type": "MemmapArrayFile"}\n{"partial": true',
+            False,
+        ),  # partial line
+        ('metadata={"cache_type": "MemmapArrayFile"}\n     \n', True),  # deleted item
+        (
+            'metadata={"cache_type": "MemmapArrayFile"}\n     ',
+            True,
+        ),  # deleted item (no trailing newline)
+        (
+            'metadata={"cache_type": "MemmapArrayFile"}\n     \n{"#key": "blu"}',
+            False,
+        ),  # remaning data
+    ],
+)
+def test_orphaned_cleanup_edge_cases(
+    tmp_path: Path, content: str, should_delete: bool
+) -> None:
+    """Test edge cases for orphaned file cleanup."""
+    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
+        folder=tmp_path, keep_in_ram=False, cache_type="MemmapArrayFile"
+    )
+    # Create test file pair
+    jsonl = tmp_path / "test-writer-info.jsonl"
+    data_file = tmp_path / "test-writer.data"
+    jsonl.write_text(content)
+    data_file.write_bytes(b"")
+    # Write and delete an item to trigger reader initialization for our test file
+    with cache.writer() as w:
+        w["x"] = np.array([1])
+    del cache["x"]
+    # Trigger cleanup
+    _ = list(cache.keys())
+    # Check result
+    if should_delete:
+        assert not jsonl.exists(), f"jsonl should be deleted for: {content!r}"
+        assert not data_file.exists(), f"data file should be deleted for: {content!r}"
+    else:
+        assert jsonl.exists(), f"jsonl should NOT be deleted for: {content!r}"
+        assert data_file.exists(), f"data file should NOT be deleted for: {content!r}"
