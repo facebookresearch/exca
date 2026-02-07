@@ -108,6 +108,7 @@ class Step(exca.helpers.DiscriminatedModel):
     infra: backends.Backend | None = None
     _previous: tp.Union["Step", None] = None
 
+    @classmethod
     def _exclude_from_cls_uid(cls) -> list[str]:
         return ["infra"]
 
