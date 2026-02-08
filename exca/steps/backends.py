@@ -314,6 +314,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def job(self) -> submitit.Job[tp.Any] | None:
         """Get submitit job for this step, or None."""
         if self.paths.job_pkl.exists():
+            self._check_configs(write=False)
             with self.paths.job_pkl.open("rb") as f:
                 return pickle.load(f)  # type: ignore
         return None
