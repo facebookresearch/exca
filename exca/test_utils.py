@@ -543,7 +543,7 @@ def test_check_configs(tmp_path: Path) -> None:
     # Creates config files
     dump.check_and_write(tmp_path)
     assert (tmp_path / "uid.yaml").exists()
-    assert "x: 5" in (tmp_path / "uid.yaml").read_text()
+    assert "x: 5" in (tmp_path / "uid.yaml").read_text("utf8")
 
     # Detects inconsistent uid.yaml (error includes model info)
     (tmp_path / "uid.yaml").write_text("x: 999\n")
@@ -553,12 +553,12 @@ def test_check_configs(tmp_path: Path) -> None:
     # Handles corrupted files (deletes and recreates)
     (tmp_path / "uid.yaml").write_text("invalid: yaml: {{")
     dump.check_and_write(tmp_path)
-    assert "x: 5" in (tmp_path / "uid.yaml").read_text()
+    assert "x: 5" in (tmp_path / "uid.yaml").read_text("utf8")
 
     # Works with list of models (writes as list, not wrapped)
     models = [A(x=1), A(x=2)]
     folder2 = tmp_path / "list_test"
     folder2.mkdir()
     utils.ConfigDump(model=models).check_and_write(folder2)
-    content = (folder2 / "uid.yaml").read_text()
+    content = (folder2 / "uid.yaml").read_text("utf8")
     assert content == "- x: 1\n- x: 2\n"

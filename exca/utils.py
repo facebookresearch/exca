@@ -648,7 +648,9 @@ class ConfigDump:
                 return None
             try:
                 content = fp.read_text("utf8")
-                _yaml.safe_load(content)  # validate yaml
+                data = _yaml.safe_load(content)
+                if not isinstance(data, (dict, list)):
+                    raise TypeError(f"Expected dict or list, got {type(data).__name__}")
                 return content
             except Exception as e:
                 logger.warning("Deleting corrupted config '%s': %s", fp, e)
