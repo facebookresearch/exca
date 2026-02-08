@@ -7,6 +7,7 @@
 import collections
 import contextlib
 import copy
+import difflib
 import hashlib
 import logging
 import os
@@ -19,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pydantic
+import yaml as _yaml
 
 from . import helpers
 
@@ -194,6 +196,16 @@ class ConfigExporter(pydantic.BaseModel):
             return {x: self._dump(y) for x, y in obj.items()}
         if isinstance(obj, list):
             return [self._dump(y) for y in obj]
+        return obj
+
+    def recursive_apply(self, obj: tp.Any) -> tp.Any:
+        """Recursively export pydantic models in any structure (list, dict, etc.)."""
+        if isinstance(obj, pydantic.BaseModel):
+            return self.apply(obj)
+        if isinstance(obj, dict):
+            return {k: self.recursive_apply(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self.recursive_apply(item) for item in obj]
         return obj
 
 
@@ -575,3 +587,109 @@ def environment_variables(**kwargs: tp.Any) -> tp.Iterator[None]:
         for x in kwargs:
             del os.environ[x]
         os.environ.update(backup)
+
+
+# =============================================================================
+# Config consistency checking (shared between TaskInfra/MapInfra and steps)
+# =============================================================================
+
+# Functions returning True to ignore default mismatches in check_configs()
+DEFAULT_CHECK_SKIPS: tp.List[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
+
+
+class ConfigDump:
+    """Config dump for cache consistency checks."""
+
+    def __init__(
+        self,
+        model: tp.Any,
+        *,
+        uid: tp.Any = None,
+        full_uid: tp.Any = None,
+        config: tp.Any = None,
+    ) -> None:
+        self.model = model
+
+        def export(provided: tp.Any, uid_flag: bool, exclude_defaults: bool) -> tp.Any:
+            if provided is not None:
+                return provided
+            return ConfigExporter(
+                uid=uid_flag, exclude_defaults=exclude_defaults
+            ).recursive_apply(model)
+
+        self.uid = export(uid, uid_flag=True, exclude_defaults=True)
+        self.full_uid = export(full_uid, uid_flag=True, exclude_defaults=False)
+        self.config = export(config, uid_flag=False, exclude_defaults=False)
+
+    def _to_yaml(self, name: str) -> str:
+        """Convert a config to yaml string."""
+        data = getattr(self, name.replace("-", "_"))
+        if hasattr(data, "to_yaml"):
+            return data.to_yaml()  # ConfDict with OrderedDict support
+        return _yaml.safe_dump(data, sort_keys=True)
+
+    def _error(self, msg: str) -> RuntimeError:
+        return RuntimeError(f"{msg}\n\n(this is for object: {self.model!r})")
+
+    def check_and_write(self, folder: Path, *, write: bool = True) -> None:
+        """Check config consistency and optionally write files.
+
+        Raises RuntimeError if uid.yaml doesn't match (cache collision)
+        or defaults changed incompatibly.
+        """
+        from .confdict import ConfDict  # avoid circular import
+
+        def as_confdict(data: tp.Any) -> ConfDict:
+            return ConfDict(data if isinstance(data, dict) else {"_": data})
+
+        def read_file(name: str) -> str | None:
+            fp = folder / f"{name}.yaml"
+            if not fp.exists():
+                return None
+            try:
+                content = fp.read_text("utf8")
+                data = _yaml.safe_load(content)
+                if not isinstance(data, (dict, list)):
+                    raise TypeError(f"Expected dict or list, got {type(data).__name__}")
+                return content
+            except Exception as e:
+                logger.warning("Deleting corrupted config '%s': %s", fp, e)
+                fp.unlink()
+                return None
+
+        # uid.yaml must match exactly (cache collision detection)
+        prev_uid = read_file("uid")
+        curr_uid = self._to_yaml("uid")
+        if prev_uid is not None and curr_uid != prev_uid:
+            diff = "\n".join(difflib.ndiff(curr_uid.splitlines(), prev_uid.splitlines()))
+            uid_str = as_confdict(self.uid).to_uid()
+            raise self._error(
+                f"Inconsistent uid config for {uid_str} in '{folder / 'uid.yaml'}':\n"
+                f"* got:\n{curr_uid!r}\n\n* but uid file contains:\n{prev_uid!r}\n\n(diff:\n{diff})"
+            )
+
+        # Check full-uid for incompatible default changes
+        prev_full = read_file("full-uid")
+        skip_write = prev_full is not None
+        if prev_full is not None:
+            curr = as_confdict(self.full_uid).flat()
+            prev = as_confdict(_yaml.safe_load(prev_full)).flat()
+            nondefaults = set(as_confdict(self.uid).flat())
+            for key, val in curr.items():
+                if key in nondefaults or key not in prev or val == prev[key]:
+                    continue
+                if any(skip(key, val, prev[key]) for skip in DEFAULT_CHECK_SKIPS):
+                    continue
+                fp = folder / "full-uid.yaml"
+                raise self._error(
+                    f"Default {val!r} for {key} seems incompatible (was {prev[key]!r})\n(to ignore, remove {fp})"
+                )
+
+        # Write configs
+        if write:
+            for name in ("uid", "full-uid", "config"):
+                fp = folder / f"{name}.yaml"
+                if fp.exists() and (name == "uid" or skip_write):
+                    continue
+                with temporary_save_path(fp) as tmp:
+                    Path(tmp).write_text(self._to_yaml(name), encoding="utf8")

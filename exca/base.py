@@ -6,7 +6,6 @@
 
 import collections
 import dataclasses
-import difflib
 import functools
 import inspect
 import logging
@@ -203,76 +202,23 @@ class BaseInfra(pydantic.BaseModel):
         xpfolder = self.uid_folder()
         if xpfolder is None:
             return
-        configs = {
-            "uid": self.config(uid=True, exclude_defaults=True),  # minimal uid config
-            "full-uid": self.config(uid=True, exclude_defaults=False),  # all uid
-            "config": self.config(uid=False, exclude_defaults=False),  # everything
-        }
-        # check for corrupted configs (can happen in case of full storage)
-        for name in configs:
-            fp = xpfolder / f"{name}.yaml"
-            if fp.exists():
-                try:
-                    ConfDict.from_yaml(fp)
-                except Exception as e:
-                    logger.warning("Deleting corrupted config '%s': %s", fp, e)
-                    fp.unlink()
-        # errors happening when multiple processes read/rewrite same file
-        FileErrors = (OSError, FileNotFoundError)
-        # (non-defaults) uid files should match exactly
-        fp = xpfolder / "uid.yaml"
-        if fp.exists():
-            current = configs["uid"].to_yaml()
-            try:
-                expected = fp.read_text("utf8")
-            except FileErrors:
-                expected = current  # bypassing
-            if current != expected:
-                diffs = difflib.ndiff(current.splitlines(), expected.splitlines())
-                diff = "\n".join(diffs)
-                msg = (
-                    f"Inconsistent uid config for {configs['uid'].to_uid()} in '{fp}':\n"
-                )
-                msg += f"* got:\n{current!r}\n\n* but uid file contains:\n{expected!r}\n\n(see diff:\n{diff})"
-                msg += f"\n\n(this is for object: {self._obj!r})"
-                raise RuntimeError(msg)
-        fp = xpfolder / "full-uid.yaml"
-        skip_exist = False
-        if fp.exists():
-            # dump to yaml and reload to account for type transformations:
-            curr = ConfDict.from_yaml(configs["full-uid"].to_yaml()).flat()
-            try:
-                prev = ConfDict.from_yaml(fp).flat()
-                skip_exist = True  # supposedly nothing to write
-            except FileErrors:
-                prev = curr
-            if prev != curr:
-                nondefaults = set(configs["uid"].flat())
-                for key, val in curr.items():
-                    if key in nondefaults:
-                        continue
-                    if key not in prev:
-                        continue  # new field, nevermind
-                    if val != prev[key]:
-                        if any(skip(key, val, prev[key]) for skip in DEFAULT_CHECK_SKIPS):
-                            continue
-                        msg = f"Default {val!r} for {key} of {self._factory()} "
-                        msg += f"seems incompatible (used to be {prev[key]!r})"
-                        msg += f"\n(to ignore, remove {fp})"
-                        raise RuntimeError(msg)
+        # Create ConfigDump using self.config() which handles exclude_from_cache_uid
+        dump = utils.ConfigDump(
+            model=self._obj,
+            uid=self.config(uid=True, exclude_defaults=True),
+            full_uid=self.config(uid=True, exclude_defaults=False),
+        )
+        dump.check_and_write(xpfolder, write=write)
         self._checked_configs = True
-        # dump configs
+        # Set permissions on written files
         if write:
-            for name, cfg in configs.items():
+            for name in ("uid", "full-uid", "config"):
                 fp = xpfolder / f"{name}.yaml"
-                if fp.exists() and (name == "uid" or skip_exist):
-                    continue  # can never be changed
-                with utils.temporary_save_path(fp) as tmp:
-                    cfg.to_yaml(tmp)
-                try:
-                    self._set_permissions(fp)
-                except FileErrors:
-                    pass
+                if fp.exists():
+                    try:
+                        self._set_permissions(fp)
+                    except (OSError, FileNotFoundError):
+                        pass
 
     def _factory(self) -> str:
         cls = self._obj.__class__

@@ -24,7 +24,6 @@ Test consolidation:
 """
 
 import random
-import typing as tp
 from pathlib import Path
 
 from .base import Step
@@ -71,7 +70,10 @@ class Add(Step):
     value: float = 2.0
     randomize: bool = False
     error: bool = False
-    _exclude_from_cls_uid: tp.ClassVar[tuple[str, ...]] = ("infra", "error")
+
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return super()._exclude_from_cls_uid() + ["error"]
 
     def _forward(self, value: float = 0) -> float:
         if self.error:

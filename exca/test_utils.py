@@ -533,3 +533,32 @@ def test_uid_dict_override(
         assert "override" in out
     else:
         assert "override" not in out
+
+
+def test_check_configs(tmp_path: Path) -> None:
+    """Test ConfigDump: creates files, detects inconsistencies, handles corruption."""
+    model = A(x=5, y="test")
+    dump = utils.ConfigDump(model=model)
+
+    # Creates config files
+    dump.check_and_write(tmp_path)
+    assert (tmp_path / "uid.yaml").exists()
+    assert "x: 5" in (tmp_path / "uid.yaml").read_text("utf8")
+
+    # Detects inconsistent uid.yaml (error includes model info)
+    (tmp_path / "uid.yaml").write_text("x: 999\n")
+    with pytest.raises(RuntimeError, match="(?s)Inconsistent.*this is for object"):
+        dump.check_and_write(tmp_path)
+
+    # Handles corrupted files (deletes and recreates)
+    (tmp_path / "uid.yaml").write_text("invalid: yaml: {{")
+    dump.check_and_write(tmp_path)
+    assert "x: 5" in (tmp_path / "uid.yaml").read_text("utf8")
+
+    # Works with list of models (writes as list, not wrapped)
+    models = [A(x=1), A(x=2)]
+    folder2 = tmp_path / "list_test"
+    folder2.mkdir()
+    utils.ConfigDump(model=models).check_and_write(folder2)
+    content = (folder2 / "uid.yaml").read_text("utf8")
+    assert content == "- x: 1\n- x: 2\n"
