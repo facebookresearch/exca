@@ -104,7 +104,7 @@ class BaseInfra(pydantic.BaseModel):
     # general permission for folders and files
     # use os.chmod / path.chmod compatible numbers, or None to deactivate
     # eg: 0o777 for all rights to all users
-    permissions: int | str | None = 0o777
+    permissions: int | None = 0o777
     # {folder} will be replaced by the class folder
     # {user} by user id and %j by job id
     logs: Path | str = "{folder}/logs/{user}/%j"
@@ -162,7 +162,7 @@ class BaseInfra(pydantic.BaseModel):
 
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
-        self._set_permissions(None)  # set compatibility for permissions as string
+        self._permission_setter = utils.PermissionSetter(self.permissions)
 
     def config(self, uid: bool = True, exclude_defaults: bool = False) -> ConfDict:
         """Exports the task configuration as a ConfigDict
@@ -215,10 +215,7 @@ class BaseInfra(pydantic.BaseModel):
             for name in ("uid", "full-uid", "config"):
                 fp = xpfolder / f"{name}.yaml"
                 if fp.exists():
-                    try:
-                        self._set_permissions(fp)
-                    except (OSError, FileNotFoundError):
-                        pass
+                    self._permission_setter.set(fp)
 
     def _factory(self) -> str:
         cls = self._obj.__class__
@@ -295,8 +292,8 @@ class BaseInfra(pydantic.BaseModel):
         if not create:
             return folder
         folder.mkdir(exist_ok=True, parents=True)
-        self._set_permissions(self.folder)
-        self._set_permissions(folder)
+        self._permission_setter.set(self.folder)
+        self._permission_setter.set(folder)
         return folder
 
     def iter_cached(self) -> tp.Iterable[pydantic.BaseModel]:
@@ -311,23 +308,6 @@ class BaseInfra(pydantic.BaseModel):
                 continue  # not a task config file
             cfg = ConfDict.from_yaml(fp)
             yield cls(**cfg)
-
-    def _set_permissions(self, path: str | Path | None) -> None:
-        if isinstance(self.permissions, str):
-            if not self.permissions:
-                self.permissions = None
-            elif self.permissions == "a+rwx":
-                self.permissions = 0o777
-            else:
-                raise ValueError(f"No compatibility for permissions {self.permissions}")
-            msg = "infra.permissions set to %s by compatibility mode"
-            logger.warning(msg, self.permissions)
-        if path is not None and self.permissions is not None:
-            try:
-                Path(path).chmod(self.permissions)
-            except Exception as e:
-                msg = f"Failed to set permission to {self.permissions} on '{path}'\n({e})"
-                logger.warning(msg)
 
     def clone_obj(self, *args: tp.Dict[str, tp.Any], **kwargs: tp.Any) -> tp.Any:
         """Create a new decorated object by applying a diff config to the underlying object"""

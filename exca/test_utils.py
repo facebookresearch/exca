@@ -562,3 +562,43 @@ def test_check_configs(tmp_path: Path) -> None:
     utils.ConfigDump(model=models).check_and_write(folder2)
     content = (folder2 / "uid.yaml").read_text("utf8")
     assert content == "- x: 1\n- x: 2\n"
+
+
+def test_permission_setter(tmp_path: Path) -> None:
+    # Test with permissions enabled
+    ps = utils.PermissionSetter(0o777)
+    folder = tmp_path / "test_folder"
+    folder.mkdir()
+    ps.set(folder)
+    assert oct(folder.stat().st_mode)[-3:] == "777"
+
+    # Test with file
+    fp = folder / "test.txt"
+    fp.write_text("hello")
+    ps.set(fp)
+    assert oct(fp.stat().st_mode)[-3:] == "777"
+
+    # Test with permissions disabled (None)
+    ps_none = utils.PermissionSetter(None)
+    folder2 = tmp_path / "test_folder2"
+    folder2.mkdir()
+    before_mode = folder2.stat().st_mode
+    ps_none.set(folder2)  # should do nothing
+    assert folder2.stat().st_mode == before_mode
+
+
+def test_permission_setter_recursive(tmp_path: Path) -> None:
+    ps = utils.PermissionSetter(0o777)
+
+    # Create nested structure
+    root = tmp_path / "root"
+    sub = root / "sub"
+    sub.mkdir(parents=True)
+    fp = sub / "file.txt"
+    fp.write_text("content")
+
+    # Set permissions recursively
+    ps.set(root, recursive=True)
+    assert oct(root.stat().st_mode)[-3:] == "777"
+    assert oct(sub.stat().st_mode)[-3:] == "777"
+    assert oct(fp.stat().st_mode)[-3:] == "777"
