@@ -301,9 +301,8 @@ def test_orphaned_cleanup_edge_cases(
     # Trigger cleanup
     _ = list(cache.keys())
     # Check result
-    if should_delete:
-        assert not jsonl.exists(), f"jsonl should be deleted for: {content!r}"
-        assert not data_file.exists(), f"data file should be deleted for: {content!r}"
-    else:
-        assert jsonl.exists(), f"jsonl should NOT be deleted for: {content!r}"
-        assert data_file.exists(), f"data file should NOT be deleted for: {content!r}"
+    for fp in [jsonl, data_file]:
+        if should_delete:
+            assert not fp.exists(), f"{fp.name} should be deleted for: {content!r}"
+        else:
+            assert fp.exists(), f"{fp.name} should NOT be deleted for: {content!r}"
