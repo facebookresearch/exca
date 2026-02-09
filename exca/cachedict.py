@@ -204,7 +204,7 @@ class CacheDict(tp.Generic[X]):
                 f.readline()  # skip metadata
                 if not f.readline().startswith(b" "):
                     continue
-            logger.debug("Cleaning up orphaned files for %s", name)
+            logger.warning("Cleaning up orphaned files for %s", name)
             prefix = name.removesuffix("-info.jsonl")
             for path in [*folder.glob(f"{prefix}.*"), reader._fp]:
                 with utils.fast_unlink(path, missing_ok=True):
