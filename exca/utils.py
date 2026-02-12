@@ -460,6 +460,29 @@ def find_models(
     return out
 
 
+_CHECKED: list[tp.Type[pydantic.BaseModel]] = []
+
+
+def check_extra_forbid(cls: tp.Type[pydantic.BaseModel]) -> None:
+    if cls in _CHECKED:
+        return
+    _CHECKED.append(cls)
+    cfg = cls.model_config
+    if "extra" not in cfg:
+        msg = f"Automatically setting extra='forbid' for {cls.__name__} "
+        msg += "(bypass by explicitely setting: model_config = pydantic.ConfigDict(extra='forbid'))"
+        logging.debug(msg)
+        cfg["extra"] = "forbid"
+    for val in cls.model_fields.values():
+        for annot in _pydantic_hints(val.annotation):
+            try:
+                check_extra_forbid(annot)
+            except Exception as e:
+                raise ValueError(f"Failing for {val.annotation} ({annot=})") from e
+    # rebuilding only after subclasses were rebuilt
+    cls.model_rebuild(force=True)
+
+
 def _pydantic_hints(hint: tp.Any) -> tp.List[tp.Type[pydantic.BaseModel]]:
     """Checks if a type hint contains pydantic models"""
     try:
