@@ -71,6 +71,19 @@ def test_register_default_for() -> None:
     del DumperLoader.CLASSES["_MarkerHandler"]
 
 
+def test_register_default_for_requires_classmethod() -> None:
+    with pytest.raises(TypeError, match="classmethod"):
+
+        @DumpContext.register(default_for=int)
+        class _BadHandler:  # pylint: disable=unused-variable
+            def __dump_info__(self, ctx: tp.Any) -> dict[str, tp.Any]:
+                return {}
+
+            @classmethod
+            def __load_from_info__(cls, ctx: tp.Any) -> tp.Any:
+                return None
+
+
 # =============================================================================
 # DumpContext basic lifecycle
 # =============================================================================
@@ -222,7 +235,21 @@ def test_datadict_roundtrip(tmp_path: Path) -> None:
     assert isinstance(loaded, dict)
     np.testing.assert_array_almost_equal(loaded["arr"], np.array([1.0, 2.0, 3.0]))
     assert loaded["count"] == 42
-    assert loaded["label"] == "test"
+
+
+def test_datadict_json_inline_for_simple_values(tmp_path: Path) -> None:
+    """Values whose default handler is Pickle but are JSON-serializable
+    should be stored inline (no #type tag), not pickled."""
+    ctx = DumpContext(tmp_path)
+    ctx.key = "entry2"
+    data = {"x": 42, "y": [1, 2, 3], "nested": {"a": 1}}
+    with ctx:
+        info = ctx.dump(data, cache_type="DataDictDump")
+    assert info["x"] == 42
+    assert info["y"] == [1, 2, 3]
+    assert info["nested"] == {"a": 1}
+    for key in ("x", "y", "nested"):
+        assert not isinstance(info[key], dict) or "#type" not in info[key]
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:

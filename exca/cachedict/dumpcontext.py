@@ -35,7 +35,9 @@ import orjson
 
 from exca import utils
 
-from .dumperloader import DumperLoader, _string_uid
+from .dumperloader import DumperLoader
+from .dumperloader import Pickle as _LegacyPickle
+from .dumperloader import _string_uid
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +103,14 @@ class DumpContext:
                     raise TypeError(
                         f"@DumpContext.register requires {method} on {klass.__name__}"
                     )
+            if default_for is not None:
+                for method in ("__dump_info__", "__load_from_info__"):
+                    raw = klass.__dict__.get(method)
+                    if not isinstance(raw, classmethod):
+                        raise TypeError(
+                            f"@DumpContext.register(default_for=...) requires "
+                            f"{method} to be a classmethod on {klass.__name__}"
+                        )
             name = getattr(klass, "dump_name", klass.__name__)
             if name in DumperLoader.CLASSES:
                 raise ValueError(
@@ -419,9 +429,10 @@ class DataDictDump:
         output: dict[str, tp.Any] = {}
         for skey, val in value.items():
             ctx.key = skey
-            if (
-                hasattr(val, "__dump_info__")
-                or DumperLoader.default_class(type(val)) is not PickleDump
+            default_cls = DumperLoader.default_class(type(val))
+            if hasattr(val, "__dump_info__") or default_cls not in (
+                PickleDump,
+                _LegacyPickle,
             ):
                 output[skey] = ctx.dump(val)
             else:
