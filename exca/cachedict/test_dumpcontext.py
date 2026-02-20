@@ -228,7 +228,7 @@ def test_datadict_roundtrip(tmp_path: Path) -> None:
         assert not isinstance(info[key], dict) or "#type" not in info[key]
     loaded = ctx.load(info)
     assert isinstance(loaded, dict)
-    np.testing.assert_array_almost_equal(loaded["arr"], data["arr"])
+    np.testing.assert_array_almost_equal(loaded["arr"], data["arr"])  # type: ignore[arg-type]
     assert loaded["count"] == 42
     assert loaded["nested"] == {"a": 1}
 
