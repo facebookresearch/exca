@@ -22,7 +22,6 @@ DumpContext also handles transparently.
 
 import contextlib
 import copy
-import logging
 import os
 import pickle
 import socket
@@ -38,8 +37,6 @@ from exca import utils
 from .dumperloader import DumperLoader
 from .dumperloader import Pickle as _LegacyPickle
 from .dumperloader import _string_uid
-
-logger = logging.getLogger(__name__)
 
 # TODO: consider supporting default_for=(type1, type2) for multiple types
 
@@ -103,10 +100,8 @@ class DumpContext:
                     raise TypeError(
                         f"@DumpContext.register requires {method} on {klass.__name__}"
                     )
-            if default_for is not None:
-                for method in ("__dump_info__", "__load_from_info__"):
-                    raw = klass.__dict__.get(method)
-                    if not isinstance(raw, classmethod):
+                if default_for is not None:
+                    if not isinstance(klass.__dict__.get(method), classmethod):
                         raise TypeError(
                             f"@DumpContext.register(default_for=...) requires "
                             f"{method} to be a classmethod on {klass.__name__}"
@@ -212,24 +207,23 @@ class DumpContext:
                 self._stack.enter_context(loader.open())
                 self._loaders[cls] = loader
             info = self._loaders[cls].dump(self.key or "", value)
-            self._track_files(info)
-            return info, cls.__name__
-        info = cls.__dump_info__(self, value)
-        self._track_files(info)
-        return info, cls.__name__
-
-    def _track_files(self, info: tp.Any) -> None:
-        """Record files referenced in an info dict for permission setting."""
+        else:
+            info = cls.__dump_info__(self, value)
         if isinstance(info, dict) and "filename" in info:
             self._created_files.append(self.folder / info["filename"])
+        return info, cls.__name__
+
+    def _resolve_type(self, info: dict[str, tp.Any]) -> tuple[tp.Any, dict[str, tp.Any]]:
+        """Extract #type from an info dict, return (cls, remaining_info)."""
+        info = dict(info)
+        type_name = info.pop("#type")
+        return DumperLoader.CLASSES[type_name], info
 
     def load(self, info: tp.Any) -> tp.Any:
         """Deserialize from an info dict. Inline values pass through."""
         if not isinstance(info, dict) or "#type" not in info:
             return info
-        info = dict(info)
-        type_name = info.pop("#type")
-        cls = DumperLoader.CLASSES[type_name]
+        cls, info = self._resolve_type(info)
         if isinstance(cls, type) and issubclass(cls, DumperLoader):
             loader = self._loaders.get(cls) or cls(self.folder)
             return loader.load(**info)
@@ -241,9 +235,7 @@ class DumpContext:
         override __delete_info__ (e.g. StaticWrapper)."""
         if not isinstance(info, dict) or "#type" not in info:
             return
-        info = dict(info)
-        type_name = info.pop("#type")
-        cls = DumperLoader.CLASSES[type_name]
+        cls, info = self._resolve_type(info)
         if hasattr(cls, "__delete_info__"):
             cls.__delete_info__(self, **info)
         else:
@@ -271,10 +263,6 @@ class DumpContext:
 #
 # Handler names avoid collision with existing DumperLoader.CLASSES entries.
 # Phase 2 will add aliases so old #type values resolve to these handlers.
-#
-# All handlers use classmethods:
-#   __dump_info__(cls, ctx, value) -> dict
-#   __load_from_info__(cls, ctx, **info) -> value
 
 
 @DumpContext.register()
@@ -346,10 +334,7 @@ class StringDump:
 
 
 class StaticWrapper:
-    """Base for one-file-per-entry formats (Pickle, NumpyArray, etc.).
-
-    Not registered itself -- subclasses are.
-    """
+    """Base for one-file-per-entry formats. Not registered itself."""
 
     SUFFIX = ""
 
@@ -420,9 +405,7 @@ class NpyArray(StaticWrapper):
 @DumpContext.register()
 class DataDictDump:
     """Delegates dict values to sub-handlers based on type.
-
-    Handles legacy format (optimized/pickled) on load.
-    """
+    Handles legacy format (optimized/pickled) on load."""
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
@@ -453,22 +436,13 @@ class DataDictDump:
     def _load_legacy(cls, ctx: DumpContext, info: dict[str, tp.Any]) -> dict[str, tp.Any]:
         output: dict[str, tp.Any] = {}
         for key, entry in info.get("optimized", {}).items():
-            loader_cls = DumperLoader.CLASSES[entry["cls"]]
-            if isinstance(loader_cls, type) and issubclass(loader_cls, DumperLoader):
-                loader = loader_cls(ctx.folder)
-                output[key] = loader.load(**entry["info"])
-            else:
-                output[key] = loader_cls.__load_from_info__(ctx, **entry["info"])
+            entry_info = dict(entry["info"])
+            entry_info["#type"] = entry["cls"]
+            output[key] = ctx.load(entry_info)
         if info.get("pickled"):
-            pickled = info["pickled"]
-            pickle_cls = DumperLoader.CLASSES.get("Pickle") or DumperLoader.CLASSES.get(
-                "PickleDump"
-            )
-            if isinstance(pickle_cls, type) and issubclass(pickle_cls, DumperLoader):
-                loader = pickle_cls(ctx.folder)
-                output.update(loader.load(**pickled))
-            else:
-                output.update(pickle_cls.__load_from_info__(ctx, **pickled))  # type: ignore
+            pickled = dict(info["pickled"])
+            pickled["#type"] = "Pickle"
+            output.update(ctx.load(pickled))
         return output
 
 
