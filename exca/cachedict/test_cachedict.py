@@ -212,9 +212,9 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     logger.debug("new file")
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert len(cache) == 2  # x and y complete, z truncated (no metadata header)
-    os.utime(tmp_path)
     # now complete
     info_path.write_bytes(b"\n".join(lines))
+    os.utime(tmp_path)  # modifying a file doesn't update folder mtime
     assert len(cache) == 3
 
 

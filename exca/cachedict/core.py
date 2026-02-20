@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import threading
+import time
 import typing as tp
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -267,7 +268,8 @@ class CacheDict(tp.Generic[X]):
         finally:
             self._write_ctx = None
             if self.folder is not None:
-                os.utime(self.folder)
+                t = time.time()  # explicit time for sub-jiffy precision
+                os.utime(self.folder, times=(t, t))
 
     @contextlib.contextmanager
     def writer(self) -> tp.Iterator["CacheDict[X]"]:
