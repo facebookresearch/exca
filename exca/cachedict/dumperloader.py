@@ -99,6 +99,47 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
         return Cls  # type: ignore
 
     @classmethod
+    def dumpable(
+        cls, target: tp.Any = None, *, cache_type: tp.Optional[str] = None
+    ) -> tp.Any:
+        """Decorator to register a class for protocol-based serialization.
+
+        Form 1 -- class implements __dump_info__ / __load_from_info__::
+
+            @DumperLoader.dumpable
+            class MyResult:
+                def __dump_info__(self, ctx): ...
+                @classmethod
+                def __load_from_info__(cls, ctx, **info): ...
+
+        Form 2 -- map a type to an existing wrapper::
+
+            @DumperLoader.dumpable(cache_type="NumpyArray")
+            class MySpecialArray: ...
+        """
+
+        def decorator(klass: type) -> type:
+            if cache_type is not None:
+                cls.DEFAULTS[klass] = cls.CLASSES[cache_type]
+                return klass
+            for method in ("__dump_info__", "__load_from_info__"):
+                if not hasattr(klass, method):
+                    raise TypeError(f"@dumpable requires {method} on {klass.__name__}")
+            name = getattr(klass, "dump_name", klass.__name__)
+            if name in cls.CLASSES:
+                raise ValueError(
+                    f"Name collision: {name!r} is already registered "
+                    f"in DumperLoader.CLASSES"
+                )
+            cls.CLASSES[name] = klass
+            cls.DEFAULTS[klass] = klass
+            return klass
+
+        if target is not None:
+            return decorator(target)
+        return decorator
+
+    @classmethod
     def check_valid_cache_type(cls, cache_type: str) -> None:
         if cache_type not in DumperLoader.CLASSES:
             avail = list(DumperLoader.CLASSES)
