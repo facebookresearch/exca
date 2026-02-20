@@ -179,6 +179,7 @@ class DumpContext:
         line = orjson.dumps(info)
         offset = f.tell()
         f.write(line + b"\n")
+        f.flush()
         return {
             "jsonl": name,
             "byte_range": (offset, offset + len(line) + 1),

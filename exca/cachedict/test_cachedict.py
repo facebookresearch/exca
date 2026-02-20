@@ -117,15 +117,7 @@ def test_specialized_dump(
         cache["x"] = data
     with utils.environment_variables(**{MEMMAP_ARRAY_FILE_MAX_CACHE: memmap_cache_size}):
         assert isinstance(cache["x"], type(data))
-    del cache
-    gc.collect()
-    # check permissions
-    octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
-    assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
-    for fp in tmp_path.iterdir():
-        octal_permissions = oct(fp.stat().st_mode)[-3:]
-        assert octal_permissions == "777", f"Wrong permissions for {fp}"
-    # check file remaining open
+    # check memmaps while cache is alive
     keeps_memmap = cache_type == "MemmapArrayFile" and (
         memmap_cache_size or keep_in_ram
     )  # keeps internal cache
@@ -135,8 +127,17 @@ def test_specialized_dump(
     files = proc.open_files()
     if keeps_memmap:
         assert files, "Some memmaps should stay open"
-    else:
-        assert not files, "No file should remain open"
+    del cache
+    gc.collect()
+    # check permissions
+    octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
+    assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
+    for fp in tmp_path.iterdir():
+        octal_permissions = oct(fp.stat().st_mode)[-3:]
+        assert octal_permissions == "777", f"Wrong permissions for {fp}"
+    # after del, all files should be closed
+    files = proc.open_files()
+    assert not files, "No file should remain open after del cache"
 
 
 def _write_items(cache: cd.CacheDict[tp.Any], keys: list[str], data: tp.Any) -> None:
