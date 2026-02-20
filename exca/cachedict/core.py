@@ -124,7 +124,7 @@ class CacheDict(tp.Generic[X]):
         self._folder_modified = -1.0
         self._jsonl_readers: dict[str, JsonlReader] = {}
         self._jsonl_reading_allowance = float("inf")
-        # Handles load() and delete() dispatch to registered handlers
+        # DumpContext for this folder (load/delete; writes use per-thread _write_ctx)
         self._dumper: DumpContext | None = None
         if self.folder is not None:
             self._dumper = DumpContext(self.folder, permissions=self.permissions)
@@ -388,10 +388,9 @@ class JsonlReader:
                         return out  # metadata line being written, retry later
                     last = len(first)
                 else:
-                    # New format: no metadata header, each line self-describing
-                    self._meta = {"_new_format": True}
+                    # New format: no metadata header, rewind to parse first line as data
+                    self._meta = {"_new_format": True}  # truthy sentinel
                     f.seek(0)
-                    last = 0
             if self._last > last:
                 msg = "Forwarding to byte %s in info file %s"
                 logger.debug(msg, self._last, self._fp.name)
