@@ -78,7 +78,8 @@ class CacheDict(tp.Generic[X]):
 
         mydict = CacheDict(folder, keep_in_ram=True)
         mydict.keys()  # empty if folder was empty
-        mydict["whatever"] = np.array([0, 1])
+        with mydict.write():
+            mydict["whatever"] = np.array([0, 1])
         # stored in both memory cache, and disk :)
         mydict2 = CacheDict(folder, keep_in_ram=True)
         # since mydict and mydict2 share the same folder, the
@@ -111,7 +112,7 @@ class CacheDict(tp.Generic[X]):
             self.folder.mkdir(exist_ok=True)
             if self.permissions is not None:
                 try:
-                    Path(self.folder).chmod(self.permissions)
+                    self.folder.chmod(self.permissions)
                 except Exception as e:
                     msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
                     logger.warning(msg)
@@ -167,8 +168,7 @@ class CacheDict(tp.Generic[X]):
         if self._jsonl_reading_allowance <= readings:
             # bypass reloading info files
             return
-        folder = Path(self.folder)
-        modified = folder.lstat().st_mtime
+        modified = self.folder.lstat().st_mtime
         nothing_new = self._folder_modified == modified
         self._folder_modified = modified
         if nothing_new:
@@ -180,7 +180,7 @@ class CacheDict(tp.Generic[X]):
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # parallel read: submit jobs as we discover files
             futures = []
-            for fp in folder.iterdir():
+            for fp in self.folder.iterdir():
                 if not fp.name.endswith("-info.jsonl"):
                     continue
                 reader = self._jsonl_readers.setdefault(fp.name, JsonlReader(fp))
@@ -193,7 +193,6 @@ class CacheDict(tp.Generic[X]):
         """Remove jsonl files and their associated data files when they have no valid items."""
         if self.folder is None:
             return
-        folder = Path(self.folder)
         referenced = {info.jsonl.name for info in self._key_info.values()}
         for name, reader in list(self._jsonl_readers.items()):
             if name in referenced or not reader._meta:
@@ -209,7 +208,7 @@ class CacheDict(tp.Generic[X]):
                     continue
             logger.warning("Cleaning up orphaned files for %s", name)
             prefix = name.removesuffix("-info.jsonl")
-            for path in [*folder.glob(f"{prefix}.*"), reader._fp]:
+            for path in [*self.folder.glob(f"{prefix}.*"), reader._fp]:
                 with utils.fast_unlink(path, missing_ok=True):
                     pass
             del self._jsonl_readers[name]
@@ -252,28 +251,23 @@ class CacheDict(tp.Generic[X]):
     def _write_ctx(self, value: DumpContext | None) -> None:
         self._local.write_ctx = value
 
-    def __enter__(self) -> "CacheDict[X]":
+    @contextlib.contextmanager
+    def write(self) -> tp.Iterator["CacheDict[X]"]:
+        """Context manager for writing items to the cache."""
         if self._write_ctx is not None:
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
             self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
-            self._write_ctx.__enter__()
-        return self
-
-    def __exit__(self, *exc: tp.Any) -> None:
         try:
             if self._write_ctx is not None:
-                self._write_ctx.__exit__(*exc)
+                with self._write_ctx:
+                    yield self
+            else:
+                yield self
         finally:
             self._write_ctx = None
             if self.folder is not None:
                 os.utime(self.folder)
-
-    @contextlib.contextmanager
-    def write(self) -> tp.Iterator["CacheDict[X]"]:
-        """Context manager for writing items to the cache."""
-        with self:
-            yield self
 
     @contextlib.contextmanager
     def writer(self) -> tp.Iterator["CacheDict[X]"]:
@@ -283,7 +277,7 @@ class CacheDict(tp.Generic[X]):
             DeprecationWarning,
             stacklevel=2,
         )
-        with self:
+        with self.write():
             yield self
 
     def __setitem__(self, key: str, value: X) -> None:
@@ -306,7 +300,7 @@ class CacheDict(tp.Generic[X]):
             content = result["content"]
             content.pop("#key", None)
             cache_type = content.pop("#type", self.cache_type or "Pickle")
-            jsonl_path = Path(self.folder) / result["jsonl"]
+            jsonl_path = self.folder / result["jsonl"]
             dinfo = DumpInfo(
                 cache_type=cache_type,
                 jsonl=jsonl_path,
