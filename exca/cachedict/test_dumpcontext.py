@@ -71,6 +71,40 @@ def test_register_default_for() -> None:
     del DumperLoader.CLASSES["_MarkerHandler"]
 
 
+def test_user_defined_class_roundtrip(tmp_path: Path) -> None:
+    """A user class registered via @DumpContext.register with instance
+    __dump_info__ should roundtrip through dump/load."""
+
+    @DumpContext.register
+    class Result:
+        def __init__(self, score: float, data: np.ndarray) -> None:
+            self.score = score
+            self.data = data
+
+        def __dump_info__(self, ctx: DumpContext) -> dict[str, tp.Any]:
+            return {
+                "score": self.score,
+                "data": ctx.dump(self.data, cache_type="MemmapArray"),
+            }
+
+        @classmethod
+        def __load_from_info__(
+            cls, ctx: DumpContext, score: float, data: tp.Any
+        ) -> "Result":
+            return cls(score=score, data=ctx.load(data))
+
+    ctx = DumpContext(tmp_path)
+    obj = Result(score=0.95, data=np.array([1.0, 2.0, 3.0]))
+    with ctx:
+        info = ctx.dump(obj)
+    assert info["#type"] == "Result"
+    loaded = ctx.load(info)
+    assert isinstance(loaded, Result)
+    assert loaded.score == 0.95
+    np.testing.assert_array_almost_equal(loaded.data, obj.data)
+    del DumperLoader.CLASSES["Result"]
+
+
 def test_register_default_for_requires_classmethod() -> None:
     with pytest.raises(TypeError, match="classmethod"):
 

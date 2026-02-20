@@ -77,6 +77,7 @@ class DumpContext:
 
             from exca.cachedict import DumpContext
 
+            # Register a handler as the default for a type:
             @DumpContext.register(default_for=np.ndarray)
             class MemmapArray:
                 @classmethod
@@ -84,9 +85,7 @@ class DumpContext:
                 @classmethod
                 def __load_from_info__(cls, ctx, **info): ...
 
-        User classes that ARE the serialized value use an instance
-        method for dump and are detected automatically::
-
+            # Register by name only (no default type):
             @DumpContext.register
             class ExperimentResult:
                 def __dump_info__(self, ctx): ...
@@ -269,7 +268,7 @@ class DumpContext:
 # Phase 2 will add aliases so old #type values resolve to these handlers.
 
 
-@DumpContext.register()
+@DumpContext.register
 class MemmapArray:
     """Appends numpy arrays to a shared binary file, loads via memmap."""
 
@@ -312,7 +311,7 @@ class MemmapArray:
         return data.view(dtype=dtype).reshape(shape)
 
 
-@DumpContext.register()
+@DumpContext.register
 class StringDump:
     """Appends strings to a shared text file, loads by offset."""
 
@@ -378,7 +377,7 @@ class StaticWrapper:
         raise NotImplementedError
 
 
-@DumpContext.register()
+@DumpContext.register
 class PickleDump(StaticWrapper):
     SUFFIX = ".pkl"
 
@@ -394,7 +393,7 @@ class PickleDump(StaticWrapper):
             return pickle.load(f)
 
 
-@DumpContext.register()
+@DumpContext.register
 class NpyArray(StaticWrapper):
     SUFFIX = ".npy"
 
@@ -410,7 +409,7 @@ class NpyArray(StaticWrapper):
         return np.load(filepath)  # type: ignore
 
 
-@DumpContext.register()
+@DumpContext.register
 class DataDictDump:
     """Delegates dict values to sub-handlers based on type.
     Handles legacy format (optimized/pickled) on load."""
@@ -454,7 +453,7 @@ class DataDictDump:
         return output
 
 
-@DumpContext.register()
+@DumpContext.register
 class Json:
     """Inline JSON storage -- small values stay in the JSONL line."""
 
