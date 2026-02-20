@@ -9,7 +9,6 @@ Disk, RAM caches
 """
 import contextlib
 import dataclasses
-import io
 import logging
 import os
 import shutil
@@ -21,12 +20,11 @@ from pathlib import Path
 import orjson
 
 from exca import utils
-from exca.confdict import ConfDict
 
-from .dumperloader import DumperLoader, StaticDumperLoader, host_pid
+from .dumpcontext import DumpContext
+from .dumperloader import DumperLoader
 
 X = tp.TypeVar("X")
-Y = tp.TypeVar("Y")
 
 logger = logging.getLogger(__name__)
 METADATA_TAG = "metadata="
@@ -123,9 +121,12 @@ class CacheDict(tp.Generic[X]):
         self._folder_modified = -1.0
         self._jsonl_readers: dict[str, JsonlReader] = {}
         self._jsonl_reading_allowance = float("inf")
-        # keep loaders live for optimized loading
-        # (instances are reinstantiated for dumping though,  to make sure they are unique)
-        self._loaders: dict[str, DumperLoader] = {}
+        # DumpContext for read-side dispatch (load / delete)
+        self._ctx: DumpContext | None = (
+            DumpContext(self.folder, permissions=self.permissions)
+            if self.folder is not None
+            else None
+        )
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -200,9 +201,10 @@ class CacheDict(tp.Generic[X]):
             if not reader._fp.exists():
                 del self._jsonl_readers[name]
                 continue
-            # Only delete if file has deleted items (lines starting with space)
+            # Only clean up if first line is blanked (by __delitem__),
+            # confirming deleted items; valid/partial first lines may
+            # indicate a concurrent write, so leave those alone.
             with reader._fp.open("rb") as f:
-                f.readline()  # skip metadata
                 if not f.readline().startswith(b" "):
                     continue
             logger.warning("Cleaning up orphaned files for %s", name)
@@ -228,16 +230,14 @@ class CacheDict(tp.Generic[X]):
             if key in self._ram_data or self.folder is None:
                 return self._ram_data[key]
         # necessarily in file cache folder from now on
-        if self.folder is None:
+        if self._ctx is None:
             raise RuntimeError("This should not happen")
         if key not in self._key_info:
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
-        if dinfo.cache_type not in self._loaders:  # keep loaders in store
-            Cls = DumperLoader.CLASSES[dinfo.cache_type]
-            self._loaders[dinfo.cache_type] = Cls(self.folder)
-        loader = self._loaders[dinfo.cache_type]
-        loaded = loader.load(**dinfo.content)
+        content = dict(dinfo.content)
+        content["#type"] = dinfo.cache_type
+        loaded = self._ctx.load(content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
         return loaded  # type: ignore
@@ -256,27 +256,19 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = key in self
         self._ram_data.pop(key, None)
-        if self.folder is None:
+        if self._ctx is None:
             return
         dinfo = self._key_info.pop(key)
-        loader = DumperLoader.CLASSES[dinfo.cache_type](self.folder)
-        if isinstance(loader, StaticDumperLoader):  # legacy
-            keyfile = self.folder / (
-                dinfo.content["filename"][: -len(loader.SUFFIX)] + ".key"
-            )
-            keyfile.unlink(missing_ok=True)
+        # Blank out the JSONL line (overwrite JSON bytes with spaces, keep newline)
         brange = dinfo.byte_range
         if brange[0] != brange[1]:
-            # overwrite with whitespaces
             with dinfo.jsonl.open("rb+") as f:
                 f.seek(brange[0])
                 f.write(b" " * (brange[1] - brange[0] - 1))
-        if len(dinfo.content) == 1:
-            # only filename -> we can remove it as it is not shared
-            # moves then delete to avoid weird effects
-            fp = Path(self.folder) / dinfo.content["filename"]
-            with utils.fast_unlink(fp, missing_ok=True):
-                pass
+        # Delete owned files via DumpContext
+        content = dict(dinfo.content)
+        content["#type"] = dinfo.cache_type
+        self._ctx.delete(content)
 
     def __contains__(self, key: str) -> bool:
         # in-memory cache
@@ -305,13 +297,9 @@ class CacheDict(tp.Generic[X]):
 
 class CacheDictWriter:
 
-    def __init__(self, cache: CacheDict) -> None:
+    def __init__(self, cache: CacheDict) -> None:  # type: ignore[type-arg]
         self.cache = cache
-        # write mode
-        self._exit_stack: contextlib.ExitStack | None = None
-        self._info_filepath: Path | None = None
-        self._info_handle: io.BufferedWriter | None = None
-        self._dumper: DumperLoader | None = None
+        self._ctx: DumpContext | None = None
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -320,88 +308,54 @@ class CacheDictWriter:
     @contextlib.contextmanager
     def open(self) -> tp.Iterator[None]:
         cd = self.cache
-        if self._exit_stack is not None:
+        if self._ctx is not None:
             raise RuntimeError("Cannot re-open an already open writer")
+        if cd.folder is None:
+            yield
+            return
+        ctx = DumpContext(cd.folder, permissions=cd.permissions)
+        self._ctx = ctx
         try:
-            with contextlib.ExitStack() as estack:
-                self._exit_stack = estack
-                if cd.folder is not None:
-                    fp = Path(cd.folder) / f"{host_pid()}-info.jsonl"
-                    self._info_filepath = fp
+            with ctx:
                 yield
         finally:
-            if cd.folder is not None:
-                t = time.time()  # make sure the modified time is updated:
-                os.utime(cd.folder, times=(t, t))
-            fp2 = self._info_filepath
-            if cd.permissions is not None and fp2 is not None and fp2.exists():
-                fp2.chmod(cd.permissions)
-            self._exit_stack = None
-            self._info_filepath = None
-            self._info_handle = None
-            self._dumper = None
+            t = time.time()
+            os.utime(cd.folder, times=(t, t))
+            self._ctx = None
 
     def __setitem__(self, key: str, value: X) -> None:
         if not isinstance(key, str):
             raise TypeError(f"Non-string keys are not allowed (got {key!r})")
-        if self._exit_stack is None:
-            raise RuntimeError("Cannot write out of a writer context")
         cd = self.cache
-        files: list[Path] = []
+        if cd.folder is not None and self._ctx is None:
+            raise RuntimeError("Cannot write out of a writer context")
         if cd._folder_modified <= 0:
             _ = cd.keys()  # force at least 1 initial key check
-        # figure out cache type
         if cd.cache_type is None:
             cls = DumperLoader.default_class(type(value))
             cd.cache_type = cls.__name__
         if key in cd._ram_data or key in cd._key_info:
             raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
         if cd._keep_in_ram and cd.folder is None:
-            # if folder is not None,
-            # ram_data will be loaded from cache for consistency
             cd._ram_data[key] = value
         if cd.folder is not None:
-            if self._info_filepath is None:
-                raise RuntimeError("Cannot write out of a writer context")
-            fp = self._info_filepath
-            if self._dumper is None:
-                self._dumper = DumperLoader.CLASSES[cd.cache_type](cd.folder)
-                self._exit_stack.enter_context(self._dumper.open())
-            info = self._dumper.dump(key, value)
-            for x, y in ConfDict(info).flat().items():
-                if x.endswith("filename"):
-                    files.append(cd.folder / y)
-            # write
-            info["#key"] = key
-            meta = {"cache_type": cd.cache_type}
-            if self._info_handle is None:
-                # create the file only when required to avoid leaving empty files for some time
-                self._info_handle = self._exit_stack.enter_context(fp.open("ab"))
-            if not self._info_handle.tell():
-                meta_dump = orjson.dumps(meta)
-                self._info_handle.write(METADATA_TAG.encode("utf8") + meta_dump + b"\n")
-            b = orjson.dumps(info)
-            current = self._info_handle.tell()
-            self._info_handle.write(b + b"\n")
-            info.pop("#key")
+            assert self._ctx is not None
+            result = self._ctx.dump_entry(key, value, cache_type=cd.cache_type)
+            content = result["content"]
+            content.pop("#key", None)
+            cache_type = content.pop("#type", cd.cache_type or "Pickle")
+            jsonl_path = Path(cd.folder) / result["jsonl"]
             dinfo = DumpInfo(
-                jsonl=fp,
-                byte_range=(current, current + len(b) + 1),
-                content=info,
-                **meta,
+                cache_type=cache_type,
+                jsonl=jsonl_path,
+                byte_range=result["byte_range"],
+                content=content,
             )
             cd._key_info[key] = dinfo
-            last = self._info_handle.tell()
-            cd._jsonl_readers.setdefault(fp.name, JsonlReader(fp))._last = last
-            # reading will reload to in-memory cache if need be
-            # (since dumping may have loaded the underlying data, let's not keep it)
-            if cd.permissions is not None:
-                for fp in files:
-                    try:
-                        fp.chmod(cd.permissions)
-                    except Exception:  # pylint: disable=broad-except
-                        pass  # avoid issues in case of overlapping processes
-            os.utime(cd.folder)  # make sure the modified time is updated
+            cd._jsonl_readers.setdefault(
+                jsonl_path.name, JsonlReader(jsonl_path)
+            )._last = result["byte_range"][1]
+            os.utime(cd.folder)
 
 
 class JsonlReader:
@@ -418,21 +372,22 @@ class JsonlReader:
         last = 0
         fail = b""
         with self._fp.open("rb") as f:
-            # always read metadata first if not cached
             if not self._meta:
                 first = f.readline()
                 if not first:
                     return out  # empty file
-                if not first.startswith(meta_tag[: len(first)]):
-                    raise RuntimeError(
-                        f"metadata missing in first line {first!r} of file {self._fp}"
-                    )
-                try:
-                    self._meta = orjson.loads(first[len(meta_tag) :])
-                except (orjson.JSONDecodeError, ValueError):
-                    # metadata line being written, retry later
-                    return out
-                last = len(first)
+                if first.startswith(meta_tag[: len(first)]):
+                    # Old format: metadata header
+                    try:
+                        self._meta = orjson.loads(first[len(meta_tag) :])
+                    except (orjson.JSONDecodeError, ValueError):
+                        return out  # metadata line being written, retry later
+                    last = len(first)
+                else:
+                    # New format: no metadata header, each line self-describing
+                    self._meta = {"_new_format": True}
+                    f.seek(0)
+                    last = 0
             if self._last > last:
                 msg = "Forwarding to byte %s in info file %s"
                 logger.debug(msg, self._last, self._fp.name)
@@ -451,13 +406,16 @@ class JsonlReader:
                 try:
                     info = orjson.loads(line)
                 except (orjson.JSONDecodeError, ValueError):
-                    # last line could be currently being written, be robust to it
                     fail = line
                     continue
-                last += count  # only advance _last for valid lines
+                last += count
                 key = info.pop("#key")
+                cache_type = info.pop("#type", self._meta.get("cache_type", "Pickle"))
                 dinfo = DumpInfo(
-                    jsonl=self._fp, byte_range=brange, content=info, **self._meta
+                    jsonl=self._fp,
+                    byte_range=brange,
+                    content=info,
+                    cache_type=cache_type,
                 )
                 out[key] = dinfo
         self._last = last

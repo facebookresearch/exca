@@ -165,13 +165,15 @@ class DumpContext:
 
     # -- Dispatch --
 
-    def dump_entry(self, key: str, value: tp.Any) -> dict[str, tp.Any]:
+    def dump_entry(
+        self, key: str, value: tp.Any, *, cache_type: tp.Optional[str] = None
+    ) -> dict[str, tp.Any]:
         """Top-level entry: serialize value, write JSONL line with #key.
         Returns index info (jsonl filename, byte range, content).
         Creates a shallow copy so ctx.key is isolated per entry."""
         ctx = copy.copy(self)
         ctx.key = key
-        info = ctx.dump(value)
+        info = ctx.dump(value, cache_type=cache_type)
         info["#key"] = key
         f, name = self.shared_file("-info.jsonl")
         line = orjson.dumps(info)
@@ -179,7 +181,7 @@ class DumpContext:
         f.write(line + b"\n")
         return {
             "jsonl": name,
-            "byte_range": (offset, offset + len(line)),
+            "byte_range": (offset, offset + len(line) + 1),
             "content": info,
         }
 
@@ -227,9 +229,19 @@ class DumpContext:
             info = self._loaders[cls].dump(self.key, value)
         else:
             info = cls.__dump_info__(self, value)
-        if isinstance(info, dict) and "filename" in info:
-            self._created_files.append(self.folder / info["filename"])
+        self._track_files(info)
         return info, cls.__name__
+
+    def _track_files(self, info: tp.Any) -> None:
+        """Record files referenced in an info dict for permission setting."""
+        if isinstance(info, dict):
+            if "filename" in info:
+                self._created_files.append(self.folder / info["filename"])
+            # TODO(legacy): remove recursion once legacy DataDict is retired;
+            # new DataDictDump tracks sub-files through ctx.dump() calls.
+            for val in info.values():
+                if isinstance(val, dict):
+                    self._track_files(val)
 
     def _resolve_type(self, info: dict[str, tp.Any]) -> tuple[tp.Any, dict[str, tp.Any]]:
         """Extract #type from an info dict, return (cls, remaining_info)."""
@@ -243,8 +255,9 @@ class DumpContext:
             return info
         cls, info = self._resolve_type(info)
         if isinstance(cls, type) and issubclass(cls, DumperLoader):
-            loader = self._loaders.get(cls) or cls(self.folder)
-            return loader.load(**info)
+            if cls not in self._loaders:
+                self._loaders[cls] = cls(self.folder)
+            return self._loaders[cls].load(**info)
         return cls.__load_from_info__(self, **info)
 
     def delete(self, info: tp.Any) -> None:

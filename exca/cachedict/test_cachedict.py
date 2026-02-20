@@ -82,7 +82,8 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     assert len(names) == 2
     j_name = [n for n in names if n.endswith("-info.jsonl")][0]
     assert isinstance(cache["blublu.tmp"], type(data))
-    assert (tmp_path / j_name).read_text("utf8").startswith("metadata={")
+    first_line = (tmp_path / j_name).read_text("utf8").split("\n")[0]
+    assert first_line.startswith("{") and '"#type"' in first_line
 
 
 @pytest.mark.parametrize(
@@ -209,7 +210,7 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     # reload cache
     logger.debug("new file")
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    assert len(cache) == 1
+    assert len(cache) == 2  # x and y complete, z truncated (no metadata header)
     os.utime(tmp_path)
     # now complete
     info_path.write_bytes(b"\n".join(lines))
@@ -266,21 +267,14 @@ def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
 @pytest.mark.parametrize(
     "content,should_delete",
     [
-        ('metadata={"cache_type":', False),  # writting metadata
-        ('metadata={"cache_type": "MemmapArrayFile"}\n', False),  # metadata only
+        ("     \n", True),  # deleted item
+        ("     ", True),  # deleted item (no trailing newline)
+        ('{"partial": true', False),  # partial line
+        ('{"#key": "blu", "#type": "MemmapArrayFile"}', False),  # remaining data
         (
-            'metadata={"cache_type": "MemmapArrayFile"}\n{"partial": true',
+            '     \n{"#key": "blu", "#type": "MemmapArrayFile"}',
             False,
-        ),  # partial line
-        ('metadata={"cache_type": "MemmapArrayFile"}\n     \n', True),  # deleted item
-        (
-            'metadata={"cache_type": "MemmapArrayFile"}\n     ',
-            True,
-        ),  # deleted item (no trailing newline)
-        (
-            'metadata={"cache_type": "MemmapArrayFile"}\n     \n{"#key": "blu"}',
-            False,
-        ),  # remaning data
+        ),  # deleted + remaining
     ],
 )
 def test_orphaned_cleanup_edge_cases(
