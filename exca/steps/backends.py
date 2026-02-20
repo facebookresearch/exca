@@ -165,8 +165,8 @@ class _CachingCall:
                     pickle.dump(e, f)
             raise
         if self.paths.item_uid not in cd:  # Only write if not already cached
-            with cd.writer() as w:
-                w[self.paths.item_uid] = result
+            with cd.write():
+                cd[self.paths.item_uid] = result
 
 
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):

@@ -13,6 +13,7 @@ pass both before and after the DumpContext migration.
 
 import contextlib
 import json
+import shutil
 import typing as tp
 from pathlib import Path
 
@@ -133,9 +134,9 @@ def test_legacy_external_static_roundtrip(tmp_path: Path) -> None:
         folder=tmp_path, cache_type="ExternalStaticDumper"
     )
     data = {"key1": {"a": 1, "b": [2, 3]}, "key2": "hello"}
-    with cache.writer() as w:
+    with cache.write():
         for k, v in data.items():
-            w[k] = v
+            cache[k] = v
     assert set(cache.keys()) == {"key1", "key2"}
     assert cache["key1"] == {"a": 1, "b": [2, 3]}
     assert cache["key2"] == "hello"
@@ -153,7 +154,7 @@ def test_legacy_external_batch_roundtrip(tmp_path: Path) -> None:
         folder=tmp_path, cache_type="ExternalBatchDumper"
     )
     data = {"k1": [1, 2, 3], "k2": {"nested": True}, "k3": "plain"}
-    with cache.writer() as w:
+    with cache.writer() as w:  # deprecated: tests legacy writer() API
         for k, v in data.items():
             w[k] = v
     assert set(cache.keys()) == {"k1", "k2", "k3"}
@@ -163,3 +164,30 @@ def test_legacy_external_batch_roundtrip(tmp_path: Path) -> None:
     # reload from disk
     cache2: cd.CacheDict[tp.Any] = cd.CacheDict(folder=tmp_path)
     assert cache2["k2"] == {"nested": True}
+
+
+def test_mixed_old_and_new_format(tmp_path: Path) -> None:
+    """Copy old-format fixture, add new items, read both old and new."""
+    src = FIXTURE_ROOT / "string"
+    dst = tmp_path / "mixed"
+    shutil.copytree(src, dst)
+    # Read old items
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(folder=dst, cache_type="String")
+    assert set(cache.keys()) == {"hello", "multiline"}
+    assert cache["hello"] == "hello world"
+    # Write new items (new JSONL format, no metadata= header)
+    with cache.write():
+        cache["extra"] = "new value"
+    # All items accessible
+    assert set(cache.keys()) == {"hello", "multiline", "extra"}
+    assert cache["hello"] == "hello world"
+    assert cache["extra"] == "new value"
+    # Reload from scratch — both old and new JSONL files coexist
+    cache2: cd.CacheDict[tp.Any] = cd.CacheDict(folder=dst)
+    assert set(cache2.keys()) == {"hello", "multiline", "extra"}
+    assert cache2["multiline"] == "line1\nline2\nline3"
+    assert cache2["extra"] == "new value"
+    # Delete an old item, verify new items survive
+    del cache2["hello"]
+    cache3: cd.CacheDict[tp.Any] = cd.CacheDict(folder=dst)
+    assert set(cache3.keys()) == {"multiline", "extra"}

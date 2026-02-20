@@ -6,7 +6,8 @@
 
 from .core import METADATA_TAG as METADATA_TAG
 from .core import CacheDict as CacheDict
-from .core import CacheDictWriter as CacheDictWriter
+
+CacheDictWriter = CacheDict  # deprecated: use CacheDict directly
 from .core import DumpInfo as DumpInfo
 from .dumpcontext import DumpContext as DumpContext
 from .dumperloader import MEMMAP_ARRAY_FILE_MAX_CACHE as MEMMAP_ARRAY_FILE_MAX_CACHE
