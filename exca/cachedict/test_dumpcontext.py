@@ -20,15 +20,6 @@ from .dumperloader import DumperLoader
 # =============================================================================
 
 
-def test_register_registration() -> None:
-    assert "MemmapArray" in DumperLoader.CLASSES
-    assert "StringDump" in DumperLoader.CLASSES
-    assert "PickleDump" in DumperLoader.CLASSES
-    assert "NpyArray" in DumperLoader.CLASSES
-    assert "DataDictDump" in DumperLoader.CLASSES
-    assert "Json" in DumperLoader.CLASSES
-
-
 def test_register_requires_protocol() -> None:
     with pytest.raises(TypeError, match="@DumpContext.register requires __dump_info__"):
 
@@ -71,6 +62,19 @@ def test_register_default_for() -> None:
     del DumperLoader.CLASSES["_MarkerHandler"]
 
 
+def test_register_default_for_requires_classmethod() -> None:
+    with pytest.raises(TypeError, match="classmethod"):
+
+        @DumpContext.register(default_for=int)
+        class _BadHandler:  # pylint: disable=unused-variable
+            def __dump_info__(self, ctx: tp.Any) -> dict[str, tp.Any]:
+                return {}
+
+            @classmethod
+            def __load_from_info__(cls, ctx: tp.Any) -> tp.Any:
+                return None
+
+
 def test_user_defined_class_roundtrip(tmp_path: Path) -> None:
     """A user class registered via @DumpContext.register with instance
     __dump_info__ should roundtrip through dump/load."""
@@ -103,19 +107,6 @@ def test_user_defined_class_roundtrip(tmp_path: Path) -> None:
     assert loaded.score == 0.95
     np.testing.assert_array_almost_equal(loaded.data, obj.data)
     del DumperLoader.CLASSES["Result"]
-
-
-def test_register_default_for_requires_classmethod() -> None:
-    with pytest.raises(TypeError, match="classmethod"):
-
-        @DumpContext.register(default_for=int)
-        class _BadHandler:  # pylint: disable=unused-variable
-            def __dump_info__(self, ctx: tp.Any) -> dict[str, tp.Any]:
-                return {}
-
-            @classmethod
-            def __load_from_info__(cls, ctx: tp.Any) -> tp.Any:
-                return None
 
 
 # =============================================================================
@@ -160,23 +151,51 @@ def test_shared_file_requires_context(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# MemmapArray
+# Handler roundtrips (parametrized)
 # =============================================================================
 
 
-def test_memmap_array_roundtrip(tmp_path: Path) -> None:
+def _compare(loaded: tp.Any, expected: tp.Any) -> None:
+    if isinstance(expected, np.ndarray):
+        np.testing.assert_array_almost_equal(loaded, expected)
+    else:
+        assert loaded == expected
+
+
+ROUNDTRIP_CASES: list[tuple[str, tp.Any, tp.Optional[str]]] = [
+    ("MemmapArray", np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32), None),
+    ("StringDump", "hello world", None),
+    ("StringDump", "line1\nline2\nline3", None),
+    ("PickleDump", [1, "two", 3.0], "pkl_key"),
+    ("NpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32), "npy_key"),
+    ("Json", 42, None),
+    ("Json", np.array([1.0, 2.0, 3.0]), None),
+    # Legacy DumperLoader subclasses through DumpContext
+    ("MemmapArrayFile", np.array([1.0, 2.0, 3.0], dtype=np.float32), "legacy_mm"),
+    ("String", "test string", "legacy_str"),
+    ("Pickle", {"a": 1}, "legacy_pkl"),
+]
+
+
+@pytest.mark.parametrize(
+    "cache_type,value,key",
+    ROUNDTRIP_CASES,
+    ids=[f"{ct}-{i}" for i, (ct, _, __) in enumerate(ROUNDTRIP_CASES)],
+)
+def test_handler_roundtrip(
+    tmp_path: Path, cache_type: str, value: tp.Any, key: tp.Optional[str]
+) -> None:
     ctx = DumpContext(tmp_path)
-    arr = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    if key is not None:
+        ctx.key = key
     with ctx:
-        info = ctx.dump(arr, cache_type="MemmapArray")
-    assert info["#type"] == "MemmapArray"
-    assert "filename" in info
-    loaded = ctx.load(info)
-    np.testing.assert_array_almost_equal(loaded, arr)
-    assert loaded.dtype == np.float32
+        info = ctx.dump(value, cache_type=cache_type)
+    assert info["#type"] == cache_type
+    _compare(ctx.load(info), value)
 
 
-def test_memmap_array_multiple(tmp_path: Path) -> None:
+def test_memmap_array_shared_file(tmp_path: Path) -> None:
+    """Multiple MemmapArray dumps share the same .data file."""
     ctx = DumpContext(tmp_path)
     a1 = np.array([1, 2, 3], dtype=np.int64)
     a2 = np.arange(12, dtype=np.float64).reshape(3, 4)
@@ -189,48 +208,8 @@ def test_memmap_array_multiple(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# StringDump
+# StaticWrapper specifics
 # =============================================================================
-
-
-def test_string_roundtrip(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    with ctx:
-        info = ctx.dump("hello world", cache_type="StringDump")
-    assert info["#type"] == "StringDump"
-    assert ctx.load(info) == "hello world"
-
-
-def test_string_multiline(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    text = "line1\nline2\nline3"
-    with ctx:
-        info = ctx.dump(text, cache_type="StringDump")
-    assert ctx.load(info) == text
-
-
-# =============================================================================
-# StaticWrapper / PickleDump / NpyArray
-# =============================================================================
-
-
-def test_pickle_roundtrip(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    ctx.key = "test_key"
-    with ctx:
-        info = ctx.dump([1, "two", 3.0], cache_type="PickleDump")
-    assert info["#type"] == "PickleDump"
-    assert ctx.load(info) == [1, "two", 3.0]
-
-
-def test_npy_array_roundtrip(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    ctx.key = "test_key"
-    arr = np.array([[1, 2], [3, 4]], dtype=np.int32)
-    with ctx:
-        info = ctx.dump(arr, cache_type="NpyArray")
-    assert info["#type"] == "NpyArray"
-    np.testing.assert_array_equal(ctx.load(info), arr)
 
 
 def test_static_wrapper_collision_detection(tmp_path: Path) -> None:
@@ -312,25 +291,8 @@ def test_datadict_legacy_load(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# Json
+# Json specifics
 # =============================================================================
-
-
-def test_json_scalar_roundtrip(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    with ctx:
-        info = ctx.dump(42, cache_type="Json")
-    assert info["#type"] == "Json"
-    assert ctx.load(info) == 42
-
-
-def test_json_small_array_roundtrip(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    arr = np.array([1.0, 2.0, 3.0])
-    with ctx:
-        info = ctx.dump(arr, cache_type="Json")
-    loaded = ctx.load(info)
-    np.testing.assert_array_almost_equal(loaded, arr)
 
 
 def test_json_large_array_rejected(tmp_path: Path) -> None:
@@ -341,7 +303,7 @@ def test_json_large_array_rejected(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# DumpContext dump_entry (JSONL writing)
+# dump_entry, shallow copy, cache
 # =============================================================================
 
 
@@ -368,22 +330,12 @@ def test_dump_entry_multiple_keys(tmp_path: Path) -> None:
     assert r1["jsonl"] == r2["jsonl"]
 
 
-# =============================================================================
-# Shallow copy isolation
-# =============================================================================
-
-
 def test_shallow_copy_key_isolation(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
     ctx.key = "original"
     with ctx:
         ctx.dump(np.array([1.0]), cache_type="MemmapArray")
     assert ctx.key == "original"
-
-
-# =============================================================================
-# DumpContext.cached / invalidate
-# =============================================================================
 
 
 def test_cached_and_invalidate(tmp_path: Path) -> None:
@@ -401,38 +353,3 @@ def test_cached_and_invalidate(tmp_path: Path) -> None:
     ctx.invalidate("k")
     assert ctx.cached("k", factory) == "value"
     assert len(calls) == 2
-
-
-# =============================================================================
-# Legacy DumperLoader through DumpContext
-# =============================================================================
-
-
-def test_legacy_dumperloader_through_context(tmp_path: Path) -> None:
-    """DumpContext handles old DumperLoader subclasses transparently."""
-    ctx = DumpContext(tmp_path)
-    ctx.key = "legacy_memmap"
-    arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    with ctx:
-        info = ctx.dump(arr, cache_type="MemmapArrayFile")
-    assert info["#type"] == "MemmapArrayFile"
-    loaded = ctx.load(info)
-    np.testing.assert_array_almost_equal(loaded, arr)
-
-
-def test_legacy_string_through_context(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    ctx.key = "legacy_str"
-    with ctx:
-        info = ctx.dump("test string", cache_type="String")
-    assert info["#type"] == "String"
-    assert ctx.load(info) == "test string"
-
-
-def test_legacy_pickle_through_context(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    ctx.key = "pkey"
-    with ctx:
-        info = ctx.dump({"a": 1}, cache_type="Pickle")
-    assert info["#type"] == "Pickle"
-    assert ctx.load(info) == {"a": 1}
