@@ -193,6 +193,12 @@ class DumpContext:
         else:
             cls = DumperLoader.default_class(type(value))
             info, type_name = ctx._dump_cls(cls, value)
+        _reserved = info.keys() & {"#type", "#key"}
+        if _reserved:
+            raise ValueError(
+                f"__dump_info__ must not return reserved keys {_reserved}; "
+                f"these are set by DumpContext"
+            )
         info["#type"] = type_name
         return info
 

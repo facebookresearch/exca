@@ -101,11 +101,22 @@ def test_user_defined_class_roundtrip(tmp_path: Path) -> None:
     obj = Result(score=0.95, data=np.array([1.0, 2.0, 3.0]))
     with ctx:
         info = ctx.dump(obj)
-    assert info["#type"] == "Result"
+    filename = info["data"]["filename"]  # dynamic (hostname-threadid.data)
+    assert info == {
+        "#type": "Result",
+        "score": 0.95,
+        "data": {
+            "#type": "MemmapArray",
+            "filename": filename,
+            "offset": 0,
+            "shape": (3,),
+            "dtype": "float64",
+        },
+    }
     loaded = ctx.load(info)
     assert isinstance(loaded, Result)
     assert loaded.score == 0.95
-    np.testing.assert_array_almost_equal(loaded.data, obj.data)
+    np.testing.assert_array_almost_equal(loaded.data, obj.data)  # type: ignore[arg-type]
     del DumperLoader.CLASSES["Result"]
 
 
