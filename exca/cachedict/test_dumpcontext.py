@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from .dumpcontext import DumpContext, Json
+from .dumpcontext import DumpContext
 from .dumperloader import DumperLoader
 
 # =============================================================================
@@ -172,7 +172,6 @@ ROUNDTRIP_CASES: list[tuple[str, tp.Any, tp.Optional[str]]] = [
     ("PickleDump", [1, "two", 3.0], "pkl_key"),
     ("NpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32), "npy_key"),
     ("Json", 42, None),
-    ("Json", np.array([1.0, 2.0, 3.0]), None),
     (
         "DataDictDump",
         {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
@@ -230,6 +229,43 @@ def test_static_wrapper_collision_and_delete(tmp_path: Path) -> None:
 
 
 # =============================================================================
+# Json inline promotion
+# =============================================================================
+
+
+@pytest.mark.parametrize("value", [42, "hello", [1, 2, 3], {"a": 1}])
+def test_json_inline_promotion(tmp_path: Path, value: tp.Any) -> None:
+    """Small JSON-serializable values auto-promote from Pickle to Json."""
+    ctx = DumpContext(tmp_path)
+    with ctx:
+        info = ctx.dump(value)
+    assert info["#type"] == "Json"
+    assert "_data" in info
+    assert not list(tmp_path.glob("*.pkl"))
+
+
+def test_json_large_value_uses_shared_file(tmp_path: Path) -> None:
+    """Values exceeding MAX_INLINE_SIZE go to a shared .json file."""
+    ctx = DumpContext(tmp_path)
+    large = list(range(1000))
+    with ctx:
+        info = ctx.dump(large)
+    assert info["#type"] == "Json"
+    assert "filename" in info and "offset" in info and "length" in info
+    assert not list(tmp_path.glob("*.pkl"))
+    loaded = ctx.load(info)
+    assert loaded == large
+
+
+def test_json_non_serializable_raises(tmp_path: Path) -> None:
+    """Non-JSON-serializable values without a handler raise TypeError."""
+    ctx = DumpContext(tmp_path)
+    with ctx:
+        with pytest.raises(TypeError, match="not JSON-serializable"):
+            ctx.dump({1, 2, 3})
+
+
+# =============================================================================
 # DataDictDump
 # =============================================================================
 
@@ -278,13 +314,6 @@ def test_datadict_legacy_load(tmp_path: Path) -> None:
 # =============================================================================
 # Json, dump_entry, shallow copy, cache
 # =============================================================================
-
-
-def test_json_large_array_rejected(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    arr = np.zeros(Json.MAX_ARRAY_SIZE + 1)
-    with ctx, pytest.raises(ValueError, match="Array too large"):
-        ctx.dump(arr, cache_type="Json")
 
 
 def test_dump_entry(tmp_path: Path) -> None:

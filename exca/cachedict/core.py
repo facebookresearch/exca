@@ -299,7 +299,9 @@ class CacheDict(tp.Generic[X]):
             self._ram_data[key] = value
         if self.folder is not None:
             assert self._write_ctx is not None
-            result = self._write_ctx.dump_entry(key, value, cache_type=self.cache_type)
+            _generic = ("Pickle", "PickleDump", "String", "StringDump")
+            ct = self.cache_type if self.cache_type not in _generic else None
+            result = self._write_ctx.dump_entry(key, value, cache_type=ct)
             content = result["content"]
             content.pop("#key", None)
             jsonl_path = self.folder / result["jsonl"]

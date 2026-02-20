@@ -38,6 +38,7 @@ from exca import utils
 
 from .dumperloader import DumperLoader
 from .dumperloader import Pickle as _LegacyPickle
+from .dumperloader import String as _LegacyString
 from .dumperloader import _string_uid
 
 logger = logging.getLogger(__name__)
@@ -190,13 +191,15 @@ class DumpContext:
         Creates a shallow copy so nested dumps don't clobber ctx.key."""
         ctx = copy.copy(self)
         if cache_type is not None:
-            cls = DumperLoader.CLASSES[cache_type]
+            cls: tp.Any = DumperLoader.CLASSES[cache_type]
             info, type_name = ctx._dump_cls(cls, value)
         elif hasattr(value, "__dump_info__"):
             info = value.__dump_info__(ctx)
             type_name = type(value).__name__
         else:
             cls = DumperLoader.default_class(type(value))
+            if cls in (_LegacyPickle, _LegacyString):
+                cls = Json
             info, type_name = ctx._dump_cls(cls, value)
         _reserved = info.keys() & {"#type", "#key"}
         if _reserved:
@@ -486,36 +489,38 @@ class DataDictDump:
 
 @DumpContext.register
 class Json:
-    """Inline JSON storage -- small values stay in the JSONL line."""
+    """JSON storage: inline in JSONL if small, shared .json file if large.
 
-    MAX_ARRAY_SIZE = 200
+    Values whose serialized size is at most ``MAX_INLINE_SIZE`` bytes are
+    stored directly in the JSONL line (``_data`` key).  Larger values are
+    appended to a shared ``.json`` file and referenced by offset/length.
+    """
+
+    MAX_INLINE_SIZE = 2048
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        return {"_data": cls._encode(value)}
+        try:
+            raw = orjson.dumps(value)
+        except (TypeError, orjson.JSONEncodeError) as e:
+            raise TypeError(
+                f"Value of type {type(value).__name__} is not JSON-serializable. "
+                f"Register a handler with @DumpContext.register(default_for={type(value).__name__}) "
+                f"or use cache_type='Pickle' explicitly."
+            ) from e
+        if len(raw) <= cls.MAX_INLINE_SIZE:
+            return {"_data": value}
+        f, name = ctx.shared_file(".json")
+        offset = f.tell()
+        f.write(raw + b"\n")
+        return {"filename": name, "offset": offset, "length": len(raw)}
 
     @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, _data: tp.Any) -> tp.Any:
-        return cls._decode(_data)
-
-    @classmethod
-    def _encode(cls, value: tp.Any) -> tp.Any:
-        if isinstance(value, np.ndarray):
-            if value.size > cls.MAX_ARRAY_SIZE:
-                raise ValueError(
-                    f"Array too large for inline ({value.size} > {cls.MAX_ARRAY_SIZE})"
-                )
-            return {
-                "__ndarray__": value.tolist(),
-                "dtype": str(value.dtype),
-                "shape": list(value.shape),
-            }
-        return value
-
-    @classmethod
-    def _decode(cls, value: tp.Any) -> tp.Any:
-        if isinstance(value, dict) and "__ndarray__" in value:
-            return np.array(value["__ndarray__"], dtype=value["dtype"]).reshape(
-                value["shape"]
-            )
-        return value
+    def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> tp.Any:
+        if "_data" in info:
+            return info["_data"]
+        path = ctx.folder / info["filename"]
+        with path.open("rb") as f:
+            f.seek(info["offset"])
+            raw = f.read(info["length"])
+        return orjson.loads(raw)
