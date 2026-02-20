@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import utils
+from exca import utils
 
 logger = logging.getLogger(__name__)
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}

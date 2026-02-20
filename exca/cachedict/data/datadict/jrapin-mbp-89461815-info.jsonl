@@ -1,0 +1,2 @@
+metadata={"cache_type":"DataDict"}
+{"optimized":{"arr":{"cls":"MemmapArrayFile","info":{"filename":"jrapin-mbp-89461815.data","offset":0,"shape":[3],"dtype":"float64"}},"label":{"cls":"String","info":{"filename":"jrapin-mbp-89461815.txt","offset":8,"length":4}}},"pickled":{"filename":"mixed-1d770934.pkl"},"#key":"mixed"}
