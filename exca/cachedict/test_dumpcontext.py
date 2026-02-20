@@ -377,6 +377,7 @@ def test_cached_and_invalidate(tmp_path: Path) -> None:
 def test_legacy_dumperloader_through_context(tmp_path: Path) -> None:
     """DumpContext handles old DumperLoader subclasses transparently."""
     ctx = DumpContext(tmp_path)
+    ctx.key = "legacy_memmap"
     arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     with ctx:
         info = ctx.dump(arr, cache_type="MemmapArrayFile")
@@ -387,6 +388,7 @@ def test_legacy_dumperloader_through_context(tmp_path: Path) -> None:
 
 def test_legacy_string_through_context(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
+    ctx.key = "legacy_str"
     with ctx:
         info = ctx.dump("test string", cache_type="String")
     assert info["#type"] == "String"

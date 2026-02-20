@@ -206,7 +206,11 @@ class DumpContext:
                 loader = cls(self.folder)
                 self._stack.enter_context(loader.open())
                 self._loaders[cls] = loader
-            info = self._loaders[cls].dump(self.key or "", value)
+            if self.key is None:
+                raise RuntimeError(
+                    "ctx.key must be set before dumping with a legacy DumperLoader"
+                )
+            info = self._loaders[cls].dump(self.key, value)
         else:
             info = cls.__dump_info__(self, value)
         if isinstance(info, dict) and "filename" in info:
@@ -340,7 +344,11 @@ class StaticWrapper:
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        uid = _string_uid(ctx.key or "")
+        if ctx.key is None:
+            raise RuntimeError(
+                "ctx.key must be set for StaticWrapper (one-file-per-entry formats)"
+            )
+        uid = _string_uid(ctx.key)
         filename = uid + cls.SUFFIX
         filepath = ctx.folder / filename
         if filepath.exists():
