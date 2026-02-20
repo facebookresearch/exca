@@ -54,7 +54,8 @@ class DumpContext:
         self.folder = Path(folder)
         self.key: tp.Optional[str] = None
         self.permissions = permissions
-        self._prefix = f"{socket.gethostname()}-{threading.get_native_id()}"
+        self._thread_id = threading.get_native_id()
+        self._prefix = f"{socket.gethostname()}-{self._thread_id}"
         self._files: dict[str, tuple[tp.IO[bytes], str]] = {}
         self._loaders: dict[type, DumperLoader] = {}
         self._stack: tp.Optional[contextlib.ExitStack] = None
@@ -146,6 +147,8 @@ class DumpContext:
         same suffix. Closed automatically when the context exits."""
         if self._stack is None:
             raise RuntimeError("DumpContext must be used as a context manager for writes")
+        if threading.get_native_id() != self._thread_id:
+            raise RuntimeError("DumpContext must not be shared across threads")
         name = f"{self._prefix}{suffix}"
         if name not in self._files:
             path = self.folder / name
