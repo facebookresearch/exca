@@ -18,8 +18,9 @@ import psutil
 import pytest
 import torch
 
-from . import cachedict as cd
-from . import utils
+from exca import utils
+
+from . import core as cd
 from .dumperloader import MEMMAP_ARRAY_FILE_MAX_CACHE
 
 logger = logging.getLogger("exca")

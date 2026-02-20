@@ -20,8 +20,9 @@ from pathlib import Path
 
 import orjson
 
-from . import utils
-from .confdict import ConfDict
+from exca import utils
+from exca.confdict import ConfDict
+
 from .dumperloader import DumperLoader, StaticDumperLoader, host_pid
 
 X = tp.TypeVar("X")
