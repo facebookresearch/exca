@@ -268,6 +268,7 @@ def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
 @pytest.mark.parametrize(
     "content,should_delete",
     [
+        # new format (no metadata header)
         ("     \n", True),  # deleted item
         ("     ", True),  # deleted item (no trailing newline)
         ('{"partial": true', False),  # partial line
@@ -276,6 +277,22 @@ def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
             '     \n{"#key": "blu", "#type": "MemmapArrayFile"}',
             False,
         ),  # deleted + remaining
+        # old format (metadata header)
+        ('metadata={"cache_type":', False),  # writing metadata
+        ('metadata={"cache_type": "MemmapArrayFile"}\n', False),  # metadata only
+        (
+            'metadata={"cache_type": "MemmapArrayFile"}\n{"partial": true',
+            False,
+        ),  # partial line
+        ('metadata={"cache_type": "MemmapArrayFile"}\n     \n', True),  # deleted item
+        (
+            'metadata={"cache_type": "MemmapArrayFile"}\n     ',
+            True,
+        ),  # deleted (no trailing newline)
+        (
+            'metadata={"cache_type": "MemmapArrayFile"}\n     \n{"#key": "blu"}',
+            False,
+        ),  # remaining data
     ],
 )
 def test_orphaned_cleanup_edge_cases(

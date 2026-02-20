@@ -201,11 +201,14 @@ class CacheDict(tp.Generic[X]):
             if not reader._fp.exists():
                 del self._jsonl_readers[name]
                 continue
-            # Only clean up if first line is blanked (by __delitem__),
+            # Only clean up if first data line is blanked (by __delitem__),
             # confirming deleted items; valid/partial first lines may
             # indicate a concurrent write, so leave those alone.
             with reader._fp.open("rb") as f:
-                if not f.readline().startswith(b" "):
+                line = f.readline()
+                if line.startswith(METADATA_TAG.encode()):
+                    line = f.readline()  # skip metadata header (old format)
+                if not line.startswith(b" "):
                     continue
             logger.warning("Cleaning up orphaned files for %s", name)
             prefix = name.removesuffix("-info.jsonl")
