@@ -13,7 +13,7 @@ __load_from_info__ protocol.
 
 Handler classes (MemmapArray, StringDump, etc.) are registered via
 @DumpContext.register and use classmethods. User classes that ARE the
-serialized value can implement __dump_info__ as an instance method
+serialized value implement __dump_info__ as an instance method
 and are detected automatically.
 
 Handler classes coexist with legacy DumperLoader subclasses which
@@ -22,6 +22,7 @@ DumpContext also handles transparently.
 
 import contextlib
 import copy
+import inspect
 import logging
 import os
 import pickle
@@ -100,7 +101,7 @@ class DumpContext:
                         f"@DumpContext.register requires {method} on {klass.__name__}"
                     )
                 if default_for is not None:
-                    if not isinstance(klass.__dict__.get(method), classmethod):
+                    if not inspect.ismethod(getattr(klass, method)):
                         raise TypeError(
                             f"@DumpContext.register(default_for=...) requires "
                             f"{method} to be a classmethod on {klass.__name__}"
