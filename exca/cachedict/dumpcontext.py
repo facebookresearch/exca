@@ -4,16 +4,20 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""DumpContext and new-style wrappers for protocol-based serialization.
+"""DumpContext and new-style handlers for protocol-based serialization.
 
 DumpContext is the central orchestrator for serialization: it manages
 write-side file lifecycle (shared files, ExitStack), read-side cache
 (memmaps), and dispatches serialization through the __dump_info__ /
 __load_from_info__ protocol.
 
-New-style wrappers (MemmapArray, StringDump, etc.) implement this protocol
-and are registered via @DumperLoader.dumpable. They coexist with legacy
-DumperLoader subclasses which DumpContext also handles transparently.
+Handler classes (MemmapArray, StringDump, etc.) are registered via
+@DumpContext.register and use classmethods. User classes that ARE the
+serialized value can implement __dump_info__ as an instance method
+and are detected automatically.
+
+Handler classes coexist with legacy DumperLoader subclasses which
+DumpContext also handles transparently.
 """
 
 import contextlib
@@ -35,12 +39,14 @@ from .dumperloader import DumperLoader, _string_uid
 
 logger = logging.getLogger(__name__)
 
+# TODO: consider supporting default_for=(type1, type2) for multiple types
+
 
 class DumpContext:
     """Central orchestrator for serialization lifecycle.
 
     Manages shared file handles (write side), resource cache (read side),
-    and dispatches to both new-style wrappers and legacy DumperLoaders.
+    and dispatches to both new-style handlers and legacy DumperLoaders.
     """
 
     def __init__(
@@ -57,6 +63,59 @@ class DumpContext:
         self._max_cache = int(os.environ.get("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", 100_000))
         self._created_files: list[Path] = []
 
+    # -- Registration --
+
+    @classmethod
+    def register(
+        cls,
+        target: tp.Any = None,
+        *,
+        default_for: tp.Optional[type] = None,
+    ) -> tp.Any:
+        """Decorator to register a handler class for serialization.
+
+        Usage::
+
+            from exca.cachedict import DumpContext
+
+            @DumpContext.register(default_for=np.ndarray)
+            class MemmapArray:
+                @classmethod
+                def __dump_info__(cls, ctx, value): ...
+                @classmethod
+                def __load_from_info__(cls, ctx, **info): ...
+
+        User classes that ARE the serialized value use an instance
+        method for dump and are detected automatically::
+
+            @DumpContext.register
+            class ExperimentResult:
+                def __dump_info__(self, ctx): ...
+                @classmethod
+                def __load_from_info__(cls, ctx, **info): ...
+        """
+
+        def decorator(klass: type) -> type:
+            for method in ("__dump_info__", "__load_from_info__"):
+                if not hasattr(klass, method):
+                    raise TypeError(
+                        f"@DumpContext.register requires {method} on {klass.__name__}"
+                    )
+            name = getattr(klass, "dump_name", klass.__name__)
+            if name in DumperLoader.CLASSES:
+                raise ValueError(
+                    f"Name collision: {name!r} is already registered "
+                    f"in DumperLoader.CLASSES"
+                )
+            DumperLoader.CLASSES[name] = klass
+            if default_for is not None:
+                DumperLoader.DEFAULTS[default_for] = klass
+            return klass
+
+        if target is not None:
+            return decorator(target)
+        return decorator
+
     # -- Write lifecycle --
 
     def __enter__(self) -> "DumpContext":
@@ -71,7 +130,8 @@ class DumpContext:
                     fp.chmod(self.permissions)
                 except Exception:
                     pass
-        assert self._stack is not None
+        if self._stack is None:
+            raise RuntimeError("DumpContext.__exit__ called without __enter__")
         self._stack.__exit__(*exc)
         self._files.clear()
         self._created_files.clear()
@@ -80,9 +140,8 @@ class DumpContext:
         """Open a shared file for appending. Returns (handle, filename).
         The file is opened once and reused for subsequent calls with the
         same suffix. Closed automatically when the context exits."""
-        assert (
-            self._stack is not None
-        ), "DumpContext must be used as a context manager for writes"
+        if self._stack is None:
+            raise RuntimeError("DumpContext must be used as a context manager for writes")
         name = f"{self._prefix}{suffix}"
         if name not in self._files:
             path = self.folder / name
@@ -131,10 +190,13 @@ class DumpContext:
         return info
 
     def _dump_cls(self, cls: tp.Any, value: tp.Any) -> tuple[dict[str, tp.Any], str]:
-        """Dispatch to a class, handling both new-style wrappers and
-        legacy DumperLoader subclasses."""
+        """Dispatch to a registered class, handling both new-style handlers
+        and legacy DumperLoader subclasses."""
         if isinstance(cls, type) and issubclass(cls, DumperLoader):
-            assert self._stack is not None
+            if self._stack is None:
+                raise RuntimeError(
+                    "DumpContext must be used as a context manager for writes"
+                )
             if cls not in self._loaders:
                 loader = cls(self.folder)
                 self._stack.enter_context(loader.open())
@@ -142,7 +204,7 @@ class DumpContext:
             info = self._loaders[cls].dump(self.key or "", value)
             self._track_files(info)
             return info, cls.__name__
-        info = cls(value).__dump_info__(self)
+        info = cls.__dump_info__(self, value)
         self._track_files(info)
         return info, cls.__name__
 
@@ -165,7 +227,7 @@ class DumpContext:
 
     def delete(self, info: tp.Any) -> None:
         """Delete files referenced by an info dict. Recurses into
-        nested #type dicts automatically. Wrappers that own a file
+        nested #type dicts automatically. Handlers that own a file
         override __delete_info__ (e.g. StaticWrapper)."""
         if not isinstance(info, dict) or "#type" not in info:
             return
@@ -194,23 +256,24 @@ class DumpContext:
 
 
 # =============================================================================
-# New-style wrappers
+# Handler classes
 # =============================================================================
 #
-# Wrapper names avoid collision with existing DumperLoader.CLASSES entries.
-# Phase 2 will add aliases so old #type values resolve to these wrappers.
+# Handler names avoid collision with existing DumperLoader.CLASSES entries.
+# Phase 2 will add aliases so old #type values resolve to these handlers.
+#
+# All handlers use classmethods:
+#   __dump_info__(cls, ctx, value) -> dict
+#   __load_from_info__(cls, ctx, **info) -> value
 
 
-@DumperLoader.dumpable
+@DumpContext.register()
 class MemmapArray:
     """Appends numpy arrays to a shared binary file, loads via memmap."""
 
-    def __init__(self, value: np.ndarray) -> None:
-        self.value = value
-
-    def __dump_info__(self, ctx: DumpContext) -> dict[str, tp.Any]:
+    @classmethod
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         f, name = ctx.shared_file(".data")
-        value = self.value
         if not isinstance(value, np.ndarray):
             raise TypeError(f"Expected numpy array but got {type(value)}")
         if not value.size:
@@ -247,20 +310,18 @@ class MemmapArray:
         return data.view(dtype=dtype).reshape(shape)
 
 
-@DumperLoader.dumpable
+@DumpContext.register()
 class StringDump:
     """Appends strings to a shared text file, loads by offset."""
 
-    def __init__(self, value: str) -> None:
-        self.value = value
-
-    def __dump_info__(self, ctx: DumpContext) -> dict[str, tp.Any]:
+    @classmethod
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         f, name = ctx.shared_file(".txt")
-        if not isinstance(self.value, str):
-            raise TypeError(f"Expected string but got {type(self.value)}")
+        if not isinstance(value, str):
+            raise TypeError(f"Expected string but got {type(value)}")
         prefix = "\n<value>".encode("utf8")
         offset = f.tell()
-        b = self.value.encode("utf8")
+        b = value.encode("utf8")
         f.write(prefix + b)
         return {"filename": name, "offset": offset + len(prefix), "length": len(b)}
 
@@ -277,17 +338,15 @@ class StringDump:
 class StaticWrapper:
     """Base for one-file-per-entry formats (Pickle, NumpyArray, etc.).
 
-    Not registered via @dumpable itself -- subclasses are.
+    Not registered itself -- subclasses are.
     """
 
     SUFFIX = ""
 
-    def __init__(self, value: tp.Any) -> None:
-        self.value = value
-
-    def __dump_info__(self, ctx: DumpContext) -> dict[str, tp.Any]:
+    @classmethod
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         uid = _string_uid(ctx.key or "")
-        filename = uid + self.SUFFIX
+        filename = uid + cls.SUFFIX
         filepath = ctx.folder / filename
         if filepath.exists():
             raise RuntimeError(
@@ -295,7 +354,7 @@ class StaticWrapper:
                 f"sub-values of the same type, set ctx.key to a unique "
                 f"sub-key for each (see DataDictDump for an example)."
             )
-        self.static_dump(filepath, self.value)
+        cls.static_dump(filepath, value)
         return {"filename": filename}
 
     @classmethod
@@ -316,7 +375,7 @@ class StaticWrapper:
         raise NotImplementedError
 
 
-@DumperLoader.dumpable
+@DumpContext.register()
 class PickleDump(StaticWrapper):
     SUFFIX = ".pkl"
 
@@ -332,7 +391,7 @@ class PickleDump(StaticWrapper):
             return pickle.load(f)
 
 
-@DumperLoader.dumpable
+@DumpContext.register()
 class NpyArray(StaticWrapper):
     SUFFIX = ".npy"
 
@@ -348,19 +407,17 @@ class NpyArray(StaticWrapper):
         return np.load(filepath)  # type: ignore
 
 
-@DumperLoader.dumpable
+@DumpContext.register()
 class DataDictDump:
-    """Delegates dict values to sub-wrappers based on type.
+    """Delegates dict values to sub-handlers based on type.
 
     Handles legacy format (optimized/pickled) on load.
     """
 
-    def __init__(self, value: dict[str, tp.Any]) -> None:
-        self.value = value
-
-    def __dump_info__(self, ctx: DumpContext) -> dict[str, tp.Any]:
+    @classmethod
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         output: dict[str, tp.Any] = {}
-        for skey, val in self.value.items():
+        for skey, val in value.items():
             ctx.key = skey
             if (
                 hasattr(val, "__dump_info__")
@@ -404,17 +461,15 @@ class DataDictDump:
         return output
 
 
-@DumperLoader.dumpable
+@DumpContext.register()
 class Json:
     """Inline JSON storage -- small values stay in the JSONL line."""
 
     MAX_ARRAY_SIZE = 200
 
-    def __init__(self, value: tp.Any) -> None:
-        self.value = value
-
-    def __dump_info__(self, ctx: DumpContext) -> dict[str, tp.Any]:
-        return {"_data": self._encode(self.value)}
+    @classmethod
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+        return {"_data": cls._encode(value)}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, _data: tp.Any) -> tp.Any:

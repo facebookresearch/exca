@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for DumpContext, @dumpable, and new-style wrappers."""
+"""Tests for DumpContext, @DumpContext.register, and handler classes."""
 
 import typing as tp
 from pathlib import Path
@@ -12,39 +12,38 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from .dumpcontext import DumpContext, Json, MemmapArray, PickleDump
+from .dumpcontext import DumpContext, Json
 from .dumperloader import DumperLoader
 
 # =============================================================================
-# @dumpable decorator
+# @DumpContext.register
 # =============================================================================
 
 
-def test_dumpable_registration() -> None:
+def test_register_registration() -> None:
     assert "MemmapArray" in DumperLoader.CLASSES
     assert "StringDump" in DumperLoader.CLASSES
     assert "PickleDump" in DumperLoader.CLASSES
     assert "NpyArray" in DumperLoader.CLASSES
     assert "DataDictDump" in DumperLoader.CLASSES
     assert "Json" in DumperLoader.CLASSES
-    assert DumperLoader.DEFAULTS[MemmapArray] is MemmapArray
-    assert DumperLoader.DEFAULTS[PickleDump] is PickleDump
 
 
-def test_dumpable_requires_protocol() -> None:
-    with pytest.raises(TypeError, match="@dumpable requires __dump_info__"):
+def test_register_requires_protocol() -> None:
+    with pytest.raises(TypeError, match="@DumpContext.register requires __dump_info__"):
 
-        @DumperLoader.dumpable
+        @DumpContext.register
         class BadClass:  # pylint: disable=unused-variable
             pass
 
 
-def test_dumpable_name_collision() -> None:
+def test_register_name_collision() -> None:
     with pytest.raises(ValueError, match="Name collision"):
 
-        @DumperLoader.dumpable
+        @DumpContext.register
         class MemmapArray:  # type: ignore  # noqa: F811  # pylint: disable=unused-variable
-            def __dump_info__(self, ctx: tp.Any) -> dict[str, tp.Any]:
+            @classmethod
+            def __dump_info__(cls, ctx: tp.Any, value: tp.Any) -> dict[str, tp.Any]:
                 return {}
 
             @classmethod
@@ -52,13 +51,24 @@ def test_dumpable_name_collision() -> None:
                 return None
 
 
-def test_dumpable_cache_type_form() -> None:
-    @DumperLoader.dumpable(cache_type="PickleDump")
-    class MySpecialType:
+def test_register_default_for() -> None:
+    class _Marker:
         pass
 
-    assert DumperLoader.DEFAULTS[MySpecialType] is PickleDump
-    del DumperLoader.DEFAULTS[MySpecialType]
+    @DumpContext.register(default_for=_Marker)
+    class _MarkerHandler:
+        @classmethod
+        def __dump_info__(cls, ctx: tp.Any, value: tp.Any) -> dict[str, tp.Any]:
+            return {"val": str(value)}
+
+        @classmethod
+        def __load_from_info__(cls, ctx: tp.Any, val: str) -> str:
+            return val
+
+    assert DumperLoader.DEFAULTS[_Marker] is _MarkerHandler
+    assert "_MarkerHandler" in DumperLoader.CLASSES
+    del DumperLoader.DEFAULTS[_Marker]
+    del DumperLoader.CLASSES["_MarkerHandler"]
 
 
 # =============================================================================
@@ -94,6 +104,12 @@ def test_shared_file_reuse(tmp_path: Path) -> None:
         f3, name3 = ctx.shared_file(".txt")
         assert f3 is not f1
         assert name3 != name1
+
+
+def test_shared_file_requires_context(tmp_path: Path) -> None:
+    ctx = DumpContext(tmp_path)
+    with pytest.raises(RuntimeError, match="context manager"):
+        ctx.shared_file(".data")
 
 
 # =============================================================================
@@ -229,6 +245,7 @@ def test_datadict_legacy_load(tmp_path: Path) -> None:
         "pickled": {"filename": "test-legacy.pkl"},
     }
     loaded = ctx.load(legacy_info)
+    assert isinstance(loaded, dict)
     np.testing.assert_array_almost_equal(loaded["arr"], arr)
     assert loaded["x"] == 42
 
@@ -310,7 +327,7 @@ def test_shallow_copy_key_isolation(tmp_path: Path) -> None:
 
 def test_cached_and_invalidate(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
-    calls = []
+    calls: list[int] = []
 
     def factory() -> str:
         calls.append(1)
