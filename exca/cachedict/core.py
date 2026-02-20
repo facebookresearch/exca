@@ -12,8 +12,9 @@ import dataclasses
 import logging
 import os
 import shutil
-import time
+import threading
 import typing as tp
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -127,6 +128,7 @@ class CacheDict(tp.Generic[X]):
             if self.folder is not None
             else None
         )
+        self._local = threading.local()
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -242,14 +244,80 @@ class CacheDict(tp.Generic[X]):
             self._ram_data[key] = loaded
         return loaded  # type: ignore
 
+    @property
+    def _write_ctx(self) -> DumpContext | None:
+        return getattr(self._local, "write_ctx", None)
+
+    @_write_ctx.setter
+    def _write_ctx(self, value: DumpContext | None) -> None:
+        self._local.write_ctx = value
+
+    def __enter__(self) -> "CacheDict[X]":
+        if self._write_ctx is not None:
+            raise RuntimeError("Cannot re-open an already open writer")
+        if self.folder is not None:
+            self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
+            self._write_ctx.__enter__()
+        return self
+
+    def __exit__(self, *exc: tp.Any) -> None:
+        try:
+            if self._write_ctx is not None:
+                self._write_ctx.__exit__(*exc)
+        finally:
+            self._write_ctx = None
+            if self.folder is not None:
+                os.utime(self.folder)
+
     @contextlib.contextmanager
-    def writer(self) -> tp.Iterator["CacheDictWriter"]:
-        writer = CacheDictWriter(self)
-        with writer.open():
-            yield writer
+    def write(self) -> tp.Iterator["CacheDict[X]"]:
+        """Context manager for writing items to the cache."""
+        with self:
+            yield self
+
+    @contextlib.contextmanager
+    def writer(self) -> tp.Iterator["CacheDict[X]"]:
+        """Deprecated: use write() instead."""
+        warnings.warn(
+            "writer() is deprecated, use write() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        with self:
+            yield self
 
     def __setitem__(self, key: str, value: X) -> None:
-        raise RuntimeError('Use cachedict.writer() as writer" context to set items')
+        if not isinstance(key, str):
+            raise TypeError(f"Non-string keys are not allowed (got {key!r})")
+        if self.folder is not None and self._write_ctx is None:
+            raise RuntimeError("Cannot write outside of a writer context")
+        if self._folder_modified <= 0:
+            _ = self.keys()
+        if self.cache_type is None:
+            cls = DumperLoader.default_class(type(value))
+            self.cache_type = cls.__name__
+        if key in self._ram_data or key in self._key_info:
+            raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
+        if self._keep_in_ram and self.folder is None:
+            self._ram_data[key] = value
+        if self.folder is not None:
+            assert self._write_ctx is not None
+            result = self._write_ctx.dump_entry(key, value, cache_type=self.cache_type)
+            content = result["content"]
+            content.pop("#key", None)
+            cache_type = content.pop("#type", self.cache_type or "Pickle")
+            jsonl_path = Path(self.folder) / result["jsonl"]
+            dinfo = DumpInfo(
+                cache_type=cache_type,
+                jsonl=jsonl_path,
+                byte_range=result["byte_range"],
+                content=content,
+            )
+            self._key_info[key] = dinfo
+            self._jsonl_readers.setdefault(
+                jsonl_path.name, JsonlReader(jsonl_path)
+            )._last = result["byte_range"][1]
+            os.utime(self.folder)
 
     def __delitem__(self, key: str) -> None:
         # necessarily in file cache folder from now on
@@ -293,69 +361,6 @@ class CacheDict(tp.Generic[X]):
             yield
         finally:
             self._jsonl_reading_allowance = float("inf")
-
-
-class CacheDictWriter:
-
-    def __init__(self, cache: CacheDict) -> None:  # type: ignore[type-arg]
-        self.cache = cache
-        self._ctx: DumpContext | None = None
-
-    def __repr__(self) -> str:
-        name = self.__class__.__name__
-        return f"{name}({self.cache!r})"
-
-    @contextlib.contextmanager
-    def open(self) -> tp.Iterator[None]:
-        cd = self.cache
-        if self._ctx is not None:
-            raise RuntimeError("Cannot re-open an already open writer")
-        if cd.folder is None:
-            yield
-            return
-        ctx = DumpContext(cd.folder, permissions=cd.permissions)
-        self._ctx = ctx
-        try:
-            with ctx:
-                yield
-        finally:
-            t = time.time()
-            os.utime(cd.folder, times=(t, t))
-            self._ctx = None
-
-    def __setitem__(self, key: str, value: X) -> None:
-        if not isinstance(key, str):
-            raise TypeError(f"Non-string keys are not allowed (got {key!r})")
-        cd = self.cache
-        if cd.folder is not None and self._ctx is None:
-            raise RuntimeError("Cannot write out of a writer context")
-        if cd._folder_modified <= 0:
-            _ = cd.keys()  # force at least 1 initial key check
-        if cd.cache_type is None:
-            cls = DumperLoader.default_class(type(value))
-            cd.cache_type = cls.__name__
-        if key in cd._ram_data or key in cd._key_info:
-            raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
-        if cd._keep_in_ram and cd.folder is None:
-            cd._ram_data[key] = value
-        if cd.folder is not None:
-            assert self._ctx is not None
-            result = self._ctx.dump_entry(key, value, cache_type=cd.cache_type)
-            content = result["content"]
-            content.pop("#key", None)
-            cache_type = content.pop("#type", cd.cache_type or "Pickle")
-            jsonl_path = Path(cd.folder) / result["jsonl"]
-            dinfo = DumpInfo(
-                cache_type=cache_type,
-                jsonl=jsonl_path,
-                byte_range=result["byte_range"],
-                content=content,
-            )
-            cd._key_info[key] = dinfo
-            cd._jsonl_readers.setdefault(
-                jsonl_path.name, JsonlReader(jsonl_path)
-            )._last = result["byte_range"][1]
-            os.utime(cd.folder)
 
 
 class JsonlReader:

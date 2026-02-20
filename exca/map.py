@@ -487,9 +487,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         except ValueError:  # no caching
             return (out[k] for k, _ in uid_items)
         if out:  # keep in ram activated but no folder
-            with cache_dict.writer() as writer:
+            with cache_dict.write():
                 for x, y in out.items():
-                    writer[x] = y
+                    cache_dict[x] = y
         msg = "Recovering %s items for %s from %s"
         # using factory because uid is too slow for here
         logger.debug(msg, len(uid_items), self._factory(), self.cache_dict)
@@ -512,15 +512,14 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         outputs = self._run_method(items)
         sentinel = base.Sentinel()
         with contextlib.ExitStack() as estack:
-            writer = d
             if isinstance(d, CacheDict):
-                writer = estack.enter_context(d.writer())  # type: ignore
+                estack.enter_context(d.write())
             in_out = itertools.zip_longest(_set_tqdm(items), outputs, fillvalue=sentinel)
             for item, output in in_out:
                 if item is sentinel or output is sentinel:
                     msg = f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
                     raise RuntimeError(msg)
-                writer[item_uid(item)] = output
+                d[item_uid(item)] = output
         # don't return the whole cache dict if data is cached
         return {} if use_cache_dict else d
 

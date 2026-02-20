@@ -35,8 +35,8 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
     assert not list(cache.keys())
     assert not len(cache)
     assert not cache
-    with cache.writer() as writer:
-        writer["blublu"] = x
+    with cache.write():
+        cache["blublu"] = x
     assert "blublu" in cache
     assert cache
     np.testing.assert_almost_equal(cache["blublu"], x)
@@ -44,8 +44,8 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
     assert set(cache.keys()) == {"blublu"}
     assert bool(cache._ram_data) is in_ram
     cache2: cd.CacheDict[tp.Any] = cd.CacheDict(folder=folder)
-    with cache2.writer() as writer:
-        writer["blabla"] = 2 * x
+    with cache2.write():
+        cache2["blabla"] = 2 * x
     assert "blabla" in cache
     assert "blabla2" not in cache
     assert set(cache.keys()) == {"blublu", "blabla"}
@@ -75,8 +75,8 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
 )
 def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     cache: cd.CacheDict[np.ndarray] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    with cache.writer() as writer:
-        writer["blublu.tmp"] = data
+    with cache.write():
+        cache["blublu.tmp"] = data
     assert cache.cache_type not in [None, "Pickle"]
     names = [fp.name for fp in tmp_path.iterdir() if not fp.name.startswith(".")]
     assert len(names) == 2
@@ -113,8 +113,8 @@ def test_specialized_dump(
         keep_in_ram=keep_in_ram,
         cache_type=cache_type,
     )
-    with cache.writer() as writer:
-        writer["x"] = data
+    with cache.write():
+        cache["x"] = data
     with utils.environment_variables(**{MEMMAP_ARRAY_FILE_MAX_CACHE: memmap_cache_size}):
         assert isinstance(cache["x"], type(data))
     del cache
@@ -140,9 +140,9 @@ def test_specialized_dump(
 
 
 def _write_items(cache: cd.CacheDict[tp.Any], keys: list[str], data: tp.Any) -> None:
-    with cache.writer() as writer:
+    with cache.write():
         for key in keys:
-            writer[key] = data
+            cache[key] = data
 
 
 @pytest.mark.parametrize("process", (False,))  # add True for more (slower) tests
@@ -176,8 +176,8 @@ def test_info_jsonl_deletion(tmp_path: Path) -> None:
     keys = ("x", "blüblû", "stuff")
     for k in keys:
         cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-        with cache.writer() as writer:
-            writer[k] = 12 if k == "x" else 3
+        with cache.write():
+            cache[k] = 12 if k == "x" else 3
     _ = cache.keys()  # listing
     info = cache._key_info
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
@@ -200,9 +200,9 @@ def test_info_jsonl_deletion(tmp_path: Path) -> None:
 
 def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    with cache.writer() as writer:
+    with cache.write():
         for val, k in enumerate("xyz"):
-            writer[k] = val
+            cache[k] = val
     info_path = [fp for fp in tmp_path.iterdir() if fp.name.endswith("-info.jsonl")][0]
     lines = info_path.read_bytes().splitlines()
     partial_lines = lines[:2] + [lines[2][: len(lines[2]) // 2]]
@@ -220,8 +220,8 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
 def test_2_caches(tmp_path: Path) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    with cache.writer() as writer:
-        writer["blublu"] = 12
+    with cache.write():
+        cache["blublu"] = 12
         keys = list(cache2.keys())
     keys = list(cache2.keys())
     assert "blublu" in keys
@@ -233,11 +233,11 @@ def test_2_caches_memmap(tmp_path: Path) -> None:
     )
     cache: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
     cache2: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
-    with cache.writer() as writer:
-        writer["blublu"] = np.random.rand(3, 12)
+    with cache.write():
+        cache["blublu"] = np.random.rand(3, 12)
     _ = cache2["blublu"]
-    with cache.writer() as writer:
-        writer["blublu2"] = np.random.rand(3, 12)
+    with cache.write():
+        cache["blublu2"] = np.random.rand(3, 12)
     _ = cache2["blublu2"]
     assert "blublu" in cache2._ram_data
     _ = cache2["blublu"]
@@ -290,8 +290,8 @@ def test_orphaned_cleanup_edge_cases(
     jsonl.write_text(content)
     data_file.write_bytes(b"")
     # Write and delete an item to trigger reader initialization for our test file
-    with cache.writer() as w:
-        w["x"] = np.array([1])
+    with cache.write():
+        cache["x"] = np.array([1])
     del cache["x"]
     # Trigger cleanup
     _ = list(cache.keys())
