@@ -186,6 +186,31 @@ class CacheDict(tp.Generic[X]):
                 futures.append(executor.submit(reader.read))
             for future in futures:
                 self._key_info.update(future.result())
+        self._cleanup_orphaned_jsonl_files()
+
+    def _cleanup_orphaned_jsonl_files(self) -> None:
+        """Remove jsonl files and their associated data files when they have no valid items."""
+        if self.folder is None:
+            return
+        folder = Path(self.folder)
+        referenced = {info.jsonl.name for info in self._key_info.values()}
+        for name, reader in list(self._jsonl_readers.items()):
+            if name in referenced or not reader._meta:
+                continue
+            if not reader._fp.exists():
+                del self._jsonl_readers[name]
+                continue
+            # Only delete if file has deleted items (lines starting with space)
+            with reader._fp.open("rb") as f:
+                f.readline()  # skip metadata
+                if not f.readline().startswith(b" "):
+                    continue
+            logger.warning("Cleaning up orphaned files for %s", name)
+            prefix = name.removesuffix("-info.jsonl")
+            for path in [*folder.glob(f"{prefix}.*"), reader._fp]:
+                with utils.fast_unlink(path, missing_ok=True):
+                    pass
+            del self._jsonl_readers[name]
 
     def values(self) -> tp.Iterable[X]:
         for key in self:

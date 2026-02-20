@@ -138,9 +138,10 @@ def test_specialized_dump(
         assert not files, "No file should remain open"
 
 
-def _setval(cache: cd.CacheDict[tp.Any], key: str, val: tp.Any) -> None:
+def _write_items(cache: cd.CacheDict[tp.Any], keys: list[str], data: tp.Any) -> None:
     with cache.writer() as writer:
-        writer[key] = val
+        for key in keys:
+            writer[key] = data
 
 
 @pytest.mark.parametrize("process", (False,))  # add True for more (slower) tests
@@ -149,9 +150,9 @@ def test_info_jsonl(tmp_path: Path, process: bool) -> None:
     Pool = futures.ProcessPoolExecutor if process else futures.ThreadPoolExecutor
     jobs = []
     with Pool(max_workers=2) as ex:
-        jobs.append(ex.submit(_setval, cache, "x", 12))
-        jobs.append(ex.submit(_setval, cache, "y", 3))
-        jobs.append(ex.submit(_setval, cache, "z", 24))
+        jobs.append(ex.submit(_write_items, cache, ["x"], 12))
+        jobs.append(ex.submit(_write_items, cache, ["y"], 3))
+        jobs.append(ex.submit(_write_items, cache, ["z"], 24))
     for j in jobs:
         j.result()
     # check files
@@ -239,3 +240,70 @@ def test_2_caches_memmap(tmp_path: Path) -> None:
     _ = cache2["blublu2"]
     assert "blublu" in cache2._ram_data
     _ = cache2["blublu"]
+
+
+@pytest.mark.parametrize("cache_type", ["MemmapArrayFile", "String"])
+def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
+    """Test that orphaned data files are cleaned up when all items are deleted."""
+    data: tp.Any = np.random.rand(3, 12) if cache_type == "MemmapArrayFile" else "hello"
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(
+        folder=tmp_path, keep_in_ram=False, cache_type=cache_type
+    )
+    # Use multiple threads to create multiple jsonl/data file pairs
+    with futures.ThreadPoolExecutor(max_workers=3) as ex:
+        for c in "abc":
+            ex.submit(_write_items, cache, [f"{c}1", f"{c}2"], data)
+    assert len(list(tmp_path.glob("*-info.jsonl"))) == 3
+    # Delete all items from one writer, files still exist (cleanup is lazy)
+    for key in ["a1", "a2", "c1", "b2"]:
+        del cache[key]
+    assert len(list(tmp_path.glob("*-info.jsonl"))) == 3
+    # Trigger cleanup via keys() - orphaned pair should be deleted
+    assert set(cache.keys()) == {"b1", "c2"}
+    assert len(list(tmp_path.glob("*-info.jsonl"))) == 2
+
+
+@pytest.mark.parametrize(
+    "content,should_delete",
+    [
+        ('metadata={"cache_type":', False),  # writting metadata
+        ('metadata={"cache_type": "MemmapArrayFile"}\n', False),  # metadata only
+        (
+            'metadata={"cache_type": "MemmapArrayFile"}\n{"partial": true',
+            False,
+        ),  # partial line
+        ('metadata={"cache_type": "MemmapArrayFile"}\n     \n', True),  # deleted item
+        (
+            'metadata={"cache_type": "MemmapArrayFile"}\n     ',
+            True,
+        ),  # deleted item (no trailing newline)
+        (
+            'metadata={"cache_type": "MemmapArrayFile"}\n     \n{"#key": "blu"}',
+            False,
+        ),  # remaning data
+    ],
+)
+def test_orphaned_cleanup_edge_cases(
+    tmp_path: Path, content: str, should_delete: bool
+) -> None:
+    """Test edge cases for orphaned file cleanup."""
+    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
+        folder=tmp_path, keep_in_ram=False, cache_type="MemmapArrayFile"
+    )
+    # Create test file pair
+    jsonl = tmp_path / "test-writer-info.jsonl"
+    data_file = tmp_path / "test-writer.data"
+    jsonl.write_text(content)
+    data_file.write_bytes(b"")
+    # Write and delete an item to trigger reader initialization for our test file
+    with cache.writer() as w:
+        w["x"] = np.array([1])
+    del cache["x"]
+    # Trigger cleanup
+    _ = list(cache.keys())
+    # Check result
+    for fp in [jsonl, data_file]:
+        if should_delete:
+            assert not fp.exists(), f"{fp.name} should be deleted for: {content!r}"
+        else:
+            assert fp.exists(), f"{fp.name} should NOT be deleted for: {content!r}"
