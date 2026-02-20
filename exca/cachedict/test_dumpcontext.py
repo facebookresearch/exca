@@ -35,7 +35,7 @@ def test_dumpable_requires_protocol() -> None:
     with pytest.raises(TypeError, match="@dumpable requires __dump_info__"):
 
         @DumperLoader.dumpable
-        class BadClass:
+        class BadClass:  # pylint: disable=unused-variable
             pass
 
 
@@ -43,7 +43,7 @@ def test_dumpable_name_collision() -> None:
     with pytest.raises(ValueError, match="Name collision"):
 
         @DumperLoader.dumpable
-        class MemmapArray:  # type: ignore  # noqa: F811
+        class MemmapArray:  # type: ignore  # noqa: F811  # pylint: disable=unused-variable
             def __dump_info__(self, ctx: tp.Any) -> dict[str, tp.Any]:
                 return {}
 
@@ -299,7 +299,7 @@ def test_shallow_copy_key_isolation(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
     ctx.key = "original"
     with ctx:
-        info = ctx.dump(np.array([1.0]), cache_type="MemmapArray")
+        ctx.dump(np.array([1.0]), cache_type="MemmapArray")
     assert ctx.key == "original"
 
 
