@@ -49,17 +49,15 @@ class DumpContext:
     and dispatches to both new-style handlers and legacy DumperLoaders.
     """
 
-    def __init__(
-        self, folder: tp.Union[str, Path], *, permissions: tp.Optional[int] = None
-    ) -> None:
+    def __init__(self, folder: str | Path, *, permissions: int | None = None) -> None:
         self.folder = Path(folder)
-        self.key: tp.Optional[str] = None
+        self.key: str | None = None
         self.permissions = permissions
         self._thread_id = threading.get_native_id()
         self._prefix = f"{socket.gethostname()}-{self._thread_id}"
         self._files: dict[str, tp.IO[bytes]] = {}
         self._loaders: dict[type, DumperLoader] = {}
-        self._stack: tp.Optional[contextlib.ExitStack] = None
+        self._stack: contextlib.ExitStack | None = None
         self._resource_cache: dict[tp.Hashable, tp.Any] = {}
         self._max_cache = int(os.environ.get("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", 100_000))
         self._created_files: list[Path] = []
@@ -71,7 +69,7 @@ class DumpContext:
         cls,
         target: tp.Any = None,
         *,
-        default_for: tp.Optional[type] = None,
+        default_for: type | None = None,
     ) -> tp.Any:
         """Decorator to register a handler class for serialization.
 
@@ -166,7 +164,7 @@ class DumpContext:
     # -- Dispatch --
 
     def dump_entry(
-        self, key: str, value: tp.Any, *, cache_type: tp.Optional[str] = None
+        self, key: str, value: tp.Any, *, cache_type: str | None = None
     ) -> dict[str, tp.Any]:
         """Top-level entry: serialize value, write JSONL line with #key.
         Returns index info (jsonl filename, byte range, content).
@@ -186,9 +184,7 @@ class DumpContext:
             "content": info,
         }
 
-    def dump(
-        self, value: tp.Any, *, cache_type: tp.Optional[str] = None
-    ) -> dict[str, tp.Any]:
+    def dump(self, value: tp.Any, *, cache_type: str | None = None) -> dict[str, tp.Any]:
         """Serialize a sub-value. Returns an info dict tagged with #type.
         Creates a shallow copy so nested dumps don't clobber ctx.key."""
         ctx = copy.copy(self)

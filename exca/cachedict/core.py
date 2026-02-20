@@ -122,13 +122,11 @@ class CacheDict(tp.Generic[X]):
         self._folder_modified = -1.0
         self._jsonl_readers: dict[str, JsonlReader] = {}
         self._jsonl_reading_allowance = float("inf")
-        # DumpContext for read-side dispatch (load / delete)
-        self._ctx: DumpContext | None = (
-            DumpContext(self.folder, permissions=self.permissions)
-            if self.folder is not None
-            else None
-        )
-        self._local = threading.local()
+        # Handles load() and delete() dispatch to registered handlers
+        self._dumper: DumpContext | None = None
+        if self.folder is not None:
+            self._dumper = DumpContext(self.folder, permissions=self.permissions)
+        self._local = threading.local()  # per-thread write context, see _write_ctx
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -232,18 +230,20 @@ class CacheDict(tp.Generic[X]):
             if key in self._ram_data or self.folder is None:
                 return self._ram_data[key]
         # necessarily in file cache folder from now on
-        if self._ctx is None:
+        if self._dumper is None:
             raise RuntimeError("This should not happen")
         if key not in self._key_info:
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
         content = dict(dinfo.content)
         content["#type"] = dinfo.cache_type
-        loaded = self._ctx.load(content)
+        loaded = self._dumper.load(content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
         return loaded  # type: ignore
 
+    # Thread-local write context: each thread gets its own DumpContext
+    # (and thus its own JSONL file), enabling concurrent writers.
     @property
     def _write_ctx(self) -> DumpContext | None:
         return getattr(self._local, "write_ctx", None)
@@ -324,7 +324,7 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = key in self
         self._ram_data.pop(key, None)
-        if self._ctx is None:
+        if self._dumper is None:
             return
         dinfo = self._key_info.pop(key)
         # Blank out the JSONL line (overwrite JSON bytes with spaces, keep newline)
@@ -336,7 +336,7 @@ class CacheDict(tp.Generic[X]):
         # Delete owned files via DumpContext
         content = dict(dinfo.content)
         content["#type"] = dinfo.cache_type
-        self._ctx.delete(content)
+        self._dumper.delete(content)
 
     def __contains__(self, key: str) -> bool:
         # in-memory cache
