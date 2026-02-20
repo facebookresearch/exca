@@ -18,6 +18,7 @@ import logging
 import pickle
 import shutil
 import typing as tp
+from concurrent import futures
 from pathlib import Path
 
 import pydantic
@@ -76,13 +77,15 @@ class StepPaths:
         """Create StepPaths from a step and input value.
 
         step_uid is computed from _chain_hash() giving nested folder structure.
-        item_uid is computed from the input value (or sentinel for generators).
+        item_uid is computed via ``step.item_uid(value)`` — subclasses
+        can override ``item_uid`` for custom cache keys (affects both
+        ``forward()`` and ``map()``).  Generators use a sentinel.
         """
         step_uid = step._chain_hash()
         if isinstance(value, NoValue):
             item_uid = _NOINPUT_UID
         else:
-            item_uid = exca.ConfDict(value=value).to_uid()
+            item_uid = step.item_uid(value)
         return cls(base_folder=folder, step_uid=step_uid, item_uid=item_uid)
 
     @property
@@ -421,6 +424,20 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         wrapper(*args)
         return _InlineJob()
 
+    def _submit_map(
+        self,
+        fn: tp.Callable[..., None],
+        chunks: list[list[tp.Any]],
+        logs_folder: str,
+    ) -> None:
+        """Execute *fn(chunk)* for each chunk.
+
+        Called by :meth:`Step.map` to process batches of items.
+        Override in subclasses for parallel / remote execution.
+        """
+        for chunk in chunks:
+            fn(chunk)
+
 
 class _InlineJob:
     """Dummy job for inline execution."""
@@ -468,6 +485,33 @@ class _SubmititBackend(Backend):
 
         return job
 
+    def _submit_map(
+        self,
+        fn: tp.Callable[..., None],
+        chunks: list[list[tp.Any]],
+        logs_folder: str,
+    ) -> None:
+        """Submit each chunk as a separate submitit job."""
+        executor = self._EXECUTOR_CLS(folder=logs_folder)
+
+        submitit_fields = set(type(self).model_fields) - set(Backend.model_fields)
+        params = {
+            k: getattr(self, k) for k in submitit_fields if getattr(self, k) is not None
+        }
+        if "job_name" in params:
+            params["name"] = params.pop("job_name")
+        executor.update_parameters(**params)
+
+        jobs: list[tp.Any] = []
+        with submitit.helpers.clean_env():
+            with executor.batch():
+                for chunk in chunks:
+                    jobs.append(executor.submit(fn, chunk))
+
+        logger.info("Submitted %d map jobs (e.g. %s)", len(jobs), jobs[0].job_id)
+        for job in jobs:
+            job.result()
+
 
 class LocalProcess(_SubmititBackend):
     """Subprocess execution + caching."""
@@ -498,3 +542,51 @@ class Auto(Slurm):
     """Auto-detect executor (local or Slurm)."""
 
     _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.AutoExecutor
+
+
+class ThreadPool(Backend):
+    """Thread-pool execution + caching.
+
+    Uses ``concurrent.futures.ThreadPoolExecutor`` for :meth:`Step.map`.
+    For :meth:`Step.forward`, behaves like ``Cached`` (inline execution).
+    """
+
+    max_workers: int | None = None
+
+    def _submit_map(
+        self,
+        fn: tp.Callable[..., None],
+        chunks: list[list[tp.Any]],
+        logs_folder: str,
+    ) -> None:
+        max_workers = self.max_workers
+        if max_workers is not None:
+            max_workers = min(len(chunks), max_workers)
+        with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futs = [executor.submit(fn, chunk) for chunk in chunks]
+            for f in futures.as_completed(futs):
+                f.result()
+
+
+class ProcessPool(Backend):
+    """Process-pool execution + caching.
+
+    Uses ``concurrent.futures.ProcessPoolExecutor`` for :meth:`Step.map`.
+    For :meth:`Step.forward`, behaves like ``Cached`` (inline execution).
+    """
+
+    max_workers: int | None = None
+
+    def _submit_map(
+        self,
+        fn: tp.Callable[..., None],
+        chunks: list[list[tp.Any]],
+        logs_folder: str,
+    ) -> None:
+        max_workers = self.max_workers
+        if max_workers is not None:
+            max_workers = min(len(chunks), max_workers)
+        with futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futs = [executor.submit(fn, chunk) for chunk in chunks]
+            for f in futures.as_completed(futs):
+                f.result()

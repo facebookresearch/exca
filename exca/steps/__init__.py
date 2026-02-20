@@ -27,4 +27,5 @@ Example:
 
 from . import backends
 from .base import Chain as Chain
+from .base import Items as Items
 from .base import Step as Step

@@ -5,10 +5,13 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-Core step classes.
+Core step classes and map/batch processing.
 
 Step handles computation logic, backends handles execution + caching.
 Backends holds a reference to its owning Step for cache key computation.
+
+Map support: ``step.map(Items([...]))`` processes multiple items with
+per-item caching, delegated to the step's backend for parallelism.
 """
 
 from __future__ import annotations
@@ -16,18 +19,118 @@ from __future__ import annotations
 import collections
 import inspect
 import logging
+import math
 import typing as tp
 from pathlib import Path
 
 import pydantic
 
 import exca
+from exca import cachedict as cachedict_mod
 from exca import utils
 
 from . import backends
 from .backends import NoValue
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Items wrapper (public API for step.map)
+# =============================================================================
+
+
+class Items:
+    """Batch of items for :meth:`Step.map`.
+
+    Accepts any iterable, including generators.  Generators are consumed
+    once during ``map()``; only uncached items are kept in memory.
+
+    Parameters
+    ----------
+    items: iterable
+        Items to process.
+    max_jobs: optional int
+        Maximum number of parallel jobs / chunks.  ``None`` = no limit.
+    min_items_per_job: int
+        Minimum items per chunk.
+    """
+
+    def __init__(
+        self,
+        items: tp.Iterable[tp.Any],
+        *,
+        max_jobs: int | None = None,
+        min_items_per_job: int = 1,
+    ):
+        self._items = items
+        self.max_jobs = max_jobs
+        self.min_items_per_job = min_items_per_job
+
+    def __iter__(self) -> tp.Iterator[tp.Any]:
+        return iter(self._items)
+
+    def __repr__(self) -> str:
+        try:
+            n = len(self._items)  # type: ignore[arg-type]
+            return f"Items({n} items, max_jobs={self.max_jobs})"
+        except TypeError:
+            return f"Items(max_jobs={self.max_jobs})"
+
+
+# =============================================================================
+# Map internals
+# =============================================================================
+
+
+def _to_chunks(
+    items: list[tp.Any],
+    *,
+    max_chunks: int | None = None,
+    min_items_per_chunk: int = 1,
+) -> list[list[tp.Any]]:
+    """Split items into balanced chunks for parallel processing."""
+    n = len(items)
+    if n == 0:
+        return []
+    splits = min(
+        n if max_chunks is None else max_chunks,
+        math.ceil(n / min_items_per_chunk),
+    )
+    splits = max(1, splits)
+    per_chunk = math.ceil(n / splits)
+    return [items[k * per_chunk : (k + 1) * per_chunk] for k in range(splits)]
+
+
+class _ChunkProcessor:
+    """Picklable callable that processes a chunk of ``(uid, item)`` pairs.
+
+    Creates a fresh ``CacheDict`` in the worker (necessary for remote
+    processes) and writes one result per item.  Used by
+    ``Backend._submit_map`` and its overrides.
+    """
+
+    def __init__(
+        self,
+        step: "Step",
+        cache_folder: Path,
+        cache_type: str | None,
+        permissions: int | None,
+    ) -> None:
+        self.step = step.model_copy(deep=True)
+        self.cache_folder = cache_folder
+        self.cache_type = cache_type
+        self.permissions = permissions
+
+    def __call__(self, chunk: list[tuple[str, tp.Any]]) -> None:
+        cd: cachedict_mod.CacheDict[tp.Any] = cachedict_mod.CacheDict(
+            folder=self.cache_folder,
+            cache_type=self.cache_type,
+            permissions=self.permissions,
+        )
+        with cd.writer() as writer:
+            for uid, item in chunk:
+                writer[uid] = self.step._map_compute(item)
 
 
 def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
@@ -179,6 +282,126 @@ class Step(exca.helpers.DiscriminatedModel):
 
         return result
 
+    def _map_compute(self, item: tp.Any) -> tp.Any:
+        """Compute one item for :meth:`map`.  Override in Chain."""
+        return self._forward(item)
+
+    def map(self, items: tp.Any) -> tp.Iterator[tp.Any]:
+        """Process multiple items with per-item caching.
+
+        Iterates through *items* **once** (generator-friendly):
+
+        * Cached items: uid recorded, value discarded (memory-efficient).
+        * Uncached items: ``(uid, value)`` kept for processing.
+
+        Processing of uncached items is delegated to the backend's
+        ``_submit_map`` method (sequential, thread-pool, Slurm …).
+
+        Parameters
+        ----------
+        items: Items
+            Batch of items wrapped in ``Items(iterable, ...)``.
+            Generators supported: only uncached items kept in memory.
+
+        Returns
+        -------
+        Iterator of results in the same order as input items.
+        """
+        if not isinstance(items, Items):
+            raise TypeError(
+                f"map() requires an Items instance, got {type(items).__name__}. "
+                "Use step.map(Items([...]))"
+            )
+        return self._map_iter(items)
+
+    def _map_iter(self, items: Items) -> tp.Iterator[tp.Any]:
+        """Generator that implements :meth:`map` (separated for eager validation)."""
+        # --- No caching: pure streaming ---
+        if self.infra is None or self.infra.folder is None:
+            for item in items:
+                yield self._map_compute(item)
+            return
+
+        # --- With caching ---
+        # Compute cache folder (with_input sets _previous = Input(NoValue)
+        # which is enough for step_uid / cache_folder — neither depends on input).
+        configured = self.with_input()
+        assert configured.infra is not None
+        cache_folder = configured.infra.paths.cache_folder
+        configured.infra._check_configs(write=True)
+
+        cd: cachedict_mod.CacheDict[tp.Any] = cachedict_mod.CacheDict(
+            folder=cache_folder,
+            keep_in_ram=self.infra.keep_in_ram,
+            cache_type=self.infra.cache_type,
+            permissions=self.infra.permissions,
+        )
+
+        mode = self.infra.mode
+
+        # Single pass through items (generator-safe).
+        uid_order: list[str] = []
+        missing: list[tuple[str, tp.Any]] = []
+        seen: set[str] = set()
+
+        with cd.frozen_cache_folder():
+            for item in items:
+                uid = self.item_uid(item)
+                uid_order.append(uid)
+                if uid in seen:
+                    continue
+                seen.add(uid)
+                if mode in ("force", "force-forward"):
+                    missing.append((uid, item))
+                elif uid not in cd:
+                    missing.append((uid, item))
+
+        # Mode: read-only
+        if mode == "read-only" and missing:
+            raise RuntimeError(
+                f"mode='read-only' but {len(missing)} items are not cached"
+            )
+
+        # Mode: force — clear existing entries before rewriting
+        if mode in ("force", "force-forward"):
+            for uid, _ in missing:
+                if uid in cd:
+                    del cd[uid]
+
+        # Process missing items via the backend
+        if missing:
+            logger.info(
+                "Processing %d/%d items for %s",
+                len(missing),
+                len(uid_order),
+                type(self).__name__,
+            )
+
+            chunks = _to_chunks(
+                missing,
+                max_chunks=items.max_jobs,
+                min_items_per_chunk=items.min_items_per_job,
+            )
+            processor = _ChunkProcessor(
+                step=self,
+                cache_folder=cache_folder,
+                cache_type=self.infra.cache_type,
+                permissions=self.infra.permissions,
+            )
+            self.infra._submit_map(
+                processor, chunks, logs_folder=configured.infra.paths.logs_folder
+            )
+
+            logger.info("Finished processing items for %s", type(self).__name__)
+
+        # Reset force modes (consistent with forward())
+        if mode in ("force", "force-forward"):
+            self.infra.mode = "cached"
+
+        # Yield results in original order from CacheDict
+        for uid in uid_order:
+            yield cd[uid]
+
     # =========================================================================
     # Cache key computation
     # =========================================================================
@@ -195,6 +418,15 @@ class Step(exca.helpers.DiscriminatedModel):
         steps = self._aligned_chain()
         opts = {"exclude_defaults": True, "uid": True}
         return "/".join(exca.ConfDict.from_model(s, **opts).to_uid() for s in steps)
+
+    def item_uid(self, value: tp.Any) -> str:
+        """Derive cache key from an input value.
+
+        Override in subclass for custom cache keys.  Used by both
+        ``forward()`` and ``map()`` — they share the same cache entries.
+        The default uses ``ConfDict(value=...).to_uid()``.
+        """
+        return exca.ConfDict(value=value).to_uid()
 
     # =========================================================================
     # Cache operations (backend auto-configures generators, errors for transformers)
@@ -364,6 +596,21 @@ class Chain(Step):
             object.__setattr__(step.infra, "mode", "cached")
 
         return result
+
+    def _map_compute(self, item: tp.Any) -> tp.Any:
+        """Compute one item for :meth:`map`.
+
+        Uses ``with_input(item)`` + ``_forward()`` to handle chain
+        initialisation and folder propagation while skipping chain-level
+        ``Backend.run()`` caching (whose key does not vary per item).
+        Internal steps still use their own backends for intermediate caching.
+        """
+        configured = self.with_input(item)
+        return configured._forward()
+
+    def item_uid(self, value: tp.Any) -> str:
+        """Delegate to first step's ``item_uid`` (the step receiving raw input)."""
+        return self._step_sequence()[0].item_uid(value)
 
     def _aligned_step(self) -> list[Step]:
         # Flatten to contained steps - chain itself is not in the UID.
