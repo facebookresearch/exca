@@ -206,15 +206,15 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
             cache[k] = val
     info_path = [fp for fp in tmp_path.iterdir() if fp.name.endswith("-info.jsonl")][0]
     lines = info_path.read_bytes().splitlines()
-    partial_lines = lines[:2] + [lines[2][: len(lines[2]) // 2]]
+    partial_lines = lines[:1] + [lines[1][: len(lines[1]) // 2]]
     info_path.write_bytes(b"\n".join(partial_lines))
     # reload cache
     logger.debug("new file")
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    assert len(cache) == 2  # x and y complete, z truncated (no metadata header)
+    assert len(cache) == 1  # x complete, y truncated
+    os.utime(tmp_path)
     # now complete
     info_path.write_bytes(b"\n".join(lines))
-    os.utime(tmp_path)  # modifying a file doesn't update folder mtime
     assert len(cache) == 3
 
 
