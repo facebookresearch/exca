@@ -34,9 +34,9 @@ METADATA_TAG = "metadata="
 
 @dataclasses.dataclass
 class DumpInfo:
-    """Structure for keeping track of metadata/how to read data"""
+    """Structure for keeping track of metadata/how to read data.
+    content always contains '#type' for dispatch."""
 
-    cache_type: str
     jsonl: Path
     byte_range: tuple[int, int]
     content: dict[str, tp.Any]
@@ -238,9 +238,7 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
-        content = dict(dinfo.content)
-        content["#type"] = dinfo.cache_type
-        loaded = self._dumper.load(content)
+        loaded = self._dumper.load(dinfo.content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
         return loaded  # type: ignore
@@ -304,10 +302,8 @@ class CacheDict(tp.Generic[X]):
             result = self._write_ctx.dump_entry(key, value, cache_type=self.cache_type)
             content = result["content"]
             content.pop("#key", None)
-            cache_type = content.pop("#type", self.cache_type or "Pickle")
             jsonl_path = self.folder / result["jsonl"]
             dinfo = DumpInfo(
-                cache_type=cache_type,
                 jsonl=jsonl_path,
                 byte_range=result["byte_range"],
                 content=content,
@@ -332,10 +328,7 @@ class CacheDict(tp.Generic[X]):
             with dinfo.jsonl.open("rb+") as f:
                 f.seek(brange[0])
                 f.write(b" " * (brange[1] - brange[0] - 1))
-        # Delete owned files via DumpContext
-        content = dict(dinfo.content)
-        content["#type"] = dinfo.cache_type
-        self._dumper.delete(content)
+        self._dumper.delete(dinfo.content)
 
     def __contains__(self, key: str) -> bool:
         # in-memory cache
@@ -413,12 +406,12 @@ class JsonlReader:
                     continue
                 last += count
                 key = info.pop("#key")
-                cache_type = info.pop("#type", self._meta.get("cache_type", "Pickle"))
+                if "#type" not in info:
+                    info["#type"] = self._meta.get("cache_type", "Pickle")
                 dinfo = DumpInfo(
                     jsonl=self._fp,
                     byte_range=brange,
                     content=info,
-                    cache_type=cache_type,
                 )
                 out[key] = dinfo
         self._last = last
