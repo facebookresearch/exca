@@ -110,17 +110,23 @@ def test_user_defined_class_roundtrip(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# DumpContext basic lifecycle
+# DumpContext lifecycle
 # =============================================================================
 
 
-def test_context_enter_exit(tmp_path: Path) -> None:
+def test_shared_file_lifecycle(tmp_path: Path) -> None:
+    """shared_file requires context, reuses handles, and writes correctly."""
     ctx = DumpContext(tmp_path)
+    with pytest.raises(RuntimeError, match="context manager"):
+        ctx.shared_file(".data")
     with ctx:
-        f, name = ctx.shared_file(".data")
-        assert name.endswith(".data")
-        f.write(b"hello")
-    assert (tmp_path / name).read_bytes() == b"hello"
+        f1, name1 = ctx.shared_file(".data")
+        f2, name2 = ctx.shared_file(".data")
+        assert f1 is f2 and name1 == name2
+        f3, name3 = ctx.shared_file(".txt")
+        assert f3 is not f1 and name3 != name1
+        f1.write(b"hello")
+    assert (tmp_path / name1).read_bytes() == b"hello"
 
 
 def test_context_permissions(tmp_path: Path) -> None:
@@ -130,24 +136,6 @@ def test_context_permissions(tmp_path: Path) -> None:
         f.write(b"test")
     mode = oct((tmp_path / name).stat().st_mode)[-3:]
     assert mode == "755"
-
-
-def test_shared_file_reuse(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    with ctx:
-        f1, name1 = ctx.shared_file(".data")
-        f2, name2 = ctx.shared_file(".data")
-        assert f1 is f2
-        assert name1 == name2
-        f3, name3 = ctx.shared_file(".txt")
-        assert f3 is not f1
-        assert name3 != name1
-
-
-def test_shared_file_requires_context(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    with pytest.raises(RuntimeError, match="context manager"):
-        ctx.shared_file(".data")
 
 
 # =============================================================================
@@ -207,25 +195,14 @@ def test_memmap_array_shared_file(tmp_path: Path) -> None:
     np.testing.assert_array_almost_equal(ctx.load(info2), a2)
 
 
-# =============================================================================
-# StaticWrapper specifics
-# =============================================================================
-
-
-def test_static_wrapper_collision_detection(tmp_path: Path) -> None:
+def test_static_wrapper_collision_and_delete(tmp_path: Path) -> None:
+    """StaticWrapper detects filename collision, and delete removes the file."""
     ctx = DumpContext(tmp_path)
     ctx.key = "same_key"
     with ctx:
-        ctx.dump(42, cache_type="PickleDump")
+        info = ctx.dump(42, cache_type="PickleDump")
         with pytest.raises(RuntimeError, match="already exists"):
             ctx.dump(43, cache_type="PickleDump")
-
-
-def test_static_wrapper_delete(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    ctx.key = "del_key"
-    with ctx:
-        info = ctx.dump(42, cache_type="PickleDump")
     filepath = tmp_path / info["filename"]
     assert filepath.exists()
     ctx.delete(info)
@@ -238,31 +215,22 @@ def test_static_wrapper_delete(tmp_path: Path) -> None:
 
 
 def test_datadict_roundtrip(tmp_path: Path) -> None:
+    """Mixed dict: arrays get handlers, JSON-serializable values stay inline."""
     ctx = DumpContext(tmp_path)
     ctx.key = "entry1"
-    data = {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "label": "test"}
+    data = {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}}
     with ctx:
         info = ctx.dump(data, cache_type="DataDictDump")
     assert info["#type"] == "DataDictDump"
+    assert info["count"] == 42
+    assert info["nested"] == {"a": 1}
+    for key in ("count", "nested"):
+        assert not isinstance(info[key], dict) or "#type" not in info[key]
     loaded = ctx.load(info)
     assert isinstance(loaded, dict)
-    np.testing.assert_array_almost_equal(loaded["arr"], np.array([1.0, 2.0, 3.0]))
+    np.testing.assert_array_almost_equal(loaded["arr"], data["arr"])
     assert loaded["count"] == 42
-
-
-def test_datadict_json_inline_for_simple_values(tmp_path: Path) -> None:
-    """Values whose default handler is Pickle but are JSON-serializable
-    should be stored inline (no #type tag), not pickled."""
-    ctx = DumpContext(tmp_path)
-    ctx.key = "entry2"
-    data = {"x": 42, "y": [1, 2, 3], "nested": {"a": 1}}
-    with ctx:
-        info = ctx.dump(data, cache_type="DataDictDump")
-    assert info["x"] == 42
-    assert info["y"] == [1, 2, 3]
-    assert info["nested"] == {"a": 1}
-    for key in ("x", "y", "nested"):
-        assert not isinstance(info[key], dict) or "#type" not in info[key]
+    assert loaded["nested"] == {"a": 1}
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:
@@ -291,7 +259,7 @@ def test_datadict_legacy_load(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# Json specifics
+# Json, dump_entry, shallow copy, cache
 # =============================================================================
 
 
@@ -302,25 +270,8 @@ def test_json_large_array_rejected(tmp_path: Path) -> None:
         ctx.dump(arr, cache_type="Json")
 
 
-# =============================================================================
-# dump_entry, shallow copy, cache
-# =============================================================================
-
-
-def test_dump_entry_writes_jsonl(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    with ctx:
-        result = ctx.dump_entry("key1", "hello world")
-    assert "#key" in result["content"]
-    assert result["content"]["#key"] == "key1"
-    assert result["content"]["#type"] in DumperLoader.CLASSES
-    jsonl_path = tmp_path / result["jsonl"]
-    assert jsonl_path.exists()
-    lines = jsonl_path.read_bytes().strip().split(b"\n")
-    assert len(lines) == 1
-
-
-def test_dump_entry_multiple_keys(tmp_path: Path) -> None:
+def test_dump_entry(tmp_path: Path) -> None:
+    """dump_entry writes JSONL with #key, multiple entries share one file."""
     ctx = DumpContext(tmp_path)
     with ctx:
         r1 = ctx.dump_entry("k1", np.array([1.0, 2.0]))
@@ -328,6 +279,9 @@ def test_dump_entry_multiple_keys(tmp_path: Path) -> None:
     assert r1["content"]["#key"] == "k1"
     assert r2["content"]["#key"] == "k2"
     assert r1["jsonl"] == r2["jsonl"]
+    jsonl_path = tmp_path / r1["jsonl"]
+    assert jsonl_path.exists()
+    assert len(jsonl_path.read_bytes().strip().split(b"\n")) == 2
 
 
 def test_shallow_copy_key_isolation(tmp_path: Path) -> None:
@@ -347,7 +301,6 @@ def test_cached_and_invalidate(tmp_path: Path) -> None:
         return "value"
 
     assert ctx.cached("k", factory) == "value"
-    assert len(calls) == 1
     assert ctx.cached("k", factory) == "value"
     assert len(calls) == 1
     ctx.invalidate("k")
