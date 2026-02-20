@@ -157,6 +157,10 @@ def test_context_permissions(tmp_path: Path) -> None:
 def _compare(loaded: tp.Any, expected: tp.Any) -> None:
     if isinstance(expected, np.ndarray):
         np.testing.assert_array_almost_equal(loaded, expected)
+    elif isinstance(expected, dict):
+        assert isinstance(loaded, dict) and loaded.keys() == expected.keys()
+        for k in expected:
+            _compare(loaded[k], expected[k])
     else:
         assert loaded == expected
 
@@ -169,6 +173,11 @@ ROUNDTRIP_CASES: list[tuple[str, tp.Any, tp.Optional[str]]] = [
     ("NpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32), "npy_key"),
     ("Json", 42, None),
     ("Json", np.array([1.0, 2.0, 3.0]), None),
+    (
+        "DataDictDump",
+        {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
+        "entry1",
+    ),
     # Legacy DumperLoader subclasses through DumpContext
     ("MemmapArrayFile", np.array([1.0, 2.0, 3.0], dtype=np.float32), "legacy_mm"),
     ("String", "test string", "legacy_str"),
@@ -225,23 +234,20 @@ def test_static_wrapper_collision_and_delete(tmp_path: Path) -> None:
 # =============================================================================
 
 
-def test_datadict_roundtrip(tmp_path: Path) -> None:
-    """Mixed dict: arrays get handlers, JSON-serializable values stay inline."""
+def test_datadict_info_structure(tmp_path: Path) -> None:
+    """JSON-serializable values stay inline (no #type wrapper)."""
     ctx = DumpContext(tmp_path)
     ctx.key = "entry1"
-    data = {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}}
     with ctx:
-        info = ctx.dump(data, cache_type="DataDictDump")
-    assert info["#type"] == "DataDictDump"
+        info = ctx.dump(
+            {"arr": np.array([1.0, 2.0]), "count": 42, "nested": {"a": 1}},
+            cache_type="DataDictDump",
+        )
     assert info["count"] == 42
     assert info["nested"] == {"a": 1}
     for key in ("count", "nested"):
         assert not isinstance(info[key], dict) or "#type" not in info[key]
-    loaded = ctx.load(info)
-    assert isinstance(loaded, dict)
-    np.testing.assert_array_almost_equal(loaded["arr"], data["arr"])  # type: ignore[arg-type]
-    assert loaded["count"] == 42
-    assert loaded["nested"] == {"a": 1}
+    assert isinstance(info["arr"], dict) and "#type" in info["arr"]
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:

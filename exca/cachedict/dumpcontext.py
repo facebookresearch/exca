@@ -22,6 +22,7 @@ DumpContext also handles transparently.
 
 import contextlib
 import copy
+import logging
 import os
 import pickle
 import socket
@@ -38,7 +39,7 @@ from .dumperloader import DumperLoader
 from .dumperloader import Pickle as _LegacyPickle
 from .dumperloader import _string_uid
 
-# TODO: consider supporting default_for=(type1, type2) for multiple types
+logger = logging.getLogger(__name__)
 
 
 class DumpContext:
@@ -56,10 +57,10 @@ class DumpContext:
         self.permissions = permissions
         self._thread_id = threading.get_native_id()
         self._prefix = f"{socket.gethostname()}-{self._thread_id}"
-        self._files: dict[str, tuple[tp.IO[bytes], str]] = {}
+        self._files: dict[str, tp.IO[bytes]] = {}
         self._loaders: dict[type, DumperLoader] = {}
         self._stack: tp.Optional[contextlib.ExitStack] = None
-        self._resource_cache: dict[str, tp.Any] = {}
+        self._resource_cache: dict[tp.Hashable, tp.Any] = {}
         self._max_cache = int(os.environ.get("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", 100_000))
         self._created_files: list[Path] = []
 
@@ -134,17 +135,21 @@ class DumpContext:
                 try:
                     fp.chmod(self.permissions)
                 except Exception:
-                    pass
+                    logger.warning("Failed to set permissions on %s", fp, exc_info=True)
         if self._stack is None:
             raise RuntimeError("DumpContext.__exit__ called without __enter__")
-        self._stack.__exit__(*exc)
-        self._files.clear()
-        self._created_files.clear()
+        try:
+            self._stack.__exit__(*exc)
+        finally:
+            self._files.clear()
+            self._created_files.clear()
 
     def shared_file(self, suffix: str) -> tuple[tp.IO[bytes], str]:
         """Open a shared file for appending. Returns (handle, filename).
         The file is opened once and reused for subsequent calls with the
         same suffix. Closed automatically when the context exits."""
+        if "." not in suffix:
+            raise ValueError(f"suffix must contain '.', got {suffix!r}")
         if self._stack is None:
             raise RuntimeError("DumpContext must be used as a context manager for writes")
         if threading.get_native_id() != self._thread_id:
@@ -154,9 +159,9 @@ class DumpContext:
             path = self.folder / name
             f = path.open("ab")
             self._stack.enter_context(f)
-            self._files[name] = (f, name)
+            self._files[name] = f
             self._created_files.append(path)
-        return self._files[name]
+        return self._files[name], name
 
     # -- Dispatch --
 
@@ -211,6 +216,7 @@ class DumpContext:
                     "DumpContext must be used as a context manager for writes"
                 )
             if cls not in self._loaders:
+                logger.debug("Using legacy DumperLoader %s", cls.__name__)
                 loader = cls(self.folder)
                 self._stack.enter_context(loader.open())
                 self._loaders[cls] = loader
@@ -256,15 +262,19 @@ class DumpContext:
 
     # -- Read-side cache --
 
-    def cached(self, key: str, factory: tp.Callable[[], tp.Any]) -> tp.Any:
-        """Get or create a cached resource (e.g. memmap handle)."""
+    def cached(self, key: tp.Hashable, factory: tp.Callable[[], tp.Any]) -> tp.Any:
+        """Get or create a cached resource (e.g. memmap handle).
+
+        Use a namespaced key (e.g. tuple) to avoid collisions across
+        handlers: ``ctx.cached(("MemmapArray", filename), factory)``.
+        """
         if key not in self._resource_cache:
             self._resource_cache[key] = factory()
         if len(self._resource_cache) > self._max_cache:
             self._resource_cache.clear()
         return self._resource_cache[key]
 
-    def invalidate(self, key: str) -> None:
+    def invalidate(self, key: tp.Hashable) -> None:
         """Force reload of a cached resource."""
         self._resource_cache.pop(key, None)
 
@@ -308,15 +318,16 @@ class MemmapArray:
     ) -> np.ndarray:
         shape = tuple(shape)
         length = int(np.prod(shape)) * np.dtype(dtype).itemsize
+        cache_key = ("MemmapArray", filename)
         for _ in range(2):
             mm = ctx.cached(
-                filename,
+                cache_key,
                 lambda: np.memmap(ctx.folder / filename, mode="r", order="C"),
             )
             data = mm[offset : offset + length]
             if data.size:
                 break
-            ctx.invalidate(filename)
+            ctx.invalidate(cache_key)
         return data.view(dtype=dtype).reshape(shape)
 
 
