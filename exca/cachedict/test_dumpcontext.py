@@ -274,7 +274,7 @@ def test_composite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             "label": "test",
         },
     }
-    assert max_level[0] == 2  # Composite at 1, MemmapArray at 2
+    assert max_level[0] == 1  # Composite at 0, MemmapArray at 1
     loaded = ctx.load(info)
     assert loaded["label"] == "test" and loaded["metrics"]["epochs"] == 3
     np.testing.assert_array_almost_equal(loaded["metrics"]["loss"], [0.5, 0.3, 0.1])

@@ -92,7 +92,7 @@ class DumpContext:
     ) -> None:
         self.folder = Path(folder)
         self.key = key
-        self.level: int = 0
+        self.level: int = -1
         self.permissions = permissions
         self._thread_id = threading.get_native_id()
         self._prefix = f"{socket.gethostname()}-{self._thread_id}"
