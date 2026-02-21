@@ -65,7 +65,8 @@ class CacheDict(tp.Generic[X]):
           - :code:`"DataDict"`: a dict for which (first-level) fields are dumped using the default
             dumper. This is particularly useful to store dict of arrays which would be then loaded
             as dict of memmaps.
-        If `None`, the type will be deduced automatically and by default use a standard pickle dump.
+        If `None`, the type will be deduced automatically (Json for JSON-serializable values,
+        or a type-specific handler for numpy arrays, tensors, etc.).
         Loading is handled using the cache_type specified in info files.
     permissions: optional int
         permissions for generated files
