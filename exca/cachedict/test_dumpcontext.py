@@ -226,8 +226,7 @@ def test_json_non_serializable_raises(tmp_path: Path) -> None:
 
 
 def test_composite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Composite handler: structure, dispatch, nesting levels, offload."""
-    # Track nesting depth via monkeypatch
+    """Nested dict with arrays: structure, roundtrip, and nesting level."""
     max_level = [0]
     real_dump = DumpContext.dump
 
@@ -239,7 +238,6 @@ def test_composite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(DumpContext, "dump", tracking_dump)
 
-    # -- Nested dict with arrays: full output check --
     ctx = DumpContext(tmp_path, key="entry")
     with ctx:
         info = ctx.dump(
@@ -280,19 +278,27 @@ def test_composite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     np.testing.assert_array_almost_equal(loaded["metrics"]["loss"], [0.5, 0.3, 0.1])
     np.testing.assert_array_almost_equal(loaded["weights"], [[1.0, 2.0], [3.0, 4.0]])
 
-    # -- Default dispatch: dict and list both use Composite --
-    ctx2 = DumpContext(tmp_path, key="defaults")
-    with ctx2:
-        assert ctx2.dump({"x": 1})["#type"] == "Composite"
-        assert ctx2.dump([10, 20])["#type"] == "Composite"
 
-    # -- Large result offloaded to shared .json file --
-    ctx3 = DumpContext(tmp_path, key="large")
+def test_composite_dispatch(tmp_path: Path) -> None:
+    """Default type routing and delegation for non-container values."""
+    ctx = DumpContext(tmp_path, key="defaults")
+    with ctx:
+        assert ctx.dump({"x": 1})["#type"] == "Composite"
+        assert ctx.dump([10, 20])["#type"] == "Composite"
+        # non-container delegates to the inner handler
+        arr_info = ctx.dump(np.array([1.0, 2.0]), cache_type="Composite")
+    assert arr_info["#type"] == "MemmapArray"
+    np.testing.assert_array_almost_equal(ctx.load(arr_info), [1.0, 2.0])
+
+
+def test_composite_large_offload(tmp_path: Path) -> None:
+    """Large Composite result offloaded to shared .json file."""
+    ctx = DumpContext(tmp_path, key="large")
     large_dict = {f"k{i}": i for i in range(500)}
-    with ctx3:
-        large_info = ctx3.dump(large_dict, cache_type="Composite")
+    with ctx:
+        large_info = ctx.dump(large_dict, cache_type="Composite")
     assert "filename" in large_info and "_data" not in large_info
-    assert ctx3.load(large_info) == large_dict
+    assert ctx.load(large_info) == large_dict
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:

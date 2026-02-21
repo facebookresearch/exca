@@ -271,7 +271,12 @@ class DumpContext:
 
     def dump(self, value: tp.Any, *, cache_type: str | None = None) -> dict[str, tp.Any]:
         """Serialize a sub-value. Returns an info dict tagged with #type.
-        Creates a shallow copy so nested dumps don't clobber ctx.key."""
+        Creates a shallow copy so nested dumps don't clobber ctx.key.
+
+        Handlers may return #type to delegate to another handler
+        (e.g. Composite delegates non-container values). The returned
+        #type must be a registered handler name.
+        """
         ctx = copy.copy(self)
         ctx.level = self.level + 1
         if cache_type is not None:
@@ -283,13 +288,19 @@ class DumpContext:
         else:
             cls = self._find_handler(type(value))
             info, type_name = ctx._dump_cls(cls, value)
-        _reserved = info.keys() & {"#type", "#key"}
-        if _reserved:
+        if "#key" in info:
             raise ValueError(
-                f"__dump_info__ must not return reserved keys {_reserved}; "
-                f"these are set by DumpContext"
+                "__dump_info__ must not return '#key'; it is set by DumpContext"
             )
-        info["#type"] = type_name
+        if "#type" not in info:
+            info["#type"] = type_name
+        else:
+            try:
+                self._lookup(info["#type"])
+            except KeyError:
+                raise ValueError(
+                    f"Delegated #type {info['#type']!r} is not a registered handler"
+                )
         return info
 
     def _dump_cls(self, cls: tp.Any, value: tp.Any) -> tuple[dict[str, tp.Any], str]:

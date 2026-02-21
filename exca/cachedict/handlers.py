@@ -328,15 +328,9 @@ class Composite:
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        parent_key = ctx.key or ""
-        if isinstance(value, (list, tuple)):
-            result: tp.Any = [
-                cls._dump_value(ctx, v, f"{parent_key}[{i}]") for i, v in enumerate(value)
-            ]
-        else:
-            result = {
-                k: cls._dump_value(ctx, v, f"{parent_key}({k})") for k, v in value.items()
-            }
+        result = cls._dump_value(ctx, value, ctx.key or "")
+        if isinstance(result, dict) and "#type" in result:
+            return result  # delegate to inner handler (no envelope)
         return Json.__dump_info__(ctx, result)
 
     @classmethod
