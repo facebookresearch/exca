@@ -347,11 +347,7 @@ class Composite:
             return {k: cls._dump_value(ctx, v, f"{key}({k})") for k, v in val.items()}
         if isinstance(val, (list, tuple)):
             return [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
-        try:
-            orjson.dumps(val)
-            return val
-        except (TypeError, orjson.JSONEncodeError):
-            pass
+        # Dispatch to type handler (safe: dump() copies ctx)
         ctx.key = key
         return ctx.dump(val)
 
