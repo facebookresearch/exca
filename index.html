@@ -1,0 +1,173 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Exca - Execution and caching infrastructure &mdash; Exca 0.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=2709fde1"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Exca - Execution and caching" href="infra/introduction.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="#" class="icon icon-home">
+            Exca
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Summary</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="infra/introduction.html">Exca - Execution and caching</a></li>
+<li class="toctree-l1"><a class="reference internal" href="infra/tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="infra/howto.html">How-to guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="infra/explanation.html">Explanations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="infra/reference.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="#">Exca</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="#" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Exca - Execution and caching infrastructure</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/index.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="exca-execution-and-caching-infrastructure">
+<h1>Exca - Execution and caching infrastructure<a class="headerlink" href="#exca-execution-and-caching-infrastructure" title="Link to this heading"></a></h1>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Summary</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="infra/introduction.html">Exca - Execution and caching</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="infra/introduction.html#challenge-1-early-configuration-validation">Challenge #1: Early configuration validation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/introduction.html#challenge-2-complex-experiments-hierarchical-configurations">Challenge #2: Complex experiments - hierarchical configurations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/introduction.html#challenge-3-experiment-computation-caching">Challenge #3: Experiment/computation caching</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="infra/tutorials.html">Tutorials</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="infra/tutorials.html#installation">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/tutorials.html#two-types-of-infra-task-and-map">Two types of infra: Task and Map</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/tutorials.html#quick-comparison">Quick comparison</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/tutorials.html#simplified-infra-decorator">Simplified infra decorator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/tutorials.html#pydantic-models">Pydantic models</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="infra/howto.html">How-to guide</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="infra/howto.html#debugging">Debugging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/howto.html#asynchronous-computation-with-taskinfra">Asynchronous computation with TaskInfra</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/howto.html#monitoring">Monitoring</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/howto.html#efficient-caching-cache-and-class-uid-exclusion">Efficient caching: cache and class uid exclusion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/howto.html#infra-versioning-default-heritage">Infra Versioning &amp; default heritage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/howto.html#using-pydantic-s-discriminator">Using pydantic’s discriminator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/howto.html#workdir-code-copy">Workdir/code copy</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="infra/explanation.html">Explanations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="infra/explanation.html#why-the-philosophy">Why? The philosophy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/explanation.html#mapinfra-task-infra-differences">MapInfra / Task Infra differences</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/explanation.html#uid-computation">uid computation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/explanation.html#confdict">ConfDict</a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/explanation.html#caching">Caching</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="infra/reference.html">API Reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="infra/reference.html#exca.TaskInfra"><code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/reference.html#exca.MapInfra"><code class="docutils literal notranslate"><span class="pre">MapInfra</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/reference.html#exca.SubmitInfra"><code class="docutils literal notranslate"><span class="pre">SubmitInfra</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="infra/reference.html#associated-classes-and-functions">Associated classes and functions</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<section id="citing">
+<h2>Citing<a class="headerlink" href="#citing" title="Link to this heading"></a></h2>
+<div class="highlight-bibtex notranslate"><div class="highlight"><pre><span></span><span class="nc">@misc</span><span class="p">{</span><span class="nl">exca</span><span class="p">,</span>
+<span class="w">    </span><span class="na">author</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{J. Rapin and J.-R. King}</span><span class="p">,</span>
+<span class="w">    </span><span class="na">title</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{{Exca - Execution and caching}}</span><span class="p">,</span>
+<span class="w">    </span><span class="na">year</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{2024}</span><span class="p">,</span>
+<span class="w">    </span><span class="na">publisher</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{GitHub}</span><span class="p">,</span>
+<span class="w">    </span><span class="na">journal</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{GitHub repository}</span><span class="p">,</span>
+<span class="w">    </span><span class="na">howpublished</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">{\url{https://github.com/facebookresearch/exca}}</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="legal">
+<h2>Legal<a class="headerlink" href="#legal" title="Link to this heading"></a></h2>
+<p><code class="code docutils literal notranslate"><span class="pre">exca</span></code> is MIT licensed, as found in the LICENSE file.
+Also check-out Meta Open Source <a class="reference external" href="https://opensource.fb.com/legal/terms">Terms of Use</a> and <a class="reference external" href="https://opensource.fb.com/legal/privacy">Privacy Policy</a>.</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="infra/introduction.html" class="btn btn-neutral float-right" title="Exca - Execution and caching" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Meta Platforms, Inc.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

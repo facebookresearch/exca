@@ -1,0 +1,277 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Explanations &mdash; Exca 0.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=2709fde1"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="API Reference" href="reference.html" />
+    <link rel="prev" title="How-to guide" href="howto.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            Exca
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Summary</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="introduction.html">Exca - Execution and caching</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="howto.html">How-to guide</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Explanations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#why-the-philosophy">Why? The philosophy</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#pure-python">Pure python</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#parameter-validation">Parameter validation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#fast-configs">Fast configs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#no-parameter-duplication-easy-to-exetend">No parameter duplication - easy to exetend</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#cached-distributed-computation">Cached/distributed computation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#modularity">Modularity</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#mapinfra-task-infra-differences">MapInfra / Task Infra differences</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#uid-computation">uid computation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#confdict">ConfDict</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#caching">Caching</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="reference.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">Exca</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Explanations</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/infra/explanation.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="explanations">
+<h1>Explanations<a class="headerlink" href="#explanations" title="Link to this heading"></a></h1>
+<section id="why-the-philosophy">
+<h2>Why? The philosophy<a class="headerlink" href="#why-the-philosophy" title="Link to this heading"></a></h2>
+<section id="pure-python">
+<span id="philosophy"></span><h3>Pure python<a class="headerlink" href="#pure-python" title="Link to this heading"></a></h3>
+<p>The tools here do not provide a script API but a way to do everything directly from Python. Specific script APIs can be easily composed on top of it if need be.</p>
+</section>
+<section id="parameter-validation">
+<h3>Parameter validation<a class="headerlink" href="#parameter-validation" title="Link to this heading"></a></h3>
+<p>Configurations should be validated before running to avoid discovering bugs much later (eg: missing parameter, inconsistent parameters, wrong type etc). We do this by using <code class="docutils literal notranslate"><span class="pre">pydantic.BaseModel</span></code> which works as <code class="docutils literal notranslate"><span class="pre">dataclasses</span></code> but validate all parameters.</p>
+</section>
+<section id="fast-configs">
+<h3>Fast configs<a class="headerlink" href="#fast-configs" title="Link to this heading"></a></h3>
+<p>Running a grid search requires creating a bunch of configs, so configurations should be easy and fast to create, and therefore not defer loading data/pytorch models/etc to later</p>
+</section>
+<section id="no-parameter-duplication-easy-to-exetend">
+<h3>No parameter duplication - easy to exetend<a class="headerlink" href="#no-parameter-duplication-easy-to-exetend" title="Link to this heading"></a></h3>
+<p>Configuration hold the underlying actual functions/classes parameters. To avoid duplicating the parameters, we opt for having coupled configs and actual classes/functions like below:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">MyClassCfg</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;hello&quot;</span>
+
+    <span class="k">def</span> <span class="nf">build</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;MyClass&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">MyClass</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">MyClass</span><span class="p">:</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cfg</span><span class="p">:</span> <span class="n">MyClassCfg</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cfg</span> <span class="o">=</span> <span class="n">cfg</span>
+</pre></div>
+</div>
+<p>With this easy pattern, building an object from the config is easy (<code class="docutils literal notranslate"><span class="pre">cfg.build()</span></code>), and adding new parameters only requires updating the config, with effective typing and low risk of silently ignored parameters because of a mismatch between configs and functions.</p>
+</section>
+<section id="cached-distributed-computation">
+<h3>Cached/distributed computation<a class="headerlink" href="#cached-distributed-computation" title="Link to this heading"></a></h3>
+<p>The main aim of this package is to provide objects that slightly modify methods and make them
+distributed and cached their results in a breeze. The <code class="docutils literal notranslate"><span class="pre">infra</span></code> objects that make this possible
+are configurations that let you specify how caching should be performed and
+how computation should be distributed directly within your experiment config
+(including slurm partitions, number of gpus etc)</p>
+</section>
+<section id="modularity">
+<h3>Modularity<a class="headerlink" href="#modularity" title="Link to this heading"></a></h3>
+<p>Pydantic hierarchical configuration and discriminated unions allows for modularity and reusability, as several sub-configs can be proposed for a training config, and plugging a new sub-config is straightforward.</p>
+</section>
+</section>
+<section id="mapinfra-task-infra-differences">
+<h2>MapInfra / Task Infra differences<a class="headerlink" href="#mapinfra-task-infra-differences" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code> must be applied to a method with no parameter (except <code class="docutils literal notranslate"><span class="pre">self</span></code>). It links 1 computation to 1 job and therefore provides easy tools for accessing the job stdout/stderr/status etc.</p>
+<p><code class="docutils literal notranslate"><span class="pre">MapInfra</span></code> on the other hand must be applied to a method with 1 parameter (in addition to <code class="docutils literal notranslate"><span class="pre">self</span></code>) which must be a <code class="docutils literal notranslate"><span class="pre">m</span></code>-sized iterator/sequence of items. It requires stating how to provide a unique uid for each item (throught the <code class="docutils literal notranslate"><span class="pre">item_uid</span></code> function, and it maps <code class="docutils literal notranslate"><span class="pre">m</span></code> computation (1 for each item) to <code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">&lt;=</span> <span class="pre">m</span></code> jobs, packing several computations together. Because of this non-bijective mapping, there is no support for checking jobs stderr/stdout/status.</p>
+</section>
+<section id="uid-computation">
+<h2>uid computation<a class="headerlink" href="#uid-computation" title="Link to this heading"></a></h2>
+<p>A unique id, the <code class="docutils literal notranslate"><span class="pre">uid</span></code>, is computed for each pydantic model/each config based on public instance attributes:</p>
+<ul class="simple">
+<li><p>which are non-defaults</p></li>
+<li><p>which are not excluded through the <code class="docutils literal notranslate"><span class="pre">_exclude_from_cls_uid</span></code> class attribute list/tuple
+(or class method returning a list/tuple). This allows removing parameters which do not impact
+the result (eg: number of workers, device, ect…).</p></li>
+</ul>
+<p><em>Note</em>: <code class="docutils literal notranslate"><span class="pre">infra</span></code> objects have all their parameters excluded except <code class="docutils literal notranslate"><span class="pre">version</span></code> as the parameters affects how the computation
+is performed but not the result</p>
+<p>Furthermore, a specific “cache” <code class="docutils literal notranslate"><span class="pre">uid</span></code> is also computed for which additional parameters can be excluded to account for
+parameters which do not impact the cached computation, but impact the class as a whole (attributes which are used
+to post-process the cached computation). This is done by specifying <code class="docutils literal notranslate"><span class="pre">exclude_from_cache_uid</span></code> in the
+<code class="docutils literal notranslate"><span class="pre">infra.apply</span></code> method. This cache uid is used as storage folder name for the cache.
+Exclusion can be specified as a list/tuple of field, or as a method, or as the name of a method
+(with format <code class="docutils literal notranslate"><span class="pre">method:&lt;method_name&gt;</span></code>). Notice that when subclassing, if you specified the exclusion
+as a function, the original function will be used (not the new function if it was overriden),
+if you want to use the new one, then you should specify the method through its name.</p>
+<p>See more in the <a class="reference internal" href="howto.html#howto-efficient-caching"><span class="std std-ref">example</span></a> from the how-to guide.</p>
+</section>
+<section id="confdict">
+<h2>ConfDict<a class="headerlink" href="#confdict" title="Link to this heading"></a></h2>
+<p>To simplify working with configuration dictionaries, we use <code class="docutils literal notranslate"><span class="pre">ConfDict</span></code> classes (see <a class="reference internal" href="reference.html#exca.ConfDict" title="exca.confdict.ConfDict"><span class="xref myst py py-class">their API</span></a>).
+In practice, they are dictionary which breaks into sub-dictionnaries on <code class="docutils literal notranslate"><span class="pre">&quot;.&quot;</span></code> characters
+such as in a config. Data can be specified either through dotted-keywords or directly through sub-dictionaries
+or a mixture of both:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">exca</span> <span class="kn">import</span> <span class="n">ConfDict</span>
+
+<span class="n">cfdict</span> <span class="o">=</span> <span class="n">ConfDict</span><span class="p">({</span><span class="s2">&quot;training.optim.lr&quot;</span><span class="p">:</span> <span class="mf">0.01</span><span class="p">})</span>
+<span class="k">assert</span> <span class="n">cfdict</span> <span class="o">==</span> <span class="p">{</span><span class="s2">&quot;training&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;optim&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;lr&quot;</span><span class="p">:</span> <span class="mf">0.01</span><span class="p">}}}</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">ConfDict</span></code> instance have a few convenient methods:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># flattens the dictionary</span>
+<span class="k">assert</span> <span class="n">cfdict</span><span class="o">.</span><span class="n">flat</span><span class="p">()</span> <span class="o">==</span> <span class="p">{</span><span class="s2">&quot;training.optim.lr&quot;</span><span class="p">:</span> <span class="mf">0.01</span><span class="p">}</span>
+
+<span class="c1"># export to yaml (can take a file as argument)</span>
+<span class="k">assert</span> <span class="n">cfdict</span><span class="o">.</span><span class="n">to_yaml</span><span class="p">()</span> <span class="o">==</span> <span class="s2">&quot;training.optim.lr: 0.01</span><span class="se">\n</span><span class="s2">&quot;</span>
+
+<span class="c1"># uid computation</span>
+<span class="k">assert</span> <span class="n">cfdict</span><span class="o">.</span><span class="n">to_uid</span><span class="p">()</span> <span class="o">==</span> <span class="s2">&quot;training.optim.lr=0.01-0f8936b4&quot;</span>
+</pre></div>
+</div>
+<p>Infra objects extensively use such dictionaries and have a <code class="docutils literal notranslate"><span class="pre">config</span></code> method for instantiating the <code class="docutils literal notranslate"><span class="pre">ConfDict</span></code> generated from an object:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">task</span> <span class="o">=</span> <span class="n">TutorialTask</span><span class="p">(</span><span class="n">param</span><span class="o">=</span><span class="mi">13</span><span class="p">)</span>
+<span class="n">cfdict</span> <span class="o">=</span> <span class="n">task</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">config</span><span class="p">(</span><span class="n">uid</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exclude_defaults</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">cfdict</span> <span class="o">==</span> <span class="p">{</span><span class="s2">&quot;param&quot;</span><span class="p">:</span> <span class="mi">13</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>They are used for uid computation as shown above (with <code class="docutils literal notranslate"><span class="pre">uid=True,</span> <span class="pre">exclude_defaults=True</span></code>) but also to clone the instance
+and updating its value, so that you can pass new values either through dotted-name format or through sub-dictionaries:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># exports a ConfDict and reinstantiate from it</span>
+<span class="n">new</span> <span class="o">=</span> <span class="n">task</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">clone_obj</span><span class="p">({</span><span class="s2">&quot;param&quot;</span><span class="p">:</span> <span class="mi">14</span><span class="p">})</span>
+<span class="k">assert</span> <span class="n">new</span><span class="o">.</span><span class="n">param</span> <span class="o">==</span> <span class="mi">14</span>
+</pre></div>
+</div>
+</section>
+<section id="caching">
+<h2>Caching<a class="headerlink" href="#caching" title="Link to this heading"></a></h2>
+<p>Cache folders are created as <code class="docutils literal notranslate"><span class="pre">&lt;full_module_import_name&gt;.&lt;class_name&gt;.&lt;method_name&gt;,&lt;version&gt;/&lt;param1=value1,...&gt;</span></code></p>
+<p>Eg: <code class="docutils literal notranslate"><span class="pre">mypackage.mymodule.TutorialTask.process,1/param=13-fbfu2iow</span></code></p>
+<p>Under the hood, data are stored using the <code class="docutils literal notranslate"><span class="pre">CacheDict</span></code> class (see <a class="reference internal" href="reference.html#exca.cachedict.CacheDict" title="exca.cachedict.CacheDict"><span class="xref myst py py-class">API here</span></a>).
+This class has a <code class="docutils literal notranslate"><span class="pre">dict</span></code>-like interface (<code class="docutils literal notranslate"><span class="pre">keys</span></code>, <code class="docutils literal notranslate"><span class="pre">items</span></code>, <code class="docutils literal notranslate"><span class="pre">values</span></code>, <code class="docutils literal notranslate"><span class="pre">__getitem__</span></code>, <code class="docutils literal notranslate"><span class="pre">__contains__</span></code>), the difference is that the data can be stored to/loaded from disk automatically,  and <code class="docutils literal notranslate"><span class="pre">__setitem__</span></code> works through a context manager to be more efficient.
+The class is initialized with 2 parameters:</p>
+<ul class="simple">
+<li><p>the storage folder, if present the data will be stored to disk in the folder, or reloaded from disk</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">keep_in_ram</span></code> flag, if <code class="docutils literal notranslate"><span class="pre">True</span></code> the data will be cached in RAM when stored/reloaded, for faster access</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cache_type</span></code> the type of caching to use (eg: cache as pickles, or independent npy files, or one large npy file)</p></li>
+</ul>
+<p><strong>Example</strong></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">exca</span> <span class="kn">import</span> <span class="n">cachedict</span>
+<span class="c1"># create a cache dict (specialized for numpy arrays)</span>
+<span class="n">cache</span> <span class="o">=</span> <span class="n">cachedict</span><span class="o">.</span><span class="n">CacheDict</span><span class="p">(</span><span class="n">folder</span><span class="o">=</span><span class="n">tmp_path</span><span class="p">,</span> <span class="n">keep_in_ram</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="c1"># the dictionary is empty:</span>
+<span class="k">assert</span> <span class="ow">not</span> <span class="n">cache</span>
+
+<span class="c1"># add a value into the cache</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">12</span><span class="p">)</span>
+<span class="k">with</span> <span class="n">cache</span><span class="o">.</span><span class="n">writer</span><span class="p">()</span> <span class="k">as</span> <span class="n">writer</span><span class="p">:</span>
+    <span class="c1"># cache dict needs a writer context to </span>
+    <span class="c1"># be more efficient in case of multiple writes </span>
+    <span class="n">writer</span><span class="p">[</span><span class="s2">&quot;blublu&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">x</span>
+<span class="k">assert</span> <span class="s2">&quot;blublu&quot;</span> <span class="ow">in</span> <span class="n">cache</span>
+<span class="c1"># the value is now available</span>
+<span class="n">np</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_almost_equal</span><span class="p">(</span><span class="n">cache</span><span class="p">[</span><span class="s2">&quot;blublu&quot;</span><span class="p">],</span> <span class="n">x</span><span class="p">)</span>
+<span class="k">assert</span> <span class="nb">set</span><span class="p">(</span><span class="n">cache</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span> <span class="o">==</span> <span class="p">{</span><span class="s2">&quot;blublu&quot;</span><span class="p">}</span>
+
+<span class="c1"># create a new dict instance with same cache folder</span>
+<span class="n">cache2</span> <span class="o">=</span> <span class="n">cachedict</span><span class="o">.</span><span class="n">CacheDict</span><span class="p">(</span><span class="n">folder</span><span class="o">=</span><span class="n">tmp_path</span><span class="p">)</span>
+<span class="c1"># the data is still available (loading from cache folder)</span>
+<span class="k">assert</span> <span class="nb">set</span><span class="p">(</span><span class="n">cache2</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span> <span class="o">==</span> <span class="p">{</span><span class="s2">&quot;blublu&quot;</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>In practice, at write time, each thread/process independently creates an <code class="docutils literal notranslate"><span class="pre">*-info.jsonl</span></code> file in which each line is a json providing the key in the dictionaray, and information on how to read the data corresponding to this key.</p>
+<p><code class="docutils literal notranslate"><span class="pre">CacheDict</span></code> is designed for use within an infra and may be sub-optimal for other use cases (eg: repeated checks to <code class="docutils literal notranslate"><span class="pre">__contains__</span></code> can repeatedly reload the keys from the file system if the key is not already present, to make sure nothing new was added through another thread/process, which can be inefficient).</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="howto.html" class="btn btn-neutral float-left" title="How-to guide" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="reference.html" class="btn btn-neutral float-right" title="API Reference" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Meta Platforms, Inc.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

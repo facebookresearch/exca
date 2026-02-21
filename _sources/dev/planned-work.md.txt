@@ -1,0 +1,53 @@
+# Planned work
+
+Deferred changes that require deprecation periods or break existing callers.
+Non-breaking behavior changes and internal cleanup can proceed without waiting.
+
+## Deprecations (caller-breaking, needs migration period)
+
+### Remove `writer()` method
+- **Status:** deprecation warning in place, `write()` is the replacement
+- **What breaks:** any caller using `with cache.writer() as w: w[key] = value`
+- **Migration:** change to `with cache.write(): cache[key] = value`
+- **When:** next major version, or after sufficient warning period
+
+### Remove `CacheDictWriter` import alias
+- **Status:** `CacheDictWriter = CacheDict` in `__init__.py`, marked deprecated
+- **What breaks:** `from exca.cachedict import CacheDictWriter`
+- **Migration:** use `CacheDict` directly
+- **When:** alongside `writer()` removal
+
+### Remove `exca/dumperloader.py` module
+- **Status:** legacy DumperLoader subclasses kept for external subclassing.
+  Registries are now separated: `DumpContext.HANDLERS` / `TYPE_DEFAULTS`
+  for new handlers, `DumperLoader.CLASSES` for legacy subclasses.
+  `DumperLoader.DEFAULTS` is empty/deprecated (fallback in `_find_handler()`).
+- **What breaks:** any code that subclasses `DumperLoader`, `StaticDumperLoader`,
+  `MemmapArrayFile`, etc., or writes to `DumperLoader.DEFAULTS`
+- **Migration:** switch to `@DumpContext.register` with new-style handlers
+- **When:** after confirming no external subclasses are in use
+
+## Internal cleanup (non-breaking, can do anytime)
+
+### Simplify `DumpInfo`
+- Remove `cache_type` field, keep `#type` in `content` dict instead
+- Eliminates the pop-then-re-inject pattern in `__getitem__` / `__delitem__`
+- Touches: `DumpInfo`, `__setitem__`, `JsonlReader.read()`, `__getitem__`,
+  `__delitem__`
+
+### Remove `_track_files` recursion
+- `TODO(legacy)` in `dumpcontext.py`: recursion only needed for legacy
+  `DataDict` DumperLoader structures; new `DataDict` handler tracks
+  sub-files through `ctx.dump()` calls
+- Remove once legacy DataDict DumperLoader is retired
+
+### Stop writing `METADATA_TAG` header
+- New JSONL files already use self-describing format (no `metadata=` header)
+- `JsonlReader` still reads old format — keep that for backward compat
+- Can remove `METADATA_TAG` constant once no old-format files exist
+
+### Clean up `default_class()` in dumperloader.py
+- Legacy method with hardcoded type checks (ndarray, str, pandas, torch, etc.)
+- New code bypasses it entirely (`DumpContext._find_handler()` checks
+  `TYPE_DEFAULTS` directly with lazy registration for optional packages)
+- Can be simplified or removed once `dumperloader.py` is retired

@@ -1,0 +1,182 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Planned work &mdash; Exca 0.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=2709fde1"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            Exca
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Summary</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../infra/introduction.html">Exca - Execution and caching</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../infra/tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../infra/howto.html">How-to guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../infra/explanation.html">Explanations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../infra/reference.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">Exca</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Planned work</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/dev/planned-work.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="planned-work">
+<h1>Planned work<a class="headerlink" href="#planned-work" title="Link to this heading"></a></h1>
+<p>Deferred changes that require deprecation periods or break existing callers.
+Non-breaking behavior changes and internal cleanup can proceed without waiting.</p>
+<section id="deprecations-caller-breaking-needs-migration-period">
+<h2>Deprecations (caller-breaking, needs migration period)<a class="headerlink" href="#deprecations-caller-breaking-needs-migration-period" title="Link to this heading"></a></h2>
+<section id="remove-writer-method">
+<h3>Remove <code class="docutils literal notranslate"><span class="pre">writer()</span></code> method<a class="headerlink" href="#remove-writer-method" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p><strong>Status:</strong> deprecation warning in place, <code class="docutils literal notranslate"><span class="pre">write()</span></code> is the replacement</p></li>
+<li><p><strong>What breaks:</strong> any caller using <code class="docutils literal notranslate"><span class="pre">with</span> <span class="pre">cache.writer()</span> <span class="pre">as</span> <span class="pre">w:</span> <span class="pre">w[key]</span> <span class="pre">=</span> <span class="pre">value</span></code></p></li>
+<li><p><strong>Migration:</strong> change to <code class="docutils literal notranslate"><span class="pre">with</span> <span class="pre">cache.write():</span> <span class="pre">cache[key]</span> <span class="pre">=</span> <span class="pre">value</span></code></p></li>
+<li><p><strong>When:</strong> next major version, or after sufficient warning period</p></li>
+</ul>
+</section>
+<section id="remove-cachedictwriter-import-alias">
+<h3>Remove <code class="docutils literal notranslate"><span class="pre">CacheDictWriter</span></code> import alias<a class="headerlink" href="#remove-cachedictwriter-import-alias" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p><strong>Status:</strong> <code class="docutils literal notranslate"><span class="pre">CacheDictWriter</span> <span class="pre">=</span> <span class="pre">CacheDict</span></code> in <code class="docutils literal notranslate"><span class="pre">__init__.py</span></code>, marked deprecated</p></li>
+<li><p><strong>What breaks:</strong> <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">exca.cachedict</span> <span class="pre">import</span> <span class="pre">CacheDictWriter</span></code></p></li>
+<li><p><strong>Migration:</strong> use <code class="docutils literal notranslate"><span class="pre">CacheDict</span></code> directly</p></li>
+<li><p><strong>When:</strong> alongside <code class="docutils literal notranslate"><span class="pre">writer()</span></code> removal</p></li>
+</ul>
+</section>
+<section id="remove-exca-dumperloader-py-module">
+<h3>Remove <code class="docutils literal notranslate"><span class="pre">exca/dumperloader.py</span></code> module<a class="headerlink" href="#remove-exca-dumperloader-py-module" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p><strong>Status:</strong> legacy DumperLoader subclasses kept for external subclassing.
+Registries are now separated: <code class="docutils literal notranslate"><span class="pre">DumpContext.HANDLERS</span></code> / <code class="docutils literal notranslate"><span class="pre">TYPE_DEFAULTS</span></code>
+for new handlers, <code class="docutils literal notranslate"><span class="pre">DumperLoader.CLASSES</span></code> for legacy subclasses.
+<code class="docutils literal notranslate"><span class="pre">DumperLoader.DEFAULTS</span></code> is empty/deprecated (fallback in <code class="docutils literal notranslate"><span class="pre">_find_handler()</span></code>).</p></li>
+<li><p><strong>What breaks:</strong> any code that subclasses <code class="docutils literal notranslate"><span class="pre">DumperLoader</span></code>, <code class="docutils literal notranslate"><span class="pre">StaticDumperLoader</span></code>,
+<code class="docutils literal notranslate"><span class="pre">MemmapArrayFile</span></code>, etc., or writes to <code class="docutils literal notranslate"><span class="pre">DumperLoader.DEFAULTS</span></code></p></li>
+<li><p><strong>Migration:</strong> switch to <code class="docutils literal notranslate"><span class="pre">&#64;DumpContext.register</span></code> with new-style handlers</p></li>
+<li><p><strong>When:</strong> after confirming no external subclasses are in use</p></li>
+</ul>
+</section>
+</section>
+<section id="internal-cleanup-non-breaking-can-do-anytime">
+<h2>Internal cleanup (non-breaking, can do anytime)<a class="headerlink" href="#internal-cleanup-non-breaking-can-do-anytime" title="Link to this heading"></a></h2>
+<section id="simplify-dumpinfo">
+<h3>Simplify <code class="docutils literal notranslate"><span class="pre">DumpInfo</span></code><a class="headerlink" href="#simplify-dumpinfo" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Remove <code class="docutils literal notranslate"><span class="pre">cache_type</span></code> field, keep <code class="docutils literal notranslate"><span class="pre">#type</span></code> in <code class="docutils literal notranslate"><span class="pre">content</span></code> dict instead</p></li>
+<li><p>Eliminates the pop-then-re-inject pattern in <code class="docutils literal notranslate"><span class="pre">__getitem__</span></code> / <code class="docutils literal notranslate"><span class="pre">__delitem__</span></code></p></li>
+<li><p>Touches: <code class="docutils literal notranslate"><span class="pre">DumpInfo</span></code>, <code class="docutils literal notranslate"><span class="pre">__setitem__</span></code>, <code class="docutils literal notranslate"><span class="pre">JsonlReader.read()</span></code>, <code class="docutils literal notranslate"><span class="pre">__getitem__</span></code>,
+<code class="docutils literal notranslate"><span class="pre">__delitem__</span></code></p></li>
+</ul>
+</section>
+<section id="remove-track-files-recursion">
+<h3>Remove <code class="docutils literal notranslate"><span class="pre">_track_files</span></code> recursion<a class="headerlink" href="#remove-track-files-recursion" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">TODO(legacy)</span></code> in <code class="docutils literal notranslate"><span class="pre">dumpcontext.py</span></code>: recursion only needed for legacy
+<code class="docutils literal notranslate"><span class="pre">DataDict</span></code> DumperLoader structures; new <code class="docutils literal notranslate"><span class="pre">DataDict</span></code> handler tracks
+sub-files through <code class="docutils literal notranslate"><span class="pre">ctx.dump()</span></code> calls</p></li>
+<li><p>Remove once legacy DataDict DumperLoader is retired</p></li>
+</ul>
+</section>
+<section id="stop-writing-metadata-tag-header">
+<h3>Stop writing <code class="docutils literal notranslate"><span class="pre">METADATA_TAG</span></code> header<a class="headerlink" href="#stop-writing-metadata-tag-header" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>New JSONL files already use self-describing format (no <code class="docutils literal notranslate"><span class="pre">metadata=</span></code> header)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">JsonlReader</span></code> still reads old format — keep that for backward compat</p></li>
+<li><p>Can remove <code class="docutils literal notranslate"><span class="pre">METADATA_TAG</span></code> constant once no old-format files exist</p></li>
+</ul>
+</section>
+<section id="clean-up-default-class-in-dumperloader-py">
+<h3>Clean up <code class="docutils literal notranslate"><span class="pre">default_class()</span></code> in dumperloader.py<a class="headerlink" href="#clean-up-default-class-in-dumperloader-py" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Legacy method with hardcoded type checks (ndarray, str, pandas, torch, etc.)</p></li>
+<li><p>New code bypasses it entirely (<code class="docutils literal notranslate"><span class="pre">DumpContext._find_handler()</span></code> checks
+<code class="docutils literal notranslate"><span class="pre">TYPE_DEFAULTS</span></code> directly with lazy registration for optional packages)</p></li>
+<li><p>Can be simplified or removed once <code class="docutils literal notranslate"><span class="pre">dumperloader.py</span></code> is retired</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Meta Platforms, Inc.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
