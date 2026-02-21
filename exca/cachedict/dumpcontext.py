@@ -87,9 +87,11 @@ class DumpContext:
     HANDLERS: dict[str, tp.Any] = {}
     TYPE_DEFAULTS: dict[type, tp.Any] = {}
 
-    def __init__(self, folder: str | Path, *, permissions: int | None = None) -> None:
+    def __init__(
+        self, folder: str | Path, *, key: str = "", permissions: int | None = None
+    ) -> None:
         self.folder = Path(folder)
-        self.key: str | None = None
+        self.key = key
         self.permissions = permissions
         self._thread_id = threading.get_native_id()
         self._prefix = f"{socket.gethostname()}-{self._thread_id}"
@@ -205,7 +207,7 @@ class DumpContext:
     def key_path(self, suffix: str = "") -> Path:
         """Create a unique path from ctx.key for one-file-per-entry handlers.
         Checks for collision, tracks for permission setting."""
-        if self.key is None:
+        if not self.key:
             raise RuntimeError("ctx.key must be set for one-file-per-entry handlers")
         path = self.folder / (string_uid(self.key) + suffix)
         if path.exists():
@@ -301,7 +303,7 @@ class DumpContext:
                 loader = cls(self.folder)
                 self._stack.enter_context(loader.open())
                 self._loaders[cls] = loader
-            if self.key is None:
+            if not self.key:
                 raise RuntimeError(
                     "ctx.key must be set before dumping with a legacy DumperLoader"
                 )
