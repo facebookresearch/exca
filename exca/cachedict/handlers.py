@@ -313,25 +313,56 @@ class MneRawBrainVision:
 
 
 # =============================================================================
-# Composite (recursive handler for dicts/lists, replaces DataDict)
+# Auto (universal handler, replaces Composite/DataDict)
 # =============================================================================
 
 
 @DumpContext.register(default_for=dict)
-class Composite:
-    """Recursively decomposes dicts and lists: JSON-serializable leaves stay
-    inline, typed values (arrays, tensors, ...) are dispatched to their
-    handlers.  The entire result is passed through Json for size management
-    (inline if small, shared .json file if large).
+class Auto:
+    """Universal handler: recursively walks dicts/lists, dispatches registered
+    types to their handlers, and serializes the result via Json.  Falls back
+    to Pickle (with DeprecationWarning) when the result is not JSON-serializable.
 
-    Also loads legacy DataDict format (optimized/pickled)."""
+    Info dict shapes:
+    - promoted:   {"#type": "Json"|"Pickle", ...}  — pure data, Auto adds no value
+    - delegated:  {"#type": "MemmapArray"|..., ...} — single non-container value
+    - inline:     {"content": <data>}               — mixed, small enough for inline
+    - shared:     {"content": {"#type": "Json"|"Pickle", ...}} — mixed, offloaded
+
+    Also loads legacy DataDict/Composite formats."""
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+        ctx._auto_dispatched = False
         result = cls._dump_value(ctx, value, ctx.key or "")
         if isinstance(result, dict) and "#type" in result:
-            return result  # delegate to inner handler (no envelope)
-        return Json.__dump_info__(ctx, result)
+            return result  # single-value delegation
+        wrapped = cls._wrap(ctx, result)
+        if not ctx._auto_dispatched:
+            return wrapped  # promote: #type is Json or Pickle
+        # Mixed: Auto needs _load_value to walk the tree on load
+        if "_data" in wrapped:
+            return {"content": wrapped["_data"]}
+        return {"content": wrapped}
+
+    @classmethod
+    def _wrap(cls, ctx: DumpContext, result: tp.Any) -> dict[str, tp.Any]:
+        """Serialize processed result to a storage backend (Json or Pickle)."""
+        try:
+            info = Json.__dump_info__(ctx, result)
+            info["#type"] = "Json"
+            return info
+        except TypeError:
+            warnings.warn(
+                "Auto: result is not JSON-serializable, falling back to Pickle "
+                "(deprecated). Register handlers for non-JSON types or use "
+                "cache_type='AutoPickle'.",
+                DeprecationWarning,
+                stacklevel=5,
+            )
+            info = Pickle.__dump_info__(ctx, result)
+            info["#type"] = "Pickle"
+            return info
 
     @classmethod
     def _dump_value(cls, ctx: DumpContext, val: tp.Any, key: str) -> tp.Any:
@@ -341,16 +372,40 @@ class Composite:
             return {k: cls._dump_value(ctx, v, f"{key}({k})") for k, v in val.items()}
         if isinstance(val, (list, tuple)):
             return [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
-        # Dispatch to type handler (safe: dump() copies ctx)
-        ctx.key = key
-        return ctx.dump(val)
+        handler = DumpContext._find_handler(type(val))
+        if handler is not None:
+            ctx._auto_dispatched = True
+            ctx.key = key
+            return ctx.dump(val)
+        return val  # unhandled: leave for Json/Pickle at outer level
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> tp.Any:
         if "optimized" in info or "pickled" in info:
             return cls._load_legacy(ctx, info)
-        data = Json.__load_from_info__(ctx, **info)
+        if "content" in info:
+            content = info["content"]
+            if isinstance(content, dict) and "#type" in content:
+                data = ctx.load(content)
+            else:
+                data = content
+        elif "_data" in info:
+            data = info["_data"]  # backward compat: old Composite inline
+        else:
+            data = Json.__load_from_info__(
+                ctx, **info
+            )  # backward compat: old Composite shared file
         return cls._load_value(ctx, data)
+
+    @classmethod
+    def __delete_info__(cls, ctx: DumpContext, **info: tp.Any) -> None:
+        if "content" in info:
+            content = info["content"]
+            if isinstance(content, dict) and "#type" in content:
+                handler = DumpContext._lookup(content["#type"])
+                if hasattr(handler, "__delete_info__"):
+                    clean = {k: v for k, v in content.items() if k != "#type"}
+                    handler.__delete_info__(ctx, **clean)
 
     @classmethod
     def _load_value(cls, ctx: DumpContext, val: tp.Any) -> tp.Any:
@@ -420,9 +475,27 @@ class Json:
         return orjson.loads(raw)
 
 
+@DumpContext.register()
+class AutoPickle(Auto):
+    """Like Auto but delegates to Pickle without deprecation warning.
+    Not a default — use via cache_type='AutoPickle'."""
+
+    @classmethod
+    def _wrap(cls, ctx: DumpContext, result: tp.Any) -> dict[str, tp.Any]:
+        try:
+            info = Json.__dump_info__(ctx, result)
+            info["#type"] = "Json"
+            return info
+        except TypeError:
+            info = Pickle.__dump_info__(ctx, result)
+            info["#type"] = "Pickle"
+            return info
+
+
 # Backward-compatible aliases for released JSONL files
 DumpContext.HANDLERS["MemmapArrayFile"] = MemmapArray
-DumpContext.HANDLERS["DataDict"] = Composite
+DumpContext.HANDLERS["DataDict"] = Auto
+DumpContext.HANDLERS["Composite"] = Auto
 
-# Composite also serves as the default handler for lists
-DumpContext.TYPE_DEFAULTS[list] = Composite
+# Auto also serves as the default handler for lists
+DumpContext.TYPE_DEFAULTS[list] = Auto

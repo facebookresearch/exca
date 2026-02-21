@@ -153,7 +153,7 @@ ROUNDTRIP_CASES: dict[str, tp.Any] = {
     "Pickle": [1, "two", 3.0],
     "NumpyArray": np.array([[1, 2], [3, 4]], dtype=np.int32),
     "Json": 42,
-    "Composite": {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
+    "Auto": {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
     "String": "test string",  # legacy DumperLoader subclass through DumpContext
 }
 
@@ -213,19 +213,19 @@ def test_json_large_value_uses_shared_file(tmp_path: Path) -> None:
 
 
 def test_json_non_serializable_raises(tmp_path: Path) -> None:
-    """Non-JSON-serializable values without a handler raise TypeError."""
-    ctx = DumpContext(tmp_path)
+    """Non-JSON-serializable values without a handler raise TypeError via Json."""
+    ctx = DumpContext(tmp_path, key="test")
     with ctx:
         with pytest.raises(TypeError, match="not JSON-serializable"):
-            ctx.dump({1, 2, 3})
+            ctx.dump({1, 2, 3}, cache_type="Json")
 
 
 # =============================================================================
-# Composite
+# Auto
 # =============================================================================
 
 
-def test_composite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Nested dict with arrays: structure, roundtrip, and nesting level."""
     max_level = [0]
     real_dump = DumpContext.dump
@@ -246,12 +246,13 @@ def test_composite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
                 "weights": np.array([[1.0, 2.0], [3.0, 4.0]]),
                 "label": "test",
             },
-            cache_type="Composite",
+            cache_type="Auto",
         )
-    fn = info["_data"]["weights"]["filename"]  # dynamic: hostname-threadid.data
+    content = info["content"]
+    fn = content["weights"]["filename"]  # dynamic: hostname-threadid.data
     assert info == {
-        "#type": "Composite",
-        "_data": {
+        "#type": "Auto",
+        "content": {
             "metrics": {
                 "loss": {
                     "#type": "MemmapArray",
@@ -272,37 +273,85 @@ def test_composite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             "label": "test",
         },
     }
-    assert max_level[0] == 1  # Composite at 0, MemmapArray at 1
+    assert max_level[0] == 1  # Auto at 0, MemmapArray at 1
     loaded = ctx.load(info)
     assert loaded["label"] == "test" and loaded["metrics"]["epochs"] == 3
     np.testing.assert_array_almost_equal(loaded["metrics"]["loss"], [0.5, 0.3, 0.1])
     np.testing.assert_array_almost_equal(loaded["weights"], [[1.0, 2.0], [3.0, 4.0]])
 
 
-def test_composite_dispatch(tmp_path: Path) -> None:
+def test_auto_dispatch(tmp_path: Path) -> None:
     """Default type routing and delegation for non-container values."""
     ctx = DumpContext(tmp_path, key="defaults")
     with ctx:
-        assert ctx.dump({"x": 1})["#type"] == "Composite"
-        assert ctx.dump([10, 20])["#type"] == "Composite"
+        # pure data (no handlers) → delegates to Json
+        assert ctx.dump({"x": 1})["#type"] == "Json"
+        assert ctx.dump([10, 20])["#type"] == "Json"
         # non-container delegates to the inner handler
-        arr_info = ctx.dump(np.array([1.0, 2.0]), cache_type="Composite")
+        arr_info = ctx.dump(np.array([1.0, 2.0]), cache_type="Auto")
     assert arr_info["#type"] == "MemmapArray"
     np.testing.assert_array_almost_equal(ctx.load(arr_info), [1.0, 2.0])
 
 
-def test_composite_large_offload(tmp_path: Path) -> None:
-    """Large Composite result offloaded to shared .json file."""
+def test_auto_large_offload(tmp_path: Path) -> None:
+    """Large pure-data Auto result delegates to Json shared file."""
     ctx = DumpContext(tmp_path, key="large")
     large_dict = {f"k{i}": i for i in range(500)}
     with ctx:
-        large_info = ctx.dump(large_dict, cache_type="Composite")
-    assert "filename" in large_info and "_data" not in large_info
+        large_info = ctx.dump(large_dict, cache_type="Auto")
+    assert large_info["#type"] == "Json" and "filename" in large_info
     assert ctx.load(large_info) == large_dict
 
 
+class _Opaque:
+    """Module-level class so it's picklable (local classes are not)."""
+
+
+def test_auto_fallback(tmp_path: Path) -> None:
+    """Document Auto's content formats: Json delegation, Auto content, Pickle."""
+    # --- Pure data (no handlers) → delegates to Json ---
+    ctx = DumpContext(tmp_path, key="pure")
+    with ctx:
+        info_str = ctx.dump("hello")
+        info_dict = ctx.dump({"count": 42, "label": "test"})
+        large = {f"k{i}": i for i in range(500)}
+        info_large = ctx.dump(large)
+    assert info_str == {"#type": "Json", "_data": "hello"}
+    assert ctx.load(info_str) == "hello"
+    assert info_dict["#type"] == "Json"
+    assert ctx.load(info_dict) == {"count": 42, "label": "test"}
+    assert info_large["#type"] == "Json" and "filename" in info_large
+    assert ctx.load(info_large) == large
+
+    # --- Mixed data (handlers used) → Auto with content ---
+    ctx2 = DumpContext(tmp_path, key="mixed")
+    with ctx2:
+        info_mixed = ctx2.dump({"arr": np.array([1.0]), "x": 1})
+    assert info_mixed["#type"] == "Auto" and "content" in info_mixed
+    loaded: dict[str, tp.Any] = ctx2.load(info_mixed)
+    np.testing.assert_array_almost_equal(loaded["arr"], [1.0])
+    assert loaded["x"] == 1
+
+    # --- Non-JSON-serializable → promotes to Pickle with DeprecationWarning ---
+    ctx3 = DumpContext(tmp_path, key="opaque1")
+    with ctx3:
+        with pytest.warns(DeprecationWarning, match="falling back to Pickle"):
+            info_opaque = ctx3.dump(_Opaque())
+    assert info_opaque["#type"] == "Pickle"
+    assert isinstance(ctx3.load(info_opaque), _Opaque)
+
+    # dict with unhandled leaf (no handlers dispatched) → promotes to Pickle
+    ctx4 = DumpContext(tmp_path, key="opaque2")
+    with ctx4:
+        with pytest.warns(DeprecationWarning):
+            info_opaque_dict = ctx4.dump({"obj": _Opaque(), "x": 1})
+    assert info_opaque_dict["#type"] == "Pickle"
+    loaded = ctx4.load(info_opaque_dict)
+    assert isinstance(loaded["obj"], _Opaque) and loaded["x"] == 1
+
+
 def test_datadict_legacy_load(tmp_path: Path) -> None:
-    """Verify Composite can load old DataDict format (via alias)."""
+    """Verify Auto can load old DataDict format (via alias)."""
     from exca.dumperloader import MemmapArrayFile
     from exca.dumperloader import Pickle as LegacyPickle
 

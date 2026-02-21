@@ -101,6 +101,7 @@ class DumpContext:
         self._stack: contextlib.ExitStack | None = None
         self._resource_cache: dict[tp.Hashable, tp.Any] = {}
         self._max_cache = int(os.environ.get("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", 100_000))
+        self._auto_dispatched: bool = False
         self._created_files: list[Path] = []
 
     # -- Registration --
@@ -223,10 +224,9 @@ class DumpContext:
     # -- Dispatch --
 
     @classmethod
-    def _find_handler(cls, type_: type) -> tp.Any:
-        """Find the best handler for a type.
-        Checks TYPE_DEFAULTS first, then DumperLoader.DEFAULTS (legacy fallback),
-        then falls back to Json."""
+    def _find_handler(cls, type_: type) -> tp.Any | None:
+        """Find a registered handler for a type, or None.
+        Checks TYPE_DEFAULTS first, then DumperLoader.DEFAULTS (legacy)."""
         _ensure_optional_defaults()
         try:
             for supported, handler in cls.TYPE_DEFAULTS.items():
@@ -238,7 +238,7 @@ class DumpContext:
                     return handler
         except TypeError:
             pass
-        return cls.HANDLERS["Json"]
+        return None
 
     def dump_entry(
         self, key: str, value: tp.Any, *, cache_type: str | None = None
@@ -274,7 +274,7 @@ class DumpContext:
         Creates a shallow copy so nested dumps don't clobber ctx.key.
 
         Handlers may return #type to delegate to another handler
-        (e.g. Composite delegates non-container values). The returned
+        (e.g. Auto delegates non-container values). The returned
         #type must be a registered handler name.
         """
         ctx = copy.copy(self)
@@ -287,6 +287,8 @@ class DumpContext:
             type_name = type(value).__name__
         else:
             cls = self._find_handler(type(value))
+            if cls is None:
+                cls = self.HANDLERS["Auto"]
             info, type_name = ctx._dump_cls(cls, value)
         if "#key" in info:
             raise ValueError(

@@ -46,3 +46,26 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
   `TYPE_DEFAULTS` directly with lazy registration for optional packages)
 - Only called by legacy `DataDict.dump()` in `dumperloader.py`
 - Can be simplified or removed once `dumperloader.py` is retired
+
+### Refine `_auto_dispatched` tracking in Auto handler
+- Currently uses `ctx._auto_dispatched` (ad-hoc attr on DumpContext) to detect
+  whether `_dump_value` dispatched any handler. If not, Auto delegates to Json
+  directly (skipping the Auto layer).
+- Cleaner alternatives:
+  - Add a metadata dict on DumpContext (e.g. `ctx.meta`) for handler-local state
+  - However, `dump()` copies ctx via `copy.copy()` — mutable state in copies is
+    shared (shallow copy). Consider whether copies should be dropped or deepened.
+  - Could also walk the result tree for `#type` dicts instead of a flag (pure but O(n))
+
+### Json forced-file parameter
+- Users may want to ensure data goes to a shared file (not inlined in JSONL),
+  e.g. for inspectability or to keep JSONL lines small
+- Mutating `Json.MAX_INLINE_SIZE` is global/thread-unsafe
+- Needs a per-context or per-call mechanism (e.g. ctx attribute, or a
+  `JsonFile` handler variant)
+
+### Remove Auto Pickle fallback
+- Currently `Auto._on_json_failure` delegates to Pickle with DeprecationWarning
+- Eventually should raise TypeError instead (strict mode)
+- `AutoPickle` will remain as the explicit opt-in for Pickle fallback
+- **When:** after sufficient deprecation period
