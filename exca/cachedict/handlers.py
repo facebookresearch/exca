@@ -176,7 +176,8 @@ class ParquetPandasDataFrame(KeyFileHandler):
 
 
 @DumpContext.register
-class TorchTensor(KeyFileHandler):
+class TorchTensor:
+    """Stores tensors as raw numpy bytes in a shared .data file (like MemmapArray)."""
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
@@ -186,16 +187,46 @@ class TorchTensor(KeyFileHandler):
             raise TypeError(f"Expected torch Tensor but got {value} ({type(value)})")
         if is_torch_view(value):
             value = value.clone()
-        path = ctx.key_path(".pt")
-        with utils.temporary_save_path(path) as tmp:
-            torch.save(value.detach().cpu(), tmp)
-        return {"filename": path.name}
+        arr = value.detach().cpu().contiguous().numpy()
+        f, name = ctx.shared_file(".data")
+        offset = f.tell()
+        f.write(np.ascontiguousarray(arr).data)
+        return {
+            "filename": name,
+            "offset": offset,
+            "shape": list(value.shape),
+            "dtype": str(arr.dtype),
+        }
 
     @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
+    def __load_from_info__(
+        cls,
+        ctx: DumpContext,
+        filename: str,
+        offset: int = 0,
+        shape: tp.Sequence[int] = (),
+        dtype: str = "",
+        **_kw: tp.Any,
+    ) -> tp.Any:
         import torch
 
-        return torch.load(ctx.folder / filename, map_location="cpu", weights_only=True)  # type: ignore
+        if not dtype:
+            return torch.load(ctx.folder / filename, map_location="cpu", weights_only=True)  # type: ignore
+        shape_t = tuple(shape)
+        length = int(np.prod(shape_t)) * np.dtype(dtype).itemsize
+        with (ctx.folder / filename).open("rb") as f:
+            f.seek(offset)
+            data = f.read(length)
+        arr = np.frombuffer(data, dtype=dtype).reshape(shape_t)
+        return torch.from_numpy(arr.copy())
+
+    @classmethod
+    def __delete_info__(
+        cls, ctx: DumpContext, filename: str, dtype: str = "", **_kw: tp.Any
+    ) -> None:
+        if not dtype:
+            with utils.fast_unlink(ctx.folder / filename, missing_ok=True):
+                pass
 
 
 @DumpContext.register
@@ -282,35 +313,64 @@ class MneRawBrainVision:
 
 
 # =============================================================================
-# DataDict
+# Composite (recursive handler for dicts/lists, replaces DataDict)
 # =============================================================================
 
 
-@DumpContext.register
-class DataDict:
-    """Delegates dict values to sub-handlers based on type.
-    Handles legacy format (optimized/pickled) on load."""
+@DumpContext.register(default_for=dict)
+class Composite:
+    """Recursively decomposes dicts and lists: JSON-serializable leaves stay
+    inline, typed values (arrays, tensors, ...) are dispatched to their
+    handlers.  The entire result is passed through Json for size management
+    (inline if small, shared .json file if large).
+
+    Also loads legacy DataDict format (optimized/pickled)."""
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        output: dict[str, tp.Any] = {}
-        for skey, val in value.items():
-            ctx.key = skey
-            try:
-                raw = orjson.dumps(val)
-                if len(raw) <= Json.MAX_INLINE_SIZE:
-                    output[skey] = val
-                    continue
-            except (TypeError, orjson.JSONEncodeError):
-                pass
-            output[skey] = ctx.dump(val)
-        return output
+        parent_key = ctx.key or ""
+        if isinstance(value, (list, tuple)):
+            result: tp.Any = [
+                cls._dump_value(ctx, v, f"{parent_key}[{i}]") for i, v in enumerate(value)
+            ]
+        else:
+            result = {
+                k: cls._dump_value(ctx, v, f"{parent_key}({k})") for k, v in value.items()
+            }
+        return Json.__dump_info__(ctx, result)
 
     @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> dict[str, tp.Any]:
+    def _dump_value(cls, ctx: DumpContext, val: tp.Any, key: str) -> tp.Any:
+        if isinstance(val, (int, float, str, bool, type(None))):
+            return val
+        if isinstance(val, dict):
+            return {k: cls._dump_value(ctx, v, f"{key}({k})") for k, v in val.items()}
+        if isinstance(val, (list, tuple)):
+            return [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
+        try:
+            orjson.dumps(val)
+            return val
+        except (TypeError, orjson.JSONEncodeError):
+            pass
+        ctx.key = key
+        return ctx.dump(val)
+
+    @classmethod
+    def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> tp.Any:
         if "optimized" in info or "pickled" in info:
             return cls._load_legacy(ctx, info)
-        return {key: ctx.load(val) for key, val in info.items()}
+        data = Json.__load_from_info__(ctx, **info)
+        return cls._load_value(ctx, data)
+
+    @classmethod
+    def _load_value(cls, ctx: DumpContext, val: tp.Any) -> tp.Any:
+        if isinstance(val, dict):
+            if "#type" in val:
+                return ctx.load(val)
+            return {k: cls._load_value(ctx, v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [cls._load_value(ctx, item) for item in val]
+        return val
 
     @classmethod
     def _load_legacy(cls, ctx: DumpContext, info: dict[str, tp.Any]) -> dict[str, tp.Any]:
@@ -340,7 +400,7 @@ class Json:
     appended to a shared ``.json`` file and referenced by offset/length.
     """
 
-    MAX_INLINE_SIZE = 2048
+    MAX_INLINE_SIZE = 512
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
@@ -370,5 +430,9 @@ class Json:
         return orjson.loads(raw)
 
 
-# Backward-compatible alias: released JSONL files may have #type="MemmapArrayFile"
+# Backward-compatible aliases for released JSONL files
 DumpContext.HANDLERS["MemmapArrayFile"] = MemmapArray
+DumpContext.HANDLERS["DataDict"] = Composite
+
+# Composite also serves as the default handler for lists
+DumpContext.TYPE_DEFAULTS[list] = Composite

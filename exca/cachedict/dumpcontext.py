@@ -90,6 +90,7 @@ class DumpContext:
     def __init__(self, folder: str | Path, *, permissions: int | None = None) -> None:
         self.folder = Path(folder)
         self.key: str | None = None
+        self.level: int = 0
         self.permissions = permissions
         self._thread_id = threading.get_native_id()
         self._prefix = f"{socket.gethostname()}-{self._thread_id}"
@@ -270,6 +271,7 @@ class DumpContext:
         """Serialize a sub-value. Returns an info dict tagged with #type.
         Creates a shallow copy so nested dumps don't clobber ctx.key."""
         ctx = copy.copy(self)
+        ctx.level = self.level + 1
         if cache_type is not None:
             cls: tp.Any = self._lookup(cache_type)
             info, type_name = ctx._dump_cls(cls, value)

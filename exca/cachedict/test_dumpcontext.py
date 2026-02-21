@@ -140,29 +140,37 @@ def _compare(loaded: tp.Any, expected: tp.Any) -> None:
         assert isinstance(loaded, dict) and loaded.keys() == expected.keys()
         for k in expected:
             _compare(loaded[k], expected[k])
+    elif isinstance(expected, list):
+        assert isinstance(loaded, list) and len(loaded) == len(expected)
+        for l_item, e_item in zip(loaded, expected):
+            _compare(l_item, e_item)
     else:
         assert loaded == expected
 
 
-ROUNDTRIP_CASES: list[tuple[str, tp.Any, tp.Optional[str]]] = [
-    ("MemmapArray", np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32), None),
-    ("Pickle", [1, "two", 3.0], "pkl_key"),
-    ("NumpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32), "npy_key"),
-    ("Json", 42, None),
-    (
-        "DataDict",
+ROUNDTRIP_CASES: dict[str, tuple[str, tp.Any, tp.Optional[str]]] = {
+    "MemmapArray": (
+        "MemmapArray",
+        np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+        None,
+    ),
+    "Pickle": ("Pickle", [1, "two", 3.0], "pkl_key"),
+    "NumpyArray": ("NumpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32), "npy_key"),
+    "Json": ("Json", 42, None),
+    "Composite-dict": (
+        "Composite",
         {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
         "entry1",
     ),
-    # Legacy DumperLoader subclass through DumpContext
-    ("String", "test string", "legacy_str"),
-]
+    "Composite-list": ("Composite", [1, 2, "three", 4.0], "list1"),
+    "Legacy-String": ("String", "test string", "legacy_str"),
+}
 
 
 @pytest.mark.parametrize(
     "cache_type,value,key",
-    ROUNDTRIP_CASES,
-    ids=[f"{ct}-{i}" for i, (ct, _, __) in enumerate(ROUNDTRIP_CASES)],
+    ROUNDTRIP_CASES.values(),
+    ids=ROUNDTRIP_CASES.keys(),
 )
 def test_handler_roundtrip(
     tmp_path: Path, cache_type: str, value: tp.Any, key: tp.Optional[str]
@@ -213,7 +221,7 @@ def test_json_large_value_uses_shared_file(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
     large = list(range(1000))
     with ctx:
-        info = ctx.dump(large)
+        info = ctx.dump(large, cache_type="Json")
     assert info["#type"] == "Json"
     assert "filename" in info and "offset" in info and "length" in info
     assert not list(tmp_path.glob("*.pkl"))
@@ -230,28 +238,82 @@ def test_json_non_serializable_raises(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# DataDict
+# Composite
 # =============================================================================
 
 
-def test_datadict_info_structure(tmp_path: Path) -> None:
-    """JSON-serializable values stay inline (no #type wrapper)."""
+def test_composite_info_structure(tmp_path: Path) -> None:
+    """Composite wraps result through Json: small results use _data inline,
+    arrays are dispatched to their handlers."""
     ctx = DumpContext(tmp_path)
     ctx.key = "entry1"
     with ctx:
         info = ctx.dump(
             {"arr": np.array([1.0, 2.0]), "count": 42, "nested": {"a": 1}},
-            cache_type="DataDict",
+            cache_type="Composite",
         )
-    assert info["count"] == 42
-    assert info["nested"] == {"a": 1}
-    for key in ("count", "nested"):
-        assert not isinstance(info[key], dict) or "#type" not in info[key]
-    assert isinstance(info["arr"], dict) and "#type" in info["arr"]
+    assert info["#type"] == "Composite"
+    assert "_data" in info
+    data = info["_data"]
+    assert data["count"] == 42
+    assert data["nested"] == {"a": 1}
+    assert isinstance(data["arr"], dict) and data["arr"]["#type"] == "MemmapArray"
+
+
+def test_composite_as_default_for_dict(tmp_path: Path) -> None:
+    """Dicts use Composite by default (no explicit cache_type needed)."""
+    ctx = DumpContext(tmp_path)
+    ctx.key = "auto"
+    with ctx:
+        info = ctx.dump({"x": 1, "y": 2})
+    assert info["#type"] == "Composite"
+    loaded = ctx.load(info)
+    assert loaded == {"x": 1, "y": 2}
+
+
+def test_composite_list_default(tmp_path: Path) -> None:
+    """Lists use Composite by default."""
+    ctx = DumpContext(tmp_path)
+    ctx.key = "list_default"
+    with ctx:
+        info = ctx.dump([10, 20, 30])
+    assert info["#type"] == "Composite"
+    assert ctx.load(info) == [10, 20, 30]
+
+
+def test_composite_nested_arrays(tmp_path: Path) -> None:
+    """Nested dicts with arrays: arrays are dispatched, JSON stays inline."""
+    ctx = DumpContext(tmp_path)
+    ctx.key = "nested"
+    value = {
+        "metrics": {"loss": np.array([0.5, 0.3, 0.1]), "epochs": 3},
+        "weights": np.array([[1.0, 2.0], [3.0, 4.0]]),
+    }
+    with ctx:
+        info = ctx.dump(value, cache_type="Composite")
+    loaded = ctx.load(info)
+    metrics: dict[str, tp.Any] = loaded["metrics"]
+    assert metrics["epochs"] == 3
+    np.testing.assert_array_almost_equal(metrics["loss"], value["metrics"]["loss"])  # type: ignore[index]
+    np.testing.assert_array_almost_equal(loaded["weights"], value["weights"])  # type: ignore[arg-type]
+
+
+def test_composite_large_offload(tmp_path: Path) -> None:
+    """Large Composite results are offloaded to a shared .json file."""
+    ctx = DumpContext(tmp_path)
+    ctx.key = "large"
+    large_dict = {f"key_{i}": i for i in range(500)}
+    with ctx:
+        info = ctx.dump(large_dict, cache_type="Composite")
+    assert info["#type"] == "Composite"
+    assert "filename" in info and "offset" in info and "length" in info
+    assert "_data" not in info
+    loaded = ctx.load(info)
+    assert loaded == large_dict
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:
-    """Verify DataDict can load old-format info dicts (including old #type name)."""
+    """Verify Composite can load old DataDict format (via alias)."""
     from exca.dumperloader import MemmapArrayFile
     from exca.dumperloader import Pickle as LegacyPickle
 
@@ -300,6 +362,27 @@ def test_shallow_copy_key_isolation(tmp_path: Path) -> None:
     with ctx:
         ctx.dump(np.array([1.0]), cache_type="MemmapArray")
     assert ctx.key == "original"
+
+
+def test_ctx_level_increments(tmp_path: Path) -> None:
+    """ctx.level starts at 0 and increments on each dump() call."""
+
+    @DumpContext.register
+    class LevelChecker:
+        @classmethod
+        def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+            return {"level": ctx.level}
+
+        @classmethod
+        def __load_from_info__(cls, ctx: DumpContext, level: int) -> int:
+            return level
+
+    ctx = DumpContext(tmp_path)
+    assert ctx.level == 0
+    with ctx:
+        info = ctx.dump(42, cache_type="LevelChecker")
+    assert info["level"] == 1
+    del DumpContext.HANDLERS["LevelChecker"]
 
 
 def test_cached_and_invalidate(tmp_path: Path) -> None:
