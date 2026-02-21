@@ -144,32 +144,20 @@ def _compare(loaded: tp.Any, expected: tp.Any) -> None:
         assert loaded == expected
 
 
-ROUNDTRIP_CASES: list[tuple[str, tp.Any, tp.Optional[str]]] = [
-    ("MemmapArray", np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32), None),
-    ("Pickle", [1, "two", 3.0], "pkl_key"),
-    ("NumpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32), "npy_key"),
-    ("Json", 42, None),
-    (
-        "DataDict",
-        {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
-        "entry1",
-    ),
-    # Legacy DumperLoader subclass through DumpContext
-    ("String", "test string", "legacy_str"),
-]
+ROUNDTRIP_CASES: dict[str, tp.Any] = {
+    "MemmapArray": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+    "Pickle": [1, "two", 3.0],
+    "NumpyArray": np.array([[1, 2], [3, 4]], dtype=np.int32),
+    "Json": 42,
+    "DataDict": {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
+    "String": "test string",  # legacy DumperLoader subclass through DumpContext
+}
 
 
-@pytest.mark.parametrize(
-    "cache_type,value,key",
-    ROUNDTRIP_CASES,
-    ids=[f"{ct}-{i}" for i, (ct, _, __) in enumerate(ROUNDTRIP_CASES)],
-)
-def test_handler_roundtrip(
-    tmp_path: Path, cache_type: str, value: tp.Any, key: tp.Optional[str]
-) -> None:
-    ctx = DumpContext(tmp_path)
-    if key is not None:
-        ctx.key = key
+@pytest.mark.parametrize("cache_type", ROUNDTRIP_CASES)
+def test_handler_roundtrip(tmp_path: Path, cache_type: str) -> None:
+    value = ROUNDTRIP_CASES[cache_type]
+    ctx = DumpContext(tmp_path, key="test")
     with ctx:
         info = ctx.dump(value, cache_type=cache_type)
     assert info["#type"] == cache_type
@@ -191,8 +179,7 @@ def test_memmap_array_shared_file(tmp_path: Path) -> None:
 
 def test_static_wrapper_collision_and_delete(tmp_path: Path) -> None:
     """StaticWrapper detects filename collision, and delete removes the file."""
-    ctx = DumpContext(tmp_path)
-    ctx.key = "same_key"
+    ctx = DumpContext(tmp_path, key="same_key")
     with ctx:
         info = ctx.dump(42, cache_type="Pickle")
         with pytest.raises(RuntimeError, match="already exists"):
@@ -236,8 +223,7 @@ def test_json_non_serializable_raises(tmp_path: Path) -> None:
 
 def test_datadict_info_structure(tmp_path: Path) -> None:
     """JSON-serializable values stay inline (no #type wrapper)."""
-    ctx = DumpContext(tmp_path)
-    ctx.key = "entry1"
+    ctx = DumpContext(tmp_path, key="entry1")
     with ctx:
         info = ctx.dump(
             {"arr": np.array([1.0, 2.0]), "count": 42, "nested": {"a": 1}},
@@ -295,8 +281,7 @@ def test_dump_entry(tmp_path: Path) -> None:
 
 
 def test_shallow_copy_key_isolation(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    ctx.key = "original"
+    ctx = DumpContext(tmp_path, key="original")
     with ctx:
         ctx.dump(np.array([1.0]), cache_type="MemmapArray")
     assert ctx.key == "original"

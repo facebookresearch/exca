@@ -55,12 +55,9 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     assert isinstance(reloaded, ExpectedCls)
 
 
-@pytest.mark.parametrize(
-    "cls",
-    (dumperloader.PandasDataFrame, dumperloader.ParquetPandasDataFrame),
-    ids=("PandasDataFrame", "ParquetPandasDataFrame"),
-)
-def test_text_df(tmp_path: Path, cls: tp.Type[dumperloader.DumperLoader]) -> None:
+@pytest.mark.parametrize("name", ("PandasDataFrame", "ParquetPandasDataFrame"))
+def test_text_df(tmp_path: Path, name: str) -> None:
+    cls = dumperloader.DumperLoader.CLASSES[name]
     df = pd.DataFrame(
         [{"type": "Word", "text": "None"}, {"type": "Something", "number": 12}]
     )
@@ -74,14 +71,9 @@ def test_text_df(tmp_path: Path, cls: tp.Type[dumperloader.DumperLoader]) -> Non
 
 
 @pytest.mark.parametrize("ch_type", ("eeg", "ecog", "seeg", "mag", "grad", "ref_meg"))
-@pytest.mark.parametrize(
-    "cls",
-    (dumperloader.MneRawFif, dumperloader.MneRawBrainVision),
-    ids=("MneRawFif", "MneRawBrainVision"),
-)
-def test_mne_raw(
-    tmp_path: Path, ch_type: str, cls: tp.Type[dumperloader.DumperLoader]
-) -> None:
+@pytest.mark.parametrize("name", ("MneRawFif", "MneRawBrainVision"))
+def test_mne_raw(tmp_path: Path, ch_type: str, name: str) -> None:
+    cls = dumperloader.DumperLoader.CLASSES[name]
     raw = make_mne_raw(ch_type)
     dl = cls(tmp_path)
     info = dl.dump("blublu", raw)
