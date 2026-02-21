@@ -4,20 +4,13 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""DumpContext and new-style handlers for protocol-based serialization.
+"""DumpContext: central orchestrator for protocol-based serialization.
 
-DumpContext is the central orchestrator for serialization: it manages
-write-side file lifecycle (shared files, ExitStack), read-side cache
-(memmaps), and dispatches serialization through the __dump_info__ /
+Manages write-side file lifecycle (shared files, ExitStack), read-side
+cache (memmaps), and dispatches serialization through the __dump_info__ /
 __load_from_info__ protocol.
 
-Handler classes (MemmapArray, StringDump, etc.) are registered via
-@DumpContext.register and use classmethods. User classes that ARE the
-serialized value implement __dump_info__ as an instance method
-and are detected automatically.
-
-Handler classes coexist with legacy DumperLoader subclasses which
-DumpContext also handles transparently.
+Handler classes live in handlers.py and are registered at import time.
 """
 
 import contextlib
@@ -25,23 +18,49 @@ import copy
 import inspect
 import logging
 import os
-import pickle
 import socket
+import sys
 import threading
 import typing as tp
 from pathlib import Path
 
-import numpy as np
 import orjson
 
-from exca import utils
-
-from .dumperloader import DumperLoader
-from .dumperloader import Pickle as _LegacyPickle
-from .dumperloader import String as _LegacyString
-from .dumperloader import _string_uid
+from exca.dumperloader import DumperLoader
 
 logger = logging.getLogger(__name__)
+
+# Lazy default registration for optional packages.
+# Maps module name → list of (type_path, handler_name) to register
+# once the module is available.
+_OPTIONAL_DEFAULTS: dict[str, list[tuple[str, str]]] = {
+    "pandas": [("pandas.DataFrame", "PandasDataFrame")],
+    "torch": [("torch.Tensor", "TorchTensor")],
+    "nibabel": [
+        ("nibabel.Nifti1Image", "NibabelNifti"),
+        ("nibabel.Nifti2Image", "NibabelNifti"),
+    ],
+    "mne": [("mne.io.Raw", "MneRawFif"), ("mne.io.RawArray", "MneRawFif")],
+}
+
+
+def _ensure_optional_defaults() -> None:
+    """Register new-style handlers as DEFAULTS for optional packages
+    that are already imported. Called lazily from dump()."""
+    for mod_name, entries in list(_OPTIONAL_DEFAULTS.items()):
+        if mod_name not in sys.modules:
+            continue
+        for type_path, handler_name in entries:
+            parts = type_path.split(".")
+            obj: tp.Any = sys.modules[parts[0]]
+            try:
+                for attr in parts[1:]:
+                    obj = getattr(obj, attr)
+            except AttributeError:
+                continue
+            if obj not in DumperLoader.DEFAULTS:
+                DumperLoader.DEFAULTS[obj] = DumperLoader.CLASSES[handler_name]
+        del _OPTIONAL_DEFAULTS[mod_name]
 
 
 class DumpContext:
@@ -108,7 +127,10 @@ class DumpContext:
                             f"{method} to be a classmethod on {klass.__name__}"
                         )
             name = getattr(klass, "dump_name", klass.__name__)
-            if name in DumperLoader.CLASSES:
+            existing = DumperLoader.CLASSES.get(name)
+            if existing is not None and not (
+                isinstance(existing, type) and issubclass(existing, DumperLoader)
+            ):
                 raise ValueError(
                     f"Name collision: {name!r} is already registered "
                     f"in DumperLoader.CLASSES"
@@ -165,6 +187,18 @@ class DumpContext:
 
     # -- Dispatch --
 
+    @staticmethod
+    def _find_handler(type_: type) -> tp.Any:
+        """Find the best handler for a type from DEFAULTS, falling back to Json."""
+        _ensure_optional_defaults()
+        try:
+            for supported, handler in DumperLoader.DEFAULTS.items():
+                if issubclass(type_, supported):
+                    return handler
+        except TypeError:
+            pass
+        return DumperLoader.CLASSES["Json"]
+
     def dump_entry(
         self, key: str, value: tp.Any, *, cache_type: str | None = None
     ) -> dict[str, tp.Any]:
@@ -197,9 +231,7 @@ class DumpContext:
             info = value.__dump_info__(ctx)
             type_name = type(value).__name__
         else:
-            cls = DumperLoader.default_class(type(value))
-            if cls in (_LegacyPickle, _LegacyString):
-                cls = Json
+            cls = self._find_handler(type(value))
             info, type_name = ctx._dump_cls(cls, value)
         _reserved = info.keys() & {"#type", "#key"}
         if _reserved:
@@ -293,234 +325,5 @@ class DumpContext:
         self._resource_cache.pop(key, None)
 
 
-# =============================================================================
-# Handler classes
-# =============================================================================
-#
-# Handler names avoid collision with existing DumperLoader.CLASSES entries.
-# Phase 2 will add aliases so old #type values resolve to these handlers.
-
-
-@DumpContext.register
-class MemmapArray:
-    """Appends numpy arrays to a shared binary file, loads via memmap."""
-
-    @classmethod
-    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        f, name = ctx.shared_file(".data")
-        if not isinstance(value, np.ndarray):
-            raise TypeError(f"Expected numpy array but got {type(value)}")
-        if not value.size:
-            raise ValueError(f"Cannot dump data with no size: shape={value.shape}")
-        offset = f.tell()
-        f.write(np.ascontiguousarray(value).data)
-        return {
-            "filename": name,
-            "offset": offset,
-            "shape": tuple(value.shape),
-            "dtype": str(value.dtype),
-        }
-
-    @classmethod
-    def __load_from_info__(
-        cls,
-        ctx: DumpContext,
-        filename: str,
-        offset: int,
-        shape: tp.Sequence[int],
-        dtype: str,
-    ) -> np.ndarray:
-        shape = tuple(shape)
-        length = int(np.prod(shape)) * np.dtype(dtype).itemsize
-        cache_key = ("MemmapArray", filename)
-        for _ in range(2):
-            mm = ctx.cached(
-                cache_key,
-                lambda: np.memmap(ctx.folder / filename, mode="r", order="C"),
-            )
-            data = mm[offset : offset + length]
-            if data.size:
-                break
-            ctx.invalidate(cache_key)
-        return data.view(dtype=dtype).reshape(shape)
-
-
-@DumpContext.register
-class StringDump:
-    """Appends strings to a shared text file, loads by offset."""
-
-    @classmethod
-    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        f, name = ctx.shared_file(".txt")
-        if not isinstance(value, str):
-            raise TypeError(f"Expected string but got {type(value)}")
-        prefix = "\n<value>".encode("utf8")
-        offset = f.tell()
-        b = value.encode("utf8")
-        f.write(prefix + b)
-        return {"filename": name, "offset": offset + len(prefix), "length": len(b)}
-
-    @classmethod
-    def __load_from_info__(
-        cls, ctx: DumpContext, filename: str, offset: int, length: int
-    ) -> str:
-        path = ctx.folder / filename
-        with path.open("rb") as f:
-            f.seek(offset)
-            return f.read(length).decode("utf8")
-
-
-class StaticWrapper:
-    """Base for one-file-per-entry formats. Not registered itself."""
-
-    SUFFIX = ""
-
-    @classmethod
-    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        if ctx.key is None:
-            raise RuntimeError(
-                "ctx.key must be set for StaticWrapper (one-file-per-entry formats)"
-            )
-        uid = _string_uid(ctx.key)
-        filename = uid + cls.SUFFIX
-        filepath = ctx.folder / filename
-        if filepath.exists():
-            raise RuntimeError(
-                f"File {filename} already exists. If dumping multiple "
-                f"sub-values of the same type, set ctx.key to a unique "
-                f"sub-key for each (see DataDictDump for an example)."
-            )
-        cls.static_dump(filepath, value)
-        return {"filename": filename}
-
-    @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
-        return cls.static_load(ctx.folder / filename)
-
-    @classmethod
-    def __delete_info__(cls, ctx: DumpContext, filename: str) -> None:
-        with utils.fast_unlink(ctx.folder / filename, missing_ok=True):
-            pass
-
-    @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
-        raise NotImplementedError
-
-    @classmethod
-    def static_load(cls, filepath: Path) -> tp.Any:
-        raise NotImplementedError
-
-
-@DumpContext.register
-class PickleDump(StaticWrapper):
-    SUFFIX = ".pkl"
-
-    @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
-        with utils.temporary_save_path(filepath) as tmp:
-            with tmp.open("wb") as f:
-                pickle.dump(value, f)
-
-    @classmethod
-    def static_load(cls, filepath: Path) -> tp.Any:
-        with filepath.open("rb") as f:
-            return pickle.load(f)
-
-
-@DumpContext.register
-class NpyArray(StaticWrapper):
-    SUFFIX = ".npy"
-
-    @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
-        if not isinstance(value, np.ndarray):
-            raise TypeError(f"Expected numpy array but got {value} ({type(value)})")
-        with utils.temporary_save_path(filepath) as tmp:
-            np.save(tmp, value)
-
-    @classmethod
-    def static_load(cls, filepath: Path) -> np.ndarray:
-        return np.load(filepath)  # type: ignore
-
-
-@DumpContext.register
-class DataDictDump:
-    """Delegates dict values to sub-handlers based on type.
-    Handles legacy format (optimized/pickled) on load."""
-
-    @classmethod
-    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        output: dict[str, tp.Any] = {}
-        for skey, val in value.items():
-            ctx.key = skey
-            default_cls = DumperLoader.default_class(type(val))
-            if hasattr(val, "__dump_info__") or default_cls not in (
-                PickleDump,
-                _LegacyPickle,
-            ):
-                output[skey] = ctx.dump(val)
-            else:
-                try:
-                    orjson.dumps(val)
-                    output[skey] = val
-                except (TypeError, orjson.JSONEncodeError):
-                    output[skey] = ctx.dump(val, cache_type="PickleDump")
-        return output
-
-    @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> dict[str, tp.Any]:
-        if "optimized" in info or "pickled" in info:
-            return cls._load_legacy(ctx, info)
-        return {key: ctx.load(val) for key, val in info.items()}
-
-    @classmethod
-    def _load_legacy(cls, ctx: DumpContext, info: dict[str, tp.Any]) -> dict[str, tp.Any]:
-        output: dict[str, tp.Any] = {}
-        for key, entry in info.get("optimized", {}).items():
-            entry_info = dict(entry["info"])
-            entry_info["#type"] = entry["cls"]
-            output[key] = ctx.load(entry_info)
-        if info.get("pickled"):
-            pickled = dict(info["pickled"])
-            pickled["#type"] = "Pickle"
-            output.update(ctx.load(pickled))
-        return output
-
-
-@DumpContext.register
-class Json:
-    """JSON storage: inline in JSONL if small, shared .json file if large.
-
-    Values whose serialized size is at most ``MAX_INLINE_SIZE`` bytes are
-    stored directly in the JSONL line (``_data`` key).  Larger values are
-    appended to a shared ``.json`` file and referenced by offset/length.
-    """
-
-    MAX_INLINE_SIZE = 2048
-
-    @classmethod
-    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        try:
-            raw = orjson.dumps(value)
-        except (TypeError, orjson.JSONEncodeError) as e:
-            raise TypeError(
-                f"Value of type {type(value).__name__} is not JSON-serializable. "
-                f"Register a handler with @DumpContext.register(default_for={type(value).__name__}) "
-                f"or use cache_type='Pickle' explicitly."
-            ) from e
-        if len(raw) <= cls.MAX_INLINE_SIZE:
-            return {"_data": value}
-        f, name = ctx.shared_file(".json")
-        offset = f.tell()
-        f.write(raw + b"\n")
-        return {"filename": name, "offset": offset, "length": len(raw)}
-
-    @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> tp.Any:
-        if "_data" in info:
-            return info["_data"]
-        path = ctx.folder / info["filename"]
-        with path.open("rb") as f:
-            f.seek(info["offset"])
-            raw = f.read(info["length"])
-        return orjson.loads(raw)
+# Import handlers to trigger registration via @DumpContext.register.
+from . import handlers as _handlers  # noqa: E402, F401

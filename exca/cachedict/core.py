@@ -24,7 +24,6 @@ import orjson
 from exca import utils
 
 from .dumpcontext import DumpContext
-from .dumperloader import DumperLoader
 
 X = tp.TypeVar("X")
 
@@ -290,17 +289,13 @@ class CacheDict(tp.Generic[X]):
             raise RuntimeError("Cannot write outside of a writer context")
         if self._folder_modified <= 0:
             _ = self.keys()
-        if self.cache_type is None:
-            cls = DumperLoader.default_class(type(value))
-            self.cache_type = cls.__name__
         if key in self._ram_data or key in self._key_info:
             raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
         if self._keep_in_ram and self.folder is None:
             self._ram_data[key] = value
         if self.folder is not None:
             assert self._write_ctx is not None
-            _generic = ("Pickle", "PickleDump", "String", "StringDump")
-            ct = self.cache_type if self.cache_type not in _generic else None
+            ct = self.cache_type
             result = self._write_ctx.dump_entry(key, value, cache_type=ct)
             content = result["content"]
             content.pop("#key", None)

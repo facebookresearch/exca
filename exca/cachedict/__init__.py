@@ -8,9 +8,10 @@ from .core import METADATA_TAG as METADATA_TAG
 from .core import CacheDict as CacheDict
 
 CacheDictWriter = CacheDict  # deprecated: use CacheDict directly
+from exca.dumperloader import MEMMAP_ARRAY_FILE_MAX_CACHE as MEMMAP_ARRAY_FILE_MAX_CACHE
+from exca.dumperloader import DumperLoader as DumperLoader
+from exca.dumperloader import StaticDumperLoader as StaticDumperLoader
+from exca.dumperloader import host_pid as host_pid
+
 from .core import DumpInfo as DumpInfo
 from .dumpcontext import DumpContext as DumpContext
-from .dumperloader import MEMMAP_ARRAY_FILE_MAX_CACHE as MEMMAP_ARRAY_FILE_MAX_CACHE
-from .dumperloader import DumperLoader as DumperLoader
-from .dumperloader import StaticDumperLoader as StaticDumperLoader
-from .dumperloader import host_pid as host_pid

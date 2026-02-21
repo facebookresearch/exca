@@ -12,8 +12,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from exca.dumperloader import DumperLoader
+
 from .dumpcontext import DumpContext
-from .dumperloader import DumperLoader
 
 # =============================================================================
 # @DumpContext.register
@@ -167,8 +168,6 @@ def _compare(loaded: tp.Any, expected: tp.Any) -> None:
 
 ROUNDTRIP_CASES: list[tuple[str, tp.Any, tp.Optional[str]]] = [
     ("MemmapArray", np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32), None),
-    ("StringDump", "hello world", None),
-    ("StringDump", "line1\nline2\nline3", None),
     ("PickleDump", [1, "two", 3.0], "pkl_key"),
     ("NpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32), "npy_key"),
     ("Json", 42, None),
@@ -288,8 +287,8 @@ def test_datadict_info_structure(tmp_path: Path) -> None:
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:
     """Verify DataDictDump can load old-format info dicts."""
-    from .dumperloader import MemmapArrayFile
-    from .dumperloader import Pickle as LegacyPickle
+    from exca.dumperloader import MemmapArrayFile
+    from exca.dumperloader import Pickle as LegacyPickle
 
     ctx = DumpContext(tmp_path)
     arr = np.array([1.0, 2.0], dtype=np.float64)

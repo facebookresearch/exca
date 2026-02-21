@@ -14,7 +14,9 @@ import pandas as pd
 import pytest
 import torch
 
-from . import dumperloader
+from exca import dumperloader
+
+from . import handlers
 
 
 def make_mne_raw(ch_type: str) -> mne.io.RawArray:
@@ -52,12 +54,16 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     assert isinstance(reloaded, ExpectedCls)
 
 
-@pytest.mark.parametrize("name", ("PandasDataFrame", "ParquetPandasDataFrame"))
-def test_text_df(tmp_path: Path, name: str) -> None:
+@pytest.mark.parametrize(
+    "cls",
+    (dumperloader.PandasDataFrame, dumperloader.ParquetPandasDataFrame),
+    ids=("PandasDataFrame", "ParquetPandasDataFrame"),
+)
+def test_text_df(tmp_path: Path, cls: tp.Type[dumperloader.DumperLoader]) -> None:
     df = pd.DataFrame(
         [{"type": "Word", "text": "None"}, {"type": "Something", "number": 12}]
     )
-    dl = dumperloader.DumperLoader.CLASSES[name](tmp_path)
+    dl = cls(tmp_path)
     info = dl.dump("blublu", df)
     reloaded = dl.load(**info)
     assert reloaded.loc[0, "text"] == "None"
@@ -67,18 +73,22 @@ def test_text_df(tmp_path: Path, name: str) -> None:
 
 
 @pytest.mark.parametrize("ch_type", ("eeg", "ecog", "seeg", "mag", "grad", "ref_meg"))
-@pytest.mark.parametrize("name", ("MneRawFif", "MneRawBrainVision"))
-def test_mne_raw(tmp_path: Path, ch_type: str, name: str) -> None:
+@pytest.mark.parametrize(
+    "cls",
+    (dumperloader.MneRawFif, dumperloader.MneRawBrainVision),
+    ids=("MneRawFif", "MneRawBrainVision"),
+)
+def test_mne_raw(
+    tmp_path: Path, ch_type: str, cls: tp.Type[dumperloader.DumperLoader]
+) -> None:
     raw = make_mne_raw(ch_type)
-    dl = dumperloader.DumperLoader.CLASSES[name](tmp_path)
+    dl = cls(tmp_path)
     info = dl.dump("blublu", raw)
     reloaded = dl.load(**info)
-    reload_type = (
-        mne.io.Raw
-        if name == "MneRawFif"
-        else mne.io.brainvision.brainvision.RawBrainVision
-    )
-    assert isinstance(reloaded, reload_type)
+    if cls is dumperloader.MneRawFif:
+        assert isinstance(reloaded, mne.io.Raw)
+    else:
+        assert isinstance(reloaded, mne.io.brainvision.brainvision.RawBrainVision)
     raw_data = raw.get_data()
     reloaded_data = reloaded.get_data()
     assert np.allclose(raw_data, reloaded_data, atol=1e-8)
@@ -96,17 +106,16 @@ def test_mne_raw(tmp_path: Path, ch_type: str, name: str) -> None:
     ],
 )
 def test_is_view(data: torch.Tensor, expected: bool) -> None:
-    assert dumperloader.is_view(data) is expected
+    assert handlers.is_torch_view(data) is expected
 
 
 def test_dump_torch_view(tmp_path: Path) -> None:
     data = torch.arange(8)[:2]
-    assert dumperloader.is_view(data)
-    # reloading it should not be a view as it was cloned
+    assert handlers.is_torch_view(data)
     dl = dumperloader.TorchTensor(tmp_path)
     info = dl.dump("blublu", data)
     reloaded = dl.load(**info)
-    assert not dumperloader.is_view(reloaded)
+    assert not handlers.is_torch_view(reloaded)
 
 
 def test_dump_dict(tmp_path: Path) -> None:
@@ -150,7 +159,7 @@ def test_default_class() -> None:
     ],
 )
 def test_string_uid(string: str, expected: str) -> None:
-    out = dumperloader._string_uid(string)
+    out = handlers.string_uid(string)
     assert out == expected
 
 

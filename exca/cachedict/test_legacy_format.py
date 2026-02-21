@@ -20,8 +20,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from exca.dumperloader import DumperLoader, MemmapArrayFile, StaticDumperLoader, host_pid
+
 from . import core as cd
-from .dumperloader import DumperLoader, StaticDumperLoader, host_pid
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "data"
 
@@ -191,3 +192,26 @@ def test_mixed_old_and_new_format(tmp_path: Path) -> None:
     del cache2["hello"]
     cache3: cd.CacheDict[tp.Any] = cd.CacheDict(folder=dst)
     assert set(cache3.keys()) == {"multiline", "extra"}
+
+
+class CustomMemmapDumper(MemmapArrayFile):
+    """Simulates a third-party subclass of MemmapArrayFile."""
+
+
+def test_memmap_array_file_subclass(tmp_path: Path) -> None:
+    """MemmapArrayFile subclass: shared binary file, memmap loading."""
+    assert "CustomMemmapDumper" in DumperLoader.CLASSES
+    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
+        folder=tmp_path, cache_type="CustomMemmapDumper"
+    )
+    a1 = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    a2 = np.arange(12, dtype=np.float64).reshape(3, 4)
+    with cache.write():
+        cache["arr1"] = a1
+        cache["arr2"] = a2
+    np.testing.assert_array_almost_equal(cache["arr1"], a1)
+    np.testing.assert_array_almost_equal(cache["arr2"], a2)
+    # Reload from disk
+    cache2: cd.CacheDict[np.ndarray] = cd.CacheDict(folder=tmp_path)
+    np.testing.assert_array_almost_equal(cache2["arr1"], a1)
+    np.testing.assert_array_almost_equal(cache2["arr2"], a2)

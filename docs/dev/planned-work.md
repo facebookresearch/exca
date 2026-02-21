@@ -17,12 +17,15 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 - **Migration:** use `CacheDict` directly
 - **When:** alongside `writer()` removal
 
-### Rename DumperLoader subclass names
-- **Status:** not started
-- **What breaks:** callers using `cache_type="MemmapArrayFile"` etc.
-- **Examples:** `MemmapArrayFile` → `MemmapArray`, keep old names as aliases
-  with deprecation warnings
-- **When:** after DumpContext migration is stable
+### Remove `exca/dumperloader.py` module
+- **Status:** legacy DumperLoader subclasses kept for external subclassing
+- **What breaks:** any code that subclasses `DumperLoader`, `StaticDumperLoader`,
+  `MemmapArrayFile`, etc.
+- **Migration:** switch to `@DumpContext.register` with new-style handlers
+- **When:** after confirming no external subclasses are in use
+- **Notes:** `DumperLoader.CLASSES` / `DEFAULTS` registries would move to
+  `DumpContext`; `default_class()` can be removed (new code uses
+  `_find_handler()` already)
 
 ## Internal cleanup (non-breaking, can do anytime)
 
@@ -31,12 +34,6 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 - Eliminates the pop-then-re-inject pattern in `__getitem__` / `__delitem__`
 - Touches: `DumpInfo`, `__setitem__`, `JsonlReader.read()`, `__getitem__`,
   `__delitem__`
-
-### JSON-inline dispatch in `DumpContext.dump()`
-- Move JSON-inline probe from `DataDictDump` into `DumpContext.dump()` dispatch
-- After `default_class()` returns pickle fallback, try `orjson.dumps(value)` —
-  if it succeeds and is under `MAX_INLINE_SIZE` (~1-2 KB), use `Json` handler
-- Simplifies `DataDictDump` to `{k: ctx.dump(v) for k, v in value.items()}`
 
 ### Remove `_track_files` recursion
 - `TODO(legacy)` in `dumpcontext.py`: recursion only needed for legacy
@@ -48,3 +45,9 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 - New JSONL files already use self-describing format (no `metadata=` header)
 - `JsonlReader` still reads old format — keep that for backward compat
 - Can remove `METADATA_TAG` constant once no old-format files exist
+
+### Clean up `default_class()` in dumperloader.py
+- Legacy method with hardcoded type checks (ndarray, str, pandas, torch, etc.)
+- New code bypasses it entirely (`DumpContext._find_handler()` checks `DEFAULTS`
+  directly with lazy registration for optional packages)
+- Can be simplified or removed once `dumperloader.py` is retired
