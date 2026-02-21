@@ -140,6 +140,10 @@ def _compare(loaded: tp.Any, expected: tp.Any) -> None:
         assert isinstance(loaded, dict) and loaded.keys() == expected.keys()
         for k in expected:
             _compare(loaded[k], expected[k])
+    elif isinstance(expected, list):
+        assert isinstance(loaded, list) and len(loaded) == len(expected)
+        for l_item, e_item in zip(loaded, expected):
+            _compare(l_item, e_item)
     else:
         assert loaded == expected
 
@@ -149,7 +153,7 @@ ROUNDTRIP_CASES: dict[str, tp.Any] = {
     "Pickle": [1, "two", 3.0],
     "NumpyArray": np.array([[1, 2], [3, 4]], dtype=np.int32),
     "Json": 42,
-    "DataDict": {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
+    "Composite": {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
     "String": "test string",  # legacy DumperLoader subclass through DumpContext
 }
 
@@ -200,7 +204,7 @@ def test_json_large_value_uses_shared_file(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
     large = list(range(1000))
     with ctx:
-        info = ctx.dump(large)
+        info = ctx.dump(large, cache_type="Json")
     assert info["#type"] == "Json"
     assert "filename" in info and "offset" in info and "length" in info
     assert not list(tmp_path.glob("*.pkl"))
@@ -217,27 +221,82 @@ def test_json_non_serializable_raises(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# DataDict
+# Composite
 # =============================================================================
 
 
-def test_datadict_info_structure(tmp_path: Path) -> None:
-    """JSON-serializable values stay inline (no #type wrapper)."""
-    ctx = DumpContext(tmp_path, key="entry1")
+def test_composite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Composite handler: structure, dispatch, nesting levels, offload."""
+    # Track nesting depth via monkeypatch
+    max_level = [0]
+    real_dump = DumpContext.dump
+
+    def tracking_dump(
+        self: DumpContext, value: tp.Any, **kw: tp.Any
+    ) -> dict[str, tp.Any]:
+        max_level[0] = max(max_level[0], self.level + 1)
+        return real_dump(self, value, **kw)
+
+    monkeypatch.setattr(DumpContext, "dump", tracking_dump)
+
+    # -- Nested dict with arrays: full output check --
+    ctx = DumpContext(tmp_path, key="entry")
     with ctx:
         info = ctx.dump(
-            {"arr": np.array([1.0, 2.0]), "count": 42, "nested": {"a": 1}},
-            cache_type="DataDict",
+            {
+                "metrics": {"loss": np.array([0.5, 0.3, 0.1]), "epochs": 3},
+                "weights": np.array([[1.0, 2.0], [3.0, 4.0]]),
+                "label": "test",
+            },
+            cache_type="Composite",
         )
-    assert info["count"] == 42
-    assert info["nested"] == {"a": 1}
-    for key in ("count", "nested"):
-        assert not isinstance(info[key], dict) or "#type" not in info[key]
-    assert isinstance(info["arr"], dict) and "#type" in info["arr"]
+    fn = info["_data"]["weights"]["filename"]  # dynamic: hostname-threadid.data
+    assert info == {
+        "#type": "Composite",
+        "_data": {
+            "metrics": {
+                "loss": {
+                    "#type": "MemmapArray",
+                    "filename": fn,
+                    "offset": 0,
+                    "shape": (3,),
+                    "dtype": "float64",
+                },
+                "epochs": 3,
+            },
+            "weights": {
+                "#type": "MemmapArray",
+                "filename": fn,
+                "offset": 24,
+                "shape": (2, 2),
+                "dtype": "float64",
+            },
+            "label": "test",
+        },
+    }
+    assert max_level[0] == 1  # Composite at 0, MemmapArray at 1
+    loaded = ctx.load(info)
+    assert loaded["label"] == "test" and loaded["metrics"]["epochs"] == 3
+    np.testing.assert_array_almost_equal(loaded["metrics"]["loss"], [0.5, 0.3, 0.1])
+    np.testing.assert_array_almost_equal(loaded["weights"], [[1.0, 2.0], [3.0, 4.0]])
+
+    # -- Default dispatch: dict and list both use Composite --
+    ctx2 = DumpContext(tmp_path, key="defaults")
+    with ctx2:
+        assert ctx2.dump({"x": 1})["#type"] == "Composite"
+        assert ctx2.dump([10, 20])["#type"] == "Composite"
+
+    # -- Large result offloaded to shared .json file --
+    ctx3 = DumpContext(tmp_path, key="large")
+    large_dict = {f"k{i}": i for i in range(500)}
+    with ctx3:
+        large_info = ctx3.dump(large_dict, cache_type="Composite")
+    assert "filename" in large_info and "_data" not in large_info
+    assert ctx3.load(large_info) == large_dict
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:
-    """Verify DataDict can load old-format info dicts (including old #type name)."""
+    """Verify Composite can load old DataDict format (via alias)."""
     from exca.dumperloader import MemmapArrayFile
     from exca.dumperloader import Pickle as LegacyPickle
 
