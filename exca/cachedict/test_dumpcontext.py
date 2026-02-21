@@ -144,23 +144,19 @@ def _compare(loaded: tp.Any, expected: tp.Any) -> None:
         assert loaded == expected
 
 
-ROUNDTRIP_CASES: list[tuple[str, tp.Any]] = [
-    ("MemmapArray", np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)),
-    ("Pickle", [1, "two", 3.0]),
-    ("NumpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32)),
-    ("Json", 42),
-    ("DataDict", {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}}),
-    # Legacy DumperLoader subclass through DumpContext
-    ("String", "test string"),
-]
+ROUNDTRIP_CASES: dict[str, tp.Any] = {
+    "MemmapArray": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+    "Pickle": [1, "two", 3.0],
+    "NumpyArray": np.array([[1, 2], [3, 4]], dtype=np.int32),
+    "Json": 42,
+    "DataDict": {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
+    "String": "test string",  # legacy DumperLoader subclass through DumpContext
+}
 
 
-@pytest.mark.parametrize(
-    "cache_type,value",
-    ROUNDTRIP_CASES,
-    ids=[ct for ct, _ in ROUNDTRIP_CASES],
-)
-def test_handler_roundtrip(tmp_path: Path, cache_type: str, value: tp.Any) -> None:
+@pytest.mark.parametrize("cache_type", ROUNDTRIP_CASES)
+def test_handler_roundtrip(tmp_path: Path, cache_type: str) -> None:
+    value = ROUNDTRIP_CASES[cache_type]
     ctx = DumpContext(tmp_path, key="test")
     with ctx:
         info = ctx.dump(value, cache_type=cache_type)
