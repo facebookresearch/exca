@@ -29,16 +29,10 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 
 ## Internal cleanup (non-breaking, can do anytime)
 
-### Simplify `DumpInfo`
-- Remove `cache_type` field, keep `#type` in `content` dict instead
-- Eliminates the pop-then-re-inject pattern in `__getitem__` / `__delitem__`
-- Touches: `DumpInfo`, `__setitem__`, `JsonlReader.read()`, `__getitem__`,
-  `__delitem__`
-
-### Remove `_track_files` recursion
-- `TODO(legacy)` in `dumpcontext.py`: recursion only needed for legacy
-  `DataDict` DumperLoader structures; new `DataDict` handler tracks
-  sub-files through `ctx.dump()` calls
+### Remove `_track_legacy_files` recursion
+- In `dumpcontext.py`: recursion only needed for legacy `DataDict`
+  DumperLoader structures; new `DataDict` handler tracks sub-files
+  through `ctx.dump()` calls
 - Remove once legacy DataDict DumperLoader is retired
 
 ### Stop writing `METADATA_TAG` header
@@ -50,4 +44,5 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 - Legacy method with hardcoded type checks (ndarray, str, pandas, torch, etc.)
 - New code bypasses it entirely (`DumpContext._find_handler()` checks
   `TYPE_DEFAULTS` directly with lazy registration for optional packages)
+- Only called by legacy `DataDict.dump()` in `dumperloader.py`
 - Can be simplified or removed once `dumperloader.py` is retired
