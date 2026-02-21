@@ -19,7 +19,7 @@ import orjson
 
 from exca import utils
 
-from .dumpcontext import DumpContext, string_uid  # string_uid re-exported for tests
+from .dumpcontext import DumpContext
 
 
 def is_torch_view(x: tp.Any) -> bool:

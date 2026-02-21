@@ -17,6 +17,7 @@ import torch
 from exca import dumperloader
 
 from . import handlers
+from .dumpcontext import string_uid
 
 
 def make_mne_raw(ch_type: str) -> mne.io.RawArray:
@@ -159,7 +160,7 @@ def test_default_class() -> None:
     ],
 )
 def test_string_uid(string: str, expected: str) -> None:
-    out = handlers.string_uid(string)
+    out = string_uid(string)
     assert out == expected
 
 
