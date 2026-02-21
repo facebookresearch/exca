@@ -40,6 +40,8 @@ def host_pid() -> str:
 
 class DumperLoader:  # not generic, as we don't want to load packages for typig
     CLASSES: tp.MutableMapping[str, "tp.Type[DumperLoader]"] = {}
+    # Deprecated: use DumpContext.TYPE_DEFAULTS instead.
+    # Kept as fallback so external code writing here still works.
     DEFAULTS: tp.MutableMapping[tp.Any, "tp.Type[DumperLoader]"] = {}
 
     def __init__(self, folder: str | Path = "") -> None:
@@ -64,15 +66,9 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
     def default_class(type_: tp.Type[tp.Any]) -> tp.Type["DumperLoader"]:
         """Return a legacy DumperLoader subclass for the given type.
 
-        Note: new-style handlers in DEFAULTS are checked by
-        DumpContext.dump() directly; this method only returns
-        DumperLoader subclasses for backward compatibility."""
-        Cls: tp.Any = Pickle  # default
+        Used only by legacy DataDict.dump() for backward compatibility.
+        New-style dispatch goes through DumpContext._find_handler()."""
         try:
-            for supported, DL in DumperLoader.DEFAULTS.items():
-                if issubclass(type_, supported):
-                    Cls = DL
-                    break
             if issubclass(type_, np.ndarray):
                 return MemmapArrayFile
             if issubclass(type_, str):
@@ -99,7 +95,7 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
                     return MneRawFif
         except TypeError:
             pass
-        return Cls  # type: ignore
+        return Pickle  # type: ignore
 
     @classmethod
     def check_valid_cache_type(cls, cache_type: str) -> None:

@@ -15,6 +15,7 @@ Handler classes live in handlers.py and are registered at import time.
 
 import contextlib
 import copy
+import hashlib
 import inspect
 import logging
 import os
@@ -29,6 +30,18 @@ import orjson
 from exca.dumperloader import DumperLoader
 
 logger = logging.getLogger(__name__)
+
+_UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
+
+
+def string_uid(string: str) -> str:
+    """Convert a string to a safe filename with a hash suffix."""
+    out = string.translate(_UNSAFE_TABLE)
+    if len(out) > 80:
+        out = out[:40] + "[.]" + out[-40:]
+    h = hashlib.md5(string.encode("utf8")).hexdigest()[:8]
+    return f"{out}-{h}"
+
 
 # Lazy default registration for optional packages.
 # Maps module name → list of (type_path, handler_name) to register
@@ -45,7 +58,7 @@ _OPTIONAL_DEFAULTS: dict[str, list[tuple[str, str]]] = {
 
 
 def _ensure_optional_defaults() -> None:
-    """Register new-style handlers as DEFAULTS for optional packages
+    """Register new-style handlers as TYPE_DEFAULTS for optional packages
     that are already imported. Called lazily from dump()."""
     for mod_name, entries in list(_OPTIONAL_DEFAULTS.items()):
         if mod_name not in sys.modules:
@@ -58,8 +71,8 @@ def _ensure_optional_defaults() -> None:
                     obj = getattr(obj, attr)
             except AttributeError:
                 continue
-            if obj not in DumperLoader.DEFAULTS:
-                DumperLoader.DEFAULTS[obj] = DumperLoader.CLASSES[handler_name]
+            if obj not in DumpContext.TYPE_DEFAULTS:
+                DumpContext.TYPE_DEFAULTS[obj] = DumpContext.HANDLERS[handler_name]
         del _OPTIONAL_DEFAULTS[mod_name]
 
 
@@ -69,6 +82,10 @@ class DumpContext:
     Manages shared file handles (write side), resource cache (read side),
     and dispatches to both new-style handlers and legacy DumperLoaders.
     """
+
+    # New-style handler registries (separate from DumperLoader.CLASSES)
+    HANDLERS: dict[str, tp.Any] = {}
+    TYPE_DEFAULTS: dict[type, tp.Any] = {}
 
     def __init__(self, folder: str | Path, *, permissions: int | None = None) -> None:
         self.folder = Path(folder)
@@ -127,17 +144,14 @@ class DumpContext:
                             f"{method} to be a classmethod on {klass.__name__}"
                         )
             name = getattr(klass, "dump_name", klass.__name__)
-            existing = DumperLoader.CLASSES.get(name)
-            if existing is not None and not (
-                isinstance(existing, type) and issubclass(existing, DumperLoader)
-            ):
+            if name in cls.HANDLERS:
                 raise ValueError(
                     f"Name collision: {name!r} is already registered "
-                    f"in DumperLoader.CLASSES"
+                    f"in DumpContext.HANDLERS"
                 )
-            DumperLoader.CLASSES[name] = klass
+            cls.HANDLERS[name] = klass
             if default_for is not None:
-                DumperLoader.DEFAULTS[default_for] = klass
+                cls.TYPE_DEFAULTS[default_for] = klass
             return klass
 
         if target is not None:
@@ -185,19 +199,40 @@ class DumpContext:
             self._created_files.append(path)
         return self._files[name], name
 
+    def key_path(self, suffix: str = "") -> Path:
+        """Create a unique path from ctx.key for one-file-per-entry handlers.
+        Checks for collision, tracks for permission setting."""
+        if self.key is None:
+            raise RuntimeError("ctx.key must be set for one-file-per-entry handlers")
+        path = self.folder / (string_uid(self.key) + suffix)
+        if path.exists():
+            raise RuntimeError(
+                f"{path.name} already exists. If dumping multiple "
+                f"sub-values of the same type, set ctx.key to a unique "
+                f"sub-key for each."
+            )
+        self._created_files.append(path)
+        return path
+
     # -- Dispatch --
 
-    @staticmethod
-    def _find_handler(type_: type) -> tp.Any:
-        """Find the best handler for a type from DEFAULTS, falling back to Json."""
+    @classmethod
+    def _find_handler(cls, type_: type) -> tp.Any:
+        """Find the best handler for a type.
+        Checks TYPE_DEFAULTS first, then DumperLoader.DEFAULTS (legacy fallback),
+        then falls back to Json."""
         _ensure_optional_defaults()
         try:
+            for supported, handler in cls.TYPE_DEFAULTS.items():
+                if issubclass(type_, supported):
+                    return handler
+            # deprecated
             for supported, handler in DumperLoader.DEFAULTS.items():
                 if issubclass(type_, supported):
                     return handler
         except TypeError:
             pass
-        return DumperLoader.CLASSES["Json"]
+        return cls.HANDLERS["Json"]
 
     def dump_entry(
         self, key: str, value: tp.Any, *, cache_type: str | None = None
@@ -220,12 +255,20 @@ class DumpContext:
             "content": info,
         }
 
+    @staticmethod
+    def _lookup(name: str) -> tp.Any:
+        """Look up a handler by name: HANDLERS first, then DumperLoader.CLASSES."""
+        cls = DumpContext.HANDLERS.get(name)
+        if cls is not None:
+            return cls
+        return DumperLoader.CLASSES[name]
+
     def dump(self, value: tp.Any, *, cache_type: str | None = None) -> dict[str, tp.Any]:
         """Serialize a sub-value. Returns an info dict tagged with #type.
         Creates a shallow copy so nested dumps don't clobber ctx.key."""
         ctx = copy.copy(self)
         if cache_type is not None:
-            cls: tp.Any = DumperLoader.CLASSES[cache_type]
+            cls: tp.Any = self._lookup(cache_type)
             info, type_name = ctx._dump_cls(cls, value)
         elif hasattr(value, "__dump_info__"):
             info = value.__dump_info__(ctx)
@@ -260,27 +303,27 @@ class DumpContext:
                     "ctx.key must be set before dumping with a legacy DumperLoader"
                 )
             info = self._loaders[cls].dump(self.key, value)
+            self._track_legacy_files(info)
         else:
             info = cls.__dump_info__(self, value)
-        self._track_files(info)
         return info, cls.__name__
 
-    def _track_files(self, info: tp.Any) -> None:
-        """Record files referenced in an info dict for permission setting."""
+    def _track_legacy_files(self, info: tp.Any) -> None:
+        """Record files from legacy DumperLoader info dicts for permission setting.
+        New-style handlers track files at creation (keyed_filepath / shared_file)."""
         if isinstance(info, dict):
             if "filename" in info:
                 self._created_files.append(self.folder / info["filename"])
-            # TODO(legacy): remove recursion once legacy DataDict is retired;
-            # new DataDictDump tracks sub-files through ctx.dump() calls.
             for val in info.values():
                 if isinstance(val, dict):
-                    self._track_files(val)
+                    self._track_legacy_files(val)
 
     def _resolve_type(self, info: dict[str, tp.Any]) -> tuple[tp.Any, dict[str, tp.Any]]:
-        """Extract #type from an info dict, return (cls, remaining_info)."""
+        """Extract #type from an info dict, return (cls, remaining_info).
+        Checks HANDLERS first, then DumperLoader.CLASSES for legacy types."""
         info = dict(info)
         type_name = info.pop("#type")
-        return DumperLoader.CLASSES[type_name], info
+        return self._lookup(type_name), info
 
     def load(self, info: tp.Any) -> tp.Any:
         """Deserialize from an info dict. Inline values pass through."""

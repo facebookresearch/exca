@@ -7,32 +7,19 @@
 """New-style serialization handlers registered via @DumpContext.register.
 
 Each handler implements the __dump_info__ / __load_from_info__ protocol.
-StaticWrapper provides a base for one-file-per-entry formats.
+One-file-per-entry handlers use ctx.key_path(suffix) for path allocation.
 """
 
-import hashlib
 import pickle
 import typing as tp
 import warnings
-from pathlib import Path
 
 import numpy as np
 import orjson
 
 from exca import utils
 
-from .dumpcontext import DumpContext
-
-_UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
-
-
-def string_uid(string: str) -> str:
-    """Convert a string to a safe filename with a hash suffix."""
-    out = string.translate(_UNSAFE_TABLE)
-    if len(out) > 80:
-        out = out[:40] + "[.]" + out[-40:]
-    h = hashlib.md5(string.encode("utf8")).hexdigest()[:8]
-    return f"{out}-{h}"
+from .dumpcontext import DumpContext, string_uid  # string_uid re-exported for tests
 
 
 def is_torch_view(x: tp.Any) -> bool:
@@ -97,182 +84,158 @@ class MemmapArray:
 
 
 # =============================================================================
-# StaticWrapper base + one-file-per-entry handlers
+# KeyFileHandler mixin + one-file-per-entry handlers
 # =============================================================================
 
 
-class StaticWrapper:
-    """Base for one-file-per-entry formats. Not registered itself."""
-
-    SUFFIX = ""
-
-    @classmethod
-    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        if ctx.key is None:
-            raise RuntimeError(
-                "ctx.key must be set for StaticWrapper (one-file-per-entry formats)"
-            )
-        uid = string_uid(ctx.key)
-        filename = uid + cls.SUFFIX
-        filepath = ctx.folder / filename
-        if filepath.exists():
-            raise RuntimeError(
-                f"File {filename} already exists. If dumping multiple "
-                f"sub-values of the same type, set ctx.key to a unique "
-                f"sub-key for each (see DataDictDump for an example)."
-            )
-        cls.static_dump(filepath, value)
-        return {"filename": filename}
-
-    @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
-        return cls.static_load(ctx.folder / filename)
+class KeyFileHandler:
+    """Mixin: adds file deletion for one-file-per-entry handlers using key_path."""
 
     @classmethod
     def __delete_info__(cls, ctx: DumpContext, filename: str) -> None:
         with utils.fast_unlink(ctx.folder / filename, missing_ok=True):
             pass
 
-    @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
-        raise NotImplementedError
-
-    @classmethod
-    def static_load(cls, filepath: Path) -> tp.Any:
-        raise NotImplementedError
-
 
 @DumpContext.register
-class PickleDump(StaticWrapper):
-    SUFFIX = ".pkl"
+class Pickle(KeyFileHandler):
 
     @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
-        with utils.temporary_save_path(filepath) as tmp:
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+        path = ctx.key_path(".pkl")
+        with utils.temporary_save_path(path) as tmp:
             with tmp.open("wb") as f:
                 pickle.dump(value, f)
+        return {"filename": path.name}
 
     @classmethod
-    def static_load(cls, filepath: Path) -> tp.Any:
-        with filepath.open("rb") as f:
+    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
+        with (ctx.folder / filename).open("rb") as f:
             return pickle.load(f)
 
 
 @DumpContext.register
-class NpyArray(StaticWrapper):
-    SUFFIX = ".npy"
+class NumpyArray(KeyFileHandler):
 
     @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         if not isinstance(value, np.ndarray):
             raise TypeError(f"Expected numpy array but got {value} ({type(value)})")
-        with utils.temporary_save_path(filepath) as tmp:
+        path = ctx.key_path(".npy")
+        with utils.temporary_save_path(path) as tmp:
             np.save(tmp, value)
+        return {"filename": path.name}
 
     @classmethod
-    def static_load(cls, filepath: Path) -> np.ndarray:
-        return np.load(filepath)  # type: ignore
+    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> np.ndarray:
+        return np.load(ctx.folder / filename)  # type: ignore
 
 
 @DumpContext.register
-class PandasDataFrame(StaticWrapper):
-    SUFFIX = ".csv"
+class PandasDataFrame(KeyFileHandler):
 
     @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         import pandas as pd
 
         if not isinstance(value, pd.DataFrame):
             raise TypeError(f"Only supports pd.DataFrame (got {type(value)})")
-        with utils.temporary_save_path(filepath) as tmp:
+        path = ctx.key_path(".csv")
+        with utils.temporary_save_path(path) as tmp:
             value.to_csv(tmp, index=True)
+        return {"filename": path.name}
 
     @classmethod
-    def static_load(cls, filepath: Path) -> tp.Any:
+    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
         import pandas as pd
 
-        return pd.read_csv(filepath, index_col=0, keep_default_na=False, na_values=[""])
+        return pd.read_csv(
+            ctx.folder / filename, index_col=0, keep_default_na=False, na_values=[""]
+        )
 
 
 @DumpContext.register
-class ParquetPandasDataFrame(StaticWrapper):
-    SUFFIX = ".parquet"
+class ParquetPandasDataFrame(KeyFileHandler):
 
     @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         import pandas as pd
 
         if not isinstance(value, pd.DataFrame):
             raise TypeError(f"Only supports pd.DataFrame (got {type(value)})")
-        with utils.temporary_save_path(filepath) as tmp:
+        path = ctx.key_path(".parquet")
+        with utils.temporary_save_path(path) as tmp:
             value.to_parquet(tmp)
+        return {"filename": path.name}
 
     @classmethod
-    def static_load(cls, filepath: Path) -> tp.Any:
+    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
         import pandas as pd
 
-        if not filepath.exists():
-            return PandasDataFrame.static_load(filepath.with_suffix(".csv"))
-        return pd.read_parquet(filepath, dtype_backend="numpy_nullable")
+        return pd.read_parquet(ctx.folder / filename, dtype_backend="numpy_nullable")
 
 
 @DumpContext.register
-class TorchTensor(StaticWrapper):
-    SUFFIX = ".pt"
+class TorchTensor(KeyFileHandler):
 
     @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         import torch
 
         if not isinstance(value, torch.Tensor):
             raise TypeError(f"Expected torch Tensor but got {value} ({type(value)})")
         if is_torch_view(value):
             value = value.clone()
-        with utils.temporary_save_path(filepath) as tmp:
+        path = ctx.key_path(".pt")
+        with utils.temporary_save_path(path) as tmp:
             torch.save(value.detach().cpu(), tmp)
+        return {"filename": path.name}
 
     @classmethod
-    def static_load(cls, filepath: Path) -> tp.Any:
+    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
         import torch
 
-        return torch.load(filepath, map_location="cpu", weights_only=True)  # type: ignore
+        return torch.load(ctx.folder / filename, map_location="cpu", weights_only=True)  # type: ignore
 
 
 @DumpContext.register
-class NibabelNifti(StaticWrapper):
-    SUFFIX = ".nii.gz"
+class NibabelNifti(KeyFileHandler):
 
     @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         import nibabel
 
-        with utils.temporary_save_path(filepath) as tmp:
+        path = ctx.key_path(".nii.gz")
+        with utils.temporary_save_path(path) as tmp:
             nibabel.save(value, tmp)
+        return {"filename": path.name}
 
     @classmethod
-    def static_load(cls, filepath: Path) -> tp.Any:
+    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
         import nibabel
 
-        return nibabel.load(filepath, mmap=True)
+        return nibabel.load(ctx.folder / filename, mmap=True)
 
 
 @DumpContext.register
-class MneRawFif(StaticWrapper):
-    SUFFIX = "-raw.fif"
+class MneRawFif(KeyFileHandler):
 
     @classmethod
-    def static_dump(cls, filepath: Path, value: tp.Any) -> None:
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+        path = ctx.key_path("-raw.fif")
         try:
-            with utils.temporary_save_path(filepath) as tmp:
+            with utils.temporary_save_path(path) as tmp:
                 value.save(tmp)
         except Exception as e:
             msg = f"Failed to save object of type {type(value)} through MneRawFif dumper"
             raise TypeError(msg) from e
+        return {"filename": path.name}
 
     @classmethod
-    def static_load(cls, filepath: Path) -> tp.Any:
+    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
         import mne
 
+        filepath = ctx.folder / filename
         try:
             return mne.io.read_raw_fif(filepath, verbose=False, allow_maxshield=False)
         except ValueError:
@@ -294,13 +257,11 @@ class MneRawBrainVision:
         import mne
         import pybv  # noqa
 
-        if ctx.key is None:
-            raise RuntimeError("ctx.key must be set for MneRawBrainVision")
-        uid = string_uid(ctx.key)
-        fp = ctx.folder / uid / f"{uid}-raw.vhdr"
+        dirpath = ctx.key_path()
+        fp = dirpath / f"{dirpath.name}-raw.vhdr"
         with utils.temporary_save_path(fp) as tmp:
             mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
-        return {"filename": uid}
+        return {"filename": dirpath.name}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
@@ -321,12 +282,12 @@ class MneRawBrainVision:
 
 
 # =============================================================================
-# DataDictDump
+# DataDict
 # =============================================================================
 
 
 @DumpContext.register
-class DataDictDump:
+class DataDict:
     """Delegates dict values to sub-handlers based on type.
     Handles legacy format (optimized/pickled) on load."""
 
@@ -407,3 +368,7 @@ class Json:
             f.seek(info["offset"])
             raw = f.read(info["length"])
         return orjson.loads(raw)
+
+
+# Backward-compatible alias: released JSONL files may have #type="MemmapArrayFile"
+DumpContext.HANDLERS["MemmapArrayFile"] = MemmapArray

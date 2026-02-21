@@ -18,14 +18,14 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 - **When:** alongside `writer()` removal
 
 ### Remove `exca/dumperloader.py` module
-- **Status:** legacy DumperLoader subclasses kept for external subclassing
+- **Status:** legacy DumperLoader subclasses kept for external subclassing.
+  Registries are now separated: `DumpContext.HANDLERS` / `TYPE_DEFAULTS`
+  for new handlers, `DumperLoader.CLASSES` for legacy subclasses.
+  `DumperLoader.DEFAULTS` is empty/deprecated (fallback in `_find_handler()`).
 - **What breaks:** any code that subclasses `DumperLoader`, `StaticDumperLoader`,
-  `MemmapArrayFile`, etc.
+  `MemmapArrayFile`, etc., or writes to `DumperLoader.DEFAULTS`
 - **Migration:** switch to `@DumpContext.register` with new-style handlers
 - **When:** after confirming no external subclasses are in use
-- **Notes:** `DumperLoader.CLASSES` / `DEFAULTS` registries would move to
-  `DumpContext`; `default_class()` can be removed (new code uses
-  `_find_handler()` already)
 
 ## Internal cleanup (non-breaking, can do anytime)
 
@@ -37,9 +37,9 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 
 ### Remove `_track_files` recursion
 - `TODO(legacy)` in `dumpcontext.py`: recursion only needed for legacy
-  `DataDict` structures; new `DataDictDump` tracks sub-files through
-  `ctx.dump()` calls
-- Remove once legacy DataDict is retired
+  `DataDict` DumperLoader structures; new `DataDict` handler tracks
+  sub-files through `ctx.dump()` calls
+- Remove once legacy DataDict DumperLoader is retired
 
 ### Stop writing `METADATA_TAG` header
 - New JSONL files already use self-describing format (no `metadata=` header)
@@ -48,6 +48,6 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 
 ### Clean up `default_class()` in dumperloader.py
 - Legacy method with hardcoded type checks (ndarray, str, pandas, torch, etc.)
-- New code bypasses it entirely (`DumpContext._find_handler()` checks `DEFAULTS`
-  directly with lazy registration for optional packages)
+- New code bypasses it entirely (`DumpContext._find_handler()` checks
+  `TYPE_DEFAULTS` directly with lazy registration for optional packages)
 - Can be simplified or removed once `dumperloader.py` is retired
