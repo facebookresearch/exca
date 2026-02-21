@@ -170,6 +170,9 @@ class DumpContext:
             for fp in self._created_files:
                 try:
                     fp.chmod(self.permissions)
+                    if fp.is_dir():
+                        for child in fp.rglob("*"):
+                            child.chmod(self.permissions)
                 except Exception:
                     logger.warning("Failed to set permissions on %s", fp, exc_info=True)
         if self._stack is None:
