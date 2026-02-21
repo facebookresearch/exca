@@ -290,6 +290,7 @@ class MneRawBrainVision:
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+        # pylint: disable=unused-import
         import mne
         import pybv  # noqa
 
@@ -303,6 +304,7 @@ class MneRawBrainVision:
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
+        # pylint: disable=unused-import
         import mne
         import pybv  # noqa
 
