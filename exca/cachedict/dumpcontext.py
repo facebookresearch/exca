@@ -143,7 +143,7 @@ class DumpContext:
                             f"@DumpContext.register(default_for=...) requires "
                             f"{method} to be a classmethod on {klass.__name__}"
                         )
-            name = getattr(klass, "dump_name", klass.__name__)
+            name = klass.__name__
             if name in cls.HANDLERS:
                 raise ValueError(
                     f"Name collision: {name!r} is already registered "
