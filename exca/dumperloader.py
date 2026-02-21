@@ -22,12 +22,12 @@ import numpy as np
 from exca import utils
 
 logger = logging.getLogger(__name__)
-UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 MEMMAP_ARRAY_FILE_MAX_CACHE = "EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE"
+_UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 
 
 def _string_uid(string: str) -> str:
-    out = string.translate(UNSAFE_TABLE)
+    out = string.translate(_UNSAFE_TABLE)
     if len(out) > 80:
         out = out[:40] + "[.]" + out[-40:]
     h = hashlib.md5(string.encode("utf8")).hexdigest()[:8]
@@ -40,6 +40,8 @@ def host_pid() -> str:
 
 class DumperLoader:  # not generic, as we don't want to load packages for typig
     CLASSES: tp.MutableMapping[str, "tp.Type[DumperLoader]"] = {}
+    # Deprecated: use DumpContext.TYPE_DEFAULTS instead.
+    # Kept as fallback so external code writing here still works.
     DEFAULTS: tp.MutableMapping[tp.Any, "tp.Type[DumperLoader]"] = {}
 
     def __init__(self, folder: str | Path = "") -> None:
@@ -62,14 +64,11 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
 
     @staticmethod
     def default_class(type_: tp.Type[tp.Any]) -> tp.Type["DumperLoader"]:
-        Cls: tp.Any = Pickle  # default
+        """Return a legacy DumperLoader subclass for the given type.
+
+        Used only by legacy DataDict.dump() for backward compatibility.
+        New-style dispatch goes through DumpContext._find_handler()."""
         try:
-            # external implementations first
-            for supported, DL in DumperLoader.DEFAULTS.items():
-                if issubclass(type_, supported):
-                    Cls = DL
-                    break
-            # internal defaults
             if issubclass(type_, np.ndarray):
                 return MemmapArrayFile
             if issubclass(type_, str):
@@ -96,7 +95,7 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
                     return MneRawFif
         except TypeError:
             pass
-        return Cls  # type: ignore
+        return Pickle  # type: ignore
 
     @classmethod
     def check_valid_cache_type(cls, cache_type: str) -> None:
@@ -429,14 +428,6 @@ class NibabelNifti(StaticDumperLoader):
 
 
 def is_view(x: tp.Any) -> bool:
-    """Check if the tensor is a view by checking if it is contiguous and has
-    same size as storage.
-
-    Note
-    ----
-    dumping the view of a slice dumps the full underlying storage, so it is
-    safer to clone beforehand
-    """
     import torch
 
     if not isinstance(x, torch.Tensor):

@@ -12,8 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from .dumpcontext import DumpContext, Json
-from .dumperloader import DumperLoader
+from .dumpcontext import DumpContext
 
 # =============================================================================
 # @DumpContext.register
@@ -40,26 +39,6 @@ def test_register_name_collision() -> None:
             @classmethod
             def __load_from_info__(cls, ctx: tp.Any) -> tp.Any:
                 return None
-
-
-def test_register_default_for() -> None:
-    class _Marker:
-        pass
-
-    @DumpContext.register(default_for=_Marker)
-    class _MarkerHandler:
-        @classmethod
-        def __dump_info__(cls, ctx: tp.Any, value: tp.Any) -> dict[str, tp.Any]:
-            return {"val": str(value)}
-
-        @classmethod
-        def __load_from_info__(cls, ctx: tp.Any, val: str) -> str:
-            return val
-
-    assert DumperLoader.DEFAULTS[_Marker] is _MarkerHandler
-    assert "_MarkerHandler" in DumperLoader.CLASSES
-    del DumperLoader.DEFAULTS[_Marker]
-    del DumperLoader.CLASSES["_MarkerHandler"]
 
 
 def test_register_default_for_requires_classmethod() -> None:
@@ -117,7 +96,7 @@ def test_user_defined_class_roundtrip(tmp_path: Path) -> None:
     assert isinstance(loaded, Result)
     assert loaded.score == 0.95
     np.testing.assert_array_almost_equal(loaded.data, obj.data)  # type: ignore[arg-type]
-    del DumperLoader.CLASSES["Result"]
+    del DumpContext.HANDLERS["Result"]
 
 
 # =============================================================================
@@ -167,21 +146,16 @@ def _compare(loaded: tp.Any, expected: tp.Any) -> None:
 
 ROUNDTRIP_CASES: list[tuple[str, tp.Any, tp.Optional[str]]] = [
     ("MemmapArray", np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32), None),
-    ("StringDump", "hello world", None),
-    ("StringDump", "line1\nline2\nline3", None),
-    ("PickleDump", [1, "two", 3.0], "pkl_key"),
-    ("NpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32), "npy_key"),
+    ("Pickle", [1, "two", 3.0], "pkl_key"),
+    ("NumpyArray", np.array([[1, 2], [3, 4]], dtype=np.int32), "npy_key"),
     ("Json", 42, None),
-    ("Json", np.array([1.0, 2.0, 3.0]), None),
     (
-        "DataDictDump",
+        "DataDict",
         {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
         "entry1",
     ),
-    # Legacy DumperLoader subclasses through DumpContext
-    ("MemmapArrayFile", np.array([1.0, 2.0, 3.0], dtype=np.float32), "legacy_mm"),
+    # Legacy DumperLoader subclass through DumpContext
     ("String", "test string", "legacy_str"),
-    ("Pickle", {"a": 1}, "legacy_pkl"),
 ]
 
 
@@ -220,9 +194,9 @@ def test_static_wrapper_collision_and_delete(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
     ctx.key = "same_key"
     with ctx:
-        info = ctx.dump(42, cache_type="PickleDump")
+        info = ctx.dump(42, cache_type="Pickle")
         with pytest.raises(RuntimeError, match="already exists"):
-            ctx.dump(43, cache_type="PickleDump")
+            ctx.dump(43, cache_type="Pickle")
     filepath = tmp_path / info["filename"]
     assert filepath.exists()
     ctx.delete(info)
@@ -230,7 +204,33 @@ def test_static_wrapper_collision_and_delete(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# DataDictDump
+# Json
+# =============================================================================
+
+
+def test_json_large_value_uses_shared_file(tmp_path: Path) -> None:
+    """Values exceeding MAX_INLINE_SIZE go to a shared .json file."""
+    ctx = DumpContext(tmp_path)
+    large = list(range(1000))
+    with ctx:
+        info = ctx.dump(large)
+    assert info["#type"] == "Json"
+    assert "filename" in info and "offset" in info and "length" in info
+    assert not list(tmp_path.glob("*.pkl"))
+    loaded = ctx.load(info)
+    assert loaded == large
+
+
+def test_json_non_serializable_raises(tmp_path: Path) -> None:
+    """Non-JSON-serializable values without a handler raise TypeError."""
+    ctx = DumpContext(tmp_path)
+    with ctx:
+        with pytest.raises(TypeError, match="not JSON-serializable"):
+            ctx.dump({1, 2, 3})
+
+
+# =============================================================================
+# DataDict
 # =============================================================================
 
 
@@ -241,7 +241,7 @@ def test_datadict_info_structure(tmp_path: Path) -> None:
     with ctx:
         info = ctx.dump(
             {"arr": np.array([1.0, 2.0]), "count": 42, "nested": {"a": 1}},
-            cache_type="DataDictDump",
+            cache_type="DataDict",
         )
     assert info["count"] == 42
     assert info["nested"] == {"a": 1}
@@ -251,9 +251,9 @@ def test_datadict_info_structure(tmp_path: Path) -> None:
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:
-    """Verify DataDictDump can load old-format info dicts."""
-    from .dumperloader import MemmapArrayFile
-    from .dumperloader import Pickle as LegacyPickle
+    """Verify DataDict can load old-format info dicts (including old #type name)."""
+    from exca.dumperloader import MemmapArrayFile
+    from exca.dumperloader import Pickle as LegacyPickle
 
     ctx = DumpContext(tmp_path)
     arr = np.array([1.0, 2.0], dtype=np.float64)
@@ -263,7 +263,7 @@ def test_datadict_legacy_load(tmp_path: Path) -> None:
     pkl_data = {"x": 42}
     LegacyPickle.static_dump(tmp_path / "test-legacy.pkl", pkl_data)
     legacy_info = {
-        "#type": "DataDictDump",
+        "#type": "DataDict",
         "optimized": {
             "arr": {"cls": "MemmapArrayFile", "info": arr_info},
         },
@@ -278,13 +278,6 @@ def test_datadict_legacy_load(tmp_path: Path) -> None:
 # =============================================================================
 # Json, dump_entry, shallow copy, cache
 # =============================================================================
-
-
-def test_json_large_array_rejected(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path)
-    arr = np.zeros(Json.MAX_ARRAY_SIZE + 1)
-    with ctx, pytest.raises(ValueError, match="Array too large"):
-        ctx.dump(arr, cache_type="Json")
 
 
 def test_dump_entry(tmp_path: Path) -> None:

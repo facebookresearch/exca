@@ -19,9 +19,9 @@ import pytest
 import torch
 
 from exca import utils
+from exca.dumperloader import MEMMAP_ARRAY_FILE_MAX_CACHE
 
 from . import core as cd
-from .dumperloader import MEMMAP_ARRAY_FILE_MAX_CACHE
 
 logger = logging.getLogger("exca")
 logger.setLevel(logging.DEBUG)
@@ -77,13 +77,16 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
     cache: cd.CacheDict[np.ndarray] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     with cache.write():
         cache["blublu.tmp"] = data
-    assert cache.cache_type not in [None, "Pickle"]
     names = [fp.name for fp in tmp_path.iterdir() if not fp.name.startswith(".")]
     assert len(names) == 2
     j_name = [n for n in names if n.endswith("-info.jsonl")][0]
     assert isinstance(cache["blublu.tmp"], type(data))
     first_line = (tmp_path / j_name).read_text("utf8").split("\n")[0]
     assert first_line.startswith("{") and '"#type"' in first_line
+    import json
+
+    entry = json.loads(first_line)
+    assert entry["#type"] not in ("Pickle", "Json")
 
 
 @pytest.mark.parametrize(
