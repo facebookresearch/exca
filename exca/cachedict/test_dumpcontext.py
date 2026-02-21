@@ -225,69 +225,74 @@ def test_json_non_serializable_raises(tmp_path: Path) -> None:
 # =============================================================================
 
 
-def test_composite_info_structure(tmp_path: Path) -> None:
-    """Composite wraps result through Json: small results use _data inline,
-    arrays are dispatched to their handlers."""
-    ctx = DumpContext(tmp_path, key="entry1")
+def test_composite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Composite handler: structure, dispatch, nesting levels, offload."""
+    # Track nesting depth via monkeypatch
+    max_level = [0]
+    real_dump = DumpContext.dump
+
+    def tracking_dump(
+        self: DumpContext, value: tp.Any, **kw: tp.Any
+    ) -> dict[str, tp.Any]:
+        max_level[0] = max(max_level[0], self.level + 1)
+        return real_dump(self, value, **kw)
+
+    monkeypatch.setattr(DumpContext, "dump", tracking_dump)
+
+    # -- Nested dict with arrays: full output check --
+    ctx = DumpContext(tmp_path, key="entry")
     with ctx:
         info = ctx.dump(
-            {"arr": np.array([1.0, 2.0]), "count": 42, "nested": {"a": 1}},
+            {
+                "metrics": {"loss": np.array([0.5, 0.3, 0.1]), "epochs": 3},
+                "weights": np.array([[1.0, 2.0], [3.0, 4.0]]),
+                "label": "test",
+            },
             cache_type="Composite",
         )
-    assert info["#type"] == "Composite"
-    assert "_data" in info
-    data = info["_data"]
-    assert data["count"] == 42
-    assert data["nested"] == {"a": 1}
-    assert isinstance(data["arr"], dict) and data["arr"]["#type"] == "MemmapArray"
-
-
-def test_composite_as_default_for_dict(tmp_path: Path) -> None:
-    """Dicts use Composite by default (no explicit cache_type needed)."""
-    ctx = DumpContext(tmp_path, key="auto")
-    with ctx:
-        info = ctx.dump({"x": 1, "y": 2})
-    assert info["#type"] == "Composite"
-    loaded = ctx.load(info)
-    assert loaded == {"x": 1, "y": 2}
-
-
-def test_composite_list_default(tmp_path: Path) -> None:
-    """Lists use Composite by default."""
-    ctx = DumpContext(tmp_path, key="list_default")
-    with ctx:
-        info = ctx.dump([10, 20, 30])
-    assert info["#type"] == "Composite"
-    assert ctx.load(info) == [10, 20, 30]
-
-
-def test_composite_nested_arrays(tmp_path: Path) -> None:
-    """Nested dicts with arrays: arrays are dispatched, JSON stays inline."""
-    ctx = DumpContext(tmp_path, key="nested")
-    value = {
-        "metrics": {"loss": np.array([0.5, 0.3, 0.1]), "epochs": 3},
-        "weights": np.array([[1.0, 2.0], [3.0, 4.0]]),
+    fn = info["_data"]["weights"]["filename"]  # dynamic: hostname-threadid.data
+    assert info == {
+        "#type": "Composite",
+        "_data": {
+            "metrics": {
+                "loss": {
+                    "#type": "MemmapArray",
+                    "filename": fn,
+                    "offset": 0,
+                    "shape": (3,),
+                    "dtype": "float64",
+                },
+                "epochs": 3,
+            },
+            "weights": {
+                "#type": "MemmapArray",
+                "filename": fn,
+                "offset": 24,
+                "shape": (2, 2),
+                "dtype": "float64",
+            },
+            "label": "test",
+        },
     }
-    with ctx:
-        info = ctx.dump(value, cache_type="Composite")
+    assert max_level[0] == 2  # Composite at 1, MemmapArray at 2
     loaded = ctx.load(info)
-    metrics: dict[str, tp.Any] = loaded["metrics"]
-    assert metrics["epochs"] == 3
-    np.testing.assert_array_almost_equal(metrics["loss"], value["metrics"]["loss"])  # type: ignore[index]
-    np.testing.assert_array_almost_equal(loaded["weights"], value["weights"])  # type: ignore[arg-type]
+    assert loaded["label"] == "test" and loaded["metrics"]["epochs"] == 3
+    np.testing.assert_array_almost_equal(loaded["metrics"]["loss"], [0.5, 0.3, 0.1])
+    np.testing.assert_array_almost_equal(loaded["weights"], [[1.0, 2.0], [3.0, 4.0]])
 
+    # -- Default dispatch: dict and list both use Composite --
+    ctx2 = DumpContext(tmp_path, key="defaults")
+    with ctx2:
+        assert ctx2.dump({"x": 1})["#type"] == "Composite"
+        assert ctx2.dump([10, 20])["#type"] == "Composite"
 
-def test_composite_large_offload(tmp_path: Path) -> None:
-    """Large Composite results are offloaded to a shared .json file."""
-    ctx = DumpContext(tmp_path, key="large")
-    large_dict = {f"key_{i}": i for i in range(500)}
-    with ctx:
-        info = ctx.dump(large_dict, cache_type="Composite")
-    assert info["#type"] == "Composite"
-    assert "filename" in info and "offset" in info and "length" in info
-    assert "_data" not in info
-    loaded = ctx.load(info)
-    assert loaded == large_dict
+    # -- Large result offloaded to shared .json file --
+    ctx3 = DumpContext(tmp_path, key="large")
+    large_dict = {f"k{i}": i for i in range(500)}
+    with ctx3:
+        large_info = ctx3.dump(large_dict, cache_type="Composite")
+    assert "filename" in large_info and "_data" not in large_info
+    assert ctx3.load(large_info) == large_dict
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:
@@ -339,27 +344,6 @@ def test_shallow_copy_key_isolation(tmp_path: Path) -> None:
     with ctx:
         ctx.dump(np.array([1.0]), cache_type="MemmapArray")
     assert ctx.key == "original"
-
-
-def test_ctx_level_increments(tmp_path: Path) -> None:
-    """ctx.level starts at 0 and increments on each dump() call."""
-
-    @DumpContext.register
-    class LevelChecker:
-        @classmethod
-        def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-            return {"level": ctx.level}
-
-        @classmethod
-        def __load_from_info__(cls, ctx: DumpContext, level: int) -> int:
-            return level
-
-    ctx = DumpContext(tmp_path)
-    assert ctx.level == 0
-    with ctx:
-        info = ctx.dump(42, cache_type="LevelChecker")
-    assert info["level"] == 1
-    del DumpContext.HANDLERS["LevelChecker"]
 
 
 def test_cached_and_invalidate(tmp_path: Path) -> None:
