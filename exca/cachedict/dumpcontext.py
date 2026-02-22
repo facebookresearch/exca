@@ -86,6 +86,8 @@ class DumpContext:
     # New-style handler registries (separate from DumperLoader.CLASSES)
     HANDLERS: dict[str, tp.Any] = {}
     TYPE_DEFAULTS: dict[type, tp.Any] = {}
+    DATA_DIR = "data"
+    INFO_SUFFIX = "-info.jsonl"
 
     def __init__(
         self, folder: str | Path, *, key: str = "", permissions: int | None = None
@@ -187,8 +189,6 @@ class DumpContext:
             self._files.clear()
             self._created_files.clear()
 
-    DATA_DIR = "data"
-
     def _ensure_parent(self, path: Path) -> None:
         """Create parent directories and track them for permission setting."""
         parent = path.parent
@@ -196,11 +196,9 @@ class DumpContext:
             parent.mkdir(parents=True, exist_ok=True)
             self._created_files.append(parent)
 
-    def shared_file(
-        self, suffix: str, *, content: bool = True
-    ) -> tuple[tp.IO[bytes], str]:
+    def shared_file(self, suffix: str) -> tuple[tp.IO[bytes], str]:
         """Open a shared file for appending. Returns (handle, relative_name).
-        Content files go under DATA_DIR/; metadata files (content=False)
+        Content files go under DATA_DIR/; info files (-info.jsonl)
         stay in the root folder. Reused across calls with the same suffix."""
         if "." not in suffix:
             raise ValueError(f"suffix must contain '.', got {suffix!r}")
@@ -209,7 +207,8 @@ class DumpContext:
         if threading.get_native_id() != self._thread_id:
             raise RuntimeError("DumpContext must not be shared across threads")
         basename = f"{self._prefix}{suffix}"
-        name = f"{self.DATA_DIR}/{basename}" if content else basename
+        is_info = suffix == self.INFO_SUFFIX
+        name = basename if is_info else f"{self.DATA_DIR}/{basename}"
         if name not in self._files:
             path = self.folder / name
             self._ensure_parent(path)
@@ -267,7 +266,7 @@ class DumpContext:
         ctx.key = key
         info = ctx.dump(value, cache_type=cache_type)
         info["#key"] = key
-        f, name = self.shared_file("-info.jsonl", content=False)
+        f, name = self.shared_file(self.INFO_SUFFIX)
         line = orjson.dumps(info)
         offset = f.tell()
         f.write(line + b"\n")
