@@ -292,7 +292,7 @@ class MneRawBrainVision:
 
 
 # =============================================================================
-# Auto (universal handler, replaces Composite/DataDict)
+# Auto (universal handler, replaces DataDict)
 # =============================================================================
 
 

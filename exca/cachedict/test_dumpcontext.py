@@ -199,25 +199,29 @@ def test_static_wrapper_collision_and_delete(tmp_path: Path) -> None:
 # =============================================================================
 
 
-def test_json_large_value_uses_shared_file(tmp_path: Path) -> None:
-    """Values exceeding MAX_INLINE_SIZE go to a shared .json file."""
+def test_json_shared_file(tmp_path: Path) -> None:
+    """Large values go to a shared .json file; multiple values share one file."""
     ctx = DumpContext(tmp_path)
-    large = list(range(1000))
+    large1 = list(range(1000))
+    large2 = {f"k{i}": i * 2 for i in range(500)}
     with ctx:
-        info = ctx.dump(large, cache_type="Json")
-    assert info["#type"] == "Json"
-    assert "filename" in info and "offset" in info and "length" in info
-    assert not list(tmp_path.glob("*.pkl"))
-    loaded = ctx.load(info)
-    assert loaded == large
+        info1 = ctx.dump(large1, cache_type="Json")
+        info2 = ctx.dump(large2, cache_type="Json")
+    assert info1["#type"] == "Json" and info2["#type"] == "Json"
+    assert info1["filename"] == info2["filename"]
+    assert info1["offset"] != info2["offset"]
+    assert ctx.load(info1) == large1
+    assert ctx.load(info2) == large2
 
 
 def test_json_non_serializable_raises(tmp_path: Path) -> None:
-    """Non-JSON-serializable values without a handler raise TypeError via Json."""
+    """Non-JSON-serializable values raise TypeError; int keys included."""
     ctx = DumpContext(tmp_path, key="test")
     with ctx:
         with pytest.raises(TypeError, match="not JSON-serializable"):
             ctx.dump({1, 2, 3}, cache_type="Json")
+        with pytest.raises(TypeError, match="not JSON-serializable"):
+            ctx.dump({1: "a"}, cache_type="Json")
 
 
 # =============================================================================
