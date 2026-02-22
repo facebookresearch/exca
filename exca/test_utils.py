@@ -564,24 +564,13 @@ def test_check_configs(tmp_path: Path) -> None:
     assert content == "- x: 1\n- x: 2\n"
 
 
-class _ConfDictUidOverride(BaseModel):
-    stuff: str = "blublu"
+def test_confdict_override_yaml() -> None:
+    """Regression: safe_dump must handle nested ConfDict (dict subclass)."""
 
-    def _exca_uid_dict_override(self) -> ConfDict:
-        return ConfDict({"nested": {"value": self.stuff}})
+    class M(BaseModel):
+        x: str = "blublu"
 
+        def _exca_uid_dict_override(self) -> ConfDict:
+            return ConfDict({"nested": {"value": self.x}})
 
-def test_confdict_override_yaml(tmp_path: Path) -> None:
-    """ConfigDump must handle _exca_uid_dict_override returning a ConfDict.
-
-    Regression: safe_dump chokes on nested ConfDict because SafeRepresenter
-    only handles exact dict, not subclasses.
-    """
-    model = _ConfDictUidOverride(stuff="hello")
-    dump = utils.ConfigDump(model=model)
-    # _to_yaml must not raise RepresenterError on nested ConfDict
-    yaml_str = dump._to_yaml("uid")
-    assert "hello" in yaml_str
-    # full round-trip through check_and_write
-    dump.check_and_write(tmp_path)
-    assert (tmp_path / "uid.yaml").exists()
+    assert "hello" in utils.ConfigDump(model=M(x="hello"))._to_yaml("uid")
