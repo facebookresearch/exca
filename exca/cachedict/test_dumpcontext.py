@@ -280,29 +280,6 @@ def test_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     np.testing.assert_array_almost_equal(loaded["weights"], [[1.0, 2.0], [3.0, 4.0]])
 
 
-def test_auto_dispatch(tmp_path: Path) -> None:
-    """Default type routing and delegation for non-container values."""
-    ctx = DumpContext(tmp_path, key="defaults")
-    with ctx:
-        # pure data (no handlers) → delegates to Json
-        assert ctx.dump({"x": 1})["#type"] == "Json"
-        assert ctx.dump([10, 20])["#type"] == "Json"
-        # non-container delegates to the inner handler
-        arr_info = ctx.dump(np.array([1.0, 2.0]), cache_type="Auto")
-    assert arr_info["#type"] == "MemmapArray"
-    np.testing.assert_array_almost_equal(ctx.load(arr_info), [1.0, 2.0])
-
-
-def test_auto_large_offload(tmp_path: Path) -> None:
-    """Large pure-data Auto result delegates to Json shared file."""
-    ctx = DumpContext(tmp_path, key="large")
-    large_dict = {f"k{i}": i for i in range(500)}
-    with ctx:
-        large_info = ctx.dump(large_dict, cache_type="Auto")
-    assert large_info["#type"] == "Json" and "filename" in large_info
-    assert ctx.load(large_info) == large_dict
-
-
 class _Opaque:
     """Module-level class so it's picklable (local classes are not)."""
 
@@ -340,20 +317,30 @@ def test_auto_instance_protocol(tmp_path: Path) -> None:
 
 
 def test_auto_fallback(tmp_path: Path) -> None:
-    """Document Auto's content formats: Json delegation, Auto content, Pickle."""
+    """Auto dispatch: Json delegation, single-value, mixed, Pickle fallback."""
     # --- Pure data (no handlers) → delegates to Json ---
     ctx = DumpContext(tmp_path, key="pure")
     with ctx:
         info_str = ctx.dump("hello")
         info_dict = ctx.dump({"count": 42, "label": "test"})
+        info_list = ctx.dump([10, 20])
         large = {f"k{i}": i for i in range(500)}
         info_large = ctx.dump(large)
     assert info_str == {"#type": "Json", "content": "hello"}
     assert ctx.load(info_str) == "hello"
     assert info_dict["#type"] == "Json"
     assert ctx.load(info_dict) == {"count": 42, "label": "test"}
+    assert info_list["#type"] == "Json"
+    assert ctx.load(info_list) == [10, 20]
     assert info_large["#type"] == "Json" and "filename" in info_large
     assert ctx.load(info_large) == large
+
+    # --- Single non-container value → delegates to inner handler ---
+    ctx_single = DumpContext(tmp_path, key="single")
+    with ctx_single:
+        arr_info = ctx_single.dump(np.array([1.0, 2.0]), cache_type="Auto")
+    assert arr_info["#type"] == "MemmapArray"
+    np.testing.assert_array_almost_equal(ctx_single.load(arr_info), [1.0, 2.0])
 
     # --- Mixed data (handlers used) → Auto with content ---
     ctx2 = DumpContext(tmp_path, key="mixed")
