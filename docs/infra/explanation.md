@@ -120,41 +120,37 @@ Cache folders are created as `<full_module_import_name>.<class_name>.<method_nam
 Eg: `mypackage.mymodule.TutorialTask.process,1/param=13-fbfu2iow`
 
 Under the hood, data are stored using the `CacheDict` class (see [API here](exca.cachedict.CacheDict)).
-This class has a `dict`-like interface (`keys`, `items`, `values`, `__getitem__`, `__contains__`), the difference is that the data can be stored to/loaded from disk automatically,  and `__setitem__` works through a context manager to be more efficient.
-The class is initialized with 2 parameters:
-- the storage folder, if present the data will be stored to disk in the folder, or reloaded from disk
-- `keep_in_ram` flag, if `True` the data will be cached in RAM when stored/reloaded, for faster access
-- `cache_type` the type of caching to use (eg: cache as pickles, or independent npy files, or one large npy file)
+This class has a `dict`-like interface (`keys`, `items`, `values`, `__getitem__`, `__contains__`), the difference is that the data can be stored to/loaded from disk automatically, and `__setitem__` works through a write context manager for efficiency.
+The class is initialized with these parameters:
+- the storage folder — if present, data will be stored to/loaded from disk
+- `keep_in_ram` flag — if `True`, data is cached in RAM for faster access
+- `cache_type` — the serialization handler to use (e.g. `"MemmapArray"`, `"PandasDataFrame"`); auto-detected if omitted
 
+For details on the serialization system and how to write custom handlers, see [Serialization](serialization.md).
 
 **Example**
 ```python fixture:tmp_path
 import numpy as np
 from exca import cachedict
-# create a cache dict (specialized for numpy arrays)
 cache = cachedict.CacheDict(folder=tmp_path, keep_in_ram=True)
 
 # the dictionary is empty:
 assert not cache
 
-# add a value into the cache
+# writes require a context manager for efficiency with multiple writes
 x = np.random.rand(2, 12)
-with cache.writer() as writer:
-    # cache dict needs a writer context to 
-    # be more efficient in case of multiple writes 
-    writer["blublu"] = x
+with cache.write():
+    cache["blublu"] = x
 assert "blublu" in cache
-# the value is now available
 np.testing.assert_almost_equal(cache["blublu"], x)
 assert set(cache.keys()) == {"blublu"}
 
-# create a new dict instance with same cache folder
+# a new instance with the same folder sees the cached data
 cache2 = cachedict.CacheDict(folder=tmp_path)
-# the data is still available (loading from cache folder)
 assert set(cache2.keys()) == {"blublu"}
 ```
 
-In practice, at write time, each thread/process independently creates an `*-info.jsonl` file in which each line is a json providing the key in the dictionaray, and information on how to read the data corresponding to this key.
+At write time, each thread/process independently creates an `*-info.jsonl` file in which each line is a JSON object providing the key and information on how to read the corresponding data.
 
-`CacheDict` is designed for use within an infra and may be sub-optimal for other use cases (eg: repeated checks to `__contains__` can repeatedly reload the keys from the file system if the key is not already present, to make sure nothing new was added through another thread/process, which can be inefficient).
+`CacheDict` is designed for use within an infra and may be sub-optimal for other use cases (e.g. repeated `__contains__` checks can reload keys from the filesystem to account for writes from other threads/processes).
 
