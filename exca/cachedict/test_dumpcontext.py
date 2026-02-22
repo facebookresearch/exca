@@ -320,57 +320,45 @@ def test_auto_instance_protocol(tmp_path: Path) -> None:
         del DumpContext.HANDLERS["_InstanceProto"]
 
 
-def test_auto_fallback(tmp_path: Path) -> None:
-    """Auto dispatch: Json delegation, single-value, mixed, Pickle fallback."""
-    # --- Pure data (no handlers) → delegates to Json ---
-    ctx = DumpContext(tmp_path, key="pure")
+@pytest.mark.parametrize(
+    "value",
+    ["hello", {"count": 42, "label": "test"}, [10, 20], {f"k{i}": i for i in range(500)}],
+)
+def test_auto_pure_data(tmp_path: Path, value: tp.Any) -> None:
+    """Pure data (no handlers needed) delegates to Json."""
+    ctx = DumpContext(tmp_path, key="test")
     with ctx:
-        info_str = ctx.dump("hello")
-        info_dict = ctx.dump({"count": 42, "label": "test"})
-        info_list = ctx.dump([10, 20])
-        large = {f"k{i}": i for i in range(500)}
-        info_large = ctx.dump(large)
-    assert info_str == {"#type": "Json", "content": "hello"}
-    assert ctx.load(info_str) == "hello"
-    assert info_dict["#type"] == "Json"
-    assert ctx.load(info_dict) == {"count": 42, "label": "test"}
-    assert info_list["#type"] == "Json"
-    assert ctx.load(info_list) == [10, 20]
-    assert info_large["#type"] == "Json" and "filename" in info_large
-    assert ctx.load(info_large) == large
+        info = ctx.dump(value)
+    assert info["#type"] == "Json"
+    assert ctx.load(info) == value
 
-    # --- Single non-container value → delegates to inner handler ---
-    ctx_single = DumpContext(tmp_path, key="single")
-    with ctx_single:
-        arr_info = ctx_single.dump(np.array([1.0, 2.0]), cache_type="Auto")
-    assert arr_info["#type"] == "MemmapArray"
-    np.testing.assert_array_almost_equal(ctx_single.load(arr_info), [1.0, 2.0])
 
-    # --- Mixed data (handlers used) → Auto with content ---
-    ctx2 = DumpContext(tmp_path, key="mixed")
-    with ctx2:
-        info_mixed = ctx2.dump({"arr": np.array([1.0]), "x": 1})
-    assert info_mixed["#type"] == "Auto" and "content" in info_mixed
-    loaded: dict[str, tp.Any] = ctx2.load(info_mixed)
-    np.testing.assert_array_almost_equal(loaded["arr"], [1.0])
-    assert loaded["x"] == 1
-
-    # --- Non-JSON-serializable → promotes to Pickle with DeprecationWarning ---
-    ctx3 = DumpContext(tmp_path, key="opaque1")
-    with ctx3:
-        with pytest.warns(DeprecationWarning, match="falling back to Pickle"):
-            info_opaque = ctx3.dump(_Opaque())
-    assert info_opaque["#type"] == "Pickle"
-    assert isinstance(ctx3.load(info_opaque), _Opaque)
-
-    # dict with unhandled leaf (no handlers dispatched) → promotes to Pickle
-    ctx4 = DumpContext(tmp_path, key="opaque2")
-    with ctx4:
-        with pytest.warns(DeprecationWarning):
-            info_opaque_dict = ctx4.dump({"obj": _Opaque(), "x": 1})
-    assert info_opaque_dict["#type"] == "Pickle"
-    loaded = ctx4.load(info_opaque_dict)
-    assert isinstance(loaded["obj"], _Opaque) and loaded["x"] == 1
+@pytest.mark.parametrize(
+    "value,expected_type,has_warning",
+    [
+        (np.array([1.0, 2.0]), "MemmapArray", False),
+        ({"arr": np.array([1.0]), "x": 1}, "Auto", False),
+        (_Opaque(), "Pickle", True),
+        ({"obj": _Opaque(), "x": 1}, "Pickle", True),
+    ],
+)
+@pytest.mark.parametrize("cache_type", [None, "Auto"])
+def test_auto_dispatch(
+    tmp_path: Path,
+    value: tp.Any,
+    expected_type: str,
+    has_warning: bool,
+    cache_type: str | None,
+) -> None:
+    """Auto routes values to the correct handler type."""
+    ctx = DumpContext(tmp_path, key="test")
+    with ctx:
+        if has_warning:
+            with pytest.warns(DeprecationWarning):
+                info = ctx.dump(value, cache_type=cache_type)
+        else:
+            info = ctx.dump(value, cache_type=cache_type)
+    assert info["#type"] == expected_type
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:

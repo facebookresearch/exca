@@ -384,12 +384,19 @@ class Auto:
     @classmethod
     def __delete_info__(cls, ctx: DumpContext, **info: tp.Any) -> None:
         if "content" in info:
-            content = info["content"]
-            if isinstance(content, dict) and "#type" in content:
-                handler = DumpContext._lookup(content["#type"])
-                if hasattr(handler, "__delete_info__"):
-                    clean = {k: v for k, v in content.items() if k != "#type"}
-                    handler.__delete_info__(ctx, **clean)
+            cls._delete_value(ctx, info["content"])
+
+    @classmethod
+    def _delete_value(cls, ctx: DumpContext, val: tp.Any) -> None:
+        if isinstance(val, dict):
+            if "#type" in val:
+                ctx.delete(val)
+            else:
+                for v in val.values():
+                    cls._delete_value(ctx, v)
+        elif isinstance(val, list):
+            for item in val:
+                cls._delete_value(ctx, item)
 
     @classmethod
     def _load_value(cls, ctx: DumpContext, val: tp.Any) -> tp.Any:
@@ -443,7 +450,7 @@ class Json:
             ) from e
         if len(raw) <= cls.MAX_INLINE_SIZE:
             return {"content": value}
-        f, name = ctx.shared_file(".json")
+        f, name = ctx.shared_file("-data.jsonl")
         offset = f.tell()
         f.write(raw + b"\n")
         return {"filename": name, "offset": offset, "length": len(raw)}
