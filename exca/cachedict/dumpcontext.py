@@ -210,11 +210,10 @@ class DumpContext:
             self._created_files.append(path)
         return self._files[name], name
 
-    def key_path(self, suffix: str = "") -> tuple[Path, str]:
+    def key_path(self, suffix: str = "") -> str:
         """Create a unique path from ctx.key for one-file-per-entry handlers.
-        Returns (full_path, relative_name) where relative_name is relative
-        to ctx.folder (e.g. "data/key-hash.pkl"). Handlers should store
-        relative_name in info dicts and use full_path for file I/O."""
+        Returns the relative name (e.g. "data/key-hash.pkl"); use
+        ctx.folder / name for the full path."""
         if not self.key:
             raise RuntimeError("ctx.key must be set for one-file-per-entry handlers")
         basename = string_uid(self.key) + suffix
@@ -228,7 +227,7 @@ class DumpContext:
                 f"sub-key for each."
             )
         self._created_files.append(path)
-        return path, name
+        return name
 
     # -- Dispatch --
 
