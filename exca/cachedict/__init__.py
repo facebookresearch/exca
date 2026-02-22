@@ -13,5 +13,6 @@ from exca.dumperloader import DumperLoader as DumperLoader
 from exca.dumperloader import StaticDumperLoader as StaticDumperLoader
 from exca.dumperloader import host_pid as host_pid
 
+from . import handlers as handlers
 from .core import DumpInfo as DumpInfo
 from .dumpcontext import DumpContext as DumpContext
