@@ -99,30 +99,20 @@ class TorchTensor:
         return MemmapArray.__dump_info__(ctx, np.ascontiguousarray(arr))
 
     @classmethod
-    def __load_from_info__(
-        cls,
-        ctx: DumpContext,
-        filename: str,
-        offset: int = 0,
-        shape: tp.Sequence[int] = (),
-        dtype: str = "",
-        **_kw: tp.Any,
-    ) -> tp.Any:
+    def __load_from_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> tp.Any:
         import torch
 
-        if not dtype:
-            return torch.load(ctx.folder / filename, map_location="cpu", weights_only=True)  # type: ignore
-        arr = MemmapArray.__load_from_info__(
-            ctx, filename=filename, offset=offset, shape=shape, dtype=dtype
-        )
+        if kwargs.get("dtype") is None:
+            # deprecated: legacy entries saved via torch.save
+            return torch.load(ctx.folder / kwargs["filename"], map_location="cpu", weights_only=True)  # type: ignore
+        arr = MemmapArray.__load_from_info__(ctx, **kwargs)
         return torch.from_numpy(arr.copy())
 
     @classmethod
-    def __delete_info__(
-        cls, ctx: DumpContext, filename: str, dtype: str = "", **_kw: tp.Any
-    ) -> None:
-        if not dtype:
-            with utils.fast_unlink(ctx.folder / filename, missing_ok=True):
+    def __delete_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> None:
+        if kwargs.get("dtype") is None:
+            # deprecated: legacy entries saved via torch.save
+            with utils.fast_unlink(ctx.folder / kwargs["filename"], missing_ok=True):
                 pass
 
 
@@ -375,7 +365,7 @@ class Auto:
             items = [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
             return tuple(items) if isinstance(val, tuple) else items
         handler = DumpContext._find_handler(type(val))
-        if handler is not None:
+        if handler is not None or hasattr(val, "__dump_info__"):
             ctx.key = key
             return ctx.dump(val)
         return val  # unhandled: leave for Json/Pickle at outer level

@@ -47,6 +47,19 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 - Only called by legacy `DataDict.dump()` in `dumperloader.py`
 - Can be simplified or removed once `dumperloader.py` is retired
 
+### Reinvestigate `cache_type` default in `dump()` / `dump_entry()`
+- The default `cache_type=None` triggers a three-step auto-detect in `dump()`:
+  instance `__dump_info__` → `TYPE_DEFAULTS` → `Auto` fallback
+- `Auto` now respects instance `__dump_info__` in `_dump_value` too,
+  so the two paths are functionally equivalent
+- However, defaulting to `"Auto"` would cause infinite recursion:
+  `dump()` → `Auto.__dump_info__` → `_dump_value` → `ctx.dump()` → loop
+- The three-branch structure in `dump()` is what breaks this cycle
+- If we find a way to avoid the recursion (e.g. an internal flag, or
+  having Auto dispatch directly without bouncing through `dump()`),
+  we could simplify `dump()` to always delegate to Auto
+- Low priority: current code is correct and clear after the `_dump_value` fix
+
 ### Generalize `_dump_count` to load side
 - `_dump_count` on DumpContext tracks how many `dump()` calls occurred during
   Auto's `_dump_value` walk. Incremented in `dump()` before the copy, reset

@@ -307,6 +307,38 @@ class _Opaque:
     """Module-level class so it's picklable (local classes are not)."""
 
 
+def test_auto_instance_protocol(tmp_path: Path) -> None:
+    """Auto delegates to instance __dump_info__ for nested values."""
+
+    @DumpContext.register
+    class _InstanceProto:
+        def __init__(self, x: int) -> None:
+            self.x = x
+
+        def __dump_info__(self, ctx: DumpContext) -> dict[str, tp.Any]:
+            return {"x": self.x}
+
+        @classmethod
+        def __load_from_info__(cls, ctx: DumpContext, x: int) -> "_InstanceProto":
+            return cls(x=x)
+
+    try:
+        ctx = DumpContext(tmp_path, key="test")
+        with ctx:
+            info = ctx.dump({"nested": _InstanceProto(42), "y": 1}, cache_type="Auto")
+        assert info["#type"] == "Auto"
+        content = info["content"]
+        assert content["nested"]["#type"] == "_InstanceProto"
+        assert content["nested"]["x"] == 42
+        assert content["y"] == 1
+        loaded = ctx.load(info)
+        assert isinstance(loaded["nested"], _InstanceProto)
+        assert loaded["nested"].x == 42
+        assert loaded["y"] == 1
+    finally:
+        del DumpContext.HANDLERS["_InstanceProto"]
+
+
 def test_auto_fallback(tmp_path: Path) -> None:
     """Document Auto's content formats: Json delegation, Auto content, Pickle."""
     # --- Pure data (no handlers) → delegates to Json ---
