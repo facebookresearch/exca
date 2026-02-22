@@ -55,6 +55,16 @@ class DumperLoader:  # not generic, as we don't want to load packages for typig
     def __init_subclass__(cls, **kwargs: tp.Any) -> None:
         super().__init_subclass__(**kwargs)
         DumperLoader.CLASSES[cls.__name__] = cls
+        # Skip warning for classes defined in exca itself (they exist for legacy compat)
+        module = getattr(cls, "__module__", "") or ""
+        if not module.startswith("exca."):
+            warnings.warn(
+                f"Subclassing DumperLoader ({cls.__name__}) is deprecated. "
+                "Use @DumpContext.register instead; "
+                "see docs/infra/serialization.md for the new handler protocol.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
     def load(self, filename: str, **kwargs: tp.Any) -> tp.Any:
         raise NotImplementedError

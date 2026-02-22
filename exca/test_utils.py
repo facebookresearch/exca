@@ -562,3 +562,15 @@ def test_check_configs(tmp_path: Path) -> None:
     utils.ConfigDump(model=models).check_and_write(folder2)
     content = (folder2 / "uid.yaml").read_text("utf8")
     assert content == "- x: 1\n- x: 2\n"
+
+
+def test_confdict_override_yaml() -> None:
+    """Regression: safe_dump must handle nested ConfDict (dict subclass)."""
+
+    class M(BaseModel):
+        x: str = "blublu"
+
+        def _exca_uid_dict_override(self) -> ConfDict:
+            return ConfDict({"nested": {"value": self.x}})
+
+    assert "hello" in utils.ConfigDump(model=M(x="hello"))._to_yaml("uid")

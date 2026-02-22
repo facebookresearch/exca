@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## 0.5.0 -> 0.5.12
+## 0.5.0 -> 0.5.13
 
 ### Added
 - `DumpContext` serialization system with `@DumpContext.register` protocol,

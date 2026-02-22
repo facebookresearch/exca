@@ -28,29 +28,6 @@ _sentinel = object()
 OVERRIDE = "=replace="
 
 
-def _special_representer(dumper: tp.Any, data: tp.Any) -> tp.Any:
-    "Represents Path instances as strings"
-    if isinstance(data, (PosixPath, WindowsPath)):
-        return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
-    elif isinstance(data, (np.float64, np.int64, np.float32, np.int32)):
-        return dumper.represent_scalar("tag:yaml.org,2002:float", str(float(data)))
-    elif isinstance(data, OrderedDict):
-        return dumper.represent_mapping("tag:yaml.org,2002:map", data.items())
-    raise NotImplementedError(f"Cannot represent data {data} of type {type(data)}")
-
-
-for t in (
-    PosixPath,
-    WindowsPath,
-    np.float32,
-    np.float64,
-    np.int32,
-    np.int64,
-    OrderedDict,
-):
-    _yaml.representer.SafeRepresenter.add_representer(t, _special_representer)
-
-
 def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
@@ -476,13 +453,36 @@ class UidMaker:
         return f"UidMaker(string={self.string!r}, hash={self.hash!r})"
 
 
-# # single-line human-readable params
-# readable = compress_dict(config, 6)[:30]
-#
-# # add hash, to ensure unique identifier
-# # (even if the human-readable param happen
-# # to be identical across to different dicts)
-# hash_obj = hashlib.sha256()
-# hash_obj.update(repr(config).encode())
-# hash_id = hash_obj.hexdigest()[:10]
-# readable += '_' + hash_id
+# -------------------------------------------------------------------------
+# YAML SafeRepresenter registrations
+# -------------------------------------------------------------------------
+
+
+def _special_representer(dumper: tp.Any, data: tp.Any) -> tp.Any:
+    "Represents Path instances as strings"
+    if isinstance(data, (PosixPath, WindowsPath)):
+        return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
+    elif isinstance(data, (np.float64, np.int64, np.float32, np.int32)):
+        return dumper.represent_scalar("tag:yaml.org,2002:float", str(float(data)))
+    elif isinstance(data, OrderedDict):
+        return dumper.represent_mapping("tag:yaml.org,2002:map", data.items())
+    raise NotImplementedError(f"Cannot represent data {data} of type {type(data)}")
+
+
+for t in (
+    PosixPath,
+    WindowsPath,
+    np.float32,
+    np.float64,
+    np.int32,
+    np.int64,
+    OrderedDict,
+):
+    _yaml.representer.SafeRepresenter.add_representer(t, _special_representer)
+
+# ConfDict (dict subclass) must be representable by SafeDumper so that
+# yaml.safe_dump works when ConfDict values appear nested in plain dicts
+# (e.g. via _exca_uid_dict_override shallow copies).
+_yaml.representer.SafeRepresenter.add_representer(
+    ConfDict, lambda dumper, data: dumper.represent_dict(data)
+)

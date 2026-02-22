@@ -23,6 +23,7 @@ import socket
 import sys
 import threading
 import typing as tp
+import warnings
 from pathlib import Path
 
 import orjson
@@ -119,10 +120,10 @@ class DumpContext:
 
         Usage::
 
-            from exca.cachedict import DumpContext
+            from exca import cachedict
 
             # Register a handler as the default for a type:
-            @DumpContext.register(default_for=np.ndarray)
+            @cachedict.DumpContext.register(default_for=np.ndarray)
             class MemmapArray:
                 @classmethod
                 def __dump_info__(cls, ctx, value): ...
@@ -130,7 +131,7 @@ class DumpContext:
                 def __load_from_info__(cls, ctx, **info): ...
 
             # Register by name only (no default type):
-            @DumpContext.register
+            @cachedict.DumpContext.register
             class ExperimentResult:
                 def __dump_info__(self, ctx): ...
                 @classmethod
@@ -248,9 +249,16 @@ class DumpContext:
             for supported, handler in cls.TYPE_DEFAULTS.items():
                 if issubclass(type_, supported):
                     return handler
-            # deprecated
             for supported, handler in DumperLoader.DEFAULTS.items():
                 if issubclass(type_, supported):
+                    warnings.warn(
+                        f"Type {type_.__name__} matched via DumperLoader.DEFAULTS "
+                        f"(handler {handler.__name__}). Register a new-style handler "
+                        "with @DumpContext.register(default_for=...) instead; "
+                        "see docs/infra/serialization.md.",
+                        DeprecationWarning,
+                        stacklevel=3,
+                    )
                     return handler
         except TypeError:
             pass
@@ -331,7 +339,13 @@ class DumpContext:
                     "DumpContext must be used as a context manager for writes"
                 )
             if cls not in self._loaders:
-                logger.debug("Using legacy DumperLoader %s", cls.__name__)
+                warnings.warn(
+                    f"Writing via legacy DumperLoader {cls.__name__!r} is deprecated. "
+                    "Migrate to a @DumpContext.register handler; "
+                    "see docs/infra/serialization.md.",
+                    DeprecationWarning,
+                    stacklevel=3,
+                )
                 loader = cls(self.folder)
                 self._stack.enter_context(loader.open())
                 self._loaders[cls] = loader
