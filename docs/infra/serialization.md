@@ -9,7 +9,7 @@ this if the built-in handlers don't cover your types.
 
 A `CacheDict` manages a folder on disk. When you write a value:
 
-```python
+```python notest
 from exca import cachedict
 
 cache = cachedict.CacheDict(folder="/tmp/my_cache")
@@ -51,7 +51,7 @@ use `AutoPickle` explicitly if you need pickle support going forward.
 
 You can force a specific handler via `cache_type`:
 
-```python
+```python notest
 cache = cachedict.CacheDict(folder="/tmp/my_cache", cache_type="MemmapArray")
 ```
 
@@ -59,7 +59,7 @@ cache = cachedict.CacheDict(folder="/tmp/my_cache", cache_type="MemmapArray")
 
 A handler is a class with two required methods and one optional:
 
-```python
+```python notest
 class MyHandler:
     @classmethod
     def __dump_info__(cls, ctx, value) -> dict:
@@ -83,7 +83,7 @@ and recursive serialization.
 
 Use classmethods and `default_for` to become the default handler for a type:
 
-```python
+```python notest
 from exca.cachedict import DumpContext
 
 @DumpContext.register(default_for=MyArrayType)
@@ -104,7 +104,7 @@ class MyArrayHandler:
 Use instance methods. The class itself is registered by name, and values are
 automatically recognized via `hasattr(value, "__dump_info__")`:
 
-```python
+```python notest
 @DumpContext.register
 class ExperimentResult:
     def __init__(self, config: dict, features: np.ndarray):
@@ -160,7 +160,7 @@ Handlers interact with `DumpContext` through a small API:
 
 Handlers that append to a shared file (like MemmapArray) use `ctx.shared_file()`:
 
-```python
+```python notest
 @DumpContext.register(default_for=MyType)
 class MySharedHandler:
     @classmethod
