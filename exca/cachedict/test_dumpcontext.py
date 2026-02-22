@@ -140,6 +140,10 @@ def _compare(loaded: tp.Any, expected: tp.Any) -> None:
         assert isinstance(loaded, dict) and loaded.keys() == expected.keys()
         for k in expected:
             _compare(loaded[k], expected[k])
+    elif isinstance(expected, list):
+        assert isinstance(loaded, list) and len(loaded) == len(expected)
+        for l_item, e_item in zip(loaded, expected):
+            _compare(l_item, e_item)
     else:
         assert loaded == expected
 
@@ -149,7 +153,7 @@ ROUNDTRIP_CASES: dict[str, tp.Any] = {
     "Pickle": [1, "two", 3.0],
     "NumpyArray": np.array([[1, 2], [3, 4]], dtype=np.int32),
     "Json": 42,
-    "DataDict": {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
+    "Auto": {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
     "String": "test string",  # legacy DumperLoader subclass through DumpContext
 }
 
@@ -195,49 +199,170 @@ def test_static_wrapper_collision_and_delete(tmp_path: Path) -> None:
 # =============================================================================
 
 
-def test_json_large_value_uses_shared_file(tmp_path: Path) -> None:
-    """Values exceeding MAX_INLINE_SIZE go to a shared .json file."""
+def test_json_shared_file(tmp_path: Path) -> None:
+    """Large values go to a shared .json file; multiple values share one file."""
     ctx = DumpContext(tmp_path)
-    large = list(range(1000))
+    large1 = list(range(1000))
+    large2 = {f"k{i}": i * 2 for i in range(500)}
     with ctx:
-        info = ctx.dump(large)
-    assert info["#type"] == "Json"
-    assert "filename" in info and "offset" in info and "length" in info
-    assert not list(tmp_path.glob("*.pkl"))
-    loaded = ctx.load(info)
-    assert loaded == large
+        info1 = ctx.dump(large1, cache_type="Json")
+        info2 = ctx.dump(large2, cache_type="Json")
+    assert info1["#type"] == "Json" and info2["#type"] == "Json"
+    assert info1["filename"] == info2["filename"]
+    assert info1["offset"] != info2["offset"]
+    assert ctx.load(info1) == large1
+    assert ctx.load(info2) == large2
 
 
 def test_json_non_serializable_raises(tmp_path: Path) -> None:
-    """Non-JSON-serializable values without a handler raise TypeError."""
-    ctx = DumpContext(tmp_path)
+    """Non-JSON-serializable values raise TypeError; int keys included."""
+    ctx = DumpContext(tmp_path, key="test")
     with ctx:
         with pytest.raises(TypeError, match="not JSON-serializable"):
-            ctx.dump({1, 2, 3})
+            ctx.dump({1, 2, 3}, cache_type="Json")
+        with pytest.raises(TypeError, match="not JSON-serializable"):
+            ctx.dump({1: "a"}, cache_type="Json")
 
 
 # =============================================================================
-# DataDict
+# Auto
 # =============================================================================
 
 
-def test_datadict_info_structure(tmp_path: Path) -> None:
-    """JSON-serializable values stay inline (no #type wrapper)."""
-    ctx = DumpContext(tmp_path, key="entry1")
+def test_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nested dict with arrays: structure, roundtrip, and nesting level."""
+    max_level = [0]
+    real_dump = DumpContext.dump
+
+    def tracking_dump(
+        self: DumpContext, value: tp.Any, **kw: tp.Any
+    ) -> dict[str, tp.Any]:
+        max_level[0] = max(max_level[0], self.level + 1)
+        return real_dump(self, value, **kw)
+
+    monkeypatch.setattr(DumpContext, "dump", tracking_dump)
+
+    ctx = DumpContext(tmp_path, key="entry")
     with ctx:
         info = ctx.dump(
-            {"arr": np.array([1.0, 2.0]), "count": 42, "nested": {"a": 1}},
-            cache_type="DataDict",
+            {
+                "metrics": {"loss": np.array([0.5, 0.3, 0.1]), "epochs": 3},
+                "weights": np.array([[1.0, 2.0], [3.0, 4.0]]),
+                "label": "test",
+            },
+            cache_type="Auto",
         )
-    assert info["count"] == 42
-    assert info["nested"] == {"a": 1}
-    for key in ("count", "nested"):
-        assert not isinstance(info[key], dict) or "#type" not in info[key]
-    assert isinstance(info["arr"], dict) and "#type" in info["arr"]
+    content = info["content"]
+    fn = content["weights"]["filename"]  # dynamic: hostname-threadid.data
+    assert info == {
+        "#type": "Auto",
+        "content": {
+            "metrics": {
+                "loss": {
+                    "#type": "MemmapArray",
+                    "filename": fn,
+                    "offset": 0,
+                    "shape": (3,),
+                    "dtype": "float64",
+                },
+                "epochs": 3,
+            },
+            "weights": {
+                "#type": "MemmapArray",
+                "filename": fn,
+                "offset": 24,
+                "shape": (2, 2),
+                "dtype": "float64",
+            },
+            "label": "test",
+        },
+    }
+    assert max_level[0] == 1  # Auto at 0, MemmapArray at 1
+    loaded = ctx.load(info)
+    assert loaded["label"] == "test" and loaded["metrics"]["epochs"] == 3
+    np.testing.assert_array_almost_equal(loaded["metrics"]["loss"], [0.5, 0.3, 0.1])
+    np.testing.assert_array_almost_equal(loaded["weights"], [[1.0, 2.0], [3.0, 4.0]])
+
+
+class _Opaque:
+    """Module-level class so it's picklable (local classes are not)."""
+
+
+def test_auto_instance_protocol(tmp_path: Path) -> None:
+    """Auto delegates to instance __dump_info__ for nested values."""
+
+    @DumpContext.register
+    class _InstanceProto:
+        def __init__(self, x: int) -> None:
+            self.x = x
+
+        def __dump_info__(self, ctx: DumpContext) -> dict[str, tp.Any]:
+            return {"x": self.x}
+
+        @classmethod
+        def __load_from_info__(cls, ctx: DumpContext, x: int) -> "_InstanceProto":
+            return cls(x=x)
+
+    try:
+        ctx = DumpContext(tmp_path, key="test")
+        with ctx:
+            info = ctx.dump({"nested": _InstanceProto(42), "y": 1}, cache_type="Auto")
+        assert info["#type"] == "Auto"
+        content = info["content"]
+        assert content["nested"]["#type"] == "_InstanceProto"
+        assert content["nested"]["x"] == 42
+        assert content["y"] == 1
+        loaded = ctx.load(info)
+        assert isinstance(loaded["nested"], _InstanceProto)
+        assert loaded["nested"].x == 42
+        assert loaded["y"] == 1
+    finally:
+        del DumpContext.HANDLERS["_InstanceProto"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["hello", {"count": 42, "label": "test"}, [10, 20], {f"k{i}": i for i in range(500)}],
+)
+def test_auto_pure_data(tmp_path: Path, value: tp.Any) -> None:
+    """Pure data (no handlers needed) delegates to Json."""
+    ctx = DumpContext(tmp_path, key="test")
+    with ctx:
+        info = ctx.dump(value)
+    assert info["#type"] == "Json"
+    assert ctx.load(info) == value
+
+
+@pytest.mark.parametrize(
+    "value,expected_type,has_warning",
+    [
+        (np.array([1.0, 2.0]), "MemmapArray", False),
+        ({"arr": np.array([1.0]), "x": 1}, "Auto", False),
+        (_Opaque(), "Pickle", True),
+        ({"obj": _Opaque(), "x": 1}, "Pickle", True),
+    ],
+)
+@pytest.mark.parametrize("cache_type", [None, "Auto"])
+def test_auto_dispatch(
+    tmp_path: Path,
+    value: tp.Any,
+    expected_type: str,
+    has_warning: bool,
+    cache_type: str | None,
+) -> None:
+    """Auto routes values to the correct handler type."""
+    ctx = DumpContext(tmp_path, key="test")
+    with ctx:
+        if has_warning:
+            with pytest.warns(DeprecationWarning):
+                info = ctx.dump(value, cache_type=cache_type)
+        else:
+            info = ctx.dump(value, cache_type=cache_type)
+    assert info["#type"] == expected_type
 
 
 def test_datadict_legacy_load(tmp_path: Path) -> None:
-    """Verify DataDict can load old-format info dicts (including old #type name)."""
+    """Verify Auto can load old DataDict format (via alias)."""
     from exca.dumperloader import MemmapArrayFile
     from exca.dumperloader import Pickle as LegacyPickle
 

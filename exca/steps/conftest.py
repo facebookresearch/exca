@@ -6,21 +6,8 @@
 
 """Shared test fixtures and step classes for steps module tests.
 
-Test guidelines:
-- Use `infra: tp.Any = {...}` for infrastructure dicts to avoid MyPy issues
-- Reuse the same infra dict across a test when possible (shorter, easier to follow)
-- Use tuple comparison for cache checks: `assert result == expected` not length + items
-- Keep test classes minimal - only add parameters when needed for specific tests
-- Use `chain.model_copy(deep=True)` to create test variants, then update parameters
-
-Test consolidation:
-- Use `pytest.mark.parametrize` when tests differ on only a few aspects
-  (e.g., mode, step type, with/without input)
-- Merge sequential tests that build on each other into one
-  (e.g., "no cache -> fails" then "with cache -> works" can be one test)
-- Prefer fewer lines of test code - easier to maintain
-- When refactoring tests, move old versions to test_old.py temporarily; if they fail
-  while new tests pass, investigate if functionality was lost; otherwise delete them
+Test guidelines live in .cursor/rules/testing.mdc (general) and
+.cursor/rules/steps-testing.mdc (steps-specific conventions).
 """
 
 import random

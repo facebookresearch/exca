@@ -83,6 +83,39 @@ class MemmapArray:
         return data.view(dtype=dtype).reshape(shape)
 
 
+@DumpContext.register
+class TorchTensor:
+    """Stores tensors via MemmapArray (shared .data file, loaded via memmap)."""
+
+    @classmethod
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+        import torch
+
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"Expected torch Tensor but got {value} ({type(value)})")
+        if is_torch_view(value):
+            value = value.clone()
+        arr = value.detach().cpu().contiguous().numpy()
+        return MemmapArray.__dump_info__(ctx, np.ascontiguousarray(arr))
+
+    @classmethod
+    def __load_from_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> tp.Any:
+        import torch
+
+        if kwargs.get("dtype") is None:
+            # deprecated: legacy entries saved via torch.save
+            return torch.load(ctx.folder / kwargs["filename"], map_location="cpu", weights_only=True)  # type: ignore
+        arr = MemmapArray.__load_from_info__(ctx, **kwargs)
+        return torch.from_numpy(arr.copy())
+
+    @classmethod
+    def __delete_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> None:
+        if kwargs.get("dtype") is None:
+            # deprecated: legacy entries saved via torch.save
+            with utils.fast_unlink(ctx.folder / kwargs["filename"], missing_ok=True):
+                pass
+
+
 # =============================================================================
 # KeyFileHandler mixin + one-file-per-entry handlers
 # =============================================================================
@@ -176,29 +209,6 @@ class ParquetPandasDataFrame(KeyFileHandler):
 
 
 @DumpContext.register
-class TorchTensor(KeyFileHandler):
-
-    @classmethod
-    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        import torch
-
-        if not isinstance(value, torch.Tensor):
-            raise TypeError(f"Expected torch Tensor but got {value} ({type(value)})")
-        if is_torch_view(value):
-            value = value.clone()
-        name = ctx.key_path(".pt")
-        with utils.temporary_save_path(ctx.folder / name) as tmp:
-            torch.save(value.detach().cpu(), tmp)
-        return {"filename": name}
-
-    @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
-        import torch
-
-        return torch.load(ctx.folder / filename, map_location="cpu", weights_only=True)  # type: ignore
-
-
-@DumpContext.register
 class NibabelNifti(KeyFileHandler):
 
     @classmethod
@@ -284,35 +294,121 @@ class MneRawBrainVision:
 
 
 # =============================================================================
-# DataDict
+# Auto (universal handler, replaces DataDict)
 # =============================================================================
 
 
-@DumpContext.register
-class DataDict:
-    """Delegates dict values to sub-handlers based on type.
-    Handles legacy format (optimized/pickled) on load."""
+@DumpContext.register(default_for=dict)
+class Auto:
+    """Universal handler: recursively walks dicts/lists, dispatches registered
+    types to their handlers, and serializes the result via Json.  Falls back
+    to Pickle (with DeprecationWarning) when the result is not JSON-serializable.
+
+    Info dict shapes:
+    - promoted:   {"#type": "Json"|"Pickle", ...}  — pure data, Auto adds no value
+    - delegated:  {"#type": "MemmapArray"|..., ...} — single non-container value
+    - inline:     {"content": <data>}               — mixed, small enough for inline
+    - shared:     {"content": {"#type": "Json"|"Pickle", ...}} — mixed, offloaded
+
+    Note: ``#type`` is reserved in user dicts. If a dict contains a ``#type``
+    key whose value is a registered handler, it is treated as a handler
+    reference. Non-handler ``#type`` values raise ``ValueError``.
+
+    Also loads legacy DataDict format (optimized/pickled)."""
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        output: dict[str, tp.Any] = {}
-        for skey, val in value.items():
-            ctx.key = skey
-            try:
-                raw = orjson.dumps(val)
-                if len(raw) <= Json.MAX_INLINE_SIZE:
-                    output[skey] = val
-                    continue
-            except (TypeError, orjson.JSONEncodeError):
-                pass
-            output[skey] = ctx.dump(val)
-        return output
+        initial_count = ctx._dump_count
+        result = cls._dump_value(ctx, value, ctx.key or "")
+        if isinstance(result, dict) and "#type" in result:
+            return result  # single-value delegation
+        wrapped = cls._wrap(ctx, result)
+        if ctx._dump_count == initial_count:
+            return wrapped  # promote: #type is Json or Pickle
+        # Mixed: Auto needs _load_value to walk the tree on load
+        if "content" in wrapped:
+            return {"content": wrapped["content"]}
+        return {"content": wrapped}
 
     @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> dict[str, tp.Any]:
+    def _wrap(cls, ctx: DumpContext, result: tp.Any) -> dict[str, tp.Any]:
+        """Serialize processed result to a storage backend (Json or Pickle)."""
+        try:
+            info = Json.__dump_info__(ctx, result)
+            info["#type"] = "Json"
+            return info
+        except TypeError:
+            warnings.warn(
+                "Auto: result is not JSON-serializable, falling back to Pickle "
+                "(deprecated). Register handlers for non-JSON types or use "
+                "cache_type='AutoPickle'.",
+                DeprecationWarning,
+                stacklevel=5,
+            )
+            info = Pickle.__dump_info__(ctx, result)
+            info["#type"] = "Pickle"
+            return info
+
+    @classmethod
+    def _dump_value(cls, ctx: DumpContext, val: tp.Any, key: str) -> tp.Any:
+        if isinstance(val, (int, float, str, bool, type(None))):
+            return val
+        if isinstance(val, dict):
+            if "#type" in val:
+                try:
+                    DumpContext._lookup(str(val["#type"]))
+                except KeyError:
+                    raise ValueError(
+                        f"'#type' is a reserved key in Auto dicts. "
+                        f"Found #type={val['#type']!r} which is not a registered handler."
+                    )
+            return {k: cls._dump_value(ctx, v, f"{key}[{k}]") for k, v in val.items()}
+        if isinstance(val, (list, tuple)):
+            items = [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
+            return tuple(items) if isinstance(val, tuple) else items
+        handler = DumpContext._find_handler(type(val))
+        if handler is not None or hasattr(val, "__dump_info__"):
+            ctx.key = key
+            return ctx.dump(val)
+        return val  # unhandled: leave for Json/Pickle at outer level
+
+    @classmethod
+    def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> tp.Any:
         if "optimized" in info or "pickled" in info:
             return cls._load_legacy(ctx, info)
-        return {key: ctx.load(val) for key, val in info.items()}
+        content = info["content"]
+        if isinstance(content, dict) and "#type" in content:
+            data = ctx.load(content)
+        else:
+            data = content
+        return cls._load_value(ctx, data)
+
+    @classmethod
+    def __delete_info__(cls, ctx: DumpContext, **info: tp.Any) -> None:
+        if "content" in info:
+            cls._delete_value(ctx, info["content"])
+
+    @classmethod
+    def _delete_value(cls, ctx: DumpContext, val: tp.Any) -> None:
+        if isinstance(val, dict):
+            if "#type" in val:
+                ctx.delete(val)
+            else:
+                for v in val.values():
+                    cls._delete_value(ctx, v)
+        elif isinstance(val, list):
+            for item in val:
+                cls._delete_value(ctx, item)
+
+    @classmethod
+    def _load_value(cls, ctx: DumpContext, val: tp.Any) -> tp.Any:
+        if isinstance(val, dict):
+            if "#type" in val:
+                return ctx.load(val)
+            return {k: cls._load_value(ctx, v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [cls._load_value(ctx, item) for item in val]
+        return val
 
     @classmethod
     def _load_legacy(cls, ctx: DumpContext, info: dict[str, tp.Any]) -> dict[str, tp.Any]:
@@ -338,11 +434,11 @@ class Json:
     """JSON storage: inline in JSONL if small, shared .json file if large.
 
     Values whose serialized size is at most ``MAX_INLINE_SIZE`` bytes are
-    stored directly in the JSONL line (``_data`` key).  Larger values are
+    stored directly in the JSONL line (``content`` key).  Larger values are
     appended to a shared ``.json`` file and referenced by offset/length.
     """
 
-    MAX_INLINE_SIZE = 2048
+    MAX_INLINE_SIZE = 512
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
@@ -355,16 +451,16 @@ class Json:
                 f"or use cache_type='Pickle' explicitly."
             ) from e
         if len(raw) <= cls.MAX_INLINE_SIZE:
-            return {"_data": value}
-        f, name = ctx.shared_file(".json")
+            return {"content": value}
+        f, name = ctx.shared_file("-data.jsonl")
         offset = f.tell()
         f.write(raw + b"\n")
         return {"filename": name, "offset": offset, "length": len(raw)}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> tp.Any:
-        if "_data" in info:
-            return info["_data"]
+        if "content" in info:
+            return info["content"]
         path = ctx.folder / info["filename"]
         with path.open("rb") as f:
             f.seek(info["offset"])
@@ -372,5 +468,22 @@ class Json:
         return orjson.loads(raw)
 
 
-# Backward-compatible alias: released JSONL files may have #type="MemmapArrayFile"
+@DumpContext.register()
+class AutoPickle(Auto):
+    """Like Auto but delegates to Pickle without deprecation warning.
+    Not a default — use via cache_type='AutoPickle'."""
+
+    @classmethod
+    def _wrap(cls, ctx: DumpContext, result: tp.Any) -> dict[str, tp.Any]:
+        try:
+            info = Json.__dump_info__(ctx, result)
+            info["#type"] = "Json"
+            return info
+        except TypeError:
+            info = Pickle.__dump_info__(ctx, result)
+            info["#type"] = "Pickle"
+            return info
+
+
+# Backward-compatible alias for released JSONL files
 DumpContext.HANDLERS["MemmapArrayFile"] = MemmapArray
