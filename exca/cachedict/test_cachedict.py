@@ -135,7 +135,7 @@ def test_specialized_dump(
     # check permissions
     octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
     assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
-    for fp in tmp_path.iterdir():
+    for fp in tmp_path.rglob("*"):
         octal_permissions = oct(fp.stat().st_mode)[-3:]
         assert octal_permissions == "777", f"Wrong permissions for {fp}"
     # after del, all files should be closed

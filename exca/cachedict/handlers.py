@@ -135,11 +135,11 @@ class Pickle(KeyFileHandler):
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        path = ctx.key_path(".pkl")
-        with utils.temporary_save_path(path) as tmp:
+        name = ctx.key_path(".pkl")
+        with utils.temporary_save_path(ctx.folder / name) as tmp:
             with tmp.open("wb") as f:
                 pickle.dump(value, f)
-        return {"filename": path.name}
+        return {"filename": name}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
@@ -154,10 +154,10 @@ class NumpyArray(KeyFileHandler):
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         if not isinstance(value, np.ndarray):
             raise TypeError(f"Expected numpy array but got {value} ({type(value)})")
-        path = ctx.key_path(".npy")
-        with utils.temporary_save_path(path) as tmp:
+        name = ctx.key_path(".npy")
+        with utils.temporary_save_path(ctx.folder / name) as tmp:
             np.save(tmp, value)
-        return {"filename": path.name}
+        return {"filename": name}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, filename: str) -> np.ndarray:
@@ -173,10 +173,10 @@ class PandasDataFrame(KeyFileHandler):
 
         if not isinstance(value, pd.DataFrame):
             raise TypeError(f"Only supports pd.DataFrame (got {type(value)})")
-        path = ctx.key_path(".csv")
-        with utils.temporary_save_path(path) as tmp:
+        name = ctx.key_path(".csv")
+        with utils.temporary_save_path(ctx.folder / name) as tmp:
             value.to_csv(tmp, index=True)
-        return {"filename": path.name}
+        return {"filename": name}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
@@ -196,10 +196,10 @@ class ParquetPandasDataFrame(KeyFileHandler):
 
         if not isinstance(value, pd.DataFrame):
             raise TypeError(f"Only supports pd.DataFrame (got {type(value)})")
-        path = ctx.key_path(".parquet")
-        with utils.temporary_save_path(path) as tmp:
+        name = ctx.key_path(".parquet")
+        with utils.temporary_save_path(ctx.folder / name) as tmp:
             value.to_parquet(tmp)
-        return {"filename": path.name}
+        return {"filename": name}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
@@ -215,10 +215,10 @@ class NibabelNifti(KeyFileHandler):
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         import nibabel
 
-        path = ctx.key_path(".nii.gz")
-        with utils.temporary_save_path(path) as tmp:
+        name = ctx.key_path(".nii.gz")
+        with utils.temporary_save_path(ctx.folder / name) as tmp:
             nibabel.save(value, tmp)
-        return {"filename": path.name}
+        return {"filename": name}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
@@ -232,14 +232,14 @@ class MneRawFif(KeyFileHandler):
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        path = ctx.key_path("-raw.fif")
+        name = ctx.key_path("-raw.fif")
         try:
-            with utils.temporary_save_path(path) as tmp:
+            with utils.temporary_save_path(ctx.folder / name) as tmp:
                 value.save(tmp)
         except Exception as e:
             msg = f"Failed to save object of type {type(value)} through MneRawFif dumper"
             raise TypeError(msg) from e
-        return {"filename": path.name}
+        return {"filename": name}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
@@ -267,11 +267,12 @@ class MneRawBrainVision:
         import mne
         import pybv  # noqa
 
-        dirpath = ctx.key_path()
+        name = ctx.key_path()
+        dirpath = ctx.folder / name
         fp = dirpath / f"{dirpath.name}-raw.vhdr"
         with utils.temporary_save_path(fp) as tmp:
             mne.export.export_raw(tmp, value, fmt="brainvision", verbose="ERROR")
-        return {"filename": dirpath.name}
+        return {"filename": name}
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, filename: str) -> tp.Any:
@@ -279,7 +280,8 @@ class MneRawBrainVision:
         import mne
         import pybv  # noqa
 
-        fp = ctx.folder / filename / f"{filename}-raw.vhdr"
+        dirpath = ctx.folder / filename
+        fp = dirpath / f"{dirpath.name}-raw.vhdr"
         return mne.io.read_raw_brainvision(fp, verbose=False)
 
     @classmethod

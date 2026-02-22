@@ -212,7 +212,11 @@ class CacheDict(tp.Generic[X]):
                     continue
             logger.warning("Cleaning up orphaned files for %s", name)
             prefix = name.removesuffix("-info.jsonl")
-            for path in [*self.folder.glob(f"{prefix}.*"), reader._fp]:
+            paths = [*self.folder.glob(f"{prefix}.*"), reader._fp]
+            data_dir = self.folder / DumpContext.DATA_DIR
+            if data_dir.is_dir():
+                paths.extend(data_dir.glob(f"{prefix}.*"))
+            for path in paths:
                 with utils.fast_unlink(path, missing_ok=True):
                     pass
             del self._jsonl_readers[name]

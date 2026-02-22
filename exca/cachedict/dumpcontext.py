@@ -187,39 +187,56 @@ class DumpContext:
             self._files.clear()
             self._created_files.clear()
 
-    def shared_file(self, suffix: str) -> tuple[tp.IO[bytes], str]:
-        """Open a shared file for appending. Returns (handle, filename).
-        The file is opened once and reused for subsequent calls with the
-        same suffix. Closed automatically when the context exits."""
+    DATA_DIR = "data"
+
+    def _ensure_parent(self, path: Path) -> None:
+        """Create parent directories and track them for permission setting."""
+        parent = path.parent
+        if parent != self.folder and not parent.exists():
+            parent.mkdir(parents=True, exist_ok=True)
+            self._created_files.append(parent)
+
+    def shared_file(
+        self, suffix: str, *, content: bool = True
+    ) -> tuple[tp.IO[bytes], str]:
+        """Open a shared file for appending. Returns (handle, relative_name).
+        Content files go under DATA_DIR/; metadata files (content=False)
+        stay in the root folder. Reused across calls with the same suffix."""
         if "." not in suffix:
             raise ValueError(f"suffix must contain '.', got {suffix!r}")
         if self._stack is None:
             raise RuntimeError("DumpContext must be used as a context manager for writes")
         if threading.get_native_id() != self._thread_id:
             raise RuntimeError("DumpContext must not be shared across threads")
-        name = f"{self._prefix}{suffix}"
+        basename = f"{self._prefix}{suffix}"
+        name = f"{self.DATA_DIR}/{basename}" if content else basename
         if name not in self._files:
             path = self.folder / name
+            self._ensure_parent(path)
             f = path.open("ab")
             self._stack.enter_context(f)
             self._files[name] = f
             self._created_files.append(path)
         return self._files[name], name
 
-    def key_path(self, suffix: str = "") -> Path:
+    def key_path(self, suffix: str = "") -> str:
         """Create a unique path from ctx.key for one-file-per-entry handlers.
-        Checks for collision, tracks for permission setting."""
+        Returns the relative name (e.g. "data/key-hash.pkl"); use
+        ctx.folder / name for the full path."""
         if not self.key:
             raise RuntimeError("ctx.key must be set for one-file-per-entry handlers")
-        path = self.folder / (string_uid(self.key) + suffix)
+        basename = string_uid(self.key) + suffix
+        name = f"{self.DATA_DIR}/{basename}"
+        path = self.folder / name
+        self._ensure_parent(path)
         if path.exists():
             raise RuntimeError(
-                f"{path.name} already exists. If dumping multiple "
+                f"{basename} already exists. If dumping multiple "
                 f"sub-values of the same type, set ctx.key to a unique "
                 f"sub-key for each."
             )
         self._created_files.append(path)
-        return path
+        return name
 
     # -- Dispatch --
 
@@ -250,7 +267,7 @@ class DumpContext:
         ctx.key = key
         info = ctx.dump(value, cache_type=cache_type)
         info["#key"] = key
-        f, name = self.shared_file("-info.jsonl")
+        f, name = self.shared_file("-info.jsonl", content=False)
         line = orjson.dumps(info)
         offset = f.tell()
         f.write(line + b"\n")
