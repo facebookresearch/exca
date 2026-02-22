@@ -187,6 +187,13 @@ class DumpContext:
 
     DATA_DIR = "data"
 
+    def _ensure_parent(self, path: Path) -> None:
+        """Create parent directories and track them for permission setting."""
+        parent = path.parent
+        if parent != self.folder and not parent.exists():
+            parent.mkdir(parents=True, exist_ok=True)
+            self._created_files.append(parent)
+
     def shared_file(
         self, suffix: str, *, content: bool = True
     ) -> tuple[tp.IO[bytes], str]:
@@ -203,7 +210,7 @@ class DumpContext:
         name = f"{self.DATA_DIR}/{basename}" if content else basename
         if name not in self._files:
             path = self.folder / name
-            path.parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_parent(path)
             f = path.open("ab")
             self._stack.enter_context(f)
             self._files[name] = f
@@ -219,7 +226,7 @@ class DumpContext:
         basename = string_uid(self.key) + suffix
         name = f"{self.DATA_DIR}/{basename}"
         path = self.folder / name
-        path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_parent(path)
         if path.exists():
             raise RuntimeError(
                 f"{basename} already exists. If dumping multiple "
