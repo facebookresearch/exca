@@ -316,7 +316,7 @@ def test_auto_fallback(tmp_path: Path) -> None:
         info_dict = ctx.dump({"count": 42, "label": "test"})
         large = {f"k{i}": i for i in range(500)}
         info_large = ctx.dump(large)
-    assert info_str == {"#type": "Json", "_data": "hello"}
+    assert info_str == {"#type": "Json", "content": "hello"}
     assert ctx.load(info_str) == "hello"
     assert info_dict["#type"] == "Json"
     assert ctx.load(info_dict) == {"count": 42, "label": "test"}

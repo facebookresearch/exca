@@ -83,6 +83,49 @@ class MemmapArray:
         return data.view(dtype=dtype).reshape(shape)
 
 
+@DumpContext.register
+class TorchTensor:
+    """Stores tensors via MemmapArray (shared .data file, loaded via memmap)."""
+
+    @classmethod
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+        import torch
+
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"Expected torch Tensor but got {value} ({type(value)})")
+        if is_torch_view(value):
+            value = value.clone()
+        arr = value.detach().cpu().contiguous().numpy()
+        return MemmapArray.__dump_info__(ctx, np.ascontiguousarray(arr))
+
+    @classmethod
+    def __load_from_info__(
+        cls,
+        ctx: DumpContext,
+        filename: str,
+        offset: int = 0,
+        shape: tp.Sequence[int] = (),
+        dtype: str = "",
+        **_kw: tp.Any,
+    ) -> tp.Any:
+        import torch
+
+        if not dtype:
+            return torch.load(ctx.folder / filename, map_location="cpu", weights_only=True)  # type: ignore
+        arr = MemmapArray.__load_from_info__(
+            ctx, filename=filename, offset=offset, shape=shape, dtype=dtype
+        )
+        return torch.from_numpy(arr.copy())
+
+    @classmethod
+    def __delete_info__(
+        cls, ctx: DumpContext, filename: str, dtype: str = "", **_kw: tp.Any
+    ) -> None:
+        if not dtype:
+            with utils.fast_unlink(ctx.folder / filename, missing_ok=True):
+                pass
+
+
 # =============================================================================
 # KeyFileHandler mixin + one-file-per-entry handlers
 # =============================================================================
@@ -173,60 +216,6 @@ class ParquetPandasDataFrame(KeyFileHandler):
         import pandas as pd
 
         return pd.read_parquet(ctx.folder / filename, dtype_backend="numpy_nullable")
-
-
-@DumpContext.register
-class TorchTensor:
-    """Stores tensors as raw numpy bytes in a shared .data file (like MemmapArray)."""
-
-    @classmethod
-    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        import torch
-
-        if not isinstance(value, torch.Tensor):
-            raise TypeError(f"Expected torch Tensor but got {value} ({type(value)})")
-        if is_torch_view(value):
-            value = value.clone()
-        arr = value.detach().cpu().contiguous().numpy()
-        f, name = ctx.shared_file(".data")
-        offset = f.tell()
-        f.write(np.ascontiguousarray(arr).data)
-        return {
-            "filename": name,
-            "offset": offset,
-            "shape": list(value.shape),
-            "dtype": str(arr.dtype),
-        }
-
-    @classmethod
-    def __load_from_info__(
-        cls,
-        ctx: DumpContext,
-        filename: str,
-        offset: int = 0,
-        shape: tp.Sequence[int] = (),
-        dtype: str = "",
-        **_kw: tp.Any,
-    ) -> tp.Any:
-        import torch
-
-        if not dtype:
-            return torch.load(ctx.folder / filename, map_location="cpu", weights_only=True)  # type: ignore
-        shape_t = tuple(shape)
-        length = int(np.prod(shape_t)) * np.dtype(dtype).itemsize
-        with (ctx.folder / filename).open("rb") as f:
-            f.seek(offset)
-            data = f.read(length)
-        arr = np.frombuffer(data, dtype=dtype).reshape(shape_t)
-        return torch.from_numpy(arr.copy())
-
-    @classmethod
-    def __delete_info__(
-        cls, ctx: DumpContext, filename: str, dtype: str = "", **_kw: tp.Any
-    ) -> None:
-        if not dtype:
-            with utils.fast_unlink(ctx.folder / filename, missing_ok=True):
-                pass
 
 
 @DumpContext.register
@@ -329,20 +318,24 @@ class Auto:
     - inline:     {"content": <data>}               — mixed, small enough for inline
     - shared:     {"content": {"#type": "Json"|"Pickle", ...}} — mixed, offloaded
 
-    Also loads legacy DataDict/Composite formats."""
+    Note: ``#type`` is reserved in user dicts. If a dict contains a ``#type``
+    key whose value is a registered handler, it is treated as a handler
+    reference. Non-handler ``#type`` values raise ``ValueError``.
+
+    Also loads legacy DataDict format (optimized/pickled)."""
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
-        ctx._auto_dispatched = False
+        initial_count = ctx._dump_count
         result = cls._dump_value(ctx, value, ctx.key or "")
         if isinstance(result, dict) and "#type" in result:
             return result  # single-value delegation
         wrapped = cls._wrap(ctx, result)
-        if not ctx._auto_dispatched:
+        if ctx._dump_count == initial_count:
             return wrapped  # promote: #type is Json or Pickle
         # Mixed: Auto needs _load_value to walk the tree on load
-        if "_data" in wrapped:
-            return {"content": wrapped["_data"]}
+        if "content" in wrapped:
+            return {"content": wrapped["content"]}
         return {"content": wrapped}
 
     @classmethod
@@ -369,12 +362,20 @@ class Auto:
         if isinstance(val, (int, float, str, bool, type(None))):
             return val
         if isinstance(val, dict):
-            return {k: cls._dump_value(ctx, v, f"{key}({k})") for k, v in val.items()}
+            if "#type" in val:
+                try:
+                    DumpContext._lookup(str(val["#type"]))
+                except KeyError:
+                    raise ValueError(
+                        f"'#type' is a reserved key in Auto dicts. "
+                        f"Found #type={val['#type']!r} which is not a registered handler."
+                    )
+            return {k: cls._dump_value(ctx, v, f"{key}[{k}]") for k, v in val.items()}
         if isinstance(val, (list, tuple)):
-            return [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
+            items = [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
+            return tuple(items) if isinstance(val, tuple) else items
         handler = DumpContext._find_handler(type(val))
         if handler is not None:
-            ctx._auto_dispatched = True
             ctx.key = key
             return ctx.dump(val)
         return val  # unhandled: leave for Json/Pickle at outer level
@@ -383,18 +384,11 @@ class Auto:
     def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> tp.Any:
         if "optimized" in info or "pickled" in info:
             return cls._load_legacy(ctx, info)
-        if "content" in info:
-            content = info["content"]
-            if isinstance(content, dict) and "#type" in content:
-                data = ctx.load(content)
-            else:
-                data = content
-        elif "_data" in info:
-            data = info["_data"]  # backward compat: old Composite inline
+        content = info["content"]
+        if isinstance(content, dict) and "#type" in content:
+            data = ctx.load(content)
         else:
-            data = Json.__load_from_info__(
-                ctx, **info
-            )  # backward compat: old Composite shared file
+            data = content
         return cls._load_value(ctx, data)
 
     @classmethod
@@ -441,7 +435,7 @@ class Json:
     """JSON storage: inline in JSONL if small, shared .json file if large.
 
     Values whose serialized size is at most ``MAX_INLINE_SIZE`` bytes are
-    stored directly in the JSONL line (``_data`` key).  Larger values are
+    stored directly in the JSONL line (``content`` key).  Larger values are
     appended to a shared ``.json`` file and referenced by offset/length.
     """
 
@@ -458,7 +452,7 @@ class Json:
                 f"or use cache_type='Pickle' explicitly."
             ) from e
         if len(raw) <= cls.MAX_INLINE_SIZE:
-            return {"_data": value}
+            return {"content": value}
         f, name = ctx.shared_file(".json")
         offset = f.tell()
         f.write(raw + b"\n")
@@ -466,8 +460,8 @@ class Json:
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> tp.Any:
-        if "_data" in info:
-            return info["_data"]
+        if "content" in info:
+            return info["content"]
         path = ctx.folder / info["filename"]
         with path.open("rb") as f:
             f.seek(info["offset"])
@@ -492,10 +486,5 @@ class AutoPickle(Auto):
             return info
 
 
-# Backward-compatible aliases for released JSONL files
+# Backward-compatible alias for released JSONL files
 DumpContext.HANDLERS["MemmapArrayFile"] = MemmapArray
-DumpContext.HANDLERS["DataDict"] = Auto
-DumpContext.HANDLERS["Composite"] = Auto
-
-# Auto also serves as the default handler for lists
-DumpContext.TYPE_DEFAULTS[list] = Auto

@@ -101,7 +101,7 @@ class DumpContext:
         self._stack: contextlib.ExitStack | None = None
         self._resource_cache: dict[tp.Hashable, tp.Any] = {}
         self._max_cache = int(os.environ.get("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", 100_000))
-        self._auto_dispatched: bool = False
+        self._dump_count: int = 0
         self._created_files: list[Path] = []
 
     # -- Registration --
@@ -277,6 +277,7 @@ class DumpContext:
         (e.g. Auto delegates non-container values). The returned
         #type must be a registered handler name.
         """
+        self._dump_count += 1
         ctx = copy.copy(self)
         ctx.level = self.level + 1
         if cache_type is not None:

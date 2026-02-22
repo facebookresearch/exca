@@ -47,15 +47,14 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 - Only called by legacy `DataDict.dump()` in `dumperloader.py`
 - Can be simplified or removed once `dumperloader.py` is retired
 
-### Refine `_auto_dispatched` tracking in Auto handler
-- Currently uses `ctx._auto_dispatched` (ad-hoc attr on DumpContext) to detect
-  whether `_dump_value` dispatched any handler. If not, Auto delegates to Json
-  directly (skipping the Auto layer).
-- Cleaner alternatives:
-  - Add a metadata dict on DumpContext (e.g. `ctx.meta`) for handler-local state
-  - However, `dump()` copies ctx via `copy.copy()` — mutable state in copies is
-    shared (shallow copy). Consider whether copies should be dropped or deepened.
-  - Could also walk the result tree for `#type` dicts instead of a flag (pure but O(n))
+### Generalize `_dump_count` to load side
+- `_dump_count` on DumpContext tracks how many `dump()` calls occurred during
+  Auto's `_dump_value` walk. Incremented in `dump()` before the copy, reset
+  by Auto's `__dump_info__`. Used to decide promote vs. encapsulate.
+- Consider adding a symmetric `_load_count` for load-side instrumentation
+- Consider whether ctx copies could be replaced by a metadata dict
+  (`ctx.meta`) for handler-local state — but shallow copy semantics for
+  mutable containers need careful handling
 
 ### Json forced-file parameter
 - Users may want to ensure data goes to a shared file (not inlined in JSONL),
@@ -65,7 +64,7 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
   `JsonFile` handler variant)
 
 ### Remove Auto Pickle fallback
-- Currently `Auto._on_json_failure` delegates to Pickle with DeprecationWarning
+- Currently `Auto._wrap` falls back to Pickle with DeprecationWarning
 - Eventually should raise TypeError instead (strict mode)
 - `AutoPickle` will remain as the explicit opt-in for Pickle fallback
 - **When:** after sufficient deprecation period
