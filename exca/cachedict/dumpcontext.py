@@ -92,6 +92,7 @@ class DumpContext:
     ) -> None:
         self.folder = Path(folder)
         self.key = key
+        self.level: int = -1
         self.permissions = permissions
         self._thread_id = threading.get_native_id()
         self._prefix = f"{socket.gethostname()}-{self._thread_id}"
@@ -100,6 +101,7 @@ class DumpContext:
         self._stack: contextlib.ExitStack | None = None
         self._resource_cache: dict[tp.Hashable, tp.Any] = {}
         self._max_cache = int(os.environ.get("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", 100_000))
+        self._dump_count: int = 0
         self._created_files: list[Path] = []
 
     # -- Registration --
@@ -222,10 +224,9 @@ class DumpContext:
     # -- Dispatch --
 
     @classmethod
-    def _find_handler(cls, type_: type) -> tp.Any:
-        """Find the best handler for a type.
-        Checks TYPE_DEFAULTS first, then DumperLoader.DEFAULTS (legacy fallback),
-        then falls back to Json."""
+    def _find_handler(cls, type_: type) -> tp.Any | None:
+        """Find a registered handler for a type, or None.
+        Checks TYPE_DEFAULTS first, then DumperLoader.DEFAULTS (legacy)."""
         _ensure_optional_defaults()
         try:
             for supported, handler in cls.TYPE_DEFAULTS.items():
@@ -237,7 +238,7 @@ class DumpContext:
                     return handler
         except TypeError:
             pass
-        return cls.HANDLERS["Json"]
+        return None
 
     def dump_entry(
         self, key: str, value: tp.Any, *, cache_type: str | None = None
@@ -270,8 +271,15 @@ class DumpContext:
 
     def dump(self, value: tp.Any, *, cache_type: str | None = None) -> dict[str, tp.Any]:
         """Serialize a sub-value. Returns an info dict tagged with #type.
-        Creates a shallow copy so nested dumps don't clobber ctx.key."""
+        Creates a shallow copy so nested dumps don't clobber ctx.key.
+
+        Handlers may return #type to delegate to another handler
+        (e.g. Auto delegates non-container values). The returned
+        #type must be a registered handler name.
+        """
+        self._dump_count += 1
         ctx = copy.copy(self)
+        ctx.level = self.level + 1
         if cache_type is not None:
             cls: tp.Any = self._lookup(cache_type)
             info, type_name = ctx._dump_cls(cls, value)
@@ -280,14 +288,22 @@ class DumpContext:
             type_name = type(value).__name__
         else:
             cls = self._find_handler(type(value))
+            if cls is None:
+                cls = self.HANDLERS["Auto"]
             info, type_name = ctx._dump_cls(cls, value)
-        _reserved = info.keys() & {"#type", "#key"}
-        if _reserved:
+        if "#key" in info:
             raise ValueError(
-                f"__dump_info__ must not return reserved keys {_reserved}; "
-                f"these are set by DumpContext"
+                "__dump_info__ must not return '#key'; it is set by DumpContext"
             )
-        info["#type"] = type_name
+        if "#type" not in info:
+            info["#type"] = type_name
+        else:
+            try:
+                self._lookup(info["#type"])
+            except KeyError:
+                raise ValueError(
+                    f"Delegated #type {info['#type']!r} is not a registered handler"
+                )
         return info
 
     def _dump_cls(self, cls: tp.Any, value: tp.Any) -> tuple[dict[str, tp.Any], str]:
