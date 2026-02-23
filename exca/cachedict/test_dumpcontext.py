@@ -426,3 +426,30 @@ def test_cached_and_invalidate(tmp_path: Path) -> None:
     ctx.invalidate("k")
     assert ctx.cached("k", factory) == "value"
     assert len(calls) == 2
+
+
+@DumpContext.register
+class _SelfHandler:
+    """User-defined self-handler (the value IS the object)."""
+
+    def __init__(self, value: int = 0):
+        self.value = value
+
+    def __dump_info__(self, ctx: DumpContext) -> dict[str, tp.Any]:
+        return {"value": self.value}
+
+    @classmethod
+    def __load_from_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> "_SelfHandler":
+        assert "#key" not in kwargs, f"#key leaked into handler kwargs: {kwargs}"
+        return cls(**kwargs)
+
+
+def test_load_strips_key_from_info(tmp_path: Path) -> None:
+    """Regression: #key must not leak into handler __load_from_info__ kwargs."""
+    ctx = DumpContext(tmp_path)
+    with ctx:
+        result = ctx.dump_entry("mykey", _SelfHandler(42))
+    info = result["content"]
+    assert "#key" in info
+    loaded = ctx.load(info)
+    assert loaded.value == 42

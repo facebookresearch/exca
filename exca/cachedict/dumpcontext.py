@@ -370,10 +370,11 @@ class DumpContext:
                     self._track_legacy_files(val)
 
     def _resolve_type(self, info: dict[str, tp.Any]) -> tuple[tp.Any, dict[str, tp.Any]]:
-        """Extract #type from an info dict, return (cls, remaining_info).
+        """Extract #type and #key from an info dict, return (cls, remaining_info).
         Checks HANDLERS first, then DumperLoader.CLASSES for legacy types."""
         info = dict(info)
         type_name = info.pop("#type")
+        info.pop("#key", None)
         return self._lookup(type_name), info
 
     def load(self, info: tp.Any) -> tp.Any:
