@@ -44,6 +44,7 @@ def _add_name(
     obj: pydantic.BaseModel, propagate_defaults: bool = False
 ) -> pydantic.BaseModel:
     """Provide owner object to the infra"""
+
     private = obj.__pydantic_private__ or {}
     params = collections.ChainMap(dict(obj), private)
     for name, val in params.items():
@@ -85,10 +86,11 @@ def _add_name(
 
 
 @pydantic.model_validator(mode="before")
-def model_with_infra_validator_before(obj: tp.Any) -> tp.Any:
+def model_with_infra_validator_before(cls, obj: tp.Any) -> tp.Any:
     """Provide owner object to the infra
     (this is set to the owner class during __set_name__)
     """
+    utils.check_extra_forbid(cls)
     if not isinstance(obj, dict):
         return obj  # should not happen
     for name, val in obj.items():
@@ -150,6 +152,7 @@ class BaseInfra(pydantic.BaseModel):
             msg += f"{cls} must inherit from pydantic.BaseModel"
             raise RuntimeError(msg)
         owner.model_config.setdefault("extra", "forbid")
+        owner.model_config.setdefault("revalidate_instances", "always")
         self._infra_name = name
         # set mechanism to provide owner obj to the infra:
         owner._model_with_infra_validator_after = model_with_infra_validator_after  # type: ignore
