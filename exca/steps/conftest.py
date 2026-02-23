@@ -75,6 +75,17 @@ class Add(Step):
 # =============================================================================
 
 
+class CountMult(Step):
+    """Multiplies input; counts calls (for testing partial cache)."""
+
+    coeff: float = 2.0
+    _call_count: int = 0  # class-level, shared across instances
+
+    def _forward(self, value: float) -> float:
+        type(self)._call_count += 1
+        return value * self.coeff
+
+
 class RandomGenerator(Step):
     """Generates a random value - useful to verify caching.
 
