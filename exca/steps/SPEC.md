@@ -20,16 +20,25 @@ The `steps` module provides a redesigned pipeline implementation where **each St
 ### Step (Base Class)
 
 A `Step` is the fundamental unit that:
-- Produces output via `_forward()` (generator) or `_forward(input) -> output` (transformer)
+- Produces output from config via `_build()` (pure generator) or transforms input via `_forward(value)` (transformer)
 - Has an optional `infra` for execution backend and caching
-- Uses `forward(input)` as the main entry point (handles caching/backend)
-- Detects generator vs transformer via signature inspection
+- Uses `build()` (no input) or `forward(value)` (with input) as public entry points
+- Dual-use steps override `_forward(value=default)` — both `build()` and `forward(value)` work
+
+**Override points:**
+
+| Step type | Override | `build()` | `forward(value)` |
+|-----------|----------|-----------|-------------------|
+| Pure generator | `_build(self)` | calls `_build()` | error |
+| Pure transformer | `_forward(self, value)` | error | calls `_forward(value)` |
+| Dual-use | `_forward(self, value=default)` | calls `_forward()` (uses default) | calls `_forward(value)` |
+| Both (e.g. Study) | `_build(self)` + `_forward(self, value)` | calls `_build()` | calls `_forward(value)` |
 
 ### NoValue Sentinel
 
-`NoValue` is a sentinel class used to distinguish "no input provided" from `None`:
-- `Input(value=NoValue())` marks a step as configured but without input
-- `Input(value=X)` marks a step as configured with input X
+`NoValue` is a sentinel class used internally to distinguish "no input" from `None`:
+- `Input(value=NoValue())` marks a step as configured but without input (generator)
+- `Input(value=X)` marks a step as configured with input X (transformer)
 - `_previous = None` means unconfigured
 
 ### Backend (Discriminated Model)
@@ -154,19 +163,24 @@ class Step(DiscriminatedModel):
     infra: Backend | None = None
     _previous: Step | None = None
     
-    def _forward(self, ...) -> Any:
-        """Override in subclasses. Signature determines step type:
-        - Generator: def _forward(self) -> Output
-        - Transformer: def _forward(self, input: Input) -> Output
-        """
+    def _build(self) -> Any:
+        """Override for pure generators. Default: call _forward() with no args."""
+        return self._forward()
+    
+    def _forward(self, value: Any) -> Any:
+        """Override for transformers/dual-use (always takes exactly 1 arg)."""
         raise NotImplementedError
     
     def _is_generator(self) -> bool:
-        """Check if _forward has no required parameters (generator step)."""
+        """True if _build is overridden or _forward has all-default params."""
         ...
     
-    def forward(self, input: Any = NoValue()) -> Any:
-        """Execute with caching and backend handling."""
+    def build(self) -> Any:
+        """Execute as generator (no input). Calls _build() or _forward() with defaults."""
+        ...
+    
+    def forward(self, value: Any) -> Any:
+        """Execute as transformer (with input). Always requires 1 argument."""
         ...
     
     def with_input(self, value: Any = NoValue()) -> "Step":
@@ -182,12 +196,14 @@ class Step(DiscriminatedModel):
 
 ```python
 class Input(Step):
-    """Step that provides a fixed value (or NoValue sentinel)."""
+    """Internal step that provides a fixed value (or NoValue sentinel)."""
     value: Any
     
+    def _build(self) -> Any:
+        return self.value
+    
     def _aligned_step(self) -> list[Step]:
-        # Invisible in chain hash when holding NoValue
-        return [] if isinstance(self.value, NoValue) else [self]
+        return []  # Input is invisible in folder path; value is used as item_uid
 ```
 
 ### Chain
@@ -199,6 +215,14 @@ class Chain(Step):
     
     def _is_generator(self) -> bool:
         """Chain is a generator if its first step is a generator."""
+        ...
+    
+    def build(self) -> Any:
+        """Execute chain as generator (first step must be generator)."""
+        ...
+    
+    def forward(self, value: Any) -> Any:
+        """Execute chain as transformer (value passed to first step)."""
         ...
     
     def clear_cache(self, recursive: bool = True) -> None:
@@ -218,7 +242,7 @@ class Chain(Step):
 
 ## Usage Examples
 
-### Example 1: Simple Step with Caching
+### Example 1: Transformer Step with Caching
 
 ```python
 from exca.steps import Step
@@ -241,30 +265,47 @@ assert step.with_input(5.0).has_cache()
 step.with_input(5.0).clear_cache()
 ```
 
-### Example 2: Generator Step
+### Example 2: Pure Generator Step
 
 ```python
 class LoadData(Step):
     path: str
     
-    def _forward(self) -> np.ndarray:  # No input parameter = generator
+    def _build(self) -> np.ndarray:  # Pure generator: override _build
         return np.load(self.path)
 
 step = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
-data = step.forward()  # No input needed
+data = step.build()  # No input needed
 
 # Cache operations work directly on generators
 assert step.has_cache()  # Auto-configures with NoValue
 ```
 
-### Example 3: Chain with Mixed Infrastructure
+### Example 3: Dual-Use Step
+
+```python
+class Normalize(Step):
+    mean: float = 0.0
+    
+    def _forward(self, value: float = 0.0) -> float:  # Default makes it dual-use
+        return value - self.mean
+
+# As generator (uses default input)
+step = Normalize(mean=5.0, infra={"backend": "Cached", "folder": "/cache"})
+result = step.build()     # Returns -5.0 (0.0 - 5.0)
+
+# As transformer (uses provided input)
+result = step.forward(10.0)  # Returns 5.0 (10.0 - 5.0)
+```
+
+### Example 4: Chain with Mixed Infrastructure
 
 ```python
 from exca.steps import Chain, Step
 
 class LoadData(Step):
     path: str
-    def _forward(self) -> np.ndarray:
+    def _build(self) -> np.ndarray:
         return load_dataset(self.path)
 
 class Train(Step):
@@ -284,7 +325,7 @@ pipeline = Chain(
     infra={"backend": "Cached", "folder": "/cache/pipeline"},
 )
 
-result = pipeline.forward()
+result = pipeline.build()  # Generator chain: first step is a generator
 ```
 
 ### Example 4: Error Caching and Retry
@@ -310,31 +351,37 @@ result = step_retry.forward(bad_input)  # Recomputes
 
 ## Execution Flow
 
-When `step.forward(input)` is called:
+When `step.build()` is called (generator):
 
 ```
-1. Configure input:
-   - step = step.with_input(input)
-   - Sets _previous = Input(value=input) or Input(value=NoValue())
+1. Check _is_generator() — error if not a generator
+2. Configure: step = step.with_input()  (NoValue sentinel)
+3. Resolve function: _build() if overridden, else _forward() with no args
+4. If no infra: execute function directly
+5. If infra: Backend.run(func) handles caching (see below)
+```
 
-2. Determine how to call _forward:
-   - If Input holds actual value: call _forward(value)
-   - If Input holds NoValue: call _forward() with no args
+When `step.forward(value)` is called (transformer):
 
-3. If no infra:
-   └─> Execute _forward() directly, return result
+```
+1. Configure: step = step.with_input(value)
+2. If no infra: execute _forward(value) directly
+3. If infra: Backend.run(_forward, value) handles caching (see below)
+```
 
-4. Backend.run() handles caching:
-   a. Check cache status (without loading)
-   b. Handle mode:
-      - "read-only": Return cache or raise
-      - "cached": Return cache if success, else continue
-      - "force": Clear cache, continue
-      - "force-forward": Clear cache, continue, and propagate force to downstream steps
-      - "retry": Clear if error, continue
-   c. Submit job (inline for Cached, subprocess for others)
-   d. Cache result/error from within job
-   e. Return cached result (or raise cached error)
+Backend.run() caching logic:
+
+```
+a. Check cache status (without loading)
+b. Handle mode:
+   - "read-only": Return cache or raise
+   - "cached": Return cache if success, else continue
+   - "force": Clear cache, continue
+   - "force-forward": Clear cache, continue, and propagate force to downstream steps
+   - "retry": Clear if error, continue
+c. Submit job (inline for Cached, subprocess for others)
+d. Cache result/error from within job
+e. Return cached result (or raise cached error)
 ```
 
 ## Key Differences from chain v1
@@ -345,9 +392,9 @@ When `step.forward(input)` is called:
 | Infrastructure model | `folder` + `backend` separate fields | `Backend` discriminated model (all-in-one) |
 | Caching | Separate `Cache` step class | All backends have caching |
 | Error caching | Via submitit | Native (both result and error cached) |
-| User method | Override `forward()` | Override `_forward()` |
-| Generator detection | Manual | Automatic via signature inspection |
-| Public API | `step.forward(input)` | `step.forward(input)` (same) |
+| User method | Override `forward()` | Override `_build()` and/or `_forward(value)` |
+| Generator detection | Manual | `_build` override or `_forward` default args |
+| Public API | `step.forward(input)` | `step.build()` or `step.forward(value)` |
 | Backend API | `submission_context()` + `submit()` | Just `run()` |
 | folder | Required | Optional, can be propagated |
 

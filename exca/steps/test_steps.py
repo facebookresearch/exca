@@ -79,10 +79,10 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     ],
 )
 def test_pure_generator_errors(tmp_path: Path, steps: list, match: str) -> None:
-    """Pure generators (no input parameter) raise TypeError when receiving input."""
+    """Pure generators (only _build) raise NotImplementedError when receiving input."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(steps=steps, infra=infra)
-    with pytest.raises(TypeError, match=rf"{match}._forward\(\)"):
+    with pytest.raises(NotImplementedError, match=rf"{match}"):
         chain.forward(1)
 
 
@@ -159,8 +159,8 @@ def test_pickle_roundtrip(tmp_path: Path, cached: bool, configured: bool) -> Non
 
     # Step should be functional
     expected = 0.639
-    assert original.forward() == pytest.approx(expected, rel=1e-3)
-    assert loaded.forward() == pytest.approx(expected, rel=1e-3)
+    assert original.build() == pytest.approx(expected, rel=1e-3)
+    assert loaded.build() == pytest.approx(expected, rel=1e-3)
 
 
 def test_infra_not_shared(tmp_path: Path) -> None:
@@ -186,7 +186,7 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
             folder=tmp_path, timeout_min=30
         )
 
-        def _forward(self) -> int:
+        def _build(self) -> int:
             return self.value
 
     # Switch backend type - shared fields propagate
@@ -233,25 +233,25 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     ), "folder should propagate to nested chain steps"
 
 
-def test_forward_mutation_cache_consistency(tmp_path: Path) -> None:
-    """Cache should work even if _forward mutates self (bug: cache key changes mid-execution)."""
+def test_build_mutation_cache_consistency(tmp_path: Path) -> None:
+    """Cache should work even if _build mutates self (bug: cache key changes mid-execution)."""
 
     class Counter(Step):
         count: int = 0
         infra: backends.Backend | None = None
 
-        def _forward(self) -> int:
-            self.count += 1  # Mutation during _forward changes cache key!
+        def _build(self) -> int:
+            self.count += 1  # Mutation during _build changes cache key!
             return self.count
 
     counter = Counter(infra={"backend": "Cached", "folder": tmp_path})  # type: ignore
 
-    # First forward - should cache result
-    result1 = counter.forward()
+    # First build - should cache result
+    result1 = counter.build()
     assert result1 == 1, "first call should return 1"
 
-    # Second forward - should return cached result, not None
-    result2 = counter.forward()
+    # Second build - should return cached result, not None
+    result2 = counter.build()
     assert result2 == 1, "second call should return cached result (bug: returns None)"
 
 

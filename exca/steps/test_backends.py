@@ -135,7 +135,7 @@ def test_paths_property_requires_initialization(tmp_path: Path) -> None:
     initialized = step.with_input(1.0)
     assert initialized.infra is not None
     assert initialized.infra.paths.step_folder.exists() is False  # Not created yet
-    initialized.forward()  # Run to create folders
+    step.forward(1.0)  # Run to create folders
     assert initialized.infra.paths.cache_folder.exists()
 
     # Generator (Add has default) auto-configures without initialization
@@ -179,7 +179,7 @@ def test_config_consistency_chain_and_step(tmp_path: Path) -> None:
         steps=[conftest.Add(value=1), conftest.Mult(coeff=2, infra=backends.Cached())],
         infra=backends.Cached(folder=tmp_path),
     )
-    assert chain.forward() == 2.0  # (0 + 1) * 2
+    assert chain.build() == 2.0  # (0 + 1) * 2
 
     # Only one uid.yaml should exist (chain and last step share folder)
     uid_files = list(tmp_path.rglob("uid.yaml"))

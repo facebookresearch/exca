@@ -41,7 +41,7 @@ class Mult(Step):
 
 
 # =============================================================================
-# Transformer with default (can be used as generator))
+# Dual-use steps (transformer with default, can also be used as generator)
 # =============================================================================
 
 
@@ -78,10 +78,10 @@ class Add(Step):
 class RandomGenerator(Step):
     """Generates a random value - useful to verify caching.
 
-    Pure generator: raises TypeError if called with input.
+    Pure generator: override _build, not _forward.
     """
 
     seed: int | None = None
 
-    def _forward(self) -> float:
+    def _build(self) -> float:
         return random.Random(self.seed).random()

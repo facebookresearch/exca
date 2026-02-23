@@ -10,6 +10,9 @@ Note: this API is unstable, use at your own risk
 Each Step has its own infrastructure (backend) for caching and execution.
 Chain is a specialized Step that composes multiple steps sequentially.
 
+Override ``_build()`` for generators, ``_forward(value)`` for transformers.
+Use ``build()`` and ``forward(value)`` as public entry points.
+
 Example:
     >>> from exca import steps
     >>>

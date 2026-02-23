@@ -39,17 +39,20 @@ def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
     step = type(step).model_validate({**step.model_dump(), "infra": infra})
 
     # Run with or without input
-    args = (5.0,) if use_input else ()
-    result1 = step.forward(*args)
-    assert step.with_input(*args).has_cache()
-
-    # Same result from cache
-    result2 = step.forward(*args)
-    assert result1 == result2
-
-    # Clear and recompute gives different result
-    step.with_input(*args).clear_cache()
-    result3 = step.forward(*args)
+    if use_input:
+        result1 = step.forward(5.0)
+        assert step.with_input(5.0).has_cache()
+        result2 = step.forward(5.0)
+        assert result1 == result2
+        step.with_input(5.0).clear_cache()
+        result3 = step.forward(5.0)
+    else:
+        result1 = step.build()
+        assert step.with_input().has_cache()
+        result2 = step.build()
+        assert result1 == result2
+        step.with_input().clear_cache()
+        result3 = step.build()
     assert result3 != result1
 
 
@@ -65,7 +68,7 @@ def test_intermediate_cache(tmp_path: Path) -> None:
         steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=3.0)],
         infra=infra,
     )
-    result1 = chain.forward()
+    result1 = chain.build()
 
     # Intermediate cache exists
     configured = chain.with_input()
@@ -74,7 +77,7 @@ def test_intermediate_cache(tmp_path: Path) -> None:
 
     # Clear chain cache but keep intermediate
     chain.clear_cache(recursive=False)
-    result2 = chain.forward()
+    result2 = chain.build()
     assert result1 == result2  # Same because generator cached
 
 
@@ -87,14 +90,14 @@ def test_intermediate_cache_reuse(tmp_path: Path) -> None:
         steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=10)],
         infra=infra,
     )
-    out1 = chain1.forward()
+    out1 = chain1.build()
 
     # Second chain: gen * 100 (same generator, different multiplier)
     chain2 = Chain(
         steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=100)],
         infra=infra,
     )
-    out2 = chain2.forward()
+    out2 = chain2.build()
 
     # out2 should be 10x out1 (same generator result)
     assert out2 == pytest.approx(10 * out1, abs=1e-9)
@@ -107,7 +110,7 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
         steps=[conftest.Add(value=1), conftest.Mult(coeff=2, infra=step_infra)],
         infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
     )
-    assert chain.forward() == 2.0  # (0 + 1) * 2
+    assert chain.build() == 2.0  # (0 + 1) * 2
 
     # Both share cache folder and cache_type is propagated from last step
     configured = chain.with_input()
@@ -129,8 +132,8 @@ def test_mode_cached(tmp_path: Path) -> None:
     chain = Chain(
         steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)], infra=infra
     )
-    out1 = chain.forward()
-    out2 = chain.forward()
+    out1 = chain.build()
+    out2 = chain.build()
     assert out1 == out2
 
 
@@ -143,14 +146,14 @@ def test_mode_readonly(tmp_path: Path) -> None:
 
     # Fails without cache
     with pytest.raises(RuntimeError, match="read-only"):
-        chain.forward()
+        chain.build()
 
     # Populate cache, then read-only works
     assert chain.infra is not None
     chain.infra.mode = "cached"
-    out1 = chain.forward()
+    out1 = chain.build()
     chain.infra.mode = "read-only"
-    assert chain.forward() == out1
+    assert chain.build() == out1
 
 
 @pytest.mark.parametrize("chain", [True, False])
@@ -163,13 +166,13 @@ def test_mode_force(tmp_path: Path, mode: str, chain: bool) -> None:
         step: Step = Chain(steps=seq, infra=infra)
     else:
         step = conftest.RandomGenerator(infra=infra)
-    out1 = step.forward()  # populate cache
+    out1 = step.build()  # populate cache
 
     step.infra.mode = mode  # type: ignore
-    out2 = step.forward()  # forces recompute
+    out2 = step.build()  # forces recompute
     assert out1 != out2
 
-    out3 = step.forward()  # uses cache (mode reset to "cached")
+    out3 = step.build()  # uses cache (mode reset to "cached")
     assert out2 == out3
 
 
@@ -185,22 +188,22 @@ def test_force_vs_force_forward(tmp_path: Path) -> None:
         infra=infra,
     )
 
-    out1 = chain.forward()  # populate caches
+    out1 = chain.build()  # populate caches
 
     # force on intermediate: only that step recomputes, downstream uses cache
     chain2 = chain.model_copy(deep=True)
     chain2._step_sequence()[1].infra.mode = "force"  # type: ignore
-    out2 = chain2.forward()
+    out2 = chain2.build()
     assert out1 == out2  # add still uses its cache
 
     # force-forward on intermediate: that step AND downstream recompute
     chain3 = chain.model_copy(deep=True)
     chain3._step_sequence()[1].infra.mode = "force-forward"  # type: ignore
-    out3 = chain3.forward()
+    out3 = chain3.build()
     assert out3 != out1  # add recomputed due to force-forward propagation
 
     # After force-forward, subsequent calls use cache (mode resets)
-    out4 = chain3.forward()
+    out4 = chain3.build()
     assert out3 == out4
 
 
@@ -223,23 +226,23 @@ def test_force_forward_nested_chains(tmp_path: Path) -> None:
         infra=infra,
     )
 
-    out1 = outer.forward()
+    out1 = outer.build()
 
     # force-forward on gen propagates through inner chain
     outer._step_sequence()[0].infra.mode = "force-forward"  # type: ignore
-    out2 = outer.forward()
+    out2 = outer.build()
     assert out1 != out2  # inner's add_random recomputed
 
     # Subsequent call uses cache (mode reset)
-    out3 = outer.forward()
+    out3 = outer.build()
     assert out2 == out3
 
     # force-forward on inner chain also propagates to downstream
     outer2 = outer.model_copy(deep=True)
     outer2._step_sequence()[2].infra.mode = "force-forward"  # type: ignore
-    # infra mode in firt step should have been reverted to cached
+    # infra mode in first step should have been reverted to cached
     assert outer._step_sequence()[0].infra.mode == "cached"  # type: ignore
-    out4 = outer2.forward()
+    out4 = outer2.build()
     assert out4 != out3  # downstream recomputed
 
 
@@ -308,7 +311,7 @@ def test_cache_folder_structure(tmp_path: Path) -> None:
         steps=[conftest.Add(infra=infra), conftest.Mult(coeff=10)],
         infra=infra,
     )
-    chain.forward()
+    chain.build()
     chain.forward(1)
 
     # Nested folder structure based on step chain
@@ -328,14 +331,14 @@ def test_multiple_inputs_cache_separately(tmp_path: Path) -> None:
 
     # Call with different inputs - each should cache separately
     outs: dict[float | None, float] = {}
-    outs[None] = step.forward()  # Generator mode (no input)
+    outs[None] = step.build()  # Generator mode (no input)
     outs[1.0] = step.forward(1.0)  # Transformer mode with input=1
     outs[2.0] = step.forward(2.0)  # Transformer mode with input=2
     # All should be different (random component)
     assert len(set(outs.values())) == 3
 
     # Second calls should return cached values (same as first calls)
-    assert step.forward() == outs[None]
+    assert step.build() == outs[None]
     assert step.forward(1.0) == outs[1.0]
     assert step.forward(2.0) == outs[2.0]
 
@@ -358,16 +361,16 @@ def test_clear_cache_recursive(tmp_path: Path) -> None:
         infra=infra,
     )
 
-    out1 = chain.forward()
+    out1 = chain.build()
 
     # Clear only chain cache
     chain.with_input().clear_cache(recursive=False)
-    out2 = chain.forward()
+    out2 = chain.build()
     assert out2 == pytest.approx(out1, abs=1e-9)  # Generator still cached
 
     # Clear all caches
     chain.with_input().clear_cache(recursive=True)
-    out3 = chain.forward()
+    out3 = chain.build()
     assert out3 != pytest.approx(out1, abs=1e-9)  # New random value
 
 
@@ -377,7 +380,7 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     step = conftest.Add(value=10, randomize=True, infra=infra)
 
     # First call: computes and caches in both disk and RAM
-    out1 = step.forward()
+    out1 = step.build()
     assert step.infra is not None
     assert step.infra.has_cache()
 
@@ -386,12 +389,12 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     assert not step.infra.has_cache()  # Disk cache gone
 
     # But RAM cache still works
-    out2 = step.forward()
+    out2 = step.build()
     assert out2 == out1  # Same value from RAM
 
     # clear_cache() clears both disk and RAM
     step.infra.clear_cache()
-    out3 = step.forward()
+    out3 = step.build()
     assert out3 != out1  # New random value (RAM was cleared)
 
 
@@ -400,12 +403,12 @@ def test_keep_in_ram_force_mode(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
     step = conftest.Add(value=10, randomize=True, infra=infra)
 
-    out1 = step.forward()
+    out1 = step.build()
     assert step.infra is not None
 
     # Force mode should clear RAM cache and recompute
     step.infra.mode = "force"
-    out2 = step.forward()
+    out2 = step.build()
     assert out2 != out1  # New value (force cleared RAM too)
 
 
@@ -459,7 +462,7 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     chain = Chain(steps=[StepA(infra=infra), StepB(infra=infra), StepC()])
 
     # First run: populate caches
-    assert chain.forward() == 3  # 0+1+1+1
+    assert chain.build() == 3  # 0+1+1+1
     assert dict(call_counts) == {"A": 1, "B": 1, "C": 1}
 
     # All caches use the no-input key (initial input for generators)
@@ -477,7 +480,7 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     step_b.infra.mode = "force"
 
     # Second run: A cached, B recomputes (force), C runs
-    assert chain.forward() == 3
+    assert chain.build() == 3
     assert call_counts["A"] == 0, "A's cache should be used"
     assert call_counts["B"] == 1, "B should recompute (force mode)"
     assert call_counts["C"] == 1, "C should run (after B)"

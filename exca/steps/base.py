@@ -28,6 +28,7 @@ from . import backends
 from .backends import NoValue
 
 logger = logging.getLogger(__name__)
+_VAR_KINDS = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
 
 
 def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
@@ -83,16 +84,26 @@ class Step(exca.helpers.DiscriminatedModel):
     """
     Base class for pipeline steps.
 
-    Override _forward() to implement computation:
+    Override ``_build()`` for generators and ``_forward(value)`` for transformers::
 
         class Generator(Step):
-            def _forward(self):
+            def _build(self):
                 return load_data()
 
         class Transformer(Step):
             coeff: float = 1.0
             def _forward(self, data):
                 return data * self.coeff
+
+    Dual-use steps give ``_forward`` a default argument::
+
+        class DualUse(Step):
+            def _forward(self, data=None):
+                return process(data)
+
+    Steps that implement both ``_build`` and ``_forward`` can have
+    independent logic for each mode (e.g. a Study that loads data
+    via ``_build`` and merges with existing data via ``_forward``).
 
     Note
     ----
@@ -128,19 +139,73 @@ class Step(exca.helpers.DiscriminatedModel):
         if self.infra is not None:
             self.infra._step = self
 
-    def _forward(self, *args: tp.Any) -> tp.Any:
-        """Override in subclasses."""
-        raise NotImplementedError
+    # How this step produces output without input, computed once per subclass.
+    # "build" = has _build override, "forward" = _forward with all-default params, None = needs input
+    _cls_gen_mode: tp.ClassVar[tp.Optional[str]] = None
+
+    def __init_subclass__(cls, **kwargs: tp.Any) -> None:
+        super().__init_subclass__(**kwargs)
+        has_build = cls._build is not Step._build
+        has_forward = cls._forward is not Step._forward
+        # Validate _build signature: must take no args besides self
+        if has_build:
+            build_params = [
+                n
+                for n, p in inspect.signature(cls._build).parameters.items()
+                if n != "self" and p.kind not in _VAR_KINDS
+            ]
+            if build_params:
+                raise TypeError(
+                    f"{cls.__name__}._build() should take no arguments, "
+                    f"got: ({', '.join(build_params)})"
+                )
+        # Validate _forward signature: must take at least 1 positional arg
+        if has_forward:
+            fwd_params = [
+                n
+                for n, p in inspect.signature(cls._forward).parameters.items()
+                if n != "self" and p.kind not in _VAR_KINDS
+            ]
+            if not fwd_params:
+                raise TypeError(
+                    f"{cls.__name__}._forward() takes no arguments. "
+                    f"Use _build() for generators, or add a value parameter."
+                )
+        # Check _forward has all-default params (dual-use / generator via forward)
+        fwd_all_defaults = has_forward and all(
+            p.default is not inspect.Parameter.empty
+            for name, p in inspect.signature(cls._forward).parameters.items()
+            if name != "self"
+        )
+        # Ambiguous: _build + _forward with all defaults — two generator paths
+        if has_build and fwd_all_defaults:
+            raise TypeError(
+                f"{cls.__name__} overrides _build() and _forward() with all-default "
+                f"parameters. Use a required parameter in _forward(self, value) to "
+                f"clarify intent, or remove _build() and rely on _forward() defaults."
+            )
+        # Determine generator mode
+        if has_build:
+            cls._cls_gen_mode = "build"
+        elif fwd_all_defaults:
+            cls._cls_gen_mode = "forward"
+        else:
+            cls._cls_gen_mode = None
+
+    def _build(self) -> tp.Any:
+        """Override for pure generators. Default: call _forward() with no args."""
+        return self._forward()  # type: ignore[call-arg]  # works for dual-use (default args)
+
+    def _forward(self, value: tp.Any) -> tp.Any:
+        """Override for transformers/dual-use. Always takes exactly 1 argument."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _forward(). "
+            f"Override _forward(self, value) for transformers or _build(self) for generators."
+        )
 
     def _is_generator(self) -> bool:
-        """Check if step is a generator (no required input in _forward)."""
-        sig = inspect.signature(self._forward)
-        for name, param in sig.parameters.items():
-            if name == "self":
-                continue
-            if param.default is inspect.Parameter.empty:
-                return False  # Has required parameter
-        return True
+        """Check if step can be used as generator (has _build or _forward with defaults)."""
+        return type(self)._cls_gen_mode is not None
 
     def with_input(self, value: tp.Any = NoValue()) -> "Step":
         """Create copy with Input as _previous (Input holds value or NoValue)."""
@@ -153,30 +218,41 @@ class Step(exca.helpers.DiscriminatedModel):
             step.infra._step = step
         return step
 
-    def forward(self, value: tp.Any = NoValue()) -> tp.Any:
-        """Execute with caching and backend handling."""
-        step = self.with_input(value) if self._previous is None else self
-        prev = step._previous
-
-        # prev is always Input after with_input()
-        if not isinstance(prev, Input):
-            raise RuntimeError("Step not properly configured")
-
-        args: tp.Any = () if isinstance(prev.value, NoValue) else (prev.value,)
-        if step.infra is None:
-            result = step._forward(*args)
-        else:
-            result = step.infra.run(step._forward, *args)
-
-        # Sync state back to original step's infra (with_input creates a copy)
+    def _sync_infra(self, step: "Step") -> None:
+        """Sync state back to original step's infra after execution."""
         if self.infra is not None:
             if step.infra is None:
                 raise RuntimeError("step.infra is None but self.infra is not")
             self.infra._ram_cache = step.infra._ram_cache
-            # Reset force modes (use object.__setattr__ for frozen TaskInfra models)
             if self.infra.mode in ("force", "force-forward"):
                 object.__setattr__(self.infra, "mode", "cached")
 
+    def build(self) -> tp.Any:
+        """Execute as generator (no input). Calls _build() or _forward() with defaults."""
+        if not self._is_generator():
+            raise TypeError(
+                f"{type(self).__name__} cannot be used as a generator. "
+                f"Use forward(value) instead of build()."
+            )
+        step = self.with_input() if self._previous is None else self
+        func: tp.Any = (
+            step._build if type(self)._cls_gen_mode == "build" else step._forward
+        )
+        if step.infra is None:
+            result = func()
+        else:
+            result = step.infra.run(func)
+        self._sync_infra(step)
+        return result
+
+    def forward(self, value: tp.Any) -> tp.Any:
+        """Execute as transformer (with input). Always requires 1 argument."""
+        step = self.with_input(value) if self._previous is None else self
+        if step.infra is None:
+            result = step._forward(value)
+        else:
+            result = step.infra.run(step._forward, value)
+        self._sync_infra(step)
         return result
 
     # =========================================================================
@@ -219,7 +295,7 @@ class Input(Step):
 
     value: tp.Any
 
-    def _forward(self) -> tp.Any:
+    def _build(self) -> tp.Any:
         return self.value
 
     def _aligned_step(self) -> list["Step"]:
@@ -290,8 +366,16 @@ class Chain(Step):
                 step._init(parent_folder=folder)
             previous = step
 
-    def _forward(self, value: tp.Any = NoValue()) -> tp.Any:
-        """Execute steps, using intermediate caches."""
+    def _build(self) -> tp.Any:
+        """Execute chain as generator (first step is generator)."""
+        return self._run_chain()
+
+    def _forward(self, value: tp.Any) -> tp.Any:
+        """Execute chain as transformer (value passed to first step)."""
+        return self._run_chain(value)
+
+    def _run_chain(self, value: tp.Any = NoValue()) -> tp.Any:
+        """Execute steps sequentially, using intermediate caches."""
         steps = self._step_sequence()
 
         # Propagate force-forward: set downstream steps to "force" mode
@@ -300,7 +384,6 @@ class Chain(Step):
         for step in steps:
             if step.infra is not None and step.infra.mode == "force-forward":
                 force_active = True
-                # For nested chains with force-forward, propagate to internal steps
                 if isinstance(step, Chain):
                     _set_mode_recursive(step._step_sequence(), "force")
             elif force_active:
@@ -312,7 +395,6 @@ class Chain(Step):
         for k, step in enumerate(reversed(steps)):
             if step.infra is None:
                 continue
-            # Force mode steps will recompute anyway, keep searching for earlier caches
             if step.infra.mode in ("force", "force-forward"):
                 continue
             if step.infra.has_cache():
@@ -325,45 +407,56 @@ class Chain(Step):
         for i, step in enumerate(steps[start_idx:], start=start_idx + 1):
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i, total, step_name)
-            if step.infra is not None:
-                args = (step.infra.run(step._forward, *args),)
+            if not args:
+                # Generator step (no input): use _build or _forward with defaults
+                gen_func: tp.Any = (
+                    step._build if type(step)._cls_gen_mode == "build" else step._forward
+                )
+                if step.infra is not None:
+                    args = (step.infra.run(gen_func),)
+                else:
+                    args = (gen_func(),)
             else:
-                args = (step._forward(*args),)
+                if step.infra is not None:
+                    args = (step.infra.run(step._forward, *args),)
+                else:
+                    args = (step._forward(*args),)
             logger.debug("Completed step %d/%d: %s", i, total, step_name)
 
         return args[0]
 
-    def forward(self, value: tp.Any = NoValue()) -> tp.Any:
+    def _execute(self, value: tp.Any = NoValue()) -> tp.Any:
+        """Common build/forward logic: handles with_input, caching, force modes."""
         chain = self.with_input(value) if self._previous is None else self
 
-        # Track steps with force modes to reset after run
         force_steps = [
             s
             for s in self._step_sequence() + (self,)
             if s.infra is not None and s.infra.mode in ("force", "force-forward")
         ]
 
-        # If the chain itself has force-forward, propagate to all internal steps recursively
         if chain.infra is not None and chain.infra.mode == "force-forward":
             _set_mode_recursive(chain._step_sequence(), "force")
 
         if chain.infra is None:
-            result = chain._forward()
+            result = chain._run_chain()
         else:
-            # If any internal step has force-forward, clear chain's cache first
             if any(s.infra.mode == "force-forward" for s in force_steps):  # type: ignore
                 chain.infra.clear_cache()
-            # Note: if the last step also has infra, it shares the same cache entry
-            # (same step_uid from _aligned_step flattening, same item_uid from original
-            # input). The last step writes first, chain finds cache hit - no duplication.
-            result = chain.infra.run(chain._forward)
+            result = chain.infra.run(chain._run_chain)
 
-        # Reset force modes on original steps and chain after successful run
-        # Use object.__setattr__ to bypass frozen model validation (TaskInfra case)
         for step in force_steps:
             object.__setattr__(step.infra, "mode", "cached")
 
         return result
+
+    def build(self) -> tp.Any:
+        """Execute chain as generator (first step must be a generator)."""
+        return self._execute()
+
+    def forward(self, value: tp.Any) -> tp.Any:
+        """Execute chain as transformer (value passed to first step)."""
+        return self._execute(value)
 
     def _aligned_step(self) -> list[Step]:
         # Flatten to contained steps - chain itself is not in the UID.

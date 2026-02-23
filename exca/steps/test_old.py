@@ -54,14 +54,14 @@ def test_generator_cache(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.RandomGenerator(infra=infra)
 
-    result1 = step.forward()
+    result1 = step.build()
     assert step.has_cache()
 
-    result2 = step.forward()
+    result2 = step.build()
     assert result1 == result2
 
     step.clear_cache()
-    result3 = step.forward()
+    result3 = step.build()
     assert result3 != result1
 
 
@@ -86,10 +86,10 @@ def test_chain_with_generator(tmp_path: Path) -> None:
         steps=[conftest.RandomGenerator(), conftest.Mult(coeff=3.0)], infra=infra
     )
 
-    result1 = chain.forward()
+    result1 = chain.build()
     assert chain.with_input().has_cache()
 
-    result2 = chain.forward()
+    result2 = chain.build()
     assert result1 == result2
 
 
