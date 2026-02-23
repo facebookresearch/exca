@@ -79,10 +79,10 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     ],
 )
 def test_pure_generator_errors(tmp_path: Path, steps: list, match: str) -> None:
-    """Pure generators (only _build) raise NotImplementedError when receiving input."""
+    """Pure generators (_forward with no args) raise TypeError when receiving input."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(steps=steps, infra=infra)
-    with pytest.raises(NotImplementedError, match=rf"{match}"):
+    with pytest.raises(TypeError, match=rf"{match}"):
         chain.forward(1)
 
 
@@ -186,7 +186,7 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
             folder=tmp_path, timeout_min=30
         )
 
-        def _build(self) -> int:
+        def _forward(self) -> int:
             return self.value
 
     # Switch backend type - shared fields propagate
@@ -240,8 +240,8 @@ def test_build_mutation_cache_consistency(tmp_path: Path) -> None:
         count: int = 0
         infra: backends.Backend | None = None
 
-        def _build(self) -> int:
-            self.count += 1  # Mutation during _build changes cache key!
+        def _forward(self) -> int:
+            self.count += 1
             return self.count
 
     counter = Counter(infra={"backend": "Cached", "folder": tmp_path})  # type: ignore

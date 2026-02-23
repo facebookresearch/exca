@@ -20,19 +20,18 @@ The `steps` module provides a redesigned pipeline implementation where **each St
 ### Step (Base Class)
 
 A `Step` is the fundamental unit that:
-- Produces output from config via `_build()` (pure generator) or transforms input via `_forward(value)` (transformer)
+- Implements computation via `_forward()` (the single override point)
 - Has an optional `infra` for execution backend and caching
 - Uses `build()` (no input) or `forward(value)` (with input) as public entry points
-- Dual-use steps override `_forward(value=default)` — both `build()` and `forward(value)` work
+- Whether a step is a generator depends on its `_forward` signature
 
-**Override points:**
+**Override patterns:**
 
 | Step type | Override | `build()` | `forward(value)` |
 |-----------|----------|-----------|-------------------|
-| Pure generator | `_build(self)` | calls `_build()` | error |
-| Pure transformer | `_forward(self, value)` | error | calls `_forward(value)` |
+| Pure generator | `_forward(self)` | calls `_forward()` | TypeError |
+| Pure transformer | `_forward(self, value)` | TypeError | calls `_forward(value)` |
 | Dual-use | `_forward(self, value=default)` | calls `_forward()` (uses default) | calls `_forward(value)` |
-| Both (e.g. Study) | `_build(self)` + `_forward(self, value)` | calls `_build()` | calls `_forward(value)` |
 
 ### NoValue Sentinel
 
@@ -163,24 +162,20 @@ class Step(DiscriminatedModel):
     infra: Backend | None = None
     _previous: Step | None = None
     
-    def _build(self) -> Any:
-        """Override for pure generators. Default: call _forward() with no args."""
-        return self._forward()
-    
-    def _forward(self, value: Any) -> Any:
-        """Override for transformers/dual-use (always takes exactly 1 arg)."""
+    def _forward(self, *args: Any) -> Any:
+        """Override in subclasses. No args = generator, one arg = transformer."""
         raise NotImplementedError
     
     def _is_generator(self) -> bool:
-        """True if _build is overridden or _forward has all-default params."""
+        """True if _forward can be called with no args (no params or all defaults)."""
         ...
     
     def build(self) -> Any:
-        """Execute as generator (no input). Calls _build() or _forward() with defaults."""
+        """Execute as generator (no input). Calls _forward() with no args."""
         ...
     
     def forward(self, value: Any) -> Any:
-        """Execute as transformer (with input). Always requires 1 argument."""
+        """Execute as transformer (with input). Calls _forward(value)."""
         ...
     
     def with_input(self, value: Any = NoValue()) -> "Step":
@@ -199,7 +194,7 @@ class Input(Step):
     """Internal step that provides a fixed value (or NoValue sentinel)."""
     value: Any
     
-    def _build(self) -> Any:
+    def _forward(self) -> Any:
         return self.value
     
     def _aligned_step(self) -> list[Step]:
@@ -271,7 +266,7 @@ step.with_input(5.0).clear_cache()
 class LoadData(Step):
     path: str
     
-    def _build(self) -> np.ndarray:  # Pure generator: override _build
+    def _forward(self) -> np.ndarray:  # No args = pure generator
         return np.load(self.path)
 
 step = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
@@ -305,7 +300,7 @@ from exca.steps import Chain, Step
 
 class LoadData(Step):
     path: str
-    def _build(self) -> np.ndarray:
+    def _forward(self) -> np.ndarray:
         return load_dataset(self.path)
 
 class Train(Step):
@@ -356,9 +351,8 @@ When `step.build()` is called (generator):
 ```
 1. Check _is_generator() — error if not a generator
 2. Configure: step = step.with_input()  (NoValue sentinel)
-3. Resolve function: _build() if overridden, else _forward() with no args
-4. If no infra: execute function directly
-5. If infra: Backend.run(func) handles caching (see below)
+3. If no infra: execute _forward() directly
+4. If infra: Backend.run(_forward) handles caching (see below)
 ```
 
 When `step.forward(value)` is called (transformer):
@@ -392,8 +386,8 @@ e. Return cached result (or raise cached error)
 | Infrastructure model | `folder` + `backend` separate fields | `Backend` discriminated model (all-in-one) |
 | Caching | Separate `Cache` step class | All backends have caching |
 | Error caching | Via submitit | Native (both result and error cached) |
-| User method | Override `forward()` | Override `_build()` and/or `_forward(value)` |
-| Generator detection | Manual | `_build` override or `_forward` default args |
+| User method | Override `forward()` | Override `_forward()` or `_forward(value)` |
+| Generator detection | Manual | `_forward` signature (no params or all defaults) |
 | Public API | `step.forward(input)` | `step.build()` or `step.forward(value)` |
 | Backend API | `submission_context()` + `submit()` | Just `run()` |
 | folder | Required | Optional, can be propagated |

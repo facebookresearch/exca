@@ -76,12 +76,9 @@ class Add(Step):
 
 
 class RandomGenerator(Step):
-    """Generates a random value - useful to verify caching.
-
-    Pure generator: override _build, not _forward.
-    """
+    """Generates a random value - useful to verify caching."""
 
     seed: int | None = None
 
-    def _build(self) -> float:
+    def _forward(self) -> float:
         return random.Random(self.seed).random()
