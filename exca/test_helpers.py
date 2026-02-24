@@ -131,9 +131,12 @@ def test_discriminated_model_errors() -> None:
         _ = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore
     # existing options should be brinted
     assert "Hello" in str(e.value)
-    with pytest.raises(pydantic.ValidationError) as e2:
+    with pytest.raises(ValueError, match="discriminator key"):
         _ = Model(sub={"num": 12})  # type: ignore
-    assert "specifying the discriminated key" in str(e2.value)
+    # base-class fields only: no misleading discriminator hint
+    with pytest.raises(pydantic.ValidationError, match="common") as e3:
+        _ = Model(sub={"common": 12})  # type: ignore
+    assert "discriminator" not in str(e3.value).lower()
 
 
 def test_discriminated_model_bad_field() -> None:
