@@ -34,18 +34,18 @@ def test_step_cache(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.Add(randomize=True, infra=infra)
 
-    result1 = step.forward(5.0)
+    result1 = step.run(5.0)
     assert step.with_input(5.0).has_cache()
 
     # Same result from cache
-    result2 = step.forward(5.0)
+    result2 = step.run(5.0)
     assert result1 == result2
     assert step.with_input(5.0).infra.cached_result() == result1  # type: ignore
 
     # Clear and recompute
     step.with_input(5.0).clear_cache()
     assert not step.with_input(5.0).has_cache()
-    result3 = step.forward(5.0)
+    result3 = step.run(5.0)
     assert result3 != result1
 
 
@@ -54,14 +54,14 @@ def test_generator_cache(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.RandomGenerator(infra=infra)
 
-    result1 = step.forward()
+    result1 = step.run()
     assert step.has_cache()
 
-    result2 = step.forward()
+    result2 = step.run()
     assert result1 == result2
 
     step.clear_cache()
-    result3 = step.forward()
+    result3 = step.run()
     assert result3 != result1
 
 
@@ -72,10 +72,10 @@ def test_chain_cache(tmp_path: Path) -> None:
         steps=[conftest.Mult(coeff=2.0), conftest.Add(randomize=True)], infra=infra
     )
 
-    result1 = chain.forward(5.0)
+    result1 = chain.run(5.0)
     assert chain.with_input(5.0).has_cache()
 
-    result2 = chain.forward(5.0)
+    result2 = chain.run(5.0)
     assert result1 == result2
 
 
@@ -86,10 +86,10 @@ def test_chain_with_generator(tmp_path: Path) -> None:
         steps=[conftest.RandomGenerator(), conftest.Mult(coeff=3.0)], infra=infra
     )
 
-    result1 = chain.forward()
+    result1 = chain.run()
     assert chain.with_input().has_cache()
 
-    result2 = chain.forward()
+    result2 = chain.run()
     assert result1 == result2
 
 

@@ -25,13 +25,13 @@ from .base import Chain, Input, Step
 
 def test_step_no_infra() -> None:
     step = conftest.Mult(coeff=3.0)
-    assert step.forward(5.0) == 15.0
+    assert step.run(5.0) == 15.0
 
 
 def test_chain_no_infra() -> None:
     chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Mult(coeff=3.0)])
     # 5 * 2 * 3 = 30
-    assert chain.forward(5.0) == 30.0
+    assert chain.run(5.0) == 30.0
 
 
 # =============================================================================
@@ -59,8 +59,8 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="not initialized"):
         step.has_cache()
 
-    # forward() works (it calls with_input internally)
-    result = step.forward(5.0)
+    # run() works (it calls with_input internally)
+    result = step.run(5.0)
     assert result == 15.0
 
     # With explicit with_input() - works
@@ -82,8 +82,8 @@ def test_pure_generator_errors(tmp_path: Path, steps: list, match: str) -> None:
     """Pure generators (no input parameter) raise TypeError when receiving input."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(steps=steps, infra=infra)
-    with pytest.raises(TypeError, match=rf"{match}._forward\(\)"):
-        chain.forward(1)
+    with pytest.raises(TypeError, match=rf"{match}._run\(\)"):
+        chain.run(1)
 
 
 # =============================================================================
@@ -159,8 +159,8 @@ def test_pickle_roundtrip(tmp_path: Path, cached: bool, configured: bool) -> Non
 
     # Step should be functional
     expected = 0.639
-    assert original.forward() == pytest.approx(expected, rel=1e-3)
-    assert loaded.forward() == pytest.approx(expected, rel=1e-3)
+    assert original.run() == pytest.approx(expected, rel=1e-3)
+    assert loaded.run() == pytest.approx(expected, rel=1e-3)
 
 
 def test_infra_not_shared(tmp_path: Path) -> None:
@@ -186,7 +186,7 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
             folder=tmp_path, timeout_min=30
         )
 
-        def _forward(self) -> int:
+        def _run(self) -> int:
             return self.value
 
     # Switch backend type - shared fields propagate
@@ -217,7 +217,7 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     )
 
     # Execute to trigger _init()
-    result = outer_chain.forward(5.0)
+    result = outer_chain.run(5.0)
     assert result == 12.0  # (5 + 1) * 2
 
     # Check folder propagated to nested chain's step
@@ -233,25 +233,25 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     ), "folder should propagate to nested chain steps"
 
 
-def test_forward_mutation_cache_consistency(tmp_path: Path) -> None:
-    """Cache should work even if _forward mutates self (bug: cache key changes mid-execution)."""
+def test_run_mutation_cache_consistency(tmp_path: Path) -> None:
+    """Cache should work even if _run mutates self (bug: cache key changes mid-execution)."""
 
     class Counter(Step):
         count: int = 0
         infra: backends.Backend | None = None
 
-        def _forward(self) -> int:
-            self.count += 1  # Mutation during _forward changes cache key!
+        def _run(self) -> int:
+            self.count += 1  # Mutation during _run changes cache key!
             return self.count
 
     counter = Counter(infra={"backend": "Cached", "folder": tmp_path})  # type: ignore
 
-    # First forward - should cache result
-    result1 = counter.forward()
+    # First run - should cache result
+    result1 = counter.run()
     assert result1 == 1, "first call should return 1"
 
-    # Second forward - should return cached result, not None
-    result2 = counter.forward()
+    # Second run - should return cached result, not None
+    result2 = counter.run()
     assert result2 == 1, "second call should return cached result (bug: returns None)"
 
 
@@ -259,10 +259,10 @@ def test_none_as_valid_input() -> None:
     """None should be a valid input value, not treated as 'no value provided'."""
 
     class AcceptsNone(Step):
-        def _forward(self, value: tp.Any) -> str:
+        def _run(self, value: tp.Any) -> str:
             return f"received:{value}"
 
-    assert AcceptsNone().forward(None) == "received:None"
+    assert AcceptsNone().run(None) == "received:None"
 
 
 # =============================================================================
@@ -289,4 +289,26 @@ def test_sequence_to_chain_conversion(steps: tp.Any, expected: float) -> None:
     """List/tuple of steps should be automatically converted to a Chain."""
     container = StepContainer(step=steps)
     assert isinstance(container.step, Chain)
-    assert container.step.forward(5) == expected
+    assert container.step.run(5) == expected
+
+
+# =============================================================================
+# Backward compatibility deprecation shims
+# =============================================================================
+
+
+def test_deprecated_forward() -> None:
+    """Old _forward override and .forward() call both work with DeprecationWarning."""
+
+    class OldStyle(Step):
+        def _forward(self, x: float) -> float:
+            return x * 2
+
+    step = OldStyle()
+    # _forward override triggers warning when run() is called
+    with pytest.warns(DeprecationWarning, match="_forward.*deprecated.*_run"):
+        assert step.run(5.0) == 10.0
+
+    # .forward() call triggers its own warning
+    with pytest.warns(DeprecationWarning, match="forward.*deprecated.*run"):
+        assert step.forward(5.0) == 10.0

@@ -36,7 +36,7 @@ class Mult(Step):
 
     coeff: float = 2.0
 
-    def _forward(self, value: float) -> float:
+    def _run(self, value: float) -> float:
         return value * self.coeff
 
 
@@ -62,7 +62,7 @@ class Add(Step):
     def _exclude_from_cls_uid(cls) -> list[str]:
         return super()._exclude_from_cls_uid() + ["error"]
 
-    def _forward(self, value: float = 0) -> float:
+    def _run(self, value: float = 0) -> float:
         if self.error:
             raise ValueError("Triggered an error")
         if self.randomize:
@@ -83,5 +83,5 @@ class RandomGenerator(Step):
 
     seed: int | None = None
 
-    def _forward(self) -> float:
+    def _run(self) -> float:
         return random.Random(self.seed).random()

@@ -26,7 +26,7 @@ Add MapInfra-like functionality to the steps module:
 - **Caching**: Uses CacheDict with item_uid as key
 
 **Steps module** (in `exca/steps/`):
-- `Step.forward(value)` processes single input
+- `Step.run(value)` processes single input
 - `Backend.run()` handles execution and caching
 - **Current caching**: Per-input folders via `with_input(value)` - NOT suitable for map
 
@@ -48,7 +48,7 @@ results = step.map(
 ```
 
 **Pros:**
-- Simple, intuitive API - mirrors `step.forward()`
+- Simple, intuitive API - mirrors `step.run()`
 - No new classes to learn
 - `item_uid` can be optional (uses ConfDict uid by default)
 - Per-item caching works automatically via existing `with_input()` mechanism
@@ -71,7 +71,7 @@ step = Mult(coeff=2.0, infra={
     'max_jobs': 4,
     'min_items_per_job': 2
 })
-results = step.forward([1, 2, 3, 4, 5])  # Auto-detects list
+results = step.run([1, 2, 3, 4, 5])  # Auto-detects list
 ```
 
 **Pros:**
@@ -83,7 +83,7 @@ results = step.forward([1, 2, 3, 4, 5])  # Auto-detects list
 - Implicit behavior change based on input type
 - All backends need `max_jobs`, `min_items_per_job` params
 - Cache key complexity: per-item vs per-batch
-- Breaks explicit `forward(value)` contract
+- Breaks explicit `run(value)` contract
 
 **Implementation complexity:** Medium-High
 
@@ -99,7 +99,7 @@ map_step = MapStep(
     max_jobs=4,
     min_items_per_job=2
 )
-results = map_step.forward([1, 2, 3, 4, 5])
+results = map_step.run([1, 2, 3, 4, 5])
 
 # Or via method:
 map_step = step.as_map(item_uid=str, max_jobs=4)
@@ -131,7 +131,7 @@ step = Mult(coeff=2.0, infra={
     'max_jobs': 4,
     'item_uid': str
 })
-results = step.forward([1, 2, 3, 4, 5])
+results = step.run([1, 2, 3, 4, 5])
 ```
 
 **Pros:**
@@ -157,7 +157,7 @@ chain = Chain(
     infra={'backend': 'LocalProcess', 'folder': path},
     map_config={'max_jobs': 4, 'item_uid': str}
 )
-results = chain.forward([item1, item2, item3])
+results = chain.run([item1, item2, item3])
 ```
 
 **Pros:**
@@ -188,7 +188,7 @@ class ProcessImage(Step):
     def item_uid(img: Image) -> str:
         return img.filename
     
-    def _forward(self, img: Image) -> Result:
+    def _run(self, img: Image) -> Result:
         ...
 ```
 
@@ -199,15 +199,15 @@ class ProcessImage(Step):
 step = ProcessImage(infra={'backend': 'Slurm', 'folder': path})
 
 # Single value - uses class's item_uid:
-step.forward(big_image)  # Cache key = "photo.jpg"
+step.run(big_image)  # Cache key = "photo.jpg"
 
 # Batch - same item_uid applied to each:
-step.forward(Items([img1, img2, img3], max_jobs=4))
+step.run(Items([img1, img2, img3], max_jobs=4))
 
 # Chain - the first step's item_uid determines chain caching:
 chain = Chain(steps=[ProcessImage(...), Classify(...)])
-chain.forward(big_image)
-chain.forward(Items([img1, img2, img3], max_jobs=4))
+chain.run(big_image)
+chain.run(Items([img1, img2, img3], max_jobs=4))
 ```
 
 ### Why `item_uid` on Step CLASS is better:
@@ -241,11 +241,11 @@ class Items:
 # Step without item_uid (default): ConfDict-based uid (like Input)
 class Mult(Step):
     coeff: float
-    def _forward(self, x: float) -> float:
+    def _run(self, x: float) -> float:
         return x * self.coeff
 
 step = Mult(coeff=2.0, infra=...)
-step.forward(5)  # Cache key from ConfDict(value=5).uid (deterministic)
+step.run(5)  # Cache key from ConfDict(value=5).uid (deterministic)
 
 # Step with item_uid: explicit cache key
 class ProcessImage(Step):
@@ -253,18 +253,18 @@ class ProcessImage(Step):
     def item_uid(img: Image) -> str:
         return img.filename
     
-    def _forward(self, img: Image) -> Result:
+    def _run(self, img: Image) -> Result:
         ...
 
 step = ProcessImage(infra=...)
-step.forward(big_image)  # Cache key = "photo.jpg"
+step.run(big_image)  # Cache key = "photo.jpg"
 ```
 
 ---
 
 ## Proposed API
 
-### Step base class with optional `item_uid` and `_forward_batch`
+### Step base class with optional `item_uid` and `_run_batch`
 
 ```python
 class Step:
@@ -277,27 +277,27 @@ class Step:
         """
         return None
     
-    def forward(self, value=NoValue()):
+    def run(self, value=NoValue()):
         """Process single value or batch (if Items)."""
         if isinstance(value, Items):
             return self._run_batch(value.items, value.max_jobs)
         else:
-            return self._forward_single(value)
+            return self._run_single(value)
     
     def _run_batch(self, items: Sequence[Any], max_jobs: int | None) -> Iterator[Any]:
         """Default batch: distribute across jobs, cache per-item."""
         # 1. Deduplicate by item_uid (same uid = same result)
         # 2. Check cache, find missing items
         # 3. Chunk missing items, submit jobs (up to max_jobs)
-        # 4. Each job calls _forward_batch (or _forward per item)
+        # 4. Each job calls _run_batch_items (or _run per item)
         # 5. Cache results per-item
         # 6. Yield results in original order
         ...
     
-    def _forward_batch(self, items: Sequence[Any]) -> Sequence[Any]:
+    def _run_batch_items(self, items: Sequence[Any]) -> Sequence[Any]:
         """Override for efficient batch processing (e.g., GPU batching).
         
-        If implemented, _run_batch will use this instead of per-item _forward.
+        If implemented, _run_batch will use this instead of per-item _run.
         """
         raise NotImplementedError  # Subclass can override
     
@@ -315,53 +315,53 @@ class Items:
     max_jobs: int | None = None
 ```
 
-### `_forward` vs `_forward_batch` relationship
+### `_run` vs `_run_batch_items` relationship
 
 Two patterns for implementing batch-capable steps:
 
-**Pattern A: `_forward_batch` calls `_forward` (default)**
+**Pattern A: `_run_batch_items` calls `_run` (default)**
 ```python
 class SimpleStep(Step):
-    def _forward(self, x: float) -> float:
+    def _run(self, x: float) -> float:
         """Core logic for single item."""
         return x * 2
     
-    # Default _forward_batch just calls _forward per item
+    # Default _run_batch_items just calls _run per item
     # No need to override
 ```
 
-**Pattern B: `_forward` calls `_forward_batch` (GPU/vectorized)**
+**Pattern B: `_run` calls `_run_batch_items` (GPU/vectorized)**
 ```python
 class GPUClassifier(Step):
     @staticmethod
     def item_uid(img: Image) -> str:
         return img.filename
     
-    def _forward(self, img: Image) -> str:
+    def _run(self, img: Image) -> str:
         """Single item - delegates to batch."""
-        return self._forward_batch([img])[0]
+        return self._run_batch_items([img])[0]
     
-    def _forward_batch(self, images: Sequence[Image]) -> Sequence[str]:
+    def _run_batch_items(self, images: Sequence[Image]) -> Sequence[str]:
         """Batch - efficient on GPU."""
         return self._model.predict(images)
 ```
 
-**Pattern C: Only `_forward_batch` (full-batch algorithms like PCA)**
+**Pattern C: Only `_run_batch_items` (full-batch algorithms like PCA)**
 ```python
 class PCAStep(Step):
-    def _forward(self, x: Any) -> Any:
+    def _run(self, x: Any) -> Any:
         raise RuntimeError("PCA requires full batch - use Items([...])")
     
-    def _forward_batch(self, items: Sequence[Any]) -> Sequence[Any]:
+    def _run_batch_items(self, items: Sequence[Any]) -> Sequence[Any]:
         """PCA needs all items to compute components."""
         pca = PCA().fit(items)
         return pca.transform(items)
 ```
 
-When `_forward_batch` is implemented:
+When `_run_batch_items` is implemented:
 - Results are still cached per-item using `item_uid`
 - Job distribution controlled by `Items.max_jobs`
-- Each job processes a chunk via `_forward_batch`
+- Each job processes a chunk via `_run_batch_items`
 
 ### Usage Examples
 
@@ -369,11 +369,11 @@ When `_forward_batch` is implemented:
 # Step without item_uid - ConfDict-based caching (like Input)
 class Mult(Step):
     coeff: float
-    def _forward(self, x: float) -> float:
+    def _run(self, x: float) -> float:
         return x * self.coeff
 
 step = Mult(coeff=2.0, infra={'backend': 'LocalProcess', 'folder': path})
-step.forward(5)  # Cache key from ConfDict(value=5).uid
+step.run(5)  # Cache key from ConfDict(value=5).uid
 
 
 # Step WITH item_uid - class defines caching
@@ -382,18 +382,18 @@ class ProcessImage(Step):
     def item_uid(img: Image) -> str:
         return img.filename
     
-    def _forward(self, img: Image) -> Result:
+    def _run(self, img: Image) -> Result:
         ...
 
 step = ProcessImage(infra={'backend': 'Slurm', 'folder': path})
-step.forward(big_image)  # Cache key = "photo.jpg"
+step.run(big_image)  # Cache key = "photo.jpg"
 
 # Batch processing - same item_uid applied to each
-for result in step.forward(Items(images, max_jobs=100)):
+for result in step.run(Items(images, max_jobs=100)):
     process(result)
 
 # Cached - second call is fast
-for result in step.forward(Items(images, max_jobs=10)):
+for result in step.run(Items(images, max_jobs=10)):
     process(result)  # loaded from cache
 ```
 
@@ -414,7 +414,7 @@ folder/
 
 ### Caching Pattern (IMPLEMENTED)
 
-The unified caching pattern is now implemented for `forward()`:
+The unified caching pattern is now implemented for `run()`:
 ```
 folder/
   {step_uid}/
@@ -485,7 +485,7 @@ class Input(Step):
 ```
 
 **Problems:**
-1. Input is created internally by `with_input()` and `Chain.forward()` - user has no control
+1. Input is created internally by `with_input()` and `Chain.run()` - user has no control
 2. `item_uid` should be on the Step, not the Input - the step knows its input type
 3. Would require changes to `with_input()` to accept item_uid
 
@@ -517,15 +517,15 @@ class ProcessImage(Step):
     def item_uid(img: Image) -> str:
         return img.filename
     
-    def _forward(self, img: Image) -> Result:
+    def _run(self, img: Image) -> Result:
         ...
 
 # Single value (no wrapper needed):
 step = ProcessImage(infra={'backend': 'Slurm', 'folder': path})
-step.forward(big_image)  # Cached by img.filename
+step.run(big_image)  # Cached by img.filename
 
 # Multiple values with parallel processing:
-step.forward(Items([img1, img2, img3], max_jobs=4))
+step.run(Items([img1, img2, img3], max_jobs=4))
 # -> Returns Iterator, each cached by img.filename
 ```
 
@@ -545,13 +545,13 @@ step.forward(Items([img1, img2, img3], max_jobs=4))
 ### Return type behavior
 
 ```python
-def forward(self, value=NoValue()):
+def run(self, value=NoValue()):
     if isinstance(value, Items):
         # Multiple items: return Iterator
-        return self._forward_batch(value.items, value.max_jobs)
+        return self._run_batch(value.items, value.max_jobs)
     else:
         # Plain value: single result
-        return self._forward_single(value)
+        return self._run_single(value)
 
 def _cache_key(self, value: Any) -> str:
     """Used in both single and batch."""
@@ -571,7 +571,7 @@ class Item:
     uid: str
 
 # Usage:
-step.forward(Item(big_image, uid="img001"))
+step.run(Item(big_image, uid="img001"))
 ```
 
 **Not needed because:**
@@ -581,18 +581,19 @@ step.forward(Item(big_image, uid="img001"))
 
 ---
 
-### Comparison: `step.map()` vs `step.forward(Items(...))`
+### Comparison: `step.map()` vs `step.run(Items(...))`
 
-| Aspect | `step.map(items)` | `step.forward(Items(...))` |
+| Aspect | `step.map(items)` | `step.run(Items(...))` |
 |--------|-------------------|---------------------------|
-| Entry point | Separate method | Single `forward()` |
+| Entry point | Separate method | Single `run()` |
 | Return type | Always Iterator | Depends on input |
 | Chain support | Needs separate `chain.map()` | Works naturally |
 | Explicitness | Very clear | Clear via `Items()` wrapper |
 | `item_uid` location | Method param | **Step field** |
-| Cache sharing | Separate from `forward()` | **Same as single** |
+| Cache sharing | Separate from `run()` | **Same as single** |
 
 **Key insight**: With `item_uid` on the Step, both single and batch use the same caching pattern. The step author defines caching once, and it works consistently for all calls.
+
 
 ---
 
@@ -602,19 +603,19 @@ step.forward(Item(big_image, uid="img001"))
 
 The requirement to use item_uid as cache key (not per-folder) is the most significant:
 
-1. **Completely separates `map()` from `forward()` caching**
-   - `forward()` uses `Backend.run()` with per-input folders
+1. **Completely separates `map()` from `run()` caching**
+   - `run()` uses `Backend.run()` with per-input folders
    - `map()` uses `CacheDict` with item_uid keys
    - No shared caching infrastructure
 
 2. **Strengthens Option 1 (`step.map()`)**
-   - Different enough from `forward()` to warrant separate method
+   - Different enough from `run()` to warrant separate method
    - MapStep wrapper (Option 3) adds no value - would just call `map()`
    - Backend integration (Option 2) doesn't fit CacheDict model
 
 3. **Simplifies implementation**
    - Can reuse `CacheDict` from MapInfra directly
-   - No need to modify existing `Backend.run()` logic
+   - No need to modify existing Backend.run() logic
    - Job distribution can be independent of Backend
 
 ### Iterator requirement is straightforward
@@ -648,11 +649,11 @@ folder/{step_uid}/items/{item_uid}.pkl
 # Step without custom item_uid:
 class Mult(Step):
     coeff: float
-    def _forward(self, x: float) -> float:
+    def _run(self, x: float) -> float:
         return x * self.coeff
 
 step = Mult(coeff=2.0, infra=...)
-step.forward(5)
+step.run(5)
 # -> folder/Mult-coeff=2.0-.../items/value=5-.../result.pkl
 ```
 
@@ -663,14 +664,14 @@ class ProcessImage(Step):
     def item_uid(img: Image) -> str:
         return img.filename
     
-    def _forward(self, img: Image) -> Result:
+    def _run(self, img: Image) -> Result:
         ...
 
 step = ProcessImage(infra=...)
-step.forward(big_image)
+step.run(big_image)
 # -> folder/ProcessImage-.../items/photo.jpg.pkl
 
-step.forward(Items([img1, img2, img3]))
+step.run(Items([img1, img2, img3]))
 # -> folder/ProcessImage-.../items/
 #      photo1.jpg.pkl
 #      photo2.jpg.pkl  
@@ -747,22 +748,22 @@ Cleanest separation of concerns:
 
 1. **Chain semantics with Items:**
    - Each step in the chain receives the full `Items` and decides internally how to handle it
-   - Steps can process items one-by-one or use `_forward_batch` for efficiency
+   - Steps can process items one-by-one or use `_run_batch_items` for efficiency
    - Chain's `item_uid` = first step's `item_uid`
 
 2. **Job distribution:**
    - `Items.max_jobs` controls number of jobs
-   - The step handles batching internally if it needs to (via `_forward_batch`)
+   - The step handles batching internally if it needs to (via `_run_batch_items`)
 
 3. **Error handling in batch:**
    - Partial results ARE cached
    - Remaining items in a failed batch are discarded (not retried in same run)
    - On retry, cached items are skipped, only failed/remaining items recomputed
 
-4. **`_forward` vs `_forward_batch` relationship:**
-   - Either `_forward_batch` calls `_forward` (default), OR `_forward` calls `_forward_batch`
-   - **Exception**: Some algorithms need full batch (e.g., PCA) - these only implement `_forward_batch`
-   - Single-item `forward(value)` should still work (wraps in list, calls `_forward_batch`)
+4. **`_run` vs `_run_batch_items` relationship:**
+   - Either `_run_batch_items` calls `_run` (default), OR `_run` calls `_run_batch_items`
+   - **Exception**: Some algorithms need full batch (e.g., PCA) - these only implement `_run_batch_items`
+   - Single-item `run(value)` should still work (wraps in list, calls `_run_batch_items`)
 
 5. **`item_uid` collision:**
    - If two items have same `item_uid`, they are considered identical
@@ -883,7 +884,7 @@ def force_single_item(cache_folder, item_uid):
         # Multiple items: just delete the key
         del cache[item_uid]
 ```
-- Simple, effective for single-item forward()
+- Simple, effective for single-item run()
 - Batch keeps existing behavior (append-only is fine for map)
 
 #### Solution B: Compact jsonl on force
@@ -910,7 +911,7 @@ def compact_jsonl(cache_folder):
 ### Recommendation
 
 **Solution A** seems cleanest:
-- Single-item forward() deletes folder on force (like current behavior)
+- Single-item run() deletes folder on force (like current behavior)
 - Batch keeps CacheDict append behavior (efficient for map)
 - Preserves unified cache structure, handles force correctly
 
@@ -929,4 +930,4 @@ This provides:
 - **Natural batch support** - single is just batch of size 1
 
 **Remaining question for `map()`/`Items`:**
-- Should work without infra? Yes: sequential processing, no caching (matches `forward()` behavior)
+- Should work without infra? Yes: sequential processing, no caching (matches `run()` behavior)

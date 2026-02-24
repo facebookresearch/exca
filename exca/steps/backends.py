@@ -250,7 +250,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         else:
             raise RuntimeError(
                 "Step requires input but with_input() was not called. "
-                "Use step.with_input(value).has_cache() or step.forward(value)."
+                "Use step.with_input(value).has_cache() or step.run(value)."
             )
 
     def _get_input_value(self) -> tp.Any:
