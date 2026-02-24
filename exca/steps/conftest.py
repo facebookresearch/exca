@@ -85,3 +85,39 @@ class RandomGenerator(Step):
 
     def _run(self) -> float:
         return random.Random(self.seed).random()
+
+
+# =============================================================================
+# Expandable steps (for _expand_step tests)
+# =============================================================================
+
+
+class AddWithTransforms(Step):
+    """Adds a value, then runs optional transforms after.
+
+    Demonstrates _expand_step: the step itself appears first in the chain,
+    followed by any transforms. The transforms field is at default ([])
+    in the stripped copy, so it's excluded from the UID.
+    """
+
+    value: float = 2.0
+    transforms: list[Step] = []
+
+    def _run(self, x: float = 0) -> float:
+        return x + self.value
+
+    def _expand_step(self) -> "Step | list[Step]":
+        if not self.transforms:
+            return self
+        stripped = self.model_copy(update={"transforms": []})
+        return [stripped] + list(self.transforms)
+
+
+class PureExpander(Step):
+    """A step that only expands (no own _run). Delegates entirely to sub-steps."""
+
+    step_a: Step = Add(value=1)
+    step_b: Step = Mult(coeff=2)
+
+    def _expand_step(self) -> "Step | list[Step]":
+        return [self.step_a, self.step_b]

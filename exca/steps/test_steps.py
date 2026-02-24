@@ -312,3 +312,112 @@ def test_deprecated_forward() -> None:
     # .forward() call triggers its own warning
     with pytest.warns(DeprecationWarning, match="forward.*deprecated.*run"):
         assert step.forward(5.0) == 10.0
+
+
+# =============================================================================
+# _expand_step
+# =============================================================================
+
+
+def test_expand_step_standalone() -> None:
+    """Expandable step runs as chain when used standalone."""
+    step = conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)])
+    # (0 + 10) * 3 = 30
+    assert step.run() == 30.0
+
+
+def test_expand_step_standalone_with_input() -> None:
+    """Expandable step passes input through the chain."""
+    step = conftest.AddWithTransforms(value=5, transforms=[conftest.Mult(coeff=2)])
+    # (7 + 5) * 2 = 24
+    assert step.run(7.0) == 24.0
+
+
+def test_expand_step_no_transforms() -> None:
+    """Without transforms, step runs normally (no expansion)."""
+    step = conftest.AddWithTransforms(value=10)
+    assert step.run(5.0) == 15.0
+
+
+def test_expand_step_inside_chain() -> None:
+    """Expandable step is expanded inside a Chain."""
+    chain = Chain(
+        steps=[
+            conftest.AddWithTransforms(value=1, transforms=[conftest.Mult(coeff=10)]),
+            conftest.Add(value=100),
+        ]
+    )
+    # (0 + 1) * 10 + 100 = 110
+    assert chain.run() == 110.0
+
+
+def test_expand_step_inside_chain_with_input() -> None:
+    """Expandable step inside chain works with input."""
+    chain = Chain(
+        steps=[
+            conftest.Add(value=1),
+            conftest.AddWithTransforms(value=2, transforms=[conftest.Mult(coeff=3)]),
+        ]
+    )
+    # ((5 + 1) + 2) * 3 = 24
+    assert chain.run(5.0) == 24.0
+
+
+def test_pure_expander() -> None:
+    """Step with only _expand_step (no _run) works."""
+    step = conftest.PureExpander(
+        step_a=conftest.Add(value=5), step_b=conftest.Mult(coeff=3)
+    )
+    # (0 + 5) * 3 = 15
+    assert step.run() == 15.0
+
+
+def test_expand_step_must_override_run_or_expand() -> None:
+    """Step with neither _run nor _expand_step raises TypeError."""
+    with pytest.raises(TypeError, match="must override _run or _expand_step"):
+
+        class BadStep(Step):
+            value: int = 0
+
+        BadStep()
+
+
+def test_expand_step_empty_list_raises() -> None:
+    """_expand_step returning empty list raises ValueError."""
+
+    class BadExpand(Step):
+        def _expand_step(self) -> list:
+            return []
+
+    with pytest.raises(ValueError, match="empty list"):
+        BadExpand().run()
+
+
+def test_step_flags() -> None:
+    """_step_flags are computed correctly at class definition."""
+    assert "has_run" in conftest.Mult._step_flags
+    assert "generator" not in conftest.Mult._step_flags  # transformer
+    assert "has_run" in conftest.RandomGenerator._step_flags
+    assert "generator" in conftest.RandomGenerator._step_flags
+    assert "has_expand" in conftest.AddWithTransforms._step_flags
+    assert "has_run" in conftest.AddWithTransforms._step_flags
+    assert "has_expand" in conftest.PureExpander._step_flags
+    assert "has_run" not in conftest.PureExpander._step_flags
+
+
+def test_is_generator_uses_flags() -> None:
+    """_is_generator uses precomputed _step_flags."""
+    assert conftest.RandomGenerator()._is_generator()
+    assert not conftest.Mult()._is_generator()
+    assert conftest.Add()._is_generator()  # default parameter = generator
+
+
+def test_expand_step_uid_consistency() -> None:
+    """Expanded step and equivalent Chain produce the same UID."""
+    step = conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)])
+    # Equivalent manually-composed chain
+    chain = Chain(steps=[conftest.AddWithTransforms(value=10), conftest.Mult(coeff=3)])
+
+    step_uid = exca.ConfDict.from_model(step, uid=True, exclude_defaults=True).to_uid()
+    chain_uid = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_uid()
+    assert step_uid == chain_uid
