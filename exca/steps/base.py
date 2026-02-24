@@ -17,6 +17,7 @@ import collections
 import inspect
 import logging
 import typing as tp
+import warnings
 from pathlib import Path
 
 import pydantic
@@ -83,15 +84,15 @@ class Step(exca.helpers.DiscriminatedModel):
     """
     Base class for pipeline steps.
 
-    Override _forward() to implement computation:
+    Override _run() to implement computation:
 
         class Generator(Step):
-            def _forward(self):
+            def _run(self):
                 return load_data()
 
         class Transformer(Step):
             coeff: float = 1.0
-            def _forward(self, data):
+            def _run(self, data):
                 return data * self.coeff
 
     Note
@@ -128,13 +129,27 @@ class Step(exca.helpers.DiscriminatedModel):
         if self.infra is not None:
             self.infra._step = self
 
-    def _forward(self, *args: tp.Any) -> tp.Any:
+    def _run(self, *args: tp.Any) -> tp.Any:
         """Override in subclasses."""
+        if type(self)._forward is not Step._forward:  # deprecated: _forward override
+            warnings.warn(
+                f"{type(self).__name__} overrides _forward which is deprecated, "
+                "override _run instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return self._forward(*args)
+        raise NotImplementedError
+
+    def _forward(self, *args: tp.Any) -> tp.Any:  # deprecated: override _run instead
         raise NotImplementedError
 
     def _is_generator(self) -> bool:
-        """Check if step is a generator (no required input in _forward)."""
-        sig = inspect.signature(self._forward)
+        """Check if step is a generator (no required input in _run)."""
+        method = self._run
+        if type(self)._run is Step._run and type(self)._forward is not Step._forward:
+            method = self._forward
+        sig = inspect.signature(method)
         for name, param in sig.parameters.items():
             if name == "self":
                 continue
@@ -153,7 +168,7 @@ class Step(exca.helpers.DiscriminatedModel):
             step.infra._step = step
         return step
 
-    def forward(self, value: tp.Any = NoValue()) -> tp.Any:
+    def run(self, value: tp.Any = NoValue()) -> tp.Any:
         """Execute with caching and backend handling."""
         step = self.with_input(value) if self._previous is None else self
         prev = step._previous
@@ -164,9 +179,9 @@ class Step(exca.helpers.DiscriminatedModel):
 
         args: tp.Any = () if isinstance(prev.value, NoValue) else (prev.value,)
         if step.infra is None:
-            result = step._forward(*args)
+            result = step._run(*args)
         else:
-            result = step.infra.run(step._forward, *args)
+            result = step.infra.run(step._run, *args)
 
         # Sync state back to original step's infra (with_input creates a copy)
         if self.infra is not None:
@@ -178,6 +193,14 @@ class Step(exca.helpers.DiscriminatedModel):
                 object.__setattr__(self.infra, "mode", "cached")
 
         return result
+
+    def forward(self, value: tp.Any = NoValue()) -> tp.Any:  # deprecated: use run()
+        warnings.warn(
+            "Step.forward() is deprecated, use run() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.run(value)
 
     # =========================================================================
     # Cache key computation
@@ -219,7 +242,7 @@ class Input(Step):
 
     value: tp.Any
 
-    def _forward(self) -> tp.Any:
+    def _run(self) -> tp.Any:
         return self.value
 
     def _aligned_step(self) -> list["Step"]:
@@ -236,7 +259,7 @@ class Chain(Step):
             steps=[LoadData(path="x.csv"), Train(epochs=10)],
             infra={"backend": "Cached", "folder": "/cache"},
         )
-        result = chain.forward()
+        result = chain.run()
     """
 
     steps: tp.Sequence[Step] | collections.OrderedDict[str, Step]
@@ -290,7 +313,7 @@ class Chain(Step):
                 step._init(parent_folder=folder)
             previous = step
 
-    def _forward(self, value: tp.Any = NoValue()) -> tp.Any:
+    def _run(self, value: tp.Any = NoValue()) -> tp.Any:
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
@@ -326,14 +349,14 @@ class Chain(Step):
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i, total, step_name)
             if step.infra is not None:
-                args = (step.infra.run(step._forward, *args),)
+                args = (step.infra.run(step._run, *args),)
             else:
-                args = (step._forward(*args),)
+                args = (step._run(*args),)
             logger.debug("Completed step %d/%d: %s", i, total, step_name)
 
         return args[0]
 
-    def forward(self, value: tp.Any = NoValue()) -> tp.Any:
+    def run(self, value: tp.Any = NoValue()) -> tp.Any:
         chain = self.with_input(value) if self._previous is None else self
 
         # Track steps with force modes to reset after run
@@ -348,7 +371,7 @@ class Chain(Step):
             _set_mode_recursive(chain._step_sequence(), "force")
 
         if chain.infra is None:
-            result = chain._forward()
+            result = chain._run()
         else:
             # If any internal step has force-forward, clear chain's cache first
             if any(s.infra.mode == "force-forward" for s in force_steps):  # type: ignore
@@ -356,7 +379,7 @@ class Chain(Step):
             # Note: if the last step also has infra, it shares the same cache entry
             # (same step_uid from _aligned_step flattening, same item_uid from original
             # input). The last step writes first, chain finds cache hit - no duplication.
-            result = chain.infra.run(chain._forward)
+            result = chain.infra.run(chain._run)
 
         # Reset force modes on original steps and chain after successful run
         # Use object.__setattr__ to bypass frozen model validation (TaskInfra case)
@@ -364,6 +387,14 @@ class Chain(Step):
             object.__setattr__(step.infra, "mode", "cached")
 
         return result
+
+    def forward(self, value: tp.Any = NoValue()) -> tp.Any:  # deprecated: use run()
+        warnings.warn(
+            "Chain.forward() is deprecated, use run() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.run(value)
 
     def _aligned_step(self) -> list[Step]:
         # Flatten to contained steps - chain itself is not in the UID.

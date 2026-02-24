@@ -20,9 +20,9 @@ The `steps` module provides a redesigned pipeline implementation where **each St
 ### Step (Base Class)
 
 A `Step` is the fundamental unit that:
-- Produces output via `_forward()` (generator) or `_forward(input) -> output` (transformer)
+- Produces output via `_run()` (generator) or `_run(input) -> output` (transformer)
 - Has an optional `infra` for execution backend and caching
-- Uses `forward(input)` as the main entry point (handles caching/backend)
+- Uses `run(input)` as the main entry point (handles caching/backend)
 - Detects generator vs transformer via signature inspection
 
 ### NoValue Sentinel
@@ -63,7 +63,7 @@ A `Chain` is a specialized `Step` that composes multiple steps sequentially.
 ┌─────────────────────────────────────────────────────────────┐
 │                          Step                               │
 │  ┌──────────┐  ┌───────────────────────┐  ┌──────────────┐ │
-│  │  config  │  │    infra (Backend)    │  │  _forward()  │ │
+│  │  config  │  │    infra (Backend)    │  │  _run()      │ │
 │  │ (params) │  │  (discriminated)      │  │  -> output   │ │
 │  └──────────┘  └───────────────────────┘  └──────────────┘ │
 │                         │                                   │
@@ -154,18 +154,18 @@ class Step(DiscriminatedModel):
     infra: Backend | None = None
     _previous: Step | None = None
     
-    def _forward(self, ...) -> Any:
+    def _run(self, ...) -> Any:
         """Override in subclasses. Signature determines step type:
-        - Generator: def _forward(self) -> Output
-        - Transformer: def _forward(self, input: Input) -> Output
+        - Generator: def _run(self) -> Output
+        - Transformer: def _run(self, input: Input) -> Output
         """
         raise NotImplementedError
     
     def _is_generator(self) -> bool:
-        """Check if _forward has no required parameters (generator step)."""
+        """Check if _run has no required parameters (generator step)."""
         ...
     
-    def forward(self, input: Any = NoValue()) -> Any:
+    def run(self, input: Any = NoValue()) -> Any:
         """Execute with caching and backend handling."""
         ...
     
@@ -226,7 +226,7 @@ from exca.steps import Step
 class Multiply(Step):
     coeff: float = 2.0
     
-    def _forward(self, value: float) -> float:
+    def _run(self, value: float) -> float:
         return value * self.coeff
 
 # Use dict syntax for infra (no imports needed)
@@ -234,7 +234,7 @@ step = Multiply(
     coeff=3.0,
     infra={"backend": "Cached", "folder": "/tmp/cache"}
 )
-result = step.forward(5.0)  # Returns 15.0
+result = step.run(5.0)  # Returns 15.0
 
 # Cache operations
 assert step.with_input(5.0).has_cache()
@@ -247,11 +247,11 @@ step.with_input(5.0).clear_cache()
 class LoadData(Step):
     path: str
     
-    def _forward(self) -> np.ndarray:  # No input parameter = generator
+    def _run(self) -> np.ndarray:  # No input parameter = generator
         return np.load(self.path)
 
 step = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
-data = step.forward()  # No input needed
+data = step.run()  # No input needed
 
 # Cache operations work directly on generators
 assert step.has_cache()  # Auto-configures with NoValue
@@ -264,12 +264,12 @@ from exca.steps import Chain, Step
 
 class LoadData(Step):
     path: str
-    def _forward(self) -> np.ndarray:
+    def _run(self) -> np.ndarray:
         return load_dataset(self.path)
 
 class Train(Step):
     epochs: int = 10
-    def _forward(self, data: np.ndarray) -> dict:
+    def _run(self, data: np.ndarray) -> dict:
         return train_model(data, self.epochs)
 
 # Chain with folder propagation
@@ -284,7 +284,7 @@ pipeline = Chain(
     infra={"backend": "Cached", "folder": "/cache/pipeline"},
 )
 
-result = pipeline.forward()
+result = pipeline.run()
 ```
 
 ### Example 4: Error Caching and Retry
@@ -293,36 +293,36 @@ result = pipeline.forward()
 # Errors are cached and re-raised on subsequent calls
 step = MyStep(infra={"backend": "Cached", "folder": "/cache"})
 try:
-    step.forward(bad_input)  # Raises and caches error
+    step.run(bad_input)  # Raises and caches error
 except ValueError:
     pass
 
 # Same error re-raised from cache
 try:
-    step.forward(bad_input)  # Raises cached error
+    step.run(bad_input)  # Raises cached error
 except ValueError:
     pass
 
 # Retry mode clears cached errors
 step_retry = MyStep(infra={"backend": "Cached", "folder": "/cache", "mode": "retry"})
-result = step_retry.forward(bad_input)  # Recomputes
+result = step_retry.run(bad_input)  # Recomputes
 ```
 
 ## Execution Flow
 
-When `step.forward(input)` is called:
+When `step.run(input)` is called:
 
 ```
 1. Configure input:
    - step = step.with_input(input)
    - Sets _previous = Input(value=input) or Input(value=NoValue())
 
-2. Determine how to call _forward:
-   - If Input holds actual value: call _forward(value)
-   - If Input holds NoValue: call _forward() with no args
+2. Determine how to call _run:
+   - If Input holds actual value: call _run(value)
+   - If Input holds NoValue: call _run() with no args
 
 3. If no infra:
-   └─> Execute _forward() directly, return result
+   └─> Execute _run() directly, return result
 
 4. Backend.run() handles caching:
    a. Check cache status (without loading)
@@ -337,40 +337,7 @@ When `step.forward(input)` is called:
    e. Return cached result (or raise cached error)
 ```
 
-## Key Differences from chain v1
-
-| Aspect | chain v1 | steps |
-|--------|----------|-------|
-| Infrastructure location | Only on Chain | On any Step |
-| Infrastructure model | `folder` + `backend` separate fields | `Backend` discriminated model (all-in-one) |
-| Caching | Separate `Cache` step class | All backends have caching |
-| Error caching | Via submitit | Native (both result and error cached) |
-| User method | Override `forward()` | Override `_forward()` |
-| Generator detection | Manual | Automatic via signature inspection |
-| Public API | `step.forward(input)` | `step.forward(input)` (same) |
-| Backend API | `submission_context()` + `submit()` | Just `run()` |
-| folder | Required | Optional, can be propagated |
-
-## Implementation Status
-
-- [x] `Backend` discriminated model with `run()`
-- [x] `Cached` backend (inline execution)
-- [x] `LocalProcess`, `SubmititDebug`, `Slurm`, `Auto` backends
-- [x] `Step` base class with `_forward()` and `forward()`
-- [x] `Input` step with NoValue handling
-- [x] `NoValue` sentinel
-- [x] Cache key via `_chain_hash()`
-- [x] `Chain` step with folder propagation
-- [x] `with_input()` on all steps
-- [x] `_is_generator()` detection
-- [x] Error caching
-- [x] All modes: cached, force, force-forward, read-only, retry
-- [x] Job recovery from job.pkl
-- [x] Unit tests
-
 ## Future Work
-
-- [ ] Migration guide from chain v1
 
 ### Safety Measures to Consider (from TaskInfra/MapInfra)
 

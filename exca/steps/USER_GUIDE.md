@@ -6,7 +6,7 @@ The `exca/steps` module provides a clean, composable pipeline framework where **
 
 ### 1. Define a Step
 
-Override `_forward()` to implement your logic:
+Override `_run()` to implement your logic:
 
 ```python
 from exca.steps import Step
@@ -14,7 +14,7 @@ from exca.steps import Step
 class Multiply(Step):
     coeff: float = 2.0
 
-    def _forward(self, value: float) -> float:
+    def _run(self, value: float) -> float:
         return value * self.coeff
 ```
 
@@ -25,7 +25,7 @@ step = Multiply(
     coeff=3.0,
     infra={"backend": "Cached", "folder": "/tmp/cache"}
 )
-result = step.forward(5.0)  # Returns 15.0, cached on disk
+result = step.run(5.0)  # Returns 15.0, cached on disk
 ```
 
 ---
@@ -43,7 +43,7 @@ pipeline = Chain(steps=[
     {"type": "Multiply", "coeff": 2.0},
     {"type": "Multiply", "coeff": 3.0},
 ])
-pipeline.forward(5)  # Returns 30
+pipeline.run(5)  # Returns 30
 ```
 
 This makes it easy to define entire pipelines in YAML/JSON configuration files.
@@ -54,17 +54,17 @@ This makes it easy to define entire pipelines in YAML/JSON configuration files.
 
 ### Generator Steps (No Input Required)
 
-Steps can be "generators" that produce data without needing input - just omit the input parameter in `_forward()`:
+Steps can be "generators" that produce data without needing input - just omit the input parameter in `_run()`:
 
 ```python
 class LoadData(Step):
     path: str
 
-    def _forward(self) -> np.ndarray:  # No input parameter
+    def _run(self) -> np.ndarray:  # No input parameter
         return np.load(self.path)
 
 loader = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
-data = loader.forward()  # No input needed
+data = loader.run()  # No input needed
 loader.has_cache()       # Cache operations work directly
 ```
 
@@ -80,7 +80,7 @@ pipeline = Chain(steps=[
     Preprocess(),
     Train(epochs=10),
 ])
-result = pipeline.forward()  # Runs all steps in sequence
+result = pipeline.run()  # Runs all steps in sequence
 ```
 
 Chains can have their own `infra` to cache the final result:
@@ -98,7 +98,7 @@ pipeline = Chain(
 
 ```python
 pipeline: Step = [Mult(coeff=2), Mult(coeff=3)]  # Becomes Chain(steps=[...])
-pipeline.forward(5)  # Returns 30
+pipeline.run(5)  # Returns 30
 ```
 
 **Named steps** (useful for debugging) use an `OrderedDict`:
@@ -215,19 +215,19 @@ Errors are cached and re-raised on subsequent calls:
 step = MyStep(infra={"backend": "Cached", "folder": "/cache"})
 
 try:
-    step.forward(bad_input)  # Raises and caches error
+    step.run(bad_input)  # Raises and caches error
 except ValueError:
     pass
 
 # Same error re-raised from cache (no recomputation)
 try:
-    step.forward(bad_input)
+    step.run(bad_input)
 except ValueError:
     pass
 
 # Use retry mode to recompute failed steps
 step_retry = MyStep(infra={"backend": "Cached", "folder": "/cache", "mode": "retry"})
-result = step_retry.forward(bad_input)  # Recomputes
+result = step_retry.run(bad_input)  # Recomputes
 ```
 
 ---
@@ -239,8 +239,8 @@ Avoid repeated disk reads with `keep_in_ram=True`:
 ```python
 step = MyStep(infra={"backend": "Cached", "folder": "/cache", "keep_in_ram": True})
 
-result1 = step.forward()  # Loads from disk, keeps in RAM
-result2 = step.forward()  # Returns from RAM (no disk read)
+result1 = step.run()  # Loads from disk, keeps in RAM
+result2 = step.run()  # Returns from RAM (no disk read)
 ```
 
 ---
@@ -257,7 +257,7 @@ class Train(Step):
     epochs: int = 10
     infra: Backend | None = Slurm(gpus_per_node=8, timeout_min=120)
 
-    def _forward(self, data) -> dict:
+    def _run(self, data) -> dict:
         return train_model(data, self.epochs)
 
 # Users only need to set the folder - GPU requirement is built-in
@@ -274,7 +274,7 @@ This makes it easy to share steps that "know" their resource needs.
 
 | Feature | Benefit |
 |---------|---------|
-| `_forward()` override | Simple, focused step implementation |
+| `_run()` override | Simple, focused step implementation |
 | Dict-based config | Steps and infra from dicts (config-friendly) |
 | Generator steps | Steps can produce data without input |
 | Chain composition | Lists, named steps, nested chains |

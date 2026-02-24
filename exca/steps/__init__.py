@@ -15,14 +15,14 @@ Example:
     >>>
     >>> class Multiply(steps.Step):
     ...     coeff: float = 2.0
-    ...     def _forward(self, value):
+    ...     def _run(self, value):
     ...         return value * self.coeff
     >>>
     >>> chain = steps.Chain(
     ...     steps=[Multiply(coeff=2), Multiply(coeff=3)],
     ...     infra={"backend": "Cached", "folder": "/tmp/cache"}
     ... )
-    >>> result = chain.forward(5.0)  # Returns 30.0
+    >>> result = chain.run(5.0)  # Returns 30.0
 """
 
 from . import backends

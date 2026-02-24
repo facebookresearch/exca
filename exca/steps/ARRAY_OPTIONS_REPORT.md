@@ -58,7 +58,7 @@ parallel = Parallel(
     steps=steps,
     infra=backend,  # shared backend config
 )
-results = parallel.forward()  # Returns list of results
+results = parallel.run()  # Returns list of results
 ```
 
 ---
@@ -111,7 +111,7 @@ Each step has its own `step_uid`, so caching is natural.
 ```python
 steps = [ProcessImage(model=m) for m in models]
 for step in steps:
-    step.forward(Items(images, max_jobs=10))
+    step.run(Items(images, max_jobs=10))
 ```
 - Steps run sequentially
 - Items within each step run in parallel
@@ -162,7 +162,7 @@ results = Step.run_array(steps)  # Each step is a generator or has fixed input
 
 # Option 2: Prioritize item parallelism
 for step in steps:  # Steps run sequentially
-    results.append(step.forward(Items(images)))
+    results.append(step.run(Items(images)))
 
 # Option 3: Flatten everything
 all_work = [(step.with_input(item), item) for step in steps for item in items]
@@ -177,7 +177,7 @@ all_work = [(step.with_input(item), item) for step in steps for item in items]
    - Each step is a generator OR has a single fixed input
    - Simple, clear semantics
 
-2. `step.forward(Items(...))` - for data parallelism on single step
+2. `step.run(Items(...))` - for data parallelism on single step
    - Well-defined caching and distribution
 
 3. **For combined case**, user chooses priority:
@@ -187,7 +187,7 @@ all_work = [(step.with_input(item), item) for step in steps for item in items]
    
    # If more items than steps: parallelize items per step
    for step in steps:
-       results.append(step.forward(Items(items)))
+       results.append(step.run(Items(items)))
    ```
 
 ---

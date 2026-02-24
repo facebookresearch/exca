@@ -31,8 +31,8 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
         steps=[conftest.Add(randomize=True), conftest.Mult(coeff=10)], infra=infra
     )
 
-    out1 = chain.forward(1)
-    out2 = chain.forward(1)
+    out1 = chain.run(1)
+    out2 = chain.run(1)
     assert out1 == out2
 
     # Job exists
@@ -50,18 +50,18 @@ def test_backend_error_caching(tmp_path: Path) -> None:
 
     # First call: submitit wraps error in FailedJobError
     with pytest.raises(submitit.core.utils.FailedJobError):
-        chain.forward(2)
+        chain.run(2)
 
     # Second call: error is cached, raises as ValueError
     chain2 = Chain(
         steps=[conftest.Mult(coeff=10), conftest.Add(value=1, error=False)], infra=infra
     )
     with pytest.raises(ValueError, match="Triggered an error"):
-        chain2.forward(2)
+        chain2.run(2)
 
     # Clear and retry succeeds
     chain2.with_input(2).clear_cache()
-    assert chain2.forward(2) == 21  # 2 * 10 + 1
+    assert chain2.run(2) == 21  # 2 * 10 + 1
 
 
 # =============================================================================
@@ -77,7 +77,7 @@ class Experiment(pydantic.BaseModel):
 
     @infra.apply
     def run(self) -> float:
-        return self.steps.forward(12)
+        return self.steps.run(12)
 
 
 def test_step_in_taskinfra(tmp_path: Path) -> None:
@@ -135,7 +135,7 @@ def test_paths_property_requires_initialization(tmp_path: Path) -> None:
     initialized = step.with_input(1.0)
     assert initialized.infra is not None
     assert initialized.infra.paths.step_folder.exists() is False  # Not created yet
-    initialized.forward()  # Run to create folders
+    initialized.run()  # Run to create folders
     assert initialized.infra.paths.cache_folder.exists()
 
     # Generator (Add has default) auto-configures without initialization
@@ -152,7 +152,7 @@ def test_paths_property_requires_initialization(tmp_path: Path) -> None:
 def test_config_files_and_consistency(tmp_path: Path) -> None:
     """Config files are created, checked for consistency, and corrupted files are handled."""
     step = conftest.Mult(coeff=3.0, infra=backends.Cached(folder=tmp_path))
-    assert step.forward(10.0) == 30.0
+    assert step.run(10.0) == 30.0
 
     # Check config files exist with correct content (list format)
     step_folder = step.with_input(10.0).infra.paths.step_folder  # type: ignore
@@ -165,11 +165,11 @@ def test_config_files_and_consistency(tmp_path: Path) -> None:
     (step_folder / "uid.yaml").write_text("- coeff: 999.0\n  type: Mult\n")
     step.with_input(10.0).clear_cache()
     with pytest.raises(RuntimeError, match="Inconsistent uid config"):
-        step.forward(10.0)
+        step.run(10.0)
 
     # Corrupted config is deleted and recreated
     (step_folder / "uid.yaml").write_text("invalid: yaml: {{{{")
-    assert step.forward(10.0) == 30.0
+    assert step.run(10.0) == 30.0
     assert (step_folder / "uid.yaml").read_text("utf8") == expected_uid
 
 
@@ -179,7 +179,7 @@ def test_config_consistency_chain_and_step(tmp_path: Path) -> None:
         steps=[conftest.Add(value=1), conftest.Mult(coeff=2, infra=backends.Cached())],
         infra=backends.Cached(folder=tmp_path),
     )
-    assert chain.forward() == 2.0  # (0 + 1) * 2
+    assert chain.run() == 2.0  # (0 + 1) * 2
 
     # Only one uid.yaml should exist (chain and last step share folder)
     uid_files = list(tmp_path.rglob("uid.yaml"))
