@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.5.14
+
 ### Changed
 - `exca/steps`: Renamed `Step._forward()` → `Step._run()` and
   `Step.forward()` → `Step.run()` for clearer naming.
