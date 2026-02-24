@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+- `exca/steps`: Renamed `Step._forward()` → `Step._run()` and
+  `Step.forward()` → `Step.run()` for clearer naming.
+
+### Deprecated and backward compatible
+- `Step._forward()` override: still works but emits `DeprecationWarning`;
+  override `_run()` instead.
+- `Step.forward()` / `Chain.forward()` calls: still work but emit
+  `DeprecationWarning`; use `run()` instead.
+
 ## 0.5.0 -> 0.5.13
 
 ### Added
