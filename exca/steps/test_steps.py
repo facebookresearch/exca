@@ -315,32 +315,32 @@ def test_deprecated_forward() -> None:
 
 
 # =============================================================================
-# _expand_step
+# _resolve_step
 # =============================================================================
 
 
-def test_expand_step_standalone() -> None:
-    """Expandable step runs as chain when used standalone."""
+def test_resolve_step_standalone() -> None:
+    """Resolvable step runs as chain when used standalone."""
     step = conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)])
     # (0 + 10) * 3 = 30
     assert step.run() == 30.0
 
 
-def test_expand_step_standalone_with_input() -> None:
-    """Expandable step passes input through the chain."""
+def test_resolve_step_standalone_with_input() -> None:
+    """Resolvable step passes input through the chain."""
     step = conftest.AddWithTransforms(value=5, transforms=[conftest.Mult(coeff=2)])
     # (7 + 5) * 2 = 24
     assert step.run(7.0) == 24.0
 
 
-def test_expand_step_no_transforms() -> None:
-    """Without transforms, step runs normally (no expansion)."""
+def test_resolve_step_no_transforms() -> None:
+    """Without transforms, step runs normally (no resolution)."""
     step = conftest.AddWithTransforms(value=10)
     assert step.run(5.0) == 15.0
 
 
-def test_expand_step_inside_chain() -> None:
-    """Expandable step is expanded inside a Chain."""
+def test_resolve_step_inside_chain() -> None:
+    """Resolvable step is resolved inside a Chain."""
     chain = Chain(
         steps=[
             conftest.AddWithTransforms(value=1, transforms=[conftest.Mult(coeff=10)]),
@@ -351,8 +351,8 @@ def test_expand_step_inside_chain() -> None:
     assert chain.run() == 110.0
 
 
-def test_expand_step_inside_chain_with_input() -> None:
-    """Expandable step inside chain works with input."""
+def test_resolve_step_inside_chain_with_input() -> None:
+    """Resolvable step inside chain works with input."""
     chain = Chain(
         steps=[
             conftest.Add(value=1),
@@ -364,17 +364,17 @@ def test_expand_step_inside_chain_with_input() -> None:
 
 
 def test_pure_expander() -> None:
-    """Step with only _expand_step (no _run) works."""
-    step = conftest.PureExpander(
+    """Step with only _resolve_step (no _run) works."""
+    step = conftest.PureResolver(
         step_a=conftest.Add(value=5), step_b=conftest.Mult(coeff=3)
     )
     # (0 + 5) * 3 = 15
     assert step.run() == 15.0
 
 
-def test_expand_step_must_override_run_or_expand() -> None:
-    """Step with neither _run nor _expand_step raises TypeError."""
-    with pytest.raises(TypeError, match="must override _run or _expand_step"):
+def test_resolve_step_must_override_run_or_resolve() -> None:
+    """Step with neither _run nor _resolve_step raises TypeError."""
+    with pytest.raises(TypeError, match="must override _run or _resolve_step"):
 
         class BadStep(Step):
             value: int = 0
@@ -382,27 +382,16 @@ def test_expand_step_must_override_run_or_expand() -> None:
         BadStep()
 
 
-def test_expand_step_empty_list_raises() -> None:
-    """_expand_step returning empty list raises ValueError."""
-
-    class BadExpand(Step):
-        def _expand_step(self) -> list:
-            return []
-
-    with pytest.raises(ValueError, match="empty list"):
-        BadExpand().run()
-
-
 def test_step_flags() -> None:
     """_step_flags are computed correctly at class definition."""
     assert "has_run" in conftest.Mult._step_flags
-    assert "generator" not in conftest.Mult._step_flags  # transformer
+    assert "has_generator" not in conftest.Mult._step_flags  # transformer
     assert "has_run" in conftest.RandomGenerator._step_flags
-    assert "generator" in conftest.RandomGenerator._step_flags
-    assert "has_expand" in conftest.AddWithTransforms._step_flags
+    assert "has_generator" in conftest.RandomGenerator._step_flags
+    assert "has_resolve" in conftest.AddWithTransforms._step_flags
     assert "has_run" in conftest.AddWithTransforms._step_flags
-    assert "has_expand" in conftest.PureExpander._step_flags
-    assert "has_run" not in conftest.PureExpander._step_flags
+    assert "has_resolve" in conftest.PureResolver._step_flags
+    assert "has_run" not in conftest.PureResolver._step_flags
 
 
 def test_is_generator_uses_flags() -> None:
@@ -412,8 +401,8 @@ def test_is_generator_uses_flags() -> None:
     assert conftest.Add()._is_generator()  # default parameter = generator
 
 
-def test_expand_step_uid_consistency() -> None:
-    """Expanded step and equivalent Chain produce the same UID."""
+def test_resolve_step_uid_consistency() -> None:
+    """Resolved step and equivalent Chain produce the same UID."""
     step = conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)])
     # Equivalent manually-composed chain
     chain = Chain(steps=[conftest.AddWithTransforms(value=10), conftest.Mult(coeff=3)])

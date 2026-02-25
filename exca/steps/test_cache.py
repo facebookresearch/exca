@@ -484,12 +484,12 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# _expand_step caching
+# _resolve_step caching
 # =============================================================================
 
 
-def test_expand_step_intermediate_cache(tmp_path: Path) -> None:
-    """Expanded step's own computation is cached independently of transforms."""
+def test_resolve_step_intermediate_cache(tmp_path: Path) -> None:
+    """Resolved step's own computation is cached independently of transforms."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.AddWithTransforms(
         value=5, transforms=[conftest.Mult(coeff=2)], infra=infra
@@ -512,8 +512,8 @@ def test_expand_step_intermediate_cache(tmp_path: Path) -> None:
     ), f"Expected 1 AddWithTransforms cache folder, got {add_folders}"
 
 
-def test_expand_step_inside_chain_cache(tmp_path: Path) -> None:
-    """Expanded step works with caching inside a Chain."""
+def test_resolve_step_inside_chain_cache(tmp_path: Path) -> None:
+    """Resolved step works with caching inside a Chain."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(
         steps=[

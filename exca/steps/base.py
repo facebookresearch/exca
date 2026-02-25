@@ -31,24 +31,18 @@ from .backends import NoValue
 logger = logging.getLogger(__name__)
 
 
-def _expand_steps(steps: tp.Iterable["Step"]) -> list["Step"]:
-    """Expand steps that define _expand_step into their sub-steps."""
-    expanded: list["Step"] = []
+def _resolve_all(steps: tp.Iterable["Step"]) -> list["Step"]:
+    """Resolve steps that define _resolve_step, flattening Chains into sub-steps."""
+    resolved: list["Step"] = []
     for step in steps:
-        built = step._expand_step()
+        built = step._resolve_step()
         if built is step:
-            expanded.append(step)
-        elif isinstance(built, list):
-            if not built:
-                raise ValueError(
-                    f"{type(step).__name__}._expand_step() returned empty list"
-                )
-            expanded.extend(built)
+            resolved.append(step)
         elif isinstance(built, Chain):
-            expanded.extend(built._step_sequence())
+            resolved.extend(built._step_sequence())
         else:
-            expanded.append(built)
-    return expanded
+            resolved.append(built)
+    return resolved
 
 
 def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
@@ -115,17 +109,17 @@ class Step(exca.helpers.DiscriminatedModel):
             def _run(self, data):
                 return data * self.coeff
 
-    Override _expand_step() to decompose into a chain of steps:
+    Override _resolve_step() to decompose into a chain of steps:
 
         class Pipeline(Step):
             transforms: list[Step] = []
             def _run(self, data):
                 return expensive_computation(data)
-            def _expand_step(self):
+            def _resolve_step(self):
                 if not self.transforms:
                     return self
                 stripped = self.model_copy(update={"transforms": []})
-                return [stripped] + self.transforms
+                return Chain(steps=[stripped] + self.transforms)
 
     Note
     ----
@@ -157,9 +151,9 @@ class Step(exca.helpers.DiscriminatedModel):
                 if name != "self"
             )
             if is_gen:
-                flags.add("generator")
-        if cls._expand_step is not Step._expand_step:
-            flags.add("has_expand")
+                flags.add("has_generator")
+        if cls._resolve_step is not Step._resolve_step:
+            flags.add("has_resolve")
         cls._step_flags = frozenset(flags)
 
     @classmethod
@@ -179,8 +173,8 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def model_post_init(self, __context: tp.Any) -> None:
         super().model_post_init(__context)
-        if not ({"has_run", "has_expand"} & self._step_flags):
-            raise TypeError(f"{type(self).__name__} must override _run or _expand_step")
+        if not ({"has_run", "has_resolve"} & self._step_flags):
+            raise TypeError(f"{type(self).__name__} must override _run or _resolve_step")
         if self.infra is not None:
             self.infra._step = self
 
@@ -199,19 +193,18 @@ class Step(exca.helpers.DiscriminatedModel):
     def _forward(self, *args: tp.Any) -> tp.Any:  # deprecated: override _run instead
         raise NotImplementedError
 
-    def _expand_step(self) -> "Step | list[Step]":
+    def _resolve_step(self) -> "Step":
         """Override to decompose this step into a chain of steps.
 
         Returns:
-            self: normal step behavior (default, no expansion)
-            list[Step]: auto-wrapped in Chain(steps=..., infra=None)
+            self: normal step behavior (default, no resolution)
             Step: used directly (return a Chain to control its infra)
         """
         return self
 
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
-        return "generator" in self._step_flags
+        return "has_generator" in self._step_flags
 
     def with_input(self, value: tp.Any = NoValue()) -> "Step":
         """Create copy with Input as _previous (Input holds value or NoValue)."""
@@ -226,14 +219,8 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
         """Execute with caching and backend handling."""
-        built = self._expand_step()
+        built = self._resolve_step()
         if built is not self:
-            if isinstance(built, list):
-                if not built:
-                    raise ValueError(
-                        f"{type(self).__name__}._expand_step() returned empty list"
-                    )
-                built = Chain(steps=built)
             return built.run(value)
 
         step = self.with_input(value) if self._previous is None else self
@@ -286,13 +273,11 @@ class Step(exca.helpers.DiscriminatedModel):
         return "/".join(exca.ConfDict.from_model(s, **opts).to_uid() for s in steps)
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
-        if "has_expand" not in self._step_flags:
+        if "has_resolve" not in self._step_flags:
             return None
-        built = self._expand_step()
+        built = self._resolve_step()
         if built is self:
             return None
-        if isinstance(built, list):
-            built = Chain(steps=built)
         return built._exca_uid_dict_override()
 
     # =========================================================================
@@ -357,7 +342,7 @@ class Chain(Step):
         """Create copy with optional Input prepended."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
-        expanded = _expand_steps(self._step_sequence())
+        expanded = _resolve_all(self._step_sequence())
         steps: list[tp.Any] = [s.model_dump() for s in expanded]
         if not isinstance(value, NoValue):
             steps = [Input(value=value)] + steps

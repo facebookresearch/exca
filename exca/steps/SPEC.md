@@ -163,20 +163,20 @@ class Step(DiscriminatedModel):
         """
         raise NotImplementedError
     
-    def _expand_step(self) -> "Step | list[Step]":
+    def _resolve_step(self) -> "Step":
         """Override to decompose this step into a chain of steps.
-        Returns self (default), a list of Steps, or a Step/Chain.
+        Returns self (default) or a Step/Chain.
         See EXPANSION_DESIGN.md for details.
         """
         return self
     
     def _is_generator(self) -> bool:
-        """Check _step_flags for 'generator' (precomputed at class definition)."""
+        """Check _step_flags for 'has_generator' (precomputed at class definition)."""
         ...
     
     def run(self, input: Any = NoValue()) -> Any:
         """Execute with caching and backend handling.
-        Delegates to expanded chain if _expand_step returns non-self.
+        Delegates to resolved step if _resolve_step returns non-self.
         """
         ...
     
@@ -214,7 +214,7 @@ class Chain(Step):
     
     def with_input(self, value: Any = NoValue()) -> Chain:
         """Create copy with optional Input prepended.
-        Expands compound steps (_expand_step) before setup.
+        Resolves compound steps (_resolve_step) before setup.
         """
         ...
     
@@ -223,22 +223,22 @@ class Chain(Step):
         ...
 ```
 
-### Step Expansion (`_expand_step`)
+### Step Resolution (`_resolve_step`)
 
-A Step can override `_expand_step()` to decompose itself into a chain of steps.
+A Step can override `_resolve_step()` to decompose itself into a chain of steps.
 This replaces manual Chain construction for steps that present a single interface
 but internally run a pipeline. See `EXPANSION_DESIGN.md` for full design.
 
 **Class-level flags** (`_step_flags: ClassVar[frozenset[str]]`):
 - Computed at class definition via `__pydantic_init_subclass__`
-- Values: `"has_run"`, `"generator"`, `"has_expand"`
-- Validation at instantiation: at least `"has_run"` or `"has_expand"` must be set
+- Values: `"has_run"`, `"has_generator"`, `"has_resolve"`
+- Validation at instantiation: at least `"has_run"` or `"has_resolve"` must be set
 - `_is_generator()` uses precomputed flag instead of runtime introspection
 
-**Expansion flow**:
-- `Step.run()`: if `_expand_step()` returns non-self, wraps in Chain and delegates
-- `Chain.with_input()`: expands compound steps before serialization/setup
-- UID consistency: `_exca_uid_dict_override` on Step delegates to Chain representation
+**Resolution flow**:
+- `Step.run()`: if `_resolve_step()` returns non-self, delegates to the returned Step
+- `Chain.with_input()`: resolves compound steps before serialization/setup
+- UID consistency: `_exca_uid_dict_override` on Step delegates to resolved Step's representation
 
 ## Execution Modes
 

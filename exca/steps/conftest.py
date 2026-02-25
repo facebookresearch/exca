@@ -88,14 +88,14 @@ class RandomGenerator(Step):
 
 
 # =============================================================================
-# Expandable steps (for _expand_step tests)
+# Resolvable steps (for _resolve_step tests)
 # =============================================================================
 
 
 class AddWithTransforms(Step):
     """Adds a value, then runs optional transforms after.
 
-    Demonstrates _expand_step: the step itself appears first in the chain,
+    Demonstrates _resolve_step: the step itself appears first in the chain,
     followed by any transforms. The transforms field is at default ([])
     in the stripped copy, so it's excluded from the UID.
     """
@@ -106,18 +106,22 @@ class AddWithTransforms(Step):
     def _run(self, x: float = 0) -> float:
         return x + self.value
 
-    def _expand_step(self) -> "Step | list[Step]":
+    def _resolve_step(self) -> Step:
         if not self.transforms:
             return self
+        from .base import Chain
+
         stripped = self.model_copy(update={"transforms": []})
-        return [stripped] + list(self.transforms)
+        return Chain(steps=[stripped] + list(self.transforms))
 
 
-class PureExpander(Step):
-    """A step that only expands (no own _run). Delegates entirely to sub-steps."""
+class PureResolver(Step):
+    """A step that only resolves (no own _run). Delegates entirely to sub-steps."""
 
     step_a: Step = Add(value=1)
     step_b: Step = Mult(coeff=2)
 
-    def _expand_step(self) -> "Step | list[Step]":
-        return [self.step_a, self.step_b]
+    def _resolve_step(self) -> Step:
+        from .base import Chain
+
+        return Chain(steps=[self.step_a, self.step_b])
