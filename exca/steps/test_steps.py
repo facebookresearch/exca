@@ -332,30 +332,30 @@ def _scale(x: float, factor: float = 10.0) -> float:
 def test_to_step() -> None:
     # generator (all defaults)
     G = to_step(_generate)
-    g = G(seed=123)
+    g = G(seed=123)  # type: ignore[call-arg]
     assert g._is_generator()
     assert g.run() == g.run()
     # transformer (auto-detect required param as input)
     M = to_step(_scale)
-    assert not M(coeff=3.0).run(5.0) != 15.0  # noqa (negated for conciseness)
+    assert M(coeff=3.0).run(5.0) == 15.0  # type: ignore[call-arg]
     assert M().run(5.0) == 50.0
     # explicit input_params override
     def add(a: float, b: float) -> float:
         return a + b
-    assert to_step(add, input_params=["a"])(b=10.0).run(5.0) == 15.0
+    assert to_step(add, input_params=["a"])(b=10.0).run(5.0) == 15.0  # type: ignore[call-arg]
     # multiple inputs -> tuple unpacking
     def combine(x: int, y: int, s: float = 1.0) -> float:
         return (x + y) * s
-    assert to_step(combine)(s=2.0).run((3, 7)) == 20.0
+    assert to_step(combine)(s=2.0).run((3, 7)) == 20.0  # type: ignore[call-arg]
     # in a Chain
-    chain = Chain(steps=[G(seed=42), M(factor=100.0)])
+    chain = Chain(steps=[G(seed=42), M(factor=100.0)])  # type: ignore[call-arg]
     assert chain.run() == pytest.approx(_random.Random(42).random() * 100.0)
 
 
 def test_to_step_with_infra(tmp_path: Path) -> None:
     G = to_step(_generate)
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = G(seed=7, infra=infra)
+    step = G(seed=7, infra=infra)  # type: ignore[call-arg]
     assert step.run() == step.run()
     assert step.with_input().has_cache()
 
@@ -379,12 +379,12 @@ def test_to_chain() -> None:
     MyChain = to_chain(_generate, _scale)
     assert issubclass(MyChain, Chain)
     # defaults
-    assert MyChain().run() == pytest.approx(_random.Random(42).random() * 10.0)
+    assert MyChain().run() == pytest.approx(_random.Random(42).random() * 10.0)  # type: ignore[call-arg]
     # custom
-    c = MyChain(generate=dict(seed=123), scale=dict(factor=100.0))
+    c = MyChain(generate=dict(seed=123), scale=dict(factor=100.0))  # type: ignore[call-arg]
     assert c.run() == pytest.approx(_random.Random(123).random() * 100.0)
     # partial
-    c2 = MyChain(scale=dict(factor=5.0))
+    c2 = MyChain(scale=dict(factor=5.0))  # type: ignore[call-arg]
     assert c2.run() == pytest.approx(_random.Random(42).random() * 5.0)
 
 
@@ -392,14 +392,14 @@ def test_to_chain_with_infra(tmp_path: Path) -> None:
     def double(x: float) -> float:
         return x * 2
     MyChain = to_chain(_generate, double, infra={"backend": "Cached", "folder": tmp_path})
-    chain = MyChain()
+    chain = MyChain()  # type: ignore[call-arg]
     assert chain.run() == chain.run()
 
 
 def test_to_chain_named_and_errors() -> None:
     # (name, func) tuples for duplicate functions
     MyChain = to_chain(_generate, ("up", _scale), ("down", _scale))
-    c = MyChain(up=dict(factor=100.0), down=dict(factor=0.5))
+    c = MyChain(up=dict(factor=100.0), down=dict(factor=0.5))  # type: ignore[call-arg]
     assert c.run() == pytest.approx(_generate() * 100.0 * 0.5)
     # duplicate bare names rejected
     with pytest.raises(ValueError, match="Duplicate"):
