@@ -112,7 +112,7 @@ def test_force_with_taskinfra(tmp_path: Path) -> None:
     # clear TaskInfra cache and recreate an instance with force on a step
     xp.infra.clear_job()
     xp = xp.infra.clone_obj()  # reset
-    xp.steps.steps[0].infra.mode = "force-forward"  # type: ignore
+    xp.steps.steps[0].infra.mode = "force"  # type: ignore
     # this should run even though it freezes the steps (which update the mode in-place)
     out2 = xp.run()
     # Should get different result (forced recompute)

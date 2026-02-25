@@ -18,6 +18,7 @@ import logging
 import pickle
 import shutil
 import typing as tp
+import warnings
 from pathlib import Path
 
 import pydantic
@@ -134,7 +135,7 @@ class StepPaths:
             shutil.rmtree(self.job_folder)
 
 
-ModeType = tp.Literal["cached", "force", "force-forward", "read-only", "retry"]
+ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 CacheStatus = tp.Literal["success", "error", None]
 
 
@@ -186,6 +187,19 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     cache_type: str | None = None
     mode: ModeType = "cached"
     keep_in_ram: bool = False
+
+    @pydantic.field_validator("mode", mode="before")
+    @classmethod
+    def _deprecate_force_forward(cls, v: str) -> str:
+        if v == "force-forward":
+            warnings.warn(
+                '"force-forward" mode is deprecated, use "force" instead '
+                "(force now propagates to downstream steps)",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return "force"
+        return v
 
     _step: "Step" | None = None
     _ram_cache: tp.Any = pydantic.PrivateAttr(default_factory=NoValue)
@@ -337,7 +351,13 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         # Check for error in job folder
         if self.paths.error_pkl.exists():
             with self.paths.error_pkl.open("rb") as f:
-                raise pickle.load(f)
+                err = pickle.load(f)
+            logger.warning(
+                "Re-raising cached error for %s[%s] (use mode='retry' to recompute)",
+                self.paths.step_uid,
+                self.paths.item_uid,
+            )
+            raise err
 
         cd = self._cache_dict()
         if self.paths.item_uid in cd:
@@ -358,7 +378,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         # Check RAM cache first (survives disk deletion)
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
-            if self.mode not in ("force", "force-forward"):
+            if self.mode != "force":
                 return self._ram_cache
 
         status = self._cache_status()
@@ -369,12 +389,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     f"No cache in read-only mode: {self.paths.step_uid}[{self.paths.item_uid}]"
                 )
             return self._load_cache()  # Raises if error
-        if status is not None and self.mode not in ("force", "force-forward", "retry"):
+        if status is not None and self.mode not in ("force", "retry"):
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
             return self._load_cache()  # Raises if error
 
-        # Force modes: clear cache; Retry: clear only errors
-        if self.mode in ("force", "force-forward") and status is not None:
+        if self.mode == "force" and status is not None:
             self.clear_cache()
         elif self.mode == "retry" and status == "error":
             logger.warning(
@@ -385,8 +404,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         # Check job recovery (for submitit backends)
         job = self.job()
         if job is not None:
-            # Force modes: cancel existing job if running
-            if self.mode in ("force", "force-forward"):
+            if self.mode == "force":
                 if not job.done():
                     try:
                         job.cancel()

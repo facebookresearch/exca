@@ -229,12 +229,17 @@ class DumpContext:
         name = f"{self.DATA_DIR}/{basename}"
         path = self.folder / name
         self._ensure_parent(path)
-        if path.exists():
+        if path in self._created_files:
+            # Same dump context tried to create this path twice: user error
             raise RuntimeError(
                 f"{basename} already exists. If dumping multiple "
                 f"sub-values of the same type, set ctx.key to a unique "
                 f"sub-key for each."
             )
+        if path.exists():
+            # File written by a concurrent worker; handlers use
+            # temporary_save_path (atomic rename) so this is safe.
+            logger.debug("Concurrent write detected for %s, proceeding", basename)
         self._created_files.append(path)
         return name
 

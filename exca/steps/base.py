@@ -242,7 +242,7 @@ class Step(exca.helpers.DiscriminatedModel):
         # Sync state back to original step's infra (with_input creates a copy)
         if step is not self and self.infra is not None:
             self.infra._ram_cache = step.infra._ram_cache  # type: ignore[union-attr]
-            if self.infra.mode in ("force", "force-forward"):
+            if self.infra.mode == "force":
                 object.__setattr__(self.infra, "mode", "cached")
 
         return result
@@ -379,13 +379,11 @@ class Chain(Step):
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
-        # Propagate force-forward: set downstream steps to "force" mode
-        # so they clear their cache when run with the actual input value
+        # Propagate force to downstream steps
         force_active = False
         for step in steps:
-            if step.infra is not None and step.infra.mode == "force-forward":
+            if step.infra is not None and step.infra.mode == "force":
                 force_active = True
-                # For nested chains with force-forward, propagate to internal steps
                 if isinstance(step, Chain):
                     _set_mode_recursive(step._step_sequence(), "force")
             elif force_active:
@@ -397,8 +395,7 @@ class Chain(Step):
         for k, step in enumerate(reversed(steps)):
             if step.infra is None:
                 continue
-            # Force mode steps will recompute anyway, keep searching for earlier caches
-            if step.infra.mode in ("force", "force-forward"):
+            if step.infra.mode == "force":
                 continue
             if step.infra.has_cache():
                 args = (step.infra.cached_result(),)
@@ -421,30 +418,29 @@ class Chain(Step):
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
         chain = self.with_input(value) if self._previous is None else self
 
-        # Track steps with force modes to reset after run
+        # Track force steps to reset after run
         force_steps = [
             s
             for s in self._step_sequence() + (self,)
-            if s.infra is not None and s.infra.mode in ("force", "force-forward")
+            if s.infra is not None and s.infra.mode == "force"
         ]
 
-        # If the chain itself has force-forward, propagate to all internal steps recursively
-        if chain.infra is not None and chain.infra.mode == "force-forward":
+        # Propagate force to all internal steps recursively
+        if chain.infra is not None and chain.infra.mode == "force":
             _set_mode_recursive(chain._step_sequence(), "force")
 
         if chain.infra is None:
             result = chain._run()
         else:
-            # If any internal step has force-forward, clear chain's cache first
-            if any(s.infra.mode == "force-forward" for s in force_steps):  # type: ignore
+            if force_steps:
                 chain.infra.clear_cache()
             # Note: if the last step also has infra, it shares the same cache entry
             # (same step_uid from _aligned_step flattening, same item_uid from original
             # input). The last step writes first, chain finds cache hit - no duplication.
             result = chain.infra.run(chain._run)
 
-        # Reset force modes on original steps and chain after successful run
-        # Use object.__setattr__ to bypass frozen model validation (TaskInfra case)
+        # Reset force on original steps after successful run
+        # (object.__setattr__ bypasses frozen model validation for TaskInfra)
         for step in force_steps:
             object.__setattr__(step.infra, "mode", "cached")
 
