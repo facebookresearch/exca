@@ -28,5 +28,5 @@ Example:
 from . import backends
 from .base import Chain as Chain
 from .base import Step as Step
-from .base import to_chain as to_chain
-from .base import to_step as to_step
+from .helpers import to_chain as to_chain
+from .helpers import to_step as to_step
