@@ -194,6 +194,18 @@ def test_static_wrapper_collision_and_delete(tmp_path: Path) -> None:
     assert not filepath.exists()
 
 
+def test_key_path_concurrent_write_tolerance(tmp_path: Path) -> None:
+    """key_path allows files written by another worker (different context)."""
+    ctx1 = DumpContext(tmp_path, key="shared_key")
+    with ctx1:
+        ctx1.dump(42, cache_type="Pickle")
+    # Simulate a second worker with a fresh context dumping the same key
+    ctx2 = DumpContext(tmp_path, key="shared_key")
+    with ctx2:
+        info2 = ctx2.dump(99, cache_type="Pickle")
+    assert ctx2.load(info2) == 99
+
+
 # =============================================================================
 # Json
 # =============================================================================
