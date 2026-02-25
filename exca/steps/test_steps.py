@@ -331,9 +331,9 @@ def scale(x: float, factor: float = 10.0) -> float:
 def test_to_step() -> None:
     # generator (all defaults)
     G = to_step(generate)
-    g = G(seed=123)  # type: ignore[call-arg]
-    assert g._is_generator()
-    assert g.run() == g.run()
+    gen = G(seed=123)  # type: ignore[call-arg]
+    assert gen._is_generator()
+    assert gen.run() == gen.run()
     # transformer (auto-detect required param as input)
     M = to_step(scale)
     assert M(factor=3.0).run(5.0) == 15.0  # type: ignore[call-arg]
