@@ -31,6 +31,15 @@ from .backends import NoValue
 logger = logging.getLogger(__name__)
 
 
+def _has_all_defaults(method: tp.Callable[..., tp.Any]) -> bool:
+    """Check if all parameters (except self) have defaults."""
+    return all(
+        p.default is not inspect.Parameter.empty
+        for name, p in inspect.signature(method).parameters.items()
+        if name != "self"
+    )
+
+
 def _resolve_all(steps: tp.Iterable["Step"]) -> list["Step"]:
     """Resolve steps that define _resolve_step, flattening Chains into sub-steps."""
     resolved: list["Step"] = []
@@ -133,7 +142,7 @@ class Step(exca.helpers.DiscriminatedModel):
     _infra_validator_after = _infra_validator_after
 
     infra: backends.Backend | None = None
-    _previous: tp.Union["Step", None] = None
+    _previous: Step | None = None
     _step_flags: tp.ClassVar[frozenset[str]] = frozenset()
 
     @classmethod
@@ -144,13 +153,7 @@ class Step(exca.helpers.DiscriminatedModel):
         if has_run:
             flags.add("has_run")
             method = cls._run if cls._run is not Step._run else cls._forward
-            sig = inspect.signature(method)
-            is_gen = all(
-                p.default is not inspect.Parameter.empty
-                for name, p in sig.parameters.items()
-                if name != "self"
-            )
-            if is_gen:
+            if _has_all_defaults(method):
                 flags.add("has_generator")
         if cls._resolve_step is not Step._resolve_step:
             flags.add("has_resolve")
@@ -237,11 +240,8 @@ class Step(exca.helpers.DiscriminatedModel):
             result = step.infra.run(step._run, *args)
 
         # Sync state back to original step's infra (with_input creates a copy)
-        if self.infra is not None:
-            if step.infra is None:
-                raise RuntimeError("step.infra is None but self.infra is not")
-            self.infra._ram_cache = step.infra._ram_cache
-            # Reset force modes (use object.__setattr__ for frozen TaskInfra models)
+        if step is not self and self.infra is not None:
+            self.infra._ram_cache = step.infra._ram_cache  # type: ignore[union-attr]
             if self.infra.mode in ("force", "force-forward"):
                 object.__setattr__(self.infra, "mode", "cached")
 
