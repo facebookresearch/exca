@@ -25,10 +25,11 @@ import pydantic
 import exca
 from exca import utils
 
-X = tp.TypeVar("X")
-
 from . import backends
 from .backends import NoValue
+
+X = tp.TypeVar("X")
+
 
 logger = logging.getLogger(__name__)
 
@@ -441,9 +442,7 @@ def _resolve_input_params(
     sig = inspect.signature(func)
     if input_params is None:
         return tuple(
-            p.name
-            for p in sig.parameters.values()
-            if p.default is inspect._empty
+            p.name for p in sig.parameters.values() if p.default is inspect._empty
         )
     for name in input_params:
         if name not in sig.parameters:
@@ -495,21 +494,21 @@ def to_step(
             continue
         if p.name in reserved:
             raise ValueError(
-                f"Parameter {p.name!r} is reserved and cannot be used "
-                "as a field name"
+                f"Parameter {p.name!r} is reserved and cannot be used " "as a field name"
             )
         if p.annotation in (tp.Any, inspect._empty):
             raise ValueError(
-                f"Parameter {p.name!r} of {func.__name__} needs a type "
-                "annotation"
+                f"Parameter {p.name!r} of {func.__name__} needs a type " "annotation"
             )
         default = ... if p.default is inspect._empty else p.default
         fields[p.name] = (p.annotation, default)
 
     # Build _run that calls the original function
     if len(resolved) == 0:
+
         def _run(self: tp.Any) -> tp.Any:  # type: ignore[misc]
             return func(**{n: getattr(self, n) for n in fields})
+
     elif len(resolved) == 1:
         _input_name = resolved[0]
 
@@ -517,6 +516,7 @@ def to_step(
             kwargs = {n: getattr(self, n) for n in fields}
             kwargs[_input_name] = value
             return func(**kwargs)
+
     else:
         _input_names = resolved
 
