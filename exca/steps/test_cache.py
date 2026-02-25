@@ -459,3 +459,52 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     assert call_counts["A"] == 0, "A's cache should be used"
     assert call_counts["B"] == 1, "B should recompute (force mode)"
     assert call_counts["C"] == 1, "C should run (after B)"
+
+
+# =============================================================================
+# _resolve_step caching
+# =============================================================================
+
+
+def test_resolve_step_intermediate_cache(tmp_path: Path) -> None:
+    """Resolved step's own computation is cached independently of transforms."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.AddWithTransforms(
+        value=5, transforms=[conftest.Mult(coeff=2)], infra=infra
+    )
+    out1 = step.run()  # (0 + 5) * 2 = 10
+    assert out1 == 10.0
+
+    # Change transforms: the AddWithTransforms cache should be reused
+    step2 = conftest.AddWithTransforms(
+        value=5, transforms=[conftest.Mult(coeff=100)], infra=infra
+    )
+    out2 = step2.run()  # (0 + 5) * 100 = 500
+    assert out2 == 500.0
+
+    # Verify: only one cache folder for AddWithTransforms (same step_uid regardless of transforms)
+    folders = conftest.extract_cache_folders(tmp_path)
+    add_folders = [f for f in folders if "AddWithTransforms" in f]
+    assert (
+        len(add_folders) == 1
+    ), f"Expected 1 AddWithTransforms cache folder, got {add_folders}"
+
+
+def test_resolve_step_inside_chain_cache(tmp_path: Path) -> None:
+    """Resolved step works with caching inside a Chain."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(
+        steps=[
+            conftest.AddWithTransforms(
+                value=1, transforms=[conftest.Mult(coeff=10)], infra=infra
+            ),
+            conftest.Add(value=100),
+        ],
+        infra=infra,
+    )
+    out1 = chain.run()  # (0 + 1) * 10 + 100 = 110
+    assert out1 == 110.0
+
+    # Second call returns cached
+    out2 = chain.run()
+    assert out1 == out2

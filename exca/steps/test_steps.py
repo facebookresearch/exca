@@ -312,3 +312,69 @@ def test_deprecated_forward() -> None:
     # .forward() call triggers its own warning
     with pytest.warns(DeprecationWarning, match="forward.*deprecated.*run"):
         assert step.forward(5.0) == 10.0
+
+
+# =============================================================================
+# _resolve_step
+# =============================================================================
+
+
+def test_resolve_step() -> None:
+    """Resolvable steps run correctly standalone (with/without input/transforms)."""
+    awt = conftest.AddWithTransforms
+    assert awt(value=10, transforms=[conftest.Mult(coeff=3)]).run() == 30.0
+    assert awt(value=5, transforms=[conftest.Mult(coeff=2)]).run(7.0) == 24.0
+    assert awt(value=10).run(5.0) == 15.0  # no transforms = no resolution
+    pr = conftest.PureResolver(
+        step_a=conftest.Add(value=5), step_b=conftest.Mult(coeff=3)
+    )
+    assert pr.run() == 15.0
+
+
+def test_resolve_step_in_chain() -> None:
+    """Resolvable steps are resolved when used inside a Chain."""
+    awt = conftest.AddWithTransforms
+    chain1 = Chain(
+        steps=[
+            awt(value=1, transforms=[conftest.Mult(coeff=10)]),
+            conftest.Add(value=100),
+        ]
+    )
+    assert chain1.run() == 110.0
+    chain2 = Chain(
+        steps=[conftest.Add(value=1), awt(value=2, transforms=[conftest.Mult(coeff=3)])]
+    )
+    assert chain2.run(5.0) == 24.0
+
+
+def test_resolve_step_must_override_run_or_resolve() -> None:
+    """Step with neither _run nor _resolve_step raises TypeError."""
+    with pytest.raises(TypeError, match="must override _run or _resolve_step"):
+
+        class BadStep(Step):
+            value: int = 0
+
+        BadStep()
+
+
+def test_step_flags() -> None:
+    """_step_flags and _is_generator are computed correctly at class definition."""
+    expected: dict[type[Step], tuple[set[str], bool]] = {
+        conftest.Mult: ({"has_run"}, False),
+        conftest.RandomGenerator: ({"has_run", "has_generator"}, True),
+        conftest.Add: ({"has_run", "has_generator"}, True),
+        conftest.AddWithTransforms: ({"has_run", "has_generator", "has_resolve"}, True),
+        conftest.PureResolver: ({"has_resolve"}, False),
+    }
+    for cls, (flags, is_gen) in expected.items():
+        assert cls._step_flags == flags, cls.__name__
+        assert cls()._is_generator() is is_gen, cls.__name__
+
+
+def test_resolve_step_uid_consistency() -> None:
+    """Resolved step and equivalent Chain produce the same UID."""
+    step = conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)])
+    chain = Chain(steps=[conftest.AddWithTransforms(value=10), conftest.Mult(coeff=3)])
+    step_uid = exca.ConfDict.from_model(step, uid=True, exclude_defaults=True).to_uid()
+    chain_uid = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_uid()
+    assert step_uid == chain_uid

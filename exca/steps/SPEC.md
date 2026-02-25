@@ -154,6 +154,8 @@ class Step(DiscriminatedModel):
     infra: Backend | None = None
     _previous: Step | None = None
     
+    _step_flags: ClassVar[frozenset[str]] = frozenset()
+    
     def _run(self, ...) -> Any:
         """Override in subclasses. Signature determines step type:
         - Generator: def _run(self) -> Output
@@ -161,12 +163,21 @@ class Step(DiscriminatedModel):
         """
         raise NotImplementedError
     
+    def _resolve_step(self) -> "Step":
+        """Override to decompose this step into a chain of steps.
+        Returns self (default) or a Step/Chain.
+        See EXPANSION_DESIGN.md for details.
+        """
+        return self
+    
     def _is_generator(self) -> bool:
-        """Check if _run has no required parameters (generator step)."""
+        """Check _step_flags for 'has_generator' (precomputed at class definition)."""
         ...
     
     def run(self, input: Any = NoValue()) -> Any:
-        """Execute with caching and backend handling."""
+        """Execute with caching and backend handling.
+        Delegates to resolved step if _resolve_step returns non-self.
+        """
         ...
     
     def with_input(self, value: Any = NoValue()) -> "Step":
@@ -201,10 +212,33 @@ class Chain(Step):
         """Chain is a generator if its first step is a generator."""
         ...
     
+    def with_input(self, value: Any = NoValue()) -> Chain:
+        """Create copy with optional Input prepended.
+        Resolves compound steps (_resolve_step) before setup.
+        """
+        ...
+    
     def clear_cache(self, recursive: bool = True) -> None:
         """Clear cache, optionally including sub-steps."""
         ...
 ```
+
+### Step Resolution (`_resolve_step`)
+
+A Step can override `_resolve_step()` to decompose itself into a chain of steps.
+This replaces manual Chain construction for steps that present a single interface
+but internally run a pipeline. See `EXPANSION_DESIGN.md` for full design.
+
+**Class-level flags** (`_step_flags: ClassVar[frozenset[str]]`):
+- Computed at class definition via `__pydantic_init_subclass__`
+- Values: `"has_run"`, `"has_generator"`, `"has_resolve"`
+- Validation at instantiation: at least `"has_run"` or `"has_resolve"` must be set
+- `_is_generator()` uses precomputed flag instead of runtime introspection
+
+**Resolution flow**:
+- `Step.run()`: if `_resolve_step()` returns non-self, delegates to the returned Step
+- `Chain.with_input()`: resolves compound steps before serialization/setup
+- UID consistency: `_exca_uid_dict_override` on Step delegates to resolved Step's representation
 
 ## Execution Modes
 

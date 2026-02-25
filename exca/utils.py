@@ -105,10 +105,11 @@ class ConfigExporter(pydantic.BaseModel):
         if isinstance(obj, pydantic.BaseModel):
             if self.exclude_defaults and self.uid and not self.ignore_first_override:
                 if hasattr(obj, "_exca_uid_dict_override"):
-                    # bypass used for custom representations, for Chain models for instance
-                    dump.clear()  # override the config
-                    dump.update(dict(obj._exca_uid_dict_override()))
-                    return True
+                    override = obj._exca_uid_dict_override()
+                    if override is not None:
+                        dump.clear()
+                        dump.update(dict(override))
+                        return True
             info = _get_uid_info(
                 obj, ignore_discriminator=self.ignore_first_discriminator
             )
