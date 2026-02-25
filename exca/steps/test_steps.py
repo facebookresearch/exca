@@ -338,12 +338,14 @@ def test_to_step() -> None:
     M = to_step(scale)
     assert M(factor=3.0).run(5.0) == 15.0  # type: ignore[call-arg]
     assert M().run(5.0) == 50.0
+
     # explicit input_params override
     def add(a: float, b: float) -> float:
         return a + b
 
     AddStep = to_step(add, input_params=["a"])
     assert AddStep(b=10.0).run(5.0) == 15.0  # type: ignore[call-arg]
+
     # multiple inputs -> tuple unpacking
     def combine(x: int, y: int, s: float = 1.0) -> float:
         return (x + y) * s
@@ -352,6 +354,7 @@ def test_to_step() -> None:
     # in a Chain
     chain = Chain(steps=[G(seed=42), M(factor=100.0)])  # type: ignore[call-arg]
     assert chain.run() == pytest.approx(random.Random(42).random() * 100.0)
+
     # validation errors
     def f(x: int) -> int:
         return x
@@ -389,9 +392,7 @@ def test_to_chain() -> None:
     assert c2.run() == pytest.approx(random.Random(42).random() * 5.0)
     # (name, func) tuples for duplicate functions
     MyChain2 = to_chain(generate, ("up", scale), ("down", scale))
-    c3 = MyChain2(  # type: ignore[call-arg]
-        up=dict(factor=100.0), down=dict(factor=0.5)
-    )
+    c3 = MyChain2(up=dict(factor=100.0), down=dict(factor=0.5))  # type: ignore[call-arg]
     assert c3.run() == pytest.approx(generate() * 100.0 * 0.5)
     # duplicate bare names rejected
     with pytest.raises(ValueError, match="Duplicate"):
