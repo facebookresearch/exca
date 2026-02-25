@@ -598,7 +598,6 @@ def to_chain(
 
     step_classes = [to_step(f) for _, f in named]
     _field_names = tuple(name for name, _ in named)
-    _default_infra = infra
 
     # One field per step, typed as its Step subclass (with a default
     # instance so all fields are optional).
@@ -609,6 +608,11 @@ def to_chain(
     # Override ``steps`` with an empty default; it is rebuilt from the
     # per-function fields in model_post_init.
     model_fields["steps"] = (tp.Sequence[Step], ())
+
+    # Set the default infra via the field default so that pydantic
+    # validates it (converts dicts to Backend instances, etc.).
+    if infra is not None:
+        model_fields["infra"] = (backends.Backend | None, infra)
 
     chain_name = "_".join(_field_names) + "_Chain"
 
@@ -625,8 +629,6 @@ def to_chain(
         if not self.steps:
             built = tuple(getattr(self, name) for name in _field_names)
             object.__setattr__(self, "steps", built)
-        if _default_infra is not None and self.infra is None:
-            object.__setattr__(self, "infra", _default_infra)
         _super_post_init(self, __context)
 
     Model.model_post_init = _model_post_init  # type: ignore[assignment]
