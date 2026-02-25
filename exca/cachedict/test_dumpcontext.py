@@ -198,7 +198,7 @@ def test_key_path_concurrent_write_tolerance(tmp_path: Path) -> None:
     """key_path allows files written by another worker (different context)."""
     ctx1 = DumpContext(tmp_path, key="shared_key")
     with ctx1:
-        info = ctx1.dump(42, cache_type="Pickle")
+        ctx1.dump(42, cache_type="Pickle")
     # Simulate a second worker with a fresh context dumping the same key
     ctx2 = DumpContext(tmp_path, key="shared_key")
     with ctx2:
