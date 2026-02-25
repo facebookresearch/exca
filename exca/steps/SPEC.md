@@ -44,7 +44,7 @@ A `Step` is the fundamental unit that:
 All backends have:
 - `folder`: Path for cache storage (optional, can be propagated from Chain)
 - `cache_type`: Serialization format
-- `mode`: Execution mode (cached/force/force-forward/read-only/retry)
+- `mode`: Execution mode (cached/force/read-only/retry)
 
 ### Cache Status
 
@@ -105,7 +105,7 @@ class Backend(DiscriminatedModel, discriminator_key="backend"):
     """Base class for backends with integrated caching."""
     folder: Path | None = None
     cache_type: str | None = None
-    mode: Literal["cached", "force", "force-forward", "read-only", "retry"] = "cached"
+    mode: Literal["cached", "force", "read-only", "retry"] = "cached"
     
     _step: Step | None = None  # Back-reference for cache key computation
     
@@ -211,8 +211,7 @@ class Chain(Step):
 | Mode | Behavior |
 |------|----------|
 | `cached` | Return cached result if exists, else compute and cache |
-| `force` | Clear cache, recompute, and cache new result |
-| `force-forward` | Like `force`, but also forces all downstream steps in the chain |
+| `force` | Clear cache, recompute, and cache new result (propagates to downstream steps in chains) |
 | `read-only` | Return cached result, raise error if not cached |
 | `retry` | Return cached if success, clear and recompute if error |
 
@@ -329,8 +328,7 @@ When `step.run(input)` is called:
    b. Handle mode:
       - "read-only": Return cache or raise
       - "cached": Return cache if success, else continue
-      - "force": Clear cache, continue
-      - "force-forward": Clear cache, continue, and propagate force to downstream steps
+      - "force": Clear cache, continue, and propagate force to downstream steps
       - "retry": Clear if error, continue
    c. Submit job (inline for Cached, subprocess for others)
    d. Cache result/error from within job
