@@ -320,7 +320,6 @@ def test_deprecated_forward() -> None:
 # =============================================================================
 
 
-
 def generate(seed: int = 42) -> float:
     return _random.Random(seed).random()
 
