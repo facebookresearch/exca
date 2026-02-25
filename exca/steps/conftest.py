@@ -13,7 +13,7 @@ Test guidelines live in .cursor/rules/testing.mdc (general) and
 import random
 from pathlib import Path
 
-from .base import Step
+from . import base
 
 # =============================================================================
 # Test utilities
@@ -31,7 +31,7 @@ def extract_cache_folders(folder: Path) -> tuple[str, ...]:
 # =============================================================================
 
 
-class Mult(Step):
+class Mult(base.Step):
     """Multiplies input by coefficient."""
 
     coeff: float = 2.0
@@ -45,7 +45,7 @@ class Mult(Step):
 # =============================================================================
 
 
-class Add(Step):
+class Add(base.Step):
     """Adds a value to input.
 
     - randomize=True: adds random noise instead of fixed value
@@ -75,7 +75,7 @@ class Add(Step):
 # =============================================================================
 
 
-class RandomGenerator(Step):
+class RandomGenerator(base.Step):
     """Generates a random value - useful to verify caching.
 
     Pure generator: raises TypeError if called with input.
@@ -92,7 +92,7 @@ class RandomGenerator(Step):
 # =============================================================================
 
 
-class AddWithTransforms(Step):
+class AddWithTransforms(base.Step):
     """Adds a value, then runs optional transforms after.
 
     Demonstrates _resolve_step: the step itself appears first in the chain,
@@ -101,27 +101,23 @@ class AddWithTransforms(Step):
     """
 
     value: float = 2.0
-    transforms: list[Step] = []
+    transforms: list[base.Step] = []
 
     def _run(self, x: float = 0) -> float:
         return x + self.value
 
-    def _resolve_step(self) -> Step:
+    def _resolve_step(self) -> base.Step:
         if not self.transforms:
             return self
-        from .base import Chain
-
         stripped = self.model_copy(update={"transforms": []})
-        return Chain(steps=[stripped] + list(self.transforms))
+        return base.Chain(steps=[stripped] + list(self.transforms))
 
 
-class PureResolver(Step):
+class PureResolver(base.Step):
     """A step that only resolves (no own _run). Delegates entirely to sub-steps."""
 
-    step_a: Step = Add(value=1)
-    step_b: Step = Mult(coeff=2)
+    step_a: base.Step = Add(value=1)
+    step_b: base.Step = Mult(coeff=2)
 
-    def _resolve_step(self) -> Step:
-        from .base import Chain
-
-        return Chain(steps=[self.step_a, self.step_b])
+    def _resolve_step(self) -> base.Step:
+        return base.Chain(steps=[self.step_a, self.step_b])

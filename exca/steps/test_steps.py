@@ -319,57 +319,62 @@ def test_deprecated_forward() -> None:
 # =============================================================================
 
 
-def test_resolve_step_standalone() -> None:
-    """Resolvable step runs as chain when used standalone."""
-    step = conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)])
-    # (0 + 10) * 3 = 30
-    assert step.run() == 30.0
+@pytest.mark.parametrize(
+    "step,args,expected",
+    [
+        (
+            conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)]),
+            (),
+            30.0,
+        ),
+        (
+            conftest.AddWithTransforms(value=5, transforms=[conftest.Mult(coeff=2)]),
+            (7.0,),
+            24.0,
+        ),
+        (
+            conftest.AddWithTransforms(value=10),
+            (5.0,),
+            15.0,
+        ),  # no transforms = no resolution
+        (
+            conftest.PureResolver(
+                step_a=conftest.Add(value=5), step_b=conftest.Mult(coeff=3)
+            ),
+            (),
+            15.0,
+        ),
+    ],
+)
+def test_resolve_step(step: Step, args: tuple, expected: float) -> None:
+    """Resolvable steps run correctly standalone (with/without input/transforms)."""
+    assert step.run(*args) == expected
 
 
-def test_resolve_step_standalone_with_input() -> None:
-    """Resolvable step passes input through the chain."""
-    step = conftest.AddWithTransforms(value=5, transforms=[conftest.Mult(coeff=2)])
-    # (7 + 5) * 2 = 24
-    assert step.run(7.0) == 24.0
-
-
-def test_resolve_step_no_transforms() -> None:
-    """Without transforms, step runs normally (no resolution)."""
-    step = conftest.AddWithTransforms(value=10)
-    assert step.run(5.0) == 15.0
-
-
-def test_resolve_step_inside_chain() -> None:
-    """Resolvable step is resolved inside a Chain."""
-    chain = Chain(
-        steps=[
-            conftest.AddWithTransforms(value=1, transforms=[conftest.Mult(coeff=10)]),
-            conftest.Add(value=100),
-        ]
-    )
-    # (0 + 1) * 10 + 100 = 110
-    assert chain.run() == 110.0
-
-
-def test_resolve_step_inside_chain_with_input() -> None:
-    """Resolvable step inside chain works with input."""
-    chain = Chain(
-        steps=[
-            conftest.Add(value=1),
-            conftest.AddWithTransforms(value=2, transforms=[conftest.Mult(coeff=3)]),
-        ]
-    )
-    # ((5 + 1) + 2) * 3 = 24
-    assert chain.run(5.0) == 24.0
-
-
-def test_pure_expander() -> None:
-    """Step with only _resolve_step (no _run) works."""
-    step = conftest.PureResolver(
-        step_a=conftest.Add(value=5), step_b=conftest.Mult(coeff=3)
-    )
-    # (0 + 5) * 3 = 15
-    assert step.run() == 15.0
+@pytest.mark.parametrize(
+    "steps,args,expected",
+    [
+        (
+            [
+                conftest.AddWithTransforms(value=1, transforms=[conftest.Mult(coeff=10)]),
+                conftest.Add(value=100),
+            ],
+            (),
+            110.0,
+        ),
+        (
+            [
+                conftest.Add(value=1),
+                conftest.AddWithTransforms(value=2, transforms=[conftest.Mult(coeff=3)]),
+            ],
+            (5.0,),
+            24.0,
+        ),
+    ],
+)
+def test_resolve_step_in_chain(steps: list, args: tuple, expected: float) -> None:
+    """Resolvable steps are resolved when used inside a Chain."""
+    assert Chain(steps=steps).run(*args) == expected
 
 
 def test_resolve_step_must_override_run_or_resolve() -> None:
@@ -383,30 +388,23 @@ def test_resolve_step_must_override_run_or_resolve() -> None:
 
 
 def test_step_flags() -> None:
-    """_step_flags are computed correctly at class definition."""
-    assert "has_run" in conftest.Mult._step_flags
-    assert "has_generator" not in conftest.Mult._step_flags  # transformer
-    assert "has_run" in conftest.RandomGenerator._step_flags
-    assert "has_generator" in conftest.RandomGenerator._step_flags
-    assert "has_resolve" in conftest.AddWithTransforms._step_flags
-    assert "has_run" in conftest.AddWithTransforms._step_flags
-    assert "has_resolve" in conftest.PureResolver._step_flags
-    assert "has_run" not in conftest.PureResolver._step_flags
-
-
-def test_is_generator_uses_flags() -> None:
-    """_is_generator uses precomputed _step_flags."""
-    assert conftest.RandomGenerator()._is_generator()
-    assert not conftest.Mult()._is_generator()
-    assert conftest.Add()._is_generator()  # default parameter = generator
+    """_step_flags and _is_generator are computed correctly at class definition."""
+    expected: dict[type[Step], tuple[set[str], bool]] = {
+        conftest.Mult: ({"has_run"}, False),
+        conftest.RandomGenerator: ({"has_run", "has_generator"}, True),
+        conftest.Add: ({"has_run", "has_generator"}, True),
+        conftest.AddWithTransforms: ({"has_run", "has_generator", "has_resolve"}, True),
+        conftest.PureResolver: ({"has_resolve"}, False),
+    }
+    for cls, (flags, is_gen) in expected.items():
+        assert cls._step_flags == flags, cls.__name__
+        assert cls()._is_generator() is is_gen, cls.__name__
 
 
 def test_resolve_step_uid_consistency() -> None:
     """Resolved step and equivalent Chain produce the same UID."""
     step = conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)])
-    # Equivalent manually-composed chain
     chain = Chain(steps=[conftest.AddWithTransforms(value=10), conftest.Mult(coeff=3)])
-
     step_uid = exca.ConfDict.from_model(step, uid=True, exclude_defaults=True).to_uid()
     chain_uid = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_uid()
     assert step_uid == chain_uid
