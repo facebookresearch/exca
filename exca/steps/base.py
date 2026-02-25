@@ -609,10 +609,7 @@ def to_chain(
     # per-function fields in model_post_init.
     model_fields["steps"] = (tp.Sequence[Step], ())
 
-    # Set the default infra via the field default so that pydantic
-    # validates it (converts dicts to Backend instances, etc.).
-    if infra is not None:
-        model_fields["infra"] = (backends.Backend | None, infra)
+    _default_infra = infra
 
     chain_name = "_".join(_field_names) + "_Chain"
 
@@ -629,6 +626,10 @@ def to_chain(
         if not self.steps:
             built = tuple(getattr(self, name) for name in _field_names)
             object.__setattr__(self, "steps", built)
+        if _default_infra is not None and self.infra is None:
+            infra_obj = backends.Backend.model_validate(_default_infra)
+            infra_obj._step = self
+            object.__setattr__(self, "infra", infra_obj)
         _super_post_init(self, __context)
 
     Model.model_post_init = _model_post_init  # type: ignore[assignment]
