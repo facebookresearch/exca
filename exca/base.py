@@ -6,10 +6,10 @@
 
 import collections
 import dataclasses
-import difflib
 import functools
 import inspect
 import logging
+import shutil
 import string
 import typing as tp
 from pathlib import Path
@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
 ExcludeCallable = tp.Callable[[tp.Any], tp.Iterable[str]]
 Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tp.Tuple[str, tp.Any]]
+# add functions here that return True if mismatch with cached config can be ignored, else False
+DEFAULT_CHECK_SKIPS: tp.List[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
+
+
+class Sentinel:
+    pass
 
 
 @pydantic.model_validator(mode="after")
@@ -45,15 +51,16 @@ def _add_name(
             continue
         # pull default infra from model_fields
         # (or from private_attributes if private/has leading _)
-        if name in obj.model_fields:
-            default = obj.model_fields[name].default
+        if name in type(obj).model_fields:
+            default = type(obj).model_fields[name].default
         else:  # private!
             default = obj.__private_attributes__[name].default
         if not isinstance(default, BaseInfra):
             continue  # unspecified default
         imethod = default._infra_method
         if imethod is None:
-            continue
+            cls = type(obj).__name__
+            raise RuntimeError(f"Infra {name!r} on {cls} was not applied to a method.")
         imethod.infra_name = name
         if getattr(val, "_infra_name", "") not in (name, ""):
             msg = f"Cannot set name of infra to {name!r}"
@@ -90,10 +97,6 @@ def model_with_infra_validator_before(obj: tp.Any) -> tp.Any:
             # applying same infra to multiple objects
             obj[name] = {x: getattr(val, x) for x in val.model_fields_set}
     return obj
-
-
-class Sentinel:
-    pass
 
 
 class BaseInfra(pydantic.BaseModel):
@@ -155,23 +158,11 @@ class BaseInfra(pydantic.BaseModel):
     def _exclude_from_cls_uid(self) -> tp.List[str]:
         if getattr(self._infra_method, "version", None) is not None:
             return ["."]  # compatibility -> avoid uid change
-        return list(set(self.model_fields) - {"version"})
+        return list(set(type(self).model_fields) - {"version"})
 
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
         self._set_permissions(None)  # set compatibility for permissions as string
-
-    def apply_on(
-        self,
-        method: tp.Callable[..., tp.Any],
-        *args: tp.Any,
-        **kwargs: tp.Any,
-    ) -> None:
-        msg = (
-            "infra.apply_on is deprecated, update your code with @infra.apply "
-            "(see how-to: https://facebookresearch.github.io/brainai/infra/howto.html#migrating-to-new-infra-api)"
-        )
-        raise RuntimeError(msg)
 
     def config(self, uid: bool = True, exclude_defaults: bool = False) -> ConfDict:
         """Exports the task configuration as a ConfigDict
@@ -211,76 +202,23 @@ class BaseInfra(pydantic.BaseModel):
         xpfolder = self.uid_folder()
         if xpfolder is None:
             return
-        configs = {
-            "uid": self.config(uid=True, exclude_defaults=True),  # minimal uid config
-            "full-uid": self.config(uid=True, exclude_defaults=False),  # all uid
-            "config": self.config(uid=False, exclude_defaults=False),  # everything
-        }
-        # check for corrupted configs (can happen in case of full storage)
-        for name in configs:
-            fp = xpfolder / f"{name}.yaml"
-            if fp.exists():
-                try:
-                    ConfDict.from_yaml(fp)
-                except Exception as e:
-                    logger.warning("Deleting corrupted config %s: %s", fp, e)
-                    fp.unlink()
-        # errors happening when multiple processes read/rewrite same file
-        FileErrors = (OSError, FileNotFoundError)
-        # (non-defaults) uid files should match exactly
-        fp = xpfolder / "uid.yaml"
-        if fp.exists():
-            current = configs["uid"].to_yaml()
-            try:
-                expected = fp.read_text("utf8")
-            except FileErrors:
-                expected = current  # bypassing
-            if current != expected:
-                diffs = difflib.ndiff(current.splitlines(), expected.splitlines())
-                diff = "\n".join(diffs)
-                msg = f"Inconsistent uid config for {configs['uid'].to_uid()} in {fp}:\n"
-                msg += f"* got:\n{current!r}\n\n* but uid file contains:\n{expected!r}\n\n(see diff:\n{diff})"
-                msg += f"\n\n(this is for object: {self._obj!r})"
-                raise RuntimeError(msg)
-        fp = xpfolder / "full-uid.yaml"
-        skip_exist = False
-        if fp.exists():
-            # dump to yaml and reload to account for type transformations:
-            curr = ConfDict.from_yaml(configs["full-uid"].to_yaml()).flat()
-            try:
-                prev = ConfDict.from_yaml(fp).flat()
-                skip_exist = True  # supposedly nothing to write
-            except FileErrors:
-                prev = curr
-            if prev != curr:
-                nondefaults = set(configs["uid"].flat())
-                for key, val in curr.items():
-                    if key in nondefaults:
-                        continue
-                    if key not in prev:
-                        continue  # new field, nevermind
-                    if val != prev[key]:
-                        if val == "native" and "frequency" in key:
-                            continue  # TODO remove, this is a temporary hack
-                        if "permissions" in key:
-                            continue  # TODO remove, this is a temporary hack
-                        msg = f"Default {val!r} for {key} of {self._factory()} "
-                        msg += f"seems incompatible (used to be {prev[key]!r})"
-                        msg += f"\n(to ignore, remove {fp})"
-                        raise RuntimeError(msg)
+        # Create ConfigDump using self.config() which handles exclude_from_cache_uid
+        dump = utils.ConfigDump(
+            model=self._obj,
+            uid=self.config(uid=True, exclude_defaults=True),
+            full_uid=self.config(uid=True, exclude_defaults=False),
+        )
+        dump.check_and_write(xpfolder, write=write)
         self._checked_configs = True
-        # dump configs
+        # Set permissions on written files
         if write:
-            for name, cfg in configs.items():
+            for name in ("uid", "full-uid", "config"):
                 fp = xpfolder / f"{name}.yaml"
-                if fp.exists() and (name == "uid" or skip_exist):
-                    continue  # can never be changed
-                with utils.temporary_save_path(fp) as tmp:
-                    cfg.to_yaml(tmp)
-                try:
-                    self._set_permissions(fp)
-                except FileErrors:
-                    pass
+                if fp.exists():
+                    try:
+                        self._set_permissions(fp)
+                    except (OSError, FileNotFoundError):
+                        pass
 
     def _factory(self) -> str:
         cls = self._obj.__class__
@@ -309,22 +247,44 @@ class BaseInfra(pydantic.BaseModel):
         if not hasattr(self, "_uid"):
             self._uid = None  # backward-compatibility
         if self._uid is None:
-            uid = self.config(uid=True, exclude_defaults=True).to_uid()
+            cfg = self.config(uid=True, exclude_defaults=True)
+            uid = cfg.to_uid()
             uid = uid if uid else "default"
-            method = self._factory()
+            params = dict(method=self._factory(), version=self.version, uid=uid)
             parsed = string.Formatter().parse(self._uid_string)
             names = {v[1] for v in parsed if v[1] is not None}
-            expected = {"method", "uid", "version"}
-            if names != expected:
-                msg = f"uid_string {self._uid_string!r} should contain exactly {expected}"
+            if names != set(params):
+                msg = f"uid_string {self._uid_string!r} should contain exactly {set(params)}"
                 msg += f"\nbut got {names} for infra applied on {self._obj!r}"
                 raise ValueError(msg)
-            self._uid = self._uid_string.format(
-                method=method, uid=uid, version=self.version
-            )
+            self._uid = self._uid_string.format(**params)
             utils.recursive_freeze(self._obj)
             msg = "Froze instance %s after computing its uid: %s"
             logger.debug(msg, repr(self._obj), self._uid)
+            # compat
+            if self.folder is not None and uid != "default":
+                folder = Path(self.folder) / self._uid
+                if not folder.exists():
+                    params["uid"] = cfg.to_uid(version=2)
+                    old = Path(self.folder) / self._uid_string.format(**params)
+                    if old.exists():
+                        # rename all folders in cache at once if possible
+                        from exca import helpers
+
+                        helpers.update_uids(self.folder, dryrun=False)
+                    if old.exists():
+                        # if this very cache was not updated
+                        # (eg: because of unexpected uid_string), then fix it manually
+                        msg = "Automatic update fail, manual update to new uid: '%s' -> '%s'"
+                        logger.warning(msg, old, folder)
+                        shutil.move(old, folder)
+            latest = ConfDict.LATEST_UID_VERSION
+            # warn for mixture of versioning
+            if self.folder is not None and ConfDict.UID_VERSION != latest:
+                new = Path(self.folder) / cfg.to_uid(version=latest)
+                if new.exists():
+                    msg = "Found folder with latest version %s but currently using %s"
+                    logger.warning(msg, latest, ConfDict.UID_VERSION)
         return self._uid
 
     def uid_folder(self, create: bool = False) -> Path | None:
@@ -366,7 +326,7 @@ class BaseInfra(pydantic.BaseModel):
             try:
                 Path(path).chmod(self.permissions)
             except Exception as e:
-                msg = f"Failed to set permission to {self.permissions} on {path}\n({e})"
+                msg = f"Failed to set permission to {self.permissions} on '{path}'\n({e})"
                 logger.warning(msg)
 
     def clone_obj(self, *args: tp.Dict[str, tp.Any], **kwargs: tp.Any) -> tp.Any:
@@ -382,7 +342,11 @@ class BaseInfra(pydantic.BaseModel):
         cdict.update(kwargs)
         out = self._obj.model_validate(cdict)
         _ = self.uid()  # trigger uid computation (to propagate dicriminated status)
-        utils.copy_discriminated_status(self._obj, out)
+        try:
+            utils.copy_discriminated_status(self._obj, out)
+        except Exception as e:
+            msg = f"Failed to copy discriminated status, cloning may be slow:\n{e!r}"
+            logger.warning(msg)
         return out
 
     def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
@@ -481,8 +445,8 @@ class InfraMethod(BaseInfraMethod):
         if not isinstance(obj, pydantic.BaseModel):
             raise TypeError("infra can only be added to pydantic.BaseModel")
         # get default
-        if infra_name in obj.model_fields:
-            default_imethod = obj.model_fields[infra_name].default._infra_method
+        if infra_name in type(obj).model_fields:
+            default_imethod = type(obj).model_fields[infra_name].default._infra_method
         elif infra_name.startswith("_"):
             default_imethod = obj.__private_attributes__[infra_name].default._infra_method  # type: ignore
         else:

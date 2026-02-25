@@ -112,6 +112,7 @@ ENV/
 exp_local
 outputs
 data
+tmp
 
 # adding output from unit-tests here
 *-raw.fif

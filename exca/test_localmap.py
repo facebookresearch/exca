@@ -12,7 +12,6 @@ import numpy as np
 import pydantic
 import pytest
 
-from .confdict import ConfDict
 from .map import MapInfra
 
 PACKAGE = MapInfra.__module__.split(".", maxsplit=1)[0]
@@ -62,11 +61,7 @@ def test_local_map_infra(
     out = list(whatever.process([1, 2, 2, 3]))
     assert [x.shape for x in out] == [(1, 13), (2, 13), (2, 13), (3, 13)]
     path = tmp_path
-    if ConfDict.UID_VERSION == 1:
-        uid = f"{__name__}.Whatever.process,1/param1=13-cbb76898"
-    else:
-        uid = f"{__name__}.Whatever.process,1/param1=13-c51ce410"
-    assert whatever.infra.uid() == uid
+    uid = f"{__name__}.Whatever.process,1/param1=13-4c541560"
     if with_folder:
         for name in uid.split("/"):
             path = path / name

@@ -4,8 +4,10 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextvars
 import inspect
 import logging
+import shutil
 import subprocess
 import typing as tp
 from pathlib import Path
@@ -13,8 +15,8 @@ from pathlib import Path
 import pydantic
 import submitit
 
-from .confdict import ConfDict
-from .task import TaskInfra
+from exca.confdict import ConfDict
+from exca.task import TaskInfra
 
 # pylint: disable=typevar-name-incorrect-variance
 X = tp.TypeVar("X", covariant=True)
@@ -41,9 +43,8 @@ class FuncConfig(pydantic.BaseModel):
     @infra.apply
     def build(self) -> tp.Any:
         """Build the underlying buildable object for this config"""
-        params = {
-            name: getattr(self, name) for name in self.model_fields if name != "infra"
-        }
+        fields = type(self).model_fields
+        params = {name: getattr(self, name) for name in fields if name != "infra"}
         return self._func[0](**params)
 
     def __reduce__(self) -> tp.Any:
@@ -119,7 +120,11 @@ class FunctionWithInfra(tp.Generic[X]):
     def config(self, **kwargs: tp.Any) -> FuncConfigProtocol[X]:
         return to_config(self.func, infra=self.infra, **kwargs)
 
-    def __call__(self, **kwargs: tp.Any) -> X:
+    def __call__(self, *args: tp.Any, **kwargs: tp.Any) -> X:
+        if args:
+            msg = "Positional arguments are disabled when using exca.helpers.with_infra"
+            msg += f" (got: {args})"
+            raise RuntimeError(msg)
         return self.config(**kwargs).build()
 
     def __repr__(self) -> str:
@@ -178,15 +183,16 @@ def validate_kwargs(func: tp.Callable[..., tp.Any], kwargs: tp.Dict[str, tp.Any]
     if not has_kwargs:
         additional = set(kwargs) - set(params.keys())
         if additional:
-            raise ValueError(f"Extra parameter(s) for {func}: {additional}")
+            msg = f"Extra parameter(s) for {func}:\n{additional}"
+            msg += f"\n(available: {set(params) - set(kwargs)})"
+            raise ValueError(msg)
     # check for correct types (only basic ones)
     for name, val in kwargs.items():
         if name in params:  # in case of **kwargs, it may not exist
             annot = params[name].annotation
             if annot in (bool, str, int, float) and not isinstance(val, annot):
-                raise TypeError(
-                    f"Wrong type {type(val)} for {name!r} in {func} (expected {annot})"
-                )
+                msg = f"Wrong type {type(val)} for {name!r} in {func} (expected {annot})"
+                raise TypeError(msg)
 
 
 # only used for typing, this is a bit hacky but convenient
@@ -276,12 +282,195 @@ def find_slurm_job(
         if not sub.is_dir():
             continue
         if folder.parent.name == "logs":
-            if all(
-                x.isdigit() for x in sub.name.split("_")
-            ):  # looks like a submitit job folder
+            # looks like a submitit job folder:
+            if all(x.isdigit() for x in sub.name.split("_")):
                 if any(sub.glob("*_submitted.pkl")):  # definitely is one
                     return None  # stop iteratoring through this log folder
         job = find_slurm_job(folder=sub, job_id=job_id)
         if job is not None:
             return job
     return None
+
+
+def update_uids(folder: str | Path, dryrun: bool = True):
+    folder = Path(folder)
+    if any(x in folder.parts for x in ["code", "wandb", "logs"]):
+        return None
+    # if all these files are present, this is the cache folder:
+    if not all((folder / name).exists() for name in ["config.yaml", "uid.yaml"]):
+        # avoid checking the cache folder as this is extra slow
+        # task Vs batch
+        for sub in folder.iterdir():
+            if sub.is_dir():
+                update_uids(sub, dryrun=dryrun)
+        return None
+    cd = ConfDict.from_yaml(folder / "uid.yaml")
+    old = cd.to_uid(version=2)
+    new = cd.to_uid()
+    if new in str(folder):
+        return  # all good
+    if old not in str(folder):
+        if folder.name != "default":
+            msg = "CAUTION: folder name %s does not match old uid pattern %s nor new %s"
+            logger.warning(msg, folder.name, old, new)
+        return
+    newfolder = Path(str(folder).replace(old, new))
+    msg = "Automatically updating folder name to new uid: '%s' -> '%s'"
+    if dryrun:
+        msg += " (dry run)"
+    logger.warning(msg, folder, newfolder)
+    if not dryrun:
+        shutil.move(folder, newfolder)
+
+
+def _get_subclasses(cls: tp.Type[X]) -> list[tp.Type[X]]:
+    """Returns all the subclasses of a given class."""
+    subclasses = []
+    for subclass in cls.__subclasses__():
+        subclasses.append(subclass)
+        subclasses.extend(_get_subclasses(subclass))
+    return subclasses
+
+
+# Context variable to track which instances are currently being serialized (to avoid recursion)
+# Uses object IDs so nested DiscriminatedModels each get their discriminator key
+_dumping_ids: contextvars.ContextVar[tp.FrozenSet[int]] = contextvars.ContextVar(
+    "_dumping_ids", default=frozenset()
+)
+
+
+class DiscriminatedModel(pydantic.BaseModel):
+    """Preserves the types of child class instance passed in pydantic
+    models during serialization and de-serialization. This is achieved
+    by injecting a key upon serialization.
+
+    By default the key is "type" but this can be customized throught heritage
+    (eg: :code:`class SubNamedModel(NamedModel, discriminator_key="name")`)
+
+    Note
+    ----
+    experimental feature
+    """
+
+    # ref: https://github.com/pydantic/pydantic/issues/7366
+
+    model_config = pydantic.ConfigDict(extra="forbid", validation_error_cause=True)
+    _exca_discriminator_key: tp.ClassVar[str] = "type"
+
+    @classmethod
+    def __init_subclass__(
+        cls, discriminator_key: str | None = None, **kwargs: tp.Any
+    ) -> None:
+        if discriminator_key is not None:
+            cls._exca_discriminator_key = discriminator_key
+        super().__init_subclass__(**kwargs)
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
+        key = cls._exca_discriminator_key
+        if key in cls.model_fields:
+            msg = f"{cls!r} cannot have a {key!r} field as it is used as "
+            msg += "discriminator key (automatically added to the serialization)"
+            raise RuntimeError(msg)
+
+    @pydantic.model_serializer(mode="wrap")
+    def _inject_type_on_serialization(
+        self,
+        handler: pydantic.SerializerFunctionWrapHandler,
+        info: pydantic.SerializationInfo,
+    ) -> dict[str, tp.Any]:
+        """Serialize as the actual runtime type (serialize_as_any behavior).
+
+        This ensures all fields from the actual subclass are included in the
+        serialization, even when the type hint is the base class. This allows
+        proper round-trip serialization/deserialization of discriminated models
+        without requiring `serialize_as_any=True` globally.
+        """
+        # Check if THIS instance is already being serialized (recursive call from model_dump below)
+        my_id = id(self)
+        current_ids = _dumping_ids.get()
+        if my_id in current_ids:
+            # delegates to model_dump with serialize_as_any=True
+            # for the actual serialization.
+            return handler(self)
+
+        # Set flag for this instance and use model_dump with serialize_as_any=True
+        token = _dumping_ids.set(current_ids | {my_id})
+        try:
+            result = self.model_dump(
+                mode=info.mode or "python",
+                exclude_defaults=info.exclude_defaults,
+                exclude_none=info.exclude_none,
+                exclude_unset=info.exclude_unset,
+                by_alias=info.by_alias,
+                serialize_as_any=True,
+            )
+        finally:
+            _dumping_ids.reset(token)
+
+        # Inject discriminator key
+        cls = type(self)
+        key = cls._exca_discriminator_key
+        name = cls.__name__
+        result.setdefault(key, name)
+        # serialization can be reentrant in some pydantic version (not sure why)
+        # so the field may be prepopulated
+        if result[key] != name:
+            msg = f"Field {key!r} in {cls} has unexpected value {result[key]}"
+            raise ValueError(msg)
+        return result
+
+    @pydantic.model_validator(mode="wrap")  # noqa  # the decorator position is correct
+    @classmethod
+    def _retrieve_type_on_deserialization(
+        cls, value: tp.Any, handler: pydantic.ValidatorFunctionWrapHandler
+    ) -> "DiscriminatedModel":
+        key = cls._exca_discriminator_key
+        if isinstance(value, str):
+            value = {key: value}  # -> instantiate corresponding class with default params
+        options: list[str] = []
+        if isinstance(value, dict):
+            # WARNING: we do not want to modify `value` which will come from the outer scope
+            # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove the config key
+            value = value.copy()
+            sub_cls_val = value.pop(key, None)
+            if sub_cls_val is not None:
+                sub_classes = _get_subclasses(cls=cls) + [cls]
+                val_classes: dict[str, tp.Any] = {}
+                for s in sub_classes:
+                    # safety check (same key):
+                    if s._exca_discriminator_key != key:
+                        msg = f"discriminator_key differs for {s} and base class {cls}"
+                        raise RuntimeError(msg)
+                    val = s.__name__
+                    past = val_classes.get(val, None)
+                    if past is not None and past.__module__ != s.__module__:
+                        # if the new class with same name is in the same module, it will
+                        # replace it, otherwise it raises for safety
+                        msg = f"2 subclasses from different modules are named {val!r}: {past} and {s}."
+                        raise RuntimeError(msg)
+                    val_classes[val] = s
+                if sub_cls_val not in val_classes:
+                    # https://docs.pydantic.dev/latest/concepts/validators/#raising-validation-errors
+                    # -> should not use a KeyError for pydantic to handle unions in type
+                    msg = f"Unknown subclass discriminator {sub_cls_val!r} for {cls}, available: {list(val_classes)}"
+                    raise ValueError(msg)  # use ValueError
+                sub_cls = val_classes[sub_cls_val]
+                if sub_cls is not cls:
+                    return sub_cls(**value)  # type: ignore
+                else:
+                    return handler(value)  # type: ignore
+            else:
+                subclasses = _get_subclasses(cls=cls)
+                extra_keys = set(value.keys()) - set(cls.model_fields.keys())
+                if subclasses and extra_keys:
+                    options = [x.__name__ for x in subclasses + [cls]]
+        try:
+            return handler(value)  # type: ignore
+        except pydantic.ValidationError as e:
+            if not options:
+                raise
+            msg = f"Validation of {cls.__name__!r} failed; you may have forgotten to specify "
+            msg += f"the discriminator key {cls._exca_discriminator_key!r} "
+            msg += f"(available: {options})\n\nOriginal error: {e}"
+            raise ValueError(msg) from e

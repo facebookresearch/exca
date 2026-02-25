@@ -9,9 +9,13 @@ import typing as tp
 from pathlib import Path
 
 import numpy as np
+import pydantic
 import pytest
 
+import exca
+
 from . import helpers
+from .confdict import ConfDict
 
 
 def my_func(a: int, b: int) -> np.ndarray:
@@ -81,3 +85,123 @@ def test_find_slurm_job(tmp_path: Path) -> None:
     assert job is not None
     assert job.config == {"a": 12}
     assert job.stdout() == "Ice cream"
+
+
+class BaseNamed(helpers.DiscriminatedModel, discriminator_key="name"):
+    common: str = "blublu"
+
+
+class Hello(BaseNamed):
+    num: int = 12
+
+
+class Model(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    sub: BaseNamed
+
+
+class World(Hello):
+    string: str = "world"
+
+
+def test_discriminated_model() -> None:
+    model = Model(sub={"name": "World", "string": "Hello"})  # type: ignore
+    cfg = ConfDict.from_model(model, exclude_defaults=True, uid=True)
+    expected = """sub:
+  name: World
+  string: Hello
+"""
+    assert cfg.to_yaml() == expected
+    # instantiate base
+    model = Model(sub={"name": "BaseNamed"})  # type: ignore
+    assert model.sub.common == "blublu"
+    # instantiate directly
+    kwargs: tp.Any = {"string": "other"}
+    for _ in range(2):
+        w = World(**kwargs)
+        assert w.string == "other"
+        kwargs["name"] = "World"  # must accept key as well
+    # instantiate with string
+    model = Model(sub="World")  # type: ignore
+    assert isinstance(model.sub, World)
+
+
+def test_discriminated_model_errors() -> None:
+    with pytest.raises(ValueError) as e:
+        _ = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore
+    # existing options should be brinted
+    assert "Hello" in str(e.value)
+    with pytest.raises(ValueError, match="discriminator key"):
+        _ = Model(sub={"num": 12})  # type: ignore
+    # base-class fields only: no misleading discriminator hint
+    with pytest.raises(pydantic.ValidationError, match="common") as e3:
+        _ = Model(sub={"common": 12})  # type: ignore
+    assert "discriminator" not in str(e3.value).lower()
+
+
+def test_discriminated_model_bad_field() -> None:
+    with pytest.raises(RuntimeError):
+
+        # pylint: disable=unused-variable
+        class Hello2(helpers.DiscriminatedModel):
+            type: str = "stuff"
+
+
+@pytest.mark.parametrize("with_params", (True, False))
+@pytest.mark.parametrize("exclude_defaults", (True, False))
+@pytest.mark.parametrize("exclude_unset", (True, False))
+def test_discriminated_model_serialize_as_any(
+    with_params: bool, exclude_unset: bool, exclude_defaults: bool
+) -> None:
+    """Test that DiscriminatedModel serializes all fields without needing serialize_as_any=True."""
+    info: tp.Any = {"exclude_defaults": exclude_defaults, "exclude_unset": exclude_unset}
+    params: tp.Any = {"name": "Hello"}
+    if with_params:
+        params["num"] = 13
+    model = Model(sub=params)
+    # the model dump as actual type
+    expected = model.sub.model_dump(**info)
+    assert "name" in expected
+    if with_params or not (exclude_defaults or exclude_unset):
+        assert "num" in expected
+    if not (exclude_defaults or exclude_unset):
+        assert "common" in expected
+    # now the dump through model should hact the same
+    dump = model.model_dump(**info)["sub"]
+    assert dump == expected
+
+
+class DiscriminatedWithInfra(BaseNamed):
+    string: str = "world"
+    infra: exca.MapInfra = exca.MapInfra()
+
+    @infra.apply(item_uid=str)
+    def process(self, nums: list[int]) -> tp.Iterator[int]:
+        for num in nums:
+            yield 2 * num
+
+
+def test_discriminated_model_with_infra(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path}
+    model = Model(sub={"name": "DiscriminatedWithInfra", "infra": infra})  # type: ignore
+    assert "DiscriminatedWithInfra" in model.sub.infra.uid()  # type: ignore
+
+
+class UnionModel(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    sub: DiscriminatedWithInfra | World
+    infra: exca.MapInfra = exca.MapInfra()
+
+    @infra.apply(item_uid=str)
+    def process(self, nums: list[int]) -> tp.Iterator[int]:
+        for num in nums:
+            yield 2 * num
+
+
+def test_discriminated_model_with_union(tmp_path: Path) -> None:
+    model = UnionModel(sub={"name": "World", "string": "hey"})  # type: ignore
+    assert isinstance(model.sub, World)
+    with pytest.raises(pydantic.ValidationError):
+        _ = UnionModel(sub={"name": "Hello"})  # type: ignore
+    expected = "sub={name=World,string=hey}-7f18d064"
+    assert model.infra.uid().endswith(expected)

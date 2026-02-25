@@ -93,7 +93,7 @@ assert cfdict.flat() == {"training.optim.lr": 0.01}
 assert cfdict.to_yaml() == "training.optim.lr: 0.01\n"
 
 # uid computation
-assert cfdict.to_uid() == "training.optim.lr=0.01-346ce994"
+assert cfdict.to_uid() == "training.optim.lr=0.01-0f8936b4"
 ```
 
 Infra objects extensively use such dictionaries and have a `config` method for instantiating the `ConfDict` generated from an object:
@@ -120,33 +120,37 @@ Cache folders are created as `<full_module_import_name>.<class_name>.<method_nam
 Eg: `mypackage.mymodule.TutorialTask.process,1/param=13-fbfu2iow`
 
 Under the hood, data are stored using the `CacheDict` class (see [API here](exca.cachedict.CacheDict)).
-This class has a `dict` interface (`keys`, `items`, `values`, get/set item, contains), the difference is that the data can be stored to/loaded from disk automatically.
-The class is initialized with 2 parameters:
-- the storage folder, if present the data will be stored to disk in the folder, or reloaded from disk
-- `keep_in_ram` flag, if `True` the data will be cached in RAM when stored/reloaded, for faster access
+This class has a `dict`-like interface (`keys`, `items`, `values`, `__getitem__`, `__contains__`), the difference is that the data can be stored to/loaded from disk automatically, and `__setitem__` works through a write context manager for efficiency.
+The class is initialized with these parameters:
+- the storage folder — if present, data will be stored to/loaded from disk
+- `keep_in_ram` flag — if `True`, data is cached in RAM for faster access
+- `cache_type` — the serialization handler to use (e.g. `"MemmapArray"`, `"PandasDataFrame"`); auto-detected if omitted
+
+For details on the serialization system and how to write custom handlers, see [Serialization](serialization.md).
 
 **Example**
 ```python fixture:tmp_path
 import numpy as np
 from exca import cachedict
-# create a cache dict (specialized for numpy arrays)
 cache = cachedict.CacheDict(folder=tmp_path, keep_in_ram=True)
 
 # the dictionary is empty:
 assert not cache
 
-# add a value into the cache
+# writes require a context manager for efficiency with multiple writes
 x = np.random.rand(2, 12)
-cache["blublu"] = x
+with cache.write():
+    cache["blublu"] = x
 assert "blublu" in cache
-# the value is now available
 np.testing.assert_almost_equal(cache["blublu"], x)
 assert set(cache.keys()) == {"blublu"}
 
-# create a new dict instance with same cache folder
+# a new instance with the same folder sees the cached data
 cache2 = cachedict.CacheDict(folder=tmp_path)
-# the data is still available (loading from cache folder)
 assert set(cache2.keys()) == {"blublu"}
 ```
 
-Note that the caching currently heavily relies on the filesystem. This is a limitation of the current version, as caches with more that ~100,000 can become slow to initialize.
+At write time, each thread/process independently creates an `*-info.jsonl` file in which each line is a JSON object providing the key and information on how to read the corresponding data.
+
+`CacheDict` is designed for use within an infra and may be sub-optimal for other use cases (e.g. repeated `__contains__` checks can reload keys from the filesystem to account for writes from other threads/processes).
+

@@ -5,12 +5,15 @@
 # LICENSE file in the root directory of this source tree.
 
 import dataclasses
+import decimal
+import fractions
 import hashlib
 import logging
 import os
 import re
+import sys
 import typing as tp
-from collections import abc
+from collections import OrderedDict, abc
 from pathlib import Path, PosixPath, WindowsPath
 
 import numpy as np
@@ -19,30 +22,65 @@ import yaml as _yaml
 
 from . import utils
 
-try:
-    import torch
-except ImportError:
-    TorchTensor: tp.Any = np.ndarray
-else:
-    TorchTensor = torch.Tensor
-
 logger = logging.getLogger(__name__)
 Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tp.Tuple[str, tp.Any]]
 _sentinel = object()
 OVERRIDE = "=replace="
 
 
-def _special_representer(dumper: tp.Any, data: tp.Any) -> tp.Any:
-    "Represents Path instances as strings"
-    if isinstance(data, (PosixPath, WindowsPath)):
-        return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
-    elif isinstance(data, (np.float64, np.int64, np.float32, np.int32)):
-        return dumper.represent_scalar("tag:yaml.org,2002:float", str(float(data)))
-    raise NotImplementedError(f"Cannot represent data {data} of type {type(data)}")
+def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
+    return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-for t in (PosixPath, WindowsPath, np.float32, np.float64, np.int32, np.int64):
-    _yaml.representer.SafeRepresenter.add_representer(t, _special_representer)
+def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
+    """Recursively cast content of list and ordered dict to to confdicts"""
+    # Note: avoid replacing native dicts as they may contain OVERRIDE tag
+    # which needs to be processed later on
+    if isinstance(obj, OrderedDict):
+        sub = {x: _propagate_confdict(y, replace_dicts=True) for x, y in obj.items()}
+        return OrderedDict(sub)
+    if replace_dicts and isinstance(obj, dict):
+        return ConfDict(obj)
+    if _is_seq(obj):
+        Container = obj.__class__
+        return Container([_propagate_confdict(v, replace_dicts=True) for v in obj])  # type: ignore
+    if isinstance(obj, dict):
+        return obj
+    if isinstance(obj, ConfDict):
+        return obj
+    return obj
+
+
+def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
+    """Internal recursive setitem on ConfDict/list"""
+    p, *rest = key.split(".", maxsplit=1)
+    if isinstance(obj, dict):
+        sub = obj.setdefault(p, ConfDict())
+    elif _is_seq(obj) and p.isdigit():
+        p = int(p)  # type: ignore
+        sub = obj[p]  # type: ignore
+    else:
+        raise TypeError(f"Cannot handle key {p!r} on existing container {obj!r}")
+    # replace sub by dict if not dict or sequence
+    if not _is_seq(sub) and not isinstance(sub, dict):
+        sub = ConfDict()
+        if _is_seq(obj):
+            obj[p] = sub  # type: ignore
+        else:
+            dict.__setitem__(obj, p, sub)
+    if rest:
+        _set_item(sub, rest[0], val)
+        return
+    # final part
+    val = _propagate_confdict(val, replace_dicts=False)
+    # list case
+    if _is_seq(obj):
+        obj[p] = val  # type: ignore
+        return
+    if isinstance(val, dict) and not isinstance(val, OrderedDict):
+        obj[p].update(val)
+    else:
+        dict.__setitem__(obj, p, val)
 
 
 class ConfDict(dict[str, tp.Any]):
@@ -58,10 +96,14 @@ class ConfDict(dict[str, tp.Any]):
 
     Note
     ----
-    This is designed for configurations, so it probably does not scale well to 100k+ keys
+    - This is designed for configurations, so it probably does not scale well to 100k+ keys
+    - dicts are merged expect if containing the key :code:`"=replace="`,
+      in which case they replace the content. On the other hand, non-dicts always
+      replace the content.
     """
 
-    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", "2"))
+    LATEST_UID_VERSION = 3
+    UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", LATEST_UID_VERSION))
     OVERRIDE = OVERRIDE  # convenient to have it here
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
@@ -91,32 +133,24 @@ class ConfDict(dict[str, tp.Any]):
         - exclude: tuple of field names to be excluded
         - force_include: tuple of fields to include in all cases (even if excluded or set to defaults)
         """
-        return ConfDict(utils.to_dict(model, uid=uid, exclude_defaults=exclude_defaults))
+        exporter = utils.ConfigExporter(uid=uid, exclude_defaults=exclude_defaults)
+        return ConfDict(exporter.apply(model))
 
     def __setitem__(self, key: str, val: tp.Any) -> None:
-        parts = key.split(".")
-        cls = self.__class__
-        sub = self
-        for p in parts[:-1]:
-            sub = sub.setdefault(p, cls())
-        if isinstance(val, dict):
-            sub.setdefault(parts[-1], cls()).update(val)
-        else:
-            if isinstance(val, abc.Sequence) and not isinstance(val, str):
-                if cls.UID_VERSION == 1:
-                    val = [cls(v) if isinstance(v, dict) else v for v in val]
-                else:
-                    Container = val.__class__
-                    val = Container([cls(v) if isinstance(v, dict) else v for v in val])  # type: ignore
-            dict.__setitem__(sub, parts[-1], val)
+        if not isinstance(key, str):
+            raise TypeError("ConfDict only support str keys, got {key!r}")
+        _set_item(self, key, val)
 
     def __getitem__(self, key: str) -> tp.Any:
         parts = key.split(".")
         sub = self
         for p in parts:
-            if not isinstance(sub, dict):
-                raise KeyError(key)
-            sub = dict.__getitem__(sub, p)
+            if isinstance(sub, dict):
+                sub = dict.__getitem__(sub, p)
+            elif _is_seq(sub) and p.isdigit():
+                sub = sub[int(p)]
+            else:
+                raise KeyError(f"Invalid key {key!r} (no subkey {p!r} on {sub!r})")
         return sub
 
     def get(self, key: str, default: tp.Any = None) -> tp.Any:
@@ -160,9 +194,11 @@ class ConfDict(dict[str, tp.Any]):
         in this case the existing keys in the sub-dictionary are wiped
         """
         if mapping is not None:
-            if isinstance(mapping, abc.Mapping):
-                mapping = mapping.items()
-            kwargs.update(dict(mapping))
+            if not isinstance(mapping, abc.Mapping):
+                mapping = dict(mapping)
+            kwargs.update(mapping)
+        if not kwargs:
+            return
         if kwargs.pop(OVERRIDE, False):
             self.clear()
         for key, val in kwargs.items():
@@ -173,6 +209,9 @@ class ConfDict(dict[str, tp.Any]):
         {"training.dataloader.lr": 0.01, "training.optim.name": "Ada"}
         """
         return _flatten(self)  # type: ignore
+
+    def copy(self) -> "ConfDict":
+        return self.__class__(super().copy())
 
     @classmethod
     def from_yaml(cls, yaml: str | Path | tp.IO[str] | tp.IO[bytes]) -> "ConfDict":
@@ -202,9 +241,12 @@ class ConfDict(dict[str, tp.Any]):
             Path(filepath).write_text(out, encoding="utf8")
         return out
 
-    def to_uid(self) -> str:
+    def to_uid(self, version: None | int = None) -> str:
         """Provides a unique string for the config"""
-        return _to_uid(_to_simplified_dict(self))
+        if version is None:
+            version = ConfDict.UID_VERSION
+        data = _to_simplified_dict(self)
+        return UidMaker(data, version=version).format()
 
     @classmethod
     def from_args(cls, args: list[str]) -> "ConfDict":
@@ -227,15 +269,18 @@ def _to_simplified_dict(data: tp.Any) -> tp.Any:
     Eg:
     :code:`{"a": 1, "b": {"c": 12}} -> {"a": 1, "b.c": 12}`
     """
-    if isinstance(data, ConfDict):
+    if isinstance(data, (OrderedDict, ConfDict)):  # TODO fix to dict in next version
         out = {}
         for x, y in data.items():
             y = _to_simplified_dict(y)
-            if isinstance(y, dict) and len(y) == 1:
+            if isinstance(y, dict) and len(y) == 1 and not isinstance(y, OrderedDict):
+                # note: keep structure for ordered dicts
                 x2, y2 = next(iter(y.items()))
                 x = f"{x}.{x2}"
                 y = y2
             out[x] = y
+        if isinstance(data, OrderedDict):
+            out = OrderedDict(out)
         return out
     if isinstance(data, list):
         return [_to_simplified_dict(x) for x in data]
@@ -272,62 +317,16 @@ def _flatten(data: tp.Any) -> tp.Any:
         return output
     if isinstance(data, abc.Sequence):
         return data.__class__([_flatten(y) for y in data])  # type: ignore
-    logger.warning("Replacing unsupported data type by None: %s (%s)", type(data), data)
-    return None
+    return data
 
 
 UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 
 
-def _to_uid(data: tp.Any) -> str:
-    """Creates a uid based on the data"""
-    if ConfDict.UID_VERSION > 1:
-        return UidMaker(data).format()
-    out = _format_data(data)
-    if out.startswith("{") and out.endswith("}"):
-        out = out[1:-1]
-    if not out:
-        return out
-    hashbase = str(data)  # str data is unreliable
-    h = hashlib.md5(hashbase.encode("utf8")).hexdigest()[:8]
-    if len(out) > 83:
-        out = out[:40] + "[.]" + out[-40:]
-    out = out.translate(UNSAFE_TABLE)
-    out = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", out)
-    return f"{out}-{h}"
-
-
-def _format_data(data: tp.Any) -> str:
-    """format data into a string"""
-    if isinstance(data, (np.ndarray, TorchTensor)):
-        return str(data)
-    if isinstance(data, dict):
-        parts = [f"{key}={_format_data(val)}" for key, val in data.items()]
-        return "{" + ",".join(parts) + "}"
-    if isinstance(data, (set, tuple, list)):
-        parts = [_format_data(val) for val in data]
-        return "[" + ",".join(parts) + "]"
-    if isinstance(data, (float, np.float32)):
-        if data.is_integer():
-            return str(int(data))
-        if 1e-3 <= abs(data) <= 1e4:  # type: ignore
-            return f"{data:.2f}"
-        return f"{data:.2e}"
-    if isinstance(data, (Path, int, np.int32, np.int64)) or data is None:
-        data = str(data)
-    if not isinstance(data, str):
-        key = "CONFDICT_UID_TYPE_BYPASS"
-        if key not in os.environ:
-            msg = f"Unsupported type {type(data)} for {data}\n"
-            msg += f"(bypass this error at your own risks by exporting {key}=1)"
-            raise TypeError(msg)
-        logger.warning(
-            "Converting type %s to string for uid computation (%s)", type(data), key
-        )
-        data = str(data)
-    if len(data) > 27:
-        data = data[:12] + "[.]" + data[-12:]
-    return data
+def _dict_sort(item: tuple[str, "UidMaker"]) -> tuple[int, str]:
+    """sorting key for uid maker, smaller strings first"""
+    key, maker = item
+    return (len(maker.string + key), key)
 
 
 class UidMaker:
@@ -336,34 +335,76 @@ class UidMaker:
     combines string and hash into the uid.
     """
 
-    def __init__(self, data: tp.Any) -> None:
-        if isinstance(data, (np.ndarray, TorchTensor)):
-            if isinstance(data, TorchTensor):
+    # https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations
+
+    def __init__(self, data: tp.Any, version: int | None = None) -> None:
+        if version is None:
+            version = ConfDict.UID_VERSION
+        self.brackets: tuple[str, str] | None = None
+        typestr = ""
+        # convert to simpler types
+        if "torch" in sys.modules:
+            import torch
+
+            if isinstance(data, torch.Tensor):
                 data = data.detach().cpu().numpy()
+        if isinstance(data, (float, np.float32)) and data.is_integer():
+            data = int(data)
+        elif isinstance(data, Path):
+            data = str(data)
+        # handle base types
+        if isinstance(data, np.ndarray):
+            if version > 2:
+                data = np.ascontiguousarray(data)
             h = hashlib.md5(data.tobytes()).hexdigest()
-            self.string = "data-" + h[:8]
-            self.hash = h
+            if version > 2:
+                self.hash = f"{','.join(str(s) for s in data.shape)}-{h[:8]}"
+                self.string = f"data-{self.hash}"
+            else:
+                self.string = "data-" + h[:8]
+                self.hash = h
+            typestr = "array"
         elif isinstance(data, dict):
-            udata = {x: UidMaker(y) for x, y in data.items()}
-            keys = sorted(data)
+            udata = {x: UidMaker(y, version=version) for x, y in data.items()}
+            if version > 2:
+                if isinstance(data, OrderedDict):
+                    keys = list(data)  # keep order only for ordered-dict
+                else:
+                    keys = [xy[0] for xy in sorted(udata.items(), key=_dict_sort)]
+            else:
+                keys = sorted(data)
             parts = [f"{key}={udata[key].string}" for key in keys]
-            self.string = "{" + ",".join(parts) + "}"
-            self.hash = ",".join(udata[key].hash for key in keys)
+            self.string = ",".join(parts)
+            self.brackets = ("{", "}")
+            typestr = "dict"
+            if version > 2:
+                self.hash = ",".join(f"{key}={udata[key].hash}" for key in keys)
+            else:
+                # incorrect (legacy) hash, can collide
+                self.hash = ",".join(udata[key].hash for key in keys)
         elif isinstance(data, (set, tuple, list)):
-            items = [UidMaker(val) for val in data]
-            self.string = "[" + ",".join(i.string for i in items) + "]"
+            items = [UidMaker(val, version=version) for val in data]
+            if isinstance(data, set):
+                items.sort(key=lambda i: i.string)
+            self.string = ",".join(i.string for i in items)
             self.hash = ",".join(i.hash for i in items)
-        elif isinstance(data, (float, np.float32)):
-            self.hash = str(hash(data))
-            if data.is_integer():
-                self.string = str(int(data))
-            elif 1e-3 <= abs(data) <= 1e4:  # type: ignore
+            self.brackets = ("(", ")") if version > 2 else ("[", "]")
+            typestr = "seq"
+        elif isinstance(data, (float, decimal.Decimal, fractions.Fraction)):
+            self.hash = str(hash(data))  # deterministic for numeric types:
+            # https://docs.python.org/3/library/stdtypes.html#hashing-of-numeric-types
+            data = float(data)  # to keep same string for decimal and fractions
+            typestr = "float"
+            if isinstance(data, (decimal.Decimal, fractions.Fraction)):
+                self.string = str(data)
+            elif 1e-3 <= abs(data) <= 1e4:
                 self.string = f"{data:.2f}"
             else:
                 self.string = f"{data:.2e}"
-        elif isinstance(data, (str, Path, int, np.int32, np.int64)) or data is None:
+        elif isinstance(data, (str, int, np.int32, np.int64)) or data is None:
             self.string = str(data)
             self.hash = self.string
+            typestr = "str" if isinstance(data, str) else "int"
         else:  # unsupported case
             key = "CONFDICT_UID_TYPE_BYPASS"
             if key not in os.environ:
@@ -372,25 +413,37 @@ class UidMaker:
                 raise TypeError(msg)
             msg = "Converting type %s to string for uid computation (%s)"
             logger.warning(msg, type(data), key)
+            typestr = "unknown"
             self.string = str(data)
             self.hash = self.string
             try:
                 self.hash = str(hash(data))
             except TypeError:
                 pass
+        if not typestr:
+            raise RuntimeError("No type found (this should not happen)")
         # clean string
-        s = self.string.translate(UNSAFE_TABLE)
-        self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", s)
+        self.string = self.string.translate(UNSAFE_TABLE)
         # avoid big names
-        if len(self.string) > 82:
-            self.string = self.string[:35] + "[.]" + self.string[-35:]
+        if version > 2:
+            self.string = re.sub(r"[^a-zA-Z0-9{}\-=,_\.\(\)]", "", self.string)
+            if len(self.string) > 128:
+                self.string = self.string[:128] + f"...{len(self.string) - 128}"
+            if self.brackets:
+                self.string = self.brackets[0] + self.string + self.brackets[1]
+                self.hash = self.brackets[0] + self.hash + self.brackets[1]
+            self.hash = f"{typestr}:{self.hash}"  # avoid hash type collision
+        else:
+            self.string = re.sub(r"[^a-zA-Z0-9{}\]\[\-=,\.]", "", self.string)
+            if self.brackets:
+                self.string = self.brackets[0] + self.string + self.brackets[1]
+            if len(self.string) > 82:
+                self.string = self.string[:35] + "[.]" + self.string[-35:]
 
     def format(self) -> str:
         s = self.string
-        if (s.startswith("{") and s.endswith("}")) or (
-            s.startswith("[") and s.endswith("]")
-        ):
-            s = s[1:-1]
+        if self.brackets:
+            s = s[len(self.brackets[0]) : -len(self.brackets[1])]
         if not s:
             return ""
         h = hashlib.md5(self.hash.encode("utf8")).hexdigest()[:8]
@@ -400,13 +453,36 @@ class UidMaker:
         return f"UidMaker(string={self.string!r}, hash={self.hash!r})"
 
 
-# # single-line human-readable params
-# readable = compress_dict(config, 6)[:30]
-#
-# # add hash, to ensure unique identifier
-# # (even if the human-readable param happen
-# # to be identical across to different dicts)
-# hash_obj = hashlib.sha256()
-# hash_obj.update(repr(config).encode())
-# hash_id = hash_obj.hexdigest()[:10]
-# readable += '_' + hash_id
+# -------------------------------------------------------------------------
+# YAML SafeRepresenter registrations
+# -------------------------------------------------------------------------
+
+
+def _special_representer(dumper: tp.Any, data: tp.Any) -> tp.Any:
+    "Represents Path instances as strings"
+    if isinstance(data, (PosixPath, WindowsPath)):
+        return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
+    elif isinstance(data, (np.float64, np.int64, np.float32, np.int32)):
+        return dumper.represent_scalar("tag:yaml.org,2002:float", str(float(data)))
+    elif isinstance(data, OrderedDict):
+        return dumper.represent_mapping("tag:yaml.org,2002:map", data.items())
+    raise NotImplementedError(f"Cannot represent data {data} of type {type(data)}")
+
+
+for t in (
+    PosixPath,
+    WindowsPath,
+    np.float32,
+    np.float64,
+    np.int32,
+    np.int64,
+    OrderedDict,
+):
+    _yaml.representer.SafeRepresenter.add_representer(t, _special_representer)
+
+# ConfDict (dict subclass) must be representable by SafeDumper so that
+# yaml.safe_dump works when ConfDict values appear nested in plain dicts
+# (e.g. via _exca_uid_dict_override shallow copies).
+_yaml.representer.SafeRepresenter.add_representer(
+    ConfDict, lambda dumper, data: dumper.represent_dict(data)
+)

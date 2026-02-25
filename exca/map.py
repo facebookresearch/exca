@@ -5,8 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 
 import collections
+import contextlib
 import dataclasses
-import functools
 import inspect
 import itertools
 import logging
@@ -19,11 +19,12 @@ from pathlib import Path
 
 import numpy as np
 import pydantic
+import submitit
 from submitit.core import utils
 
 from . import base, slurm
 from .cachedict import CacheDict
-from .dumperloader import DumperLoader
+from .utils import ShortItemUid
 
 MapFunc = tp.Callable[[tp.Sequence[tp.Any]], tp.Iterator[tp.Any]]
 X = tp.TypeVar("X")
@@ -31,6 +32,21 @@ Y = tp.TypeVar("Y")
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
 logger = logging.getLogger(__name__)
 Mode = tp.Literal["cached", "force", "read-only"]
+
+
+def _set_tqdm(items: X, total: int | None = None) -> X:
+    # (incorrect typing but nevermind)
+    if total is None:
+        total = len(items)  # type: ignore
+    if total <= 1:
+        return items
+    try:
+        import tqdm
+
+        items = tqdm.tqdm(items, total=total)  # type: ignore
+    except ImportError:
+        pass
+    return items
 
 
 # FOR COMPATIBILITY
@@ -61,7 +77,7 @@ class JobChecker:
 
     def add(self, jobs: tp.Iterable[tp.Any]) -> None:
         """Add jobs to the list of running jobs"""
-        self.folder.mkdir(exist_ok=True)
+        self.folder.mkdir(exist_ok=True, parents=True)
         for job in jobs:
             if not job.done():
                 job_path = self.folder / (uuid.uuid4().hex[:8] + ".pkl")
@@ -78,7 +94,7 @@ class JobChecker:
             except Exception:  # pylint: disable=broad-except
                 continue
             if not job.done():
-                msg = "Waiting for completion of pre-existing map job: %s\nin %s"
+                msg = "Waiting for completion of pre-existing map job: %s\nin '%s'"
                 logger.info(msg, job, self.folder)
                 job.wait()
                 waited = True
@@ -164,7 +180,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     keep_in_ram: bool = True
     # job configuration
     max_jobs: int | None = 128
-    min_samples_per_job: int = 2048
+    min_samples_per_job: int = 1
     forbid_single_item_computation: bool = False  # for local/slurm/auto
     cluster: tp.Literal[None, "auto", "local", "slurm", "debug", "threadpool", "processpool"] = None  # type: ignore
     # mode among:
@@ -215,12 +231,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 raise RuntimeError(f"Infra was not applied: {self!r}")
             cache_type = imethod.cache_type
             cache_path = self.uid_folder(create=True)
-            # TODO can be removed?
-            if cache_type is None:
-                Cls = DumperLoader.default_class(
-                    check_map_function_output(imethod.method)
-                )
-                cache_type = Cls.__name__
             if isinstance(self.permissions, str):
                 self._set_permissions(None)
             if isinstance(self.permissions, str):
@@ -237,6 +247,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         self,
         *,
         item_uid: tp.Callable[[tp.Any], str],
+        item_uid_max_length: int | None = 256,
         exclude_from_cache_uid: tp.Iterable[str] | base.ExcludeCallable = (),
         cache_type: str | None = None,
     ) -> tp.Callable[[C], C]:
@@ -249,12 +260,24 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             of a type X, and yielding one output of a type Y for each input item.
         item_uid: callable from item to str
             function returning a uid from the item of a map
+        item_uid_max_length: int or None
+            maximum length of the item_uid output before it gets shortened for efficiency
+            (as all uids need to be read at first call). Use None to deactivate shortening.
         exclude_from_cache_uid: iterable of str / method / method name
             fields that must be removed from the uid of the cache (in addition to
             the ones already removed from the class uid)
         cache_type: str
             name of the cache class to use (inferred by default)
             this can for instance be used to enforce eg a memmap instead of loading arrays
+            The available options include:
+            - :code:`NumpyArray`:  stores numpy arrays as npy files (default for np.ndarray)
+            - :code:`NumpyMemmapArray`: similar to NumpyArray but reloads arrays as memmaps
+            - :code:`MemmapArrayFile`: stores multiple np.ndarray into a unique memmap file
+              (strongly adviced in case of many arrays)
+            - :code:`PandasDataFrame`: stores pandas dataframes as csv (default for dataframes)
+            - :code:`ParquetPandasDataFrame`: stores pandas dataframes as parquet files
+            - :code:`TorchTensor`: stores torch.Tensor as .pt file (default for tensors)
+            - :code:`Pickle`: stores object as pickle file (fallback default)
 
         Usage
         -----
@@ -266,8 +289,11 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         #     [tp.Callable[[pydantic.BaseModel, tp.Sequence[X]], tp.Iterator[Y]]],
         #     tp.Callable[[tp.Sequence[X]], tp.Iterator[Y]],
         # ]:
-        params = locals()
+        params = dict(locals())
         params.pop("self")
+        max_length = params.pop("item_uid_max_length")
+        if max_length is not None:
+            params["item_uid"] = ShortItemUid(params["item_uid"], max_length=max_length)
         if self._infra_method is not None:
             raise RuntimeError(f"Infra was already applied: {self._infra_method}")
 
@@ -290,9 +316,12 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         except ValueError:
             pass  # no caching
         else:
-            missing = {k: item for k, item in missing.items() if k not in cache}
+            if not isinstance(cache, CacheDict):
+                raise TypeError(f"Unexpected type for cache: {cache}")
+            with cache.frozen_cache_folder():
+                # context: avoid reloading info files for each missing __contain__ check
+                missing = {k: item for k, item in missing.items() if k not in cache}
         self._check_configs(write=True)  # if there is a cache, check config or write it
-        executor = self.executor()
         if not hasattr(self, "mode"):  # compatibility
             self.mode = "cached"
         if self.mode == "force":
@@ -306,16 +335,20 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 for uid in to_remove:
                     del cache[uid]
             missing = {x: y for x, y in items.items() if x not in self._recomputed}
-            self._recomputed = set(missing)
-        if missing and self.mode == "read-only":
-            raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
-        if missing and executor is not None:  # wait for items being computed
-            jcheck = JobChecker(folder=executor.folder)
-            jcheck.wait()
-            # update cache dict and recheck as actual checking for keys updates the dict
-            keys = set(self.cache_dict)  # update cache dict
-            missing = {k: item for k, item in missing.items() if k not in keys}
-        if len(items) == 1 and len(missing) == 1 and self.forbid_single_item_computation:
+            if isinstance(cache, CacheDict):
+                # dont record computed items if no cache
+                self._recomputed |= set(missing)
+        if missing:
+            if self.mode == "read-only":
+                raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
+            executor: submitit.Executor | None = self.executor()
+            if executor is not None:  # wait for items being computed
+                jcheck = JobChecker(folder=executor.folder)
+                jcheck.wait()
+                # update cache dict and recheck as actual checking for keys updates the dict
+                keys = set(self.cache_dict)  # update cache dict
+                missing = {k: item for k, item in missing.items() if k not in keys}
+        if len(items) == len(missing) == 1 and self.forbid_single_item_computation:
             key, item = next(iter(missing.items()))
             raise RuntimeError(
                 f"Trying to compute single item {item!r} with key {key!r}\n"
@@ -383,6 +416,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             )
             [j.result() for j in jobs]  # wait for processing to complete
             logger.info("Finished processing %s samples for %s", len(missing), uid)
+            folder = self.uid_folder()
+            if folder is not None:
+                os.utime(folder)  # make sure the modified time is updated
         msg = "Recovering %s items for %s from %s"
         # using factory because uid is too slow for here
         logger.debug(msg, len(items), self._factory(), self.cache_dict)
@@ -406,6 +442,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             np.random.shuffle(missing)
             if pool is None:
                 # run locally
+                msg = "Computing %s missing items"
+                logger.debug(msg, len(missing))
                 cached = self.folder is not None
                 out = self._call_and_store(
                     [ki[1] for ki in missing], use_cache_dict=cached
@@ -437,23 +475,21 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     uid = self.uid()
                     msg = "Sent %s items for %s into a %s"
                     logger.info(msg, len(missing), uid, pool)
-                    iterator = futures.as_completed(jobs)
-                    try:
-                        import tqdm
-
-                        iterator = tqdm.tqdm(iterator, total=len(missing))  # type: ignore
-                    except ImportError:
-                        pass
+                    iterator = _set_tqdm(futures.as_completed(jobs), total=len(jobs))
                     for job in iterator:
                         out.update(job.result())  # raise asap
                 logger.info("Finished processing %s items for %s", len(missing), uid)
+            folder = self.uid_folder()
+            if folder is not None:
+                os.utime(folder)  # make sure the modified time is updated
         try:
             cache_dict = self.cache_dict
         except ValueError:  # no caching
             return (out[k] for k, _ in uid_items)
         if out:  # keep in ram activated but no folder
-            for x, y in out.items():
-                cache_dict[x] = y
+            with cache_dict.write():
+                for x, y in out.items():
+                    cache_dict[x] = y
         msg = "Recovering %s items for %s from %s"
         # using factory because uid is too slow for here
         logger.debug(msg, len(uid_items), self._factory(), self.cache_dict)
@@ -461,8 +497,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
     def _call_and_store(
         self, items: tp.Sequence[tp.Any], use_cache_dict: bool = True
-    ) -> tp.Dict[str, tp.Any]:
-        d: tp.Dict[str, tp.Any] = self.cache_dict if use_cache_dict else {}  # type: ignore
+    ) -> dict[str, tp.Any]:
+        d: dict[str, tp.Any] = self.cache_dict if use_cache_dict else {}  # type: ignore
         imethod = self._infra_method
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
@@ -472,41 +508,20 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             items = [item for item in items if item_uid(item) not in keys]
         if isinstance(self, slurm.SubmititMixin):  # dependence to mixin
             if self.workdir is not None and self.cluster is not None and items:
-                logger.info("Running from working directory: %s", os.getcwd())
-        method = functools.partial(imethod.method, self._obj)
-        outputs = method(items)
+                logger.info("Running from working directory: '%s'", os.getcwd())
+        outputs = self._run_method(items)
         sentinel = base.Sentinel()
-        for item, output in itertools.zip_longest(items, outputs, fillvalue=sentinel):
-            if item is sentinel or output is sentinel:
-                raise RuntimeError(
-                    f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
-                )
-            d[item_uid(item)] = output
+        with contextlib.ExitStack() as estack:
+            if isinstance(d, CacheDict):
+                estack.enter_context(d.write())
+            in_out = itertools.zip_longest(_set_tqdm(items), outputs, fillvalue=sentinel)
+            for item, output in in_out:
+                if item is sentinel or output is sentinel:
+                    msg = f"Cached function did not yield exactly once per item: {item=!r}, {output=!r}"
+                    raise RuntimeError(msg)
+                d[item_uid(item)] = output
         # don't return the whole cache dict if data is cached
         return {} if use_cache_dict else d
-
-
-class BatchInfra(MapInfra):
-
-    def model_post_init(self, log__: tp.Any) -> None:
-        super().model_post_init(log__)
-        # deprecated
-        raise RuntimeError("BatchInfra was renamed to MapInfra")
-
-
-def check_map_function_output(func: tp.Callable[..., tp.Any]) -> tp.Type[tp.Any]:
-    annot = inspect.signature(func).return_annotation
-    origin = tp.get_origin(annot)
-    allowed = (
-        collections.abc.Generator,
-        collections.abc.Iterator,
-        collections.abc.Iterable,
-    )
-    if origin not in allowed:
-        msg = f"Origin {origin} of return type hint {annot} for function {func.__qualname__!r} "
-        msg += "is not supported, use Iterator or Generator"
-        raise TypeError(msg)
-    return tp.get_args(annot)[0]  # type: ignore
 
 
 @dataclasses.dataclass

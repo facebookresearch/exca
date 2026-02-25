@@ -68,6 +68,7 @@ jobs:
         source activate ./ci_env
         pip show pytest
         pytest exca --durations=10
+        python -m exca.test_safeguard  # checks no unneeded imports
 
     - name: Test README code blocks
       run: |
@@ -75,9 +76,9 @@ jobs:
         # update readmes to avoid running on slurm:
         sed -i 's/cluster: slurm/cluster: null/g' docs/infra/*.md
         sed -i 's/\"auto\"/None/g' README.md
-        # on Mac: sed -i '' 's/cluster: slurm/cluster: null/g' infra/*.md
-        # check readmes
-        pytest --markdown-docs -m markdown-docs .
+        # on Mac: sed -i '' 's/cluster: slurm/cluster: null/g' docs/infra/*.md
+        # check readmes (only README.md and docs/ folder, not internal specs)
+        pytest --markdown-docs -m markdown-docs README.md docs/
 
     - name: Run basic pylint
       run: |

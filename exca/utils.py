@@ -7,21 +7,22 @@
 import collections
 import contextlib
 import copy
+import difflib
+import hashlib
 import logging
 import os
+import shutil
+import sys
 import typing as tp
 import uuid
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pydantic
+import yaml as _yaml
 
-try:
-    import torch
-except ImportError:
-    TorchTensor: tp.Any = np.ndarray
-else:
-    TorchTensor = torch.Tensor
+from . import helpers
 
 _default = object()  # sentinel
 EXCLUDE_FIELD = "_exclude_from_cls_uid"
@@ -51,16 +52,161 @@ def _get_uid_info(
         discriminator = model.__dict__.get(DISCRIMINATOR_FIELD, DiscrimStatus.NONE)
         if DiscrimStatus.is_discriminator(discriminator):
             uid_info[FORCE_INCLUDED].add(discriminator)
-
     return uid_info  # type: ignore
 
 
-class ExportCfg(pydantic.BaseModel):
+class ConfigExporter(pydantic.BaseModel):
+    """Enables exporting a pydantic.BaseModel configuration as a dictionary
+
+    Parameters
+    ----------
+    uid: bool
+        if True, uses the _exclude_from_cls_uid field/method to filter in and out
+        some fields
+    exclude_defaults: bool
+        if True, values that are set to defaults are not included
+    ignore_first_discriminator: bool
+        first discriminator can be ignored to avoid signature of a model to depend
+        on if it is part of a bigger hierarchy or not
+    ignore_first_override: bool
+        ignore the _exca_uid_dict_override method override on first call, this is useful to
+        avoid infinite recursion without the method itself when we want to tamper
+        with the default config export.
+
+    Notes
+    -----
+    - OrderedDict are preserved as OrderedDict to allow for order specific uids
+    - use exporter.apply(model) to get the config
+    """
+
     uid: bool = False
     exclude_defaults: bool = False
-    # first discriminator needs to be ignored to avoid signature of a model to depend
-    # on if it is part of a bigger hierarchy or not
     ignore_first_discriminator: bool = True
+    ignore_first_override: bool = False
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    def apply(self, model: pydantic.BaseModel) -> dict[str, tp.Any]:
+        if self.exclude_defaults:
+            _set_discriminated_status(model)
+        out = model.model_dump(exclude_defaults=self.exclude_defaults, mode="json")
+        self._post_process_dump(model, out)
+        return out
+
+    def _post_process_dump(self, obj: tp.Any, dump: dict[str, tp.Any]) -> bool:
+        # handles uid / defaults / discriminators / ordered dict
+        cfg = self
+        if cfg.ignore_first_discriminator or cfg.ignore_first_override:
+            # dont ignore for submodels
+            cfg = self.model_copy()
+            cfg.ignore_first_discriminator = False
+            cfg.ignore_first_override = False
+        forced = set()
+        bobj = obj
+        if isinstance(obj, pydantic.BaseModel):
+            if self.exclude_defaults and self.uid and not self.ignore_first_override:
+                if hasattr(obj, "_exca_uid_dict_override"):
+                    # bypass used for custom representations, for Chain models for instance
+                    dump.clear()  # override the config
+                    dump.update(dict(obj._exca_uid_dict_override()))
+                    return True
+            info = _get_uid_info(
+                obj, ignore_discriminator=self.ignore_first_discriminator
+            )
+            excluded = info[UID_EXCLUDED]
+            forced = info[FORCE_INCLUDED]
+            excluded -= forced  # forced taks over
+            fields = set(type(obj).model_fields)
+            missing = (excluded | forced) - (fields | {"."})
+
+            if cfg.uid and "." in excluded:
+                dump.clear()
+                return False
+            if missing:
+                raise ValueError(
+                    "Field(s) specified for exclusion/inclusion do(es) not exist:\n"
+                    f"{missing}\n(existing on {obj}: {fields})"
+                )
+            if cfg.uid:
+                for name in excluded:
+                    dump.pop(name, None)
+            for name in forced:
+                if name not in dump:
+                    dump[name] = cfg._dump(getattr(obj, name))
+            # add required field to force ones, to make sure we don't remove them later on
+            reqs = {
+                name
+                for name, field in type(obj).model_fields.items()
+                if field.is_required()
+            }
+            forced |= reqs
+            obj = dict(obj)
+        if isinstance(obj, dict):
+            for name, sub_dump in list(dump.items()):
+                if name not in obj:
+                    continue  # ignore as it may be added by serialization
+                if isinstance(obj[name], collections.OrderedDict):
+                    # keep ordered dicts
+                    dump[name] = collections.OrderedDict(sub_dump)
+                    sub_dump = dump[name]
+                keep = cfg._post_process_dump(obj[name], sub_dump)
+                if not keep:
+                    del obj[name]
+                    del dump[name]
+                    continue
+                # clear defaults after exclusion
+                if name in forced:
+                    continue
+                if not (cfg.exclude_defaults and cfg.uid):
+                    continue
+                # possibly remove if all default (appart from excluded attributes)
+                if not isinstance(obj[name], pydantic.BaseModel):
+                    continue
+                if not isinstance(bobj, pydantic.BaseModel):
+                    continue
+                default = type(bobj).model_fields[name].default
+                if not isinstance(default, pydantic.BaseModel):
+                    continue
+                if set(sub_dump) - default.model_fields_set:
+                    continue  # forced fields have been added
+                subinfo = _get_uid_info(
+                    obj[name], ignore_discriminator=self.ignore_first_discriminator
+                )
+                exc = subinfo[UID_EXCLUDED]
+                #
+                for f in default.model_fields_set - set(exc):
+                    cls_default = type(default).model_fields[f].default
+                    val = sub_dump.get(f, cls_default)
+                    cfg_default = getattr(default, f)
+                    if cfg_default != val:
+                        break  # val is different from cfg default -> keep in cfg
+                else:
+                    dump.pop(name)  # all equal to default, let's remove it
+        if isinstance(obj, (tuple, list, set)):
+            if not isinstance(dump, (tuple, list, set)) or len(obj) != len(dump):
+                raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
+            for obj2, dump2 in zip(obj, dump):
+                cfg._post_process_dump(obj2, dump2)
+        return True
+
+    def _dump(self, obj: tp.Any) -> tp.Any:
+        """Dumps the object"""
+        if isinstance(obj, pydantic.BaseModel):
+            return self.apply(obj)
+        if isinstance(obj, dict):
+            return {x: self._dump(y) for x, y in obj.items()}
+        if isinstance(obj, list):
+            return [self._dump(y) for y in obj]
+        return obj
+
+    def recursive_apply(self, obj: tp.Any) -> tp.Any:
+        """Recursively export pydantic models in any structure (list, dict, etc.)."""
+        if isinstance(obj, pydantic.BaseModel):
+            return self.apply(obj)
+        if isinstance(obj, dict):
+            return {k: self.recursive_apply(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self.recursive_apply(item) for item in obj]
+        return obj
 
 
 class DiscrimStatus:
@@ -78,111 +224,36 @@ class DiscrimStatus:
 def to_dict(
     model: pydantic.BaseModel, uid: bool = False, exclude_defaults: bool = False
 ) -> tp.Dict[str, tp.Any]:
-    """Returns the pydantic.BaseModel configuration as a dictionary
-
-    Parameters
-    ----------
-    model: pydantic.BaseModel
-        the model to convert into a dictionary
-    uid: bool
-        if True, uses the _exclude_from_cls_uid field/method to filter in and out
-        some fields
-    exclude_defaults: bool
-        if True, values that are set to defaults are not included
-    """
-    if exclude_defaults:
-        _set_discriminated_status(model)
-    cfg = ExportCfg(uid=uid, exclude_defaults=exclude_defaults)
-    out = model.model_dump(exclude_defaults=exclude_defaults)
-    if uid or exclude_defaults:
-        _apply_dump_tags(model, out, cfg=cfg)
-    return out
+    """DEPRECATED"""
+    warnings.warn("to_dict is deprecated, use ConfigExporter.apply", DeprecationWarning)
+    exporter = ConfigExporter(uid=uid, exclude_defaults=exclude_defaults)
+    return exporter.apply(model)
 
 
-def _dump(obj: tp.Any, cfg: ExportCfg) -> tp.Any:
-    """Dumps the object"""
-    if isinstance(obj, pydantic.BaseModel):
-        return to_dict(obj, uid=cfg.uid, exclude_defaults=cfg.exclude_defaults)
-    if isinstance(obj, dict):
-        return {x: _dump(y, cfg=cfg) for x, y in obj.items()}
-    if isinstance(obj, list):
-        return [_dump(y, cfg=cfg) for y in obj]
-    return obj
+def _get_resolved_schema(obj: pydantic.BaseModel) -> dict[str, tp.Any]:
+    """Resolve $ref references in a pydantic schema to get the actual definition"""
+    try:
+        schema = obj.model_json_schema()
+    except Exception:
+        from .confdict import ConfDict
+
+        msg = "Failed to extract schema for type %s:\n%s\nFull yaml:\n%s"
+        cfg = ConfDict.from_model(obj, uid=False, exclude_defaults=False)
+        logger.warning(msg, obj.__class__.__name__, repr(obj), cfg.to_yaml())
+        raise
+    # resolve
+    ref = schema.get("$ref", "")
+    if ref.startswith("#/$defs/"):
+        def_name = ref[len("#/$defs/") :]
+        if "$defs" in schema and def_name in schema["$defs"]:
+            return schema["$defs"][def_name]  # type: ignore
+    return schema
 
 
-def _apply_dump_tags(obj: tp.Any, dump: tp.Dict[str, tp.Any], cfg: ExportCfg) -> bool:
-    forced = set()
-    ignore_discriminator = cfg.ignore_first_discriminator
-    cfg.ignore_first_discriminator = False  # don't ignore for sub-models
-    bobj = obj
-    if isinstance(obj, pydantic.BaseModel):
-        info = _get_uid_info(obj, ignore_discriminator=ignore_discriminator)
-        excluded = info[UID_EXCLUDED]
-        forced = info[FORCE_INCLUDED]
-        excluded -= forced  # forced taks over
-        fields = set(obj.model_fields)
-        missing = (excluded | forced) - (fields | {"."})
-        if cfg.uid and "." in excluded:
-            dump.clear()
-            return False
-        if missing:
-            raise ValueError(
-                "Field(s) specified for exclusion/inclusion do(es) not exist:\n"
-                f"{missing}\n(existing on {obj}: {fields})"
-            )
-        if cfg.uid:
-            for name in excluded:
-                dump.pop(name, None)
-        for name in forced:
-            if name not in dump:
-                dump[name] = _dump(getattr(obj, name), cfg=cfg)
-        # add required field to force ones, to make sure we don't remove them later on
-        reqs = {name for name, field in obj.model_fields.items() if field.is_required()}
-        forced |= reqs
-        obj = dict(obj)
-    if isinstance(obj, dict):
-        for name, sub_dump in list(dump.items()):
-            keep = _apply_dump_tags(obj[name], sub_dump, cfg=cfg)
-            if not keep:
-                del obj[name]
-                del dump[name]
-                continue
-            # clear defaults after exclusion
-            if name in forced:
-                continue
-            if not (cfg.exclude_defaults and cfg.uid):
-                continue
-            # possibly remove if all default (appart from excluded attributes)
-            if not isinstance(obj[name], pydantic.BaseModel):
-                continue
-            if not isinstance(bobj, pydantic.BaseModel):
-                continue
-            default = bobj.model_fields[name].default
-            if not isinstance(default, pydantic.BaseModel):
-                continue
-            if set(sub_dump) - default.model_fields_set:
-                continue  # forced fields have been added
-            subinfo = _get_uid_info(obj[name], ignore_discriminator=ignore_discriminator)
-            exc = subinfo[UID_EXCLUDED]
-            #
-            for f in default.model_fields_set - set(exc):
-                cls_default = default.model_fields[f].default
-                val = sub_dump.get(f, cls_default)
-                cfg_default = getattr(default, f)
-                if cfg_default != val:
-                    break  # val is different from cfg default -> keep in cfg
-            else:
-                dump.pop(name)  # all equal to default, let's remove it
-    if isinstance(obj, list):
-        if not isinstance(dump, list) or len(obj) != len(dump):
-            raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
-        for obj2, dump2 in zip(obj, dump):
-            _apply_dump_tags(obj2, dump2, cfg=cfg)
-    return True
-
-
-def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
+def _get_discriminator(schema: dict[str, tp.Any], name: str) -> str:
     """Find the discriminator for a field in a pydantic schema"""
+    if "properties" not in schema:
+        return DiscrimStatus.NONE
     prop = schema["properties"][name]
     discriminator: str = DiscrimStatus.NONE
     # for list and dicts:
@@ -208,8 +279,12 @@ def _get_discriminator(schema: tp.Dict[str, tp.Any], name: str) -> str:
         ]
         should_have_discrim = len(any_of) > 1
     if discriminator == DiscrimStatus.NONE and should_have_discrim:
-        msg = "Did not find a discriminator for %s (uid may be incomplete)"
-        logger.warning(msg, name)
+        title = schema.get("title", "#UNKNOWN#")
+        msg = "Did not find a discriminator for '%s' in '%s' (uid will be inaccurate).\n"
+        msg += "More info here: https://docs.pydantic.dev/latest/concepts/unions/#discriminated-unions-with-callable-discriminator"
+        msg += "\nEg: you can use following pattern if you need defaults:\n"
+        msg += "field: TypeA | TypeB = pydantic.Field(TypeA(), discriminator='discriminator_attribute')"
+        raise RuntimeError(msg % (name, title))
     return discriminator
 
 
@@ -254,6 +329,14 @@ def _set_discriminated_status(
         return  # avoid sub-checks if we already went though it
     if "extra" not in obj.model_config:  # SAFETY MEASURE
         cls = obj.__class__
+        if cls is pydantic.BaseModel:
+            msg = "A raw/empty BaseModel was instantiated. You must have set a "
+            msg += "BaseModel type hint so all parameters were ignored. You probably "
+            msg += "want to use a pydantic discriminated union instead:\n"
+            msg += (
+                "https://docs.pydantic.dev/latest/concepts/unions/#discriminated-unions"
+            )
+            raise RuntimeError(msg)
         name = f"{cls.__module__}.{cls.__qualname__}"
         msg = f"It is strongly advised to forbid extra parameters to {name} by adding to its def:\n"
         msg += 'model_config = pydantic.ConfigDict(extra="forbid")\n'
@@ -261,11 +344,14 @@ def _set_discriminated_status(
         raise RuntimeError(msg)
     # propagate below
     schema: tp.Any = None
-    for name, field in obj.model_fields.items():
+    for name, field in type(obj).model_fields.items():
         discriminator: str = DiscrimStatus.NONE
-        if schema is None and len(_pydantic_hints(field.annotation)) > 1:
+        classes = _pydantic_hints(field.annotation)
+        # ignore DiscriminatedModel which do not need discriminator checks
+        classes = [c for c in classes if not issubclass(c, helpers.DiscriminatedModel)]
+        if schema is None and len(classes) > 1:
             # compute schema only if finding a possible pydantic union, as it is slow
-            schema = obj.model_json_schema()
+            schema = _get_resolved_schema(obj)
         if schema is not None:
             discriminator = _get_discriminator(schema, name)
         value = getattr(obj, name, _default)  # use _default for backward compat
@@ -274,13 +360,18 @@ def _set_discriminated_status(
 
 
 def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
+    if isinstance(new, (int, str, Path, float)):
+        return  # nothing to do
     if isinstance(ref, pydantic.BaseModel):
+        # depth first in case something goes wrong
+        copy_discriminated_status(dict(ref), dict(new))
         val = ref.__dict__.get(DISCRIMINATOR_FIELD, None)
         if val is None:
             return  # not checked
+        if new is None:
+            return  # no more present
         new.__dict__[DISCRIMINATOR_FIELD] = val
-        ref = dict(ref)
-        new = dict(new)
+        return
     if isinstance(ref, collections.abc.Mapping):
         keys = list(set(ref) & set(new))  # only check shared ones (in case of extra)
         ref = [ref[k] for k in keys]
@@ -290,13 +381,35 @@ def copy_discriminated_status(ref: tp.Any, new: tp.Any) -> None:
             copy_discriminated_status(item_ref, item_new)
 
 
+class _FrozenSetattr:
+    def __init__(self, obj: tp.Any) -> None:
+        self.obj = obj
+        self._pydantic_setattr_handler = obj._setattr_handler
+
+    def __call__(self, name: str, value: tp.Any) -> tp.Any:
+        if name.startswith("_"):
+            return self._pydantic_setattr_handler(name, value)
+        msg = f"Cannot proceed to update {type(self.obj)}.{name} = {value} as the instance was frozen,"
+        msg += "\nyou can create an unfrozen instance with "
+        msg += "`type(obj)(**obj.model_dump())`"
+        raise RuntimeError(msg)
+
+
 def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hierarchy"""
     models = find_models(obj, pydantic.BaseModel, include_private=False)
     for m in models.values():
-        mconfig = copy.deepcopy(m.model_config)
-        mconfig["frozen"] = True
-        object.__setattr__(m, "model_config", mconfig)
+        if m.model_config.get("frozen", False):
+            continue  # no need to freeze + it actually creates a recursion (not sure why)
+        if hasattr(m, "__pydantic_setattr_handlers__"):
+            # starting at pydantic 2.11
+            m.__pydantic_setattr_handlers__.clear()  # type: ignore
+            m._setattr_handler = _FrozenSetattr(m)  # type: ignore
+        else:
+            # legacy
+            mconfig = copy.deepcopy(m.model_config)
+            mconfig["frozen"] = True
+            object.__setattr__(m, "model_config", mconfig)
 
 
 def find_models(
@@ -319,7 +432,12 @@ def find_models(
         stop the search when reaching the searched type
     """
     out: dict[str, T] = {}
-    if isinstance(obj, (str, int, float, np.ndarray, TorchTensor)):
+    base: tp.Tuple[tp.Type[tp.Any], ...] = (str, int, float, np.ndarray)
+    if "torch" in sys.modules:
+        import torch
+
+        base = base + (torch.Tensor,)
+    if isinstance(obj, base):
         return out
     if isinstance(obj, pydantic.BaseModel):
         # copy and set to avoid modifying class attribute instead of instance attribute
@@ -377,16 +495,34 @@ def fast_unlink(
         yield
     finally:
         if to_delete is not None:
-            to_delete.unlink()
+            if to_delete.is_dir():
+                shutil.rmtree(to_delete)
+            else:
+                to_delete.unlink()
 
 
 @contextlib.contextmanager
-def temporary_save_path(filepath: tp.Union[Path, str]) -> tp.Iterator[Path]:
+def temporary_save_path(filepath: Path | str, replace: bool = True) -> tp.Iterator[Path]:
     """Yields a path where to save a file and moves it
     afterward to the provided location (and replaces any
     existing file)
     This is useful to avoid processes monitoring the filepath
     to break if trying to read when the file is being written.
+
+
+    Parameters
+    ----------
+    filepath: str | Path
+        filepath where to save
+    replace: bool
+        if the final filepath already exists, replace it
+
+    Yields
+    ------
+    Path
+        a temporary path to save the data, that will be renamed to the
+        final filepath when leaving the context (except if filepath
+        already exists and no_override is True)
 
     Note
     ----
@@ -407,12 +543,38 @@ def temporary_save_path(filepath: tp.Union[Path, str]) -> tp.Iterator[Path]:
         raise
     if not tmppath.exists():
         raise FileNotFoundError(f"No file was saved at the temporary path {tmppath}.")
+    if not replace:
+        if filepath.exists():
+            os.remove(tmppath)
+            return
     with fast_unlink(filepath, missing_ok=True):
         try:
             os.rename(tmppath, filepath)
         finally:
             if tmppath.exists():
                 os.remove(tmppath)
+
+
+class ShortItemUid:
+
+    def __init__(self, item_uid: tp.Callable[[tp.Any], str], max_length: int) -> None:
+        self.item_uid = item_uid
+        self.max_length = int(max_length)
+        if max_length < 32:
+            raise ValueError(
+                f"max_length of item_uid should be at least 32, got {max_length}"
+            )
+
+    def __call__(self, item: tp.Any) -> str:
+        uid = self.item_uid(item)
+        if len(uid) < self.max_length:
+            return uid
+        cut = (self.max_length - 13 - len(str(len(uid)))) // 2
+        sub = f"{uid[:cut]}..{len(uid) - 2 * cut}..{uid[-cut:]}"
+        sub += "-" + hashlib.md5(uid.encode("utf8")).hexdigest()[:8]
+        if len(uid) < len(sub):
+            return uid
+        return sub
 
 
 @contextlib.contextmanager
@@ -425,3 +587,109 @@ def environment_variables(**kwargs: tp.Any) -> tp.Iterator[None]:
         for x in kwargs:
             del os.environ[x]
         os.environ.update(backup)
+
+
+# =============================================================================
+# Config consistency checking (shared between TaskInfra/MapInfra and steps)
+# =============================================================================
+
+# Functions returning True to ignore default mismatches in check_configs()
+DEFAULT_CHECK_SKIPS: tp.List[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
+
+
+class ConfigDump:
+    """Config dump for cache consistency checks."""
+
+    def __init__(
+        self,
+        model: tp.Any,
+        *,
+        uid: tp.Any = None,
+        full_uid: tp.Any = None,
+        config: tp.Any = None,
+    ) -> None:
+        self.model = model
+
+        def export(provided: tp.Any, uid_flag: bool, exclude_defaults: bool) -> tp.Any:
+            if provided is not None:
+                return provided
+            return ConfigExporter(
+                uid=uid_flag, exclude_defaults=exclude_defaults
+            ).recursive_apply(model)
+
+        self.uid = export(uid, uid_flag=True, exclude_defaults=True)
+        self.full_uid = export(full_uid, uid_flag=True, exclude_defaults=False)
+        self.config = export(config, uid_flag=False, exclude_defaults=False)
+
+    def _to_yaml(self, name: str) -> str:
+        """Convert a config to yaml string."""
+        data = getattr(self, name.replace("-", "_"))
+        if hasattr(data, "to_yaml"):
+            return data.to_yaml()  # ConfDict with OrderedDict support
+        return _yaml.safe_dump(data, sort_keys=True)
+
+    def _error(self, msg: str) -> RuntimeError:
+        return RuntimeError(f"{msg}\n\n(this is for object: {self.model!r})")
+
+    def check_and_write(self, folder: Path, *, write: bool = True) -> None:
+        """Check config consistency and optionally write files.
+
+        Raises RuntimeError if uid.yaml doesn't match (cache collision)
+        or defaults changed incompatibly.
+        """
+        from .confdict import ConfDict  # avoid circular import
+
+        def as_confdict(data: tp.Any) -> ConfDict:
+            return ConfDict(data if isinstance(data, dict) else {"_": data})
+
+        def read_file(name: str) -> str | None:
+            fp = folder / f"{name}.yaml"
+            if not fp.exists():
+                return None
+            try:
+                content = fp.read_text("utf8")
+                data = _yaml.safe_load(content)
+                if not isinstance(data, (dict, list)):
+                    raise TypeError(f"Expected dict or list, got {type(data).__name__}")
+                return content
+            except Exception as e:
+                logger.warning("Deleting corrupted config '%s': %s", fp, e)
+                fp.unlink()
+                return None
+
+        # uid.yaml must match exactly (cache collision detection)
+        prev_uid = read_file("uid")
+        curr_uid = self._to_yaml("uid")
+        if prev_uid is not None and curr_uid != prev_uid:
+            diff = "\n".join(difflib.ndiff(curr_uid.splitlines(), prev_uid.splitlines()))
+            uid_str = as_confdict(self.uid).to_uid()
+            raise self._error(
+                f"Inconsistent uid config for {uid_str} in '{folder / 'uid.yaml'}':\n"
+                f"* got:\n{curr_uid!r}\n\n* but uid file contains:\n{prev_uid!r}\n\n(diff:\n{diff})"
+            )
+
+        # Check full-uid for incompatible default changes
+        prev_full = read_file("full-uid")
+        skip_write = prev_full is not None
+        if prev_full is not None:
+            curr = as_confdict(self.full_uid).flat()
+            prev = as_confdict(_yaml.safe_load(prev_full)).flat()
+            nondefaults = set(as_confdict(self.uid).flat())
+            for key, val in curr.items():
+                if key in nondefaults or key not in prev or val == prev[key]:
+                    continue
+                if any(skip(key, val, prev[key]) for skip in DEFAULT_CHECK_SKIPS):
+                    continue
+                fp = folder / "full-uid.yaml"
+                raise self._error(
+                    f"Default {val!r} for {key} seems incompatible (was {prev[key]!r})\n(to ignore, remove {fp})"
+                )
+
+        # Write configs
+        if write:
+            for name in ("uid", "full-uid", "config"):
+                fp = folder / f"{name}.yaml"
+                if fp.exists() and (name == "uid" or skip_write):
+                    continue
+                with temporary_save_path(fp) as tmp:
+                    Path(tmp).write_text(self._to_yaml(name), encoding="utf8")

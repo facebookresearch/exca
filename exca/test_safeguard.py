@@ -6,23 +6,17 @@
 
 import itertools
 import subprocess
-import warnings
+import sys
+import typing as tp
 from pathlib import Path
 
 import exca
 
-from . import confdict
 
-
-def test_uid_version() -> None:
-    # make sure this does not get overriden when copying from other repo
-    if not confdict.ConfDict.UID_VERSION == 2:
-        warnings.warn("Fixing version locally")
-        fp = Path(confdict.__file__)
-        text = fp.read_text()
-        text = text.replace('VERSION", "1")', 'VERSION", "2")')
-        fp.write_text(text)
-    assert confdict.ConfDict.UID_VERSION == 2
+def test_package_version() -> None:
+    version = exca.__version__
+    pyproject = Path(exca.__file__).parent.with_name("pyproject.toml")
+    assert f'version = "{version}"' in pyproject.read_text()
 
 
 def test_logging() -> None:
@@ -31,28 +25,33 @@ def test_logging() -> None:
     assert line in fp.read_text()
 
 
-def test_no_neuralset() -> None:
-    bad = []
-    for fp in Path(__file__).parent.glob("*.py"):
-        text = fp.read_text()
-        if "test" not in fp.name and "neuralset" in text:
-            if "neuralset.infra." in text:
-                warnings.warn(f"Fixing {fp} locally")
-                fp.write_text(text.replace("neuralset.infra.", "exca."))
-            bad.append(fp.name)
-    docs = Path(__file__).parents[1] / "docs" / "infra"
-    assert docs.exists()
-    for fp in docs.iterdir():
-        if "neuralset" in fp.read_text():
-            bad.append(fp.name)
-    assert not bad
-
-
 def test_slurm_in_doc() -> None:
     doc = Path(exca.__file__).parent.with_name("docs") / "infra" / "introduction.md"
     assert doc.exists()
     expected = "cluster: slurm"  # this gets replaced during README tests
     assert expected in doc.read_text()
+
+
+def test_read_text_encoding() -> None:
+    root = Path(__file__).parents[1]
+    assert root.name == "exca"
+    # list of files to check
+    output = subprocess.check_output(["find", root, "-name", "*.py"], shell=False)
+    tocheck = [Path(p) for p in output.decode().splitlines()]
+    # add missing licenses if none already exists
+    found = []
+    skip = ("/lib/", "/build/", "docs/conf.py", "test_safeguard.py")
+    for fp in tocheck:
+        if any(x in str(fp.relative_to(root)) for x in skip):
+            continue
+        text = Path(fp).read_text("utf8")
+        if "read_text()" in text:
+            found.append(str(fp))
+    if found:
+        found_str = "\n - ".join(found)
+        msg = f"Following files contain read_text() without encoding:\n - {found_str}"
+        # this is dangereous as it will depend on local settings
+        raise AssertionError(msg)
 
 
 def test_header() -> None:
@@ -83,3 +82,14 @@ def test_header() -> None:
         raise AssertionError(
             f"Following files are/were missing standard header (see other files):\n - {missing_str}"
         )
+
+
+if __name__ == "__main__":
+    # run this test independantly to make sure only base exca is loaded
+    _: tp.Any = exca.MapInfra()
+    _ = exca.TaskInfra()
+    modules = ["torch", "mne", "pandas", "nibabel"]  # numpy is loaded
+    modules = [x for x in modules if x in sys.modules]
+    if modules:
+        msg = f"Cache specific modules should not be loaded by default: {modules}"
+        raise RuntimeError(msg)

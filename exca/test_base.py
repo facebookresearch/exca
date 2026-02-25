@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import collections
 import subprocess
 import tempfile
 import typing as tp
@@ -13,6 +14,9 @@ import numpy as np
 import pydantic
 import pytest
 
+from exca import ConfDict
+
+from .map import MapInfra
 from .task import TaskInfra
 from .workdir import WorkDir
 
@@ -57,11 +61,29 @@ class SubBase(Base):
     pass
 
 
-def test_subclass_infra(tmp_path: Path) -> None:
-    whatever = SubInfra(param=13, tag="hello", infra={"folder": tmp_path})  # type: ignore
+# with map infra
+class BaseMap(pydantic.BaseModel):
+    infra: MapInfra = MapInfra(version="12")
+    tag: str = "whatever"
+
+    @infra.apply(item_uid=str)
+    def func(self, inds: tp.Sequence[int]) -> tp.Iterator[float]:
+        for ind in inds:
+            yield ind * np.random.rand()
+
+
+class SubMapInfra(BaseMap):
+    infra: MapInfra = MapInfra(version="24")
+
+
+def test_subclass_map_infra(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError):
-        # infra is not connected
-        _ = whatever.func()
+        _ = SubMapInfra(tag="hello", infra={"folder": tmp_path})  # type: ignore
+
+
+def test_subclass_infra(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError):
+        _ = SubInfra(param=13, tag="hello", infra={"folder": tmp_path})  # type: ignore
 
 
 def test_subclass_func(tmp_path: Path) -> None:
@@ -354,16 +376,6 @@ def test_obj_in_obj() -> None:
     _ = Xp(base=base)
 
 
-class InfraNotApplied(pydantic.BaseModel):
-    infra: TaskInfra = TaskInfra()
-
-
-def test_infra_not_applied() -> None:
-    model = InfraNotApplied()
-    excluded = model.infra._exclude_from_cls_uid()
-    assert len(excluded) > 1
-
-
 class WrappedBase(pydantic.BaseModel):
     xp: Base = Base()
     infra: TaskInfra = TaskInfra(version="12")
@@ -375,7 +387,10 @@ class WrappedBase(pydantic.BaseModel):
 
 def test_tricky_update(tmp_path: Path) -> None:
     # pb in confdict for subconfig
-    infra: tp.Any = {"folder": tmp_path, "workdir": {"copied": [Path(__file__).parent]}}
+    infra: tp.Any = {
+        "folder": tmp_path,
+        "workdir": {"copied": [Path(__file__).parent], "includes": ("*.py",)},
+    }
     xp = Base().infra.clone_obj(infra=infra)
     wxp = WrappedBase(xp=xp)
     wxp.infra._update(dict(xp.infra))
@@ -401,9 +416,168 @@ class WeirdTypes(pydantic.BaseModel):
         return 8
 
 
+class OrderedCfg(pydantic.BaseModel):
+    d: collections.OrderedDict[str, tp.Any] = collections.OrderedDict()
+    d2: dict[str, tp.Any] = {}
+    infra: TaskInfra = TaskInfra()
+
+    @infra.apply
+    def build(self) -> str:
+        return ",".join(self.d)
+
+
+def test_ordered_dict(tmp_path: Path) -> None:
+    keys = [str(k) for k in range(100)]
+    whatever = OrderedCfg(d={k: 12 for k in keys}, infra={"folder": tmp_path})  # type: ignore
+    assert isinstance(whatever.d, collections.OrderedDict)
+    assert whatever.build() == ",".join(keys)
+    # new reorder
+    keys2 = list(keys)
+    np.random.shuffle(keys2)
+    whatever2 = OrderedCfg(d={k: 12 for k in keys2}, infra={"folder": tmp_path})  # type: ignore
+    assert whatever2.build() == ",".join(keys2)
+    # check yaml
+    fp: Path = whatever2.infra.uid_folder() / "config.yaml"  # type: ignore
+    cfg = ConfDict.from_yaml(fp)
+    cfg["infra.mode"] = "read-only"
+    whatever3 = OrderedCfg(**cfg)
+    assert ",".join(whatever3.d) == ",".join(keys2)
+    assert whatever3.build() == ",".join(keys2)
+    # check modeldump/cloneobj
+    whatever4 = whatever3.infra.clone_obj()
+    assert ",".join(whatever4.d) == ",".join(whatever3.d)
+
+
+def test_unordered_dict() -> None:
+    ordered = OrderedCfg(d2=collections.OrderedDict({str(k): 12 for k in range(12)}))
+    if isinstance(ordered.d2, collections.OrderedDict):
+        raise AssertionError("OrderedDict should be cast to standard dict by pydantic")
+
+
+class Num(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    k: int
+    other: int = 12
+
+
+class OrderedNumCfg(pydantic.BaseModel):
+    d: collections.OrderedDict[str, Num] = collections.OrderedDict()
+    infra: TaskInfra = TaskInfra()
+
+    @infra.apply
+    def build(self) -> str:
+        return ",".join(self.d)
+
+
+def test_ordered_dict_with_subcfg(tmp_path: Path) -> None:
+    nums = OrderedNumCfg(d={"a": {"k": 12}}, infra={"folder": tmp_path})  # type: ignore
+    _ = nums.build()
+    uid = nums.infra.uid()
+    assert "d={a.k=12}" in uid
+
+
+def test_ordered_dict_with_subcfg_flat(tmp_path: Path) -> None:
+    infra = {"folder": tmp_path}
+    keys = list(range(10))
+    np.random.shuffle(keys)
+    nums = OrderedNumCfg(d={f"{k}": {"k": k, "other": 0} for k in keys}, infra=infra)  # type: ignore
+    flat = nums.infra.config().flat()
+    flat["d.5.k"] = 12
+    nums2 = OrderedNumCfg(**ConfDict(flat))
+    keys2 = [v.k for v in nums2.d.values()]
+    np.testing.assert_equal([k if k != 5 else 12 for k in keys], keys2)
+
+
+def test_clone_obj_with_dict(tmp_path: Path) -> None:
+    keys = [str(k) for k in range(10)]
+    w = OrderedCfg(d={k: [1] for k in keys}, infra={"folder": tmp_path})  # type: ignore
+    w2 = w.infra.clone_obj()
+    w2.d["0"][0] = 12
+    assert w.d["0"][0] == 1
+
+
+class OptCfg(OrderedNumCfg):
+    num: Num | None = Num(k=12)
+
+
+def test_clone_obj_with_optional_subconfig() -> None:
+    cfg = OptCfg()
+    assert cfg.num is not None
+    assert cfg.num.k == 12
+    nonecfg = cfg.infra.clone_obj({"num": None})
+    assert nonecfg.num is None
+    cfg2 = nonecfg.infra.clone_obj({"num": {"k": 10}})
+    assert cfg2.num is not None
+    assert cfg2.num.k == 10
+
+
 def test_weird_types(tmp_path: Path) -> None:
     whatever = WeirdTypes(infra={"folder": tmp_path})  # type: ignore
-    whatever.build()
+    _ = whatever.build()
+
+
+class BaseModel(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+
+class FrozenBaseModel(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+
+@pytest.mark.parametrize("PydanticBase", (BaseModel, FrozenBaseModel))
+def test_large_frozen_model(
+    tmp_path: Path, PydanticBase: tp.Type[pydantic.BaseModel]
+) -> None:
+    fields: dict[str, tp.Any] = {f"int{k}": (int, k) for k in range(5)}
+    fields.update({f"str{k}": (str, str(k)) for k in range(5)})
+    for level in range(12):
+        Level = pydantic.create_model(f"Level{level}", **fields, __base__=PydanticBase)
+        fields[f"level{level}"] = (Level, Level())
+
+    class DeepH(PydanticBase):  # type: ignore
+        x: Level = Level()  # type: ignore
+        infra: TaskInfra = TaskInfra()
+
+        @infra.apply
+        def process(self) -> dict[str, tp.Any]:
+            return self.infra.config().flat()
+
+    # TODO: weirdly enough, model_dump (and therefore infra.config)
+    # does not work in a local job, and returns an empty dict
+    dh = DeepH(infra={"folder": tmp_path})
+    array = []
+    for k in range(10):  # instantiate several items just to check it works
+        array.append(dh.infra.clone_obj({"x.int0": k}))
+    out = array[0].process()
+    assert len(out) > 10000
+    assert isinstance(out, dict)
+
+
+class BasicP(pydantic.BaseModel):
+    b: pydantic.BaseModel | None = None
+    infra: TaskInfra = TaskInfra(version="12")
+
+    @infra.apply
+    def func(self) -> int:
+        return 12
+
+
+def test_basic_pydantic(tmp_path: Path) -> None:
+    _ = BasicP()
+
+
+class Ambiguous(pydantic.BaseModel):
+    float_or_list: float | list[float] = [0.0, 1.0]
+    infra: TaskInfra = TaskInfra(version="12")
+
+    @infra.apply
+    def func(self) -> tp.Any:
+        return self.float_or_list
+
+
+def test_ambiguous_clone() -> None:
+    a = Ambiguous()
+    a.infra.clone_obj({"float_or_list": 12})
 
 
 def test_defined_in_main() -> None:

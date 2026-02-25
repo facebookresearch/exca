@@ -4,6 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import collections
+import datetime
 import os
 import typing as tp
 from pathlib import Path
@@ -11,26 +13,29 @@ from pathlib import Path
 import pydantic
 import pytest
 
+import exca
+
 from . import utils
 from .confdict import ConfDict
 from .utils import to_dict
 
 
-class C(pydantic.BaseModel):
+class BaseModel(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
+
+
+class C(BaseModel):
     param: int = 12
     _exclude_from_cls_uid = (".",)
 
 
-class A(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class A(BaseModel):
     _exclude_from_cls_uid = ("y",)
     x: int = 12
     y: str = "hello"
 
 
-class B(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class B(BaseModel):
     a1: A
     a2: A = A()
     a3: A = A(x=13)
@@ -81,44 +86,41 @@ def test_to_dict_uid() -> None:
     assert out == expected
 
 
-class D2(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class D2(BaseModel):
     uid: tp.Literal["D2"] = "D2"
 
 
-class D1(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class D1(BaseModel):
     uid: tp.Literal["D1"] = "D1"
     anything: int = 12
     sub: D2 = D2()
 
 
-class Discrim(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class Discrim(BaseModel):
     inst: D1 | D2 = pydantic.Field(..., discriminator="uid")
-    inst2: D1 | D2
     something_else: tp.List[str] | int
     seq: tp.List[tp.List[tp.Annotated[D1 | D2, pydantic.Field(discriminator="uid")]]]
     stuff: tp.List[D1] = []
 
 
+def test_missing_discriminator() -> None:
+    class DiscrimD(BaseModel):
+        instd: D1 | D2
+
+    _ = DiscrimD(instd={"uid": "D1"})  # type: ignore
+
+
 def test_discriminators(caplog: tp.Any) -> None:
     d = Discrim(
         inst={"uid": "D2"},  # type: ignore
-        inst2={"uid": "D1"},  # type: ignore
         something_else=12,
         seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
     )
     expected = """inst.uid: D2
-inst2:
-  anything: 12
-  sub.uid: D2
-  uid: D1
 seq:
 - - uid: D2
   - anything: 12
-    sub:
-      uid: D2
+    sub.uid: D2
     uid: D1
 something_else: 12
 stuff: []
@@ -130,15 +132,13 @@ stuff: []
     out = ConfDict.from_model(d).to_yaml()
     assert out == expected
     expected = """inst.uid: D2
-inst2: {}
 seq:
 - - uid: D2
   - uid: D1
 something_else: 12
 """
     out = ConfDict.from_model(d, exclude_defaults=True).to_yaml()
-    assert len(caplog.records) == 1
-    assert "Did not find a discriminator for inst2" in caplog.records[0].message
+    assert not caplog.records
     assert out == expected
     # check uid of subinstance again (should not have discriminators)
     sub_out = ConfDict.from_model(d.inst, exclude_defaults=True)
@@ -148,19 +148,23 @@ something_else: 12
     assert out == expected
 
 
-def test_get_discriminator() -> None:
+def test_recursive_freeze() -> None:
     d = Discrim(
         inst={"uid": "D2"},  # type: ignore
-        inst2={"uid": "D1"},  # type: ignore
         something_else=12,
         seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
     )
     sub = d.seq[0][0]
-    assert not D2.model_config.get("frozen", False)
-    assert not sub.model_config.get("frozen", False)
+    with pytest.raises(ValueError):
+        # not frozen but field does not exist
+        sub.blublu = 12  # type: ignore
     utils.recursive_freeze(d)
-    assert not D2.model_config.get("frozen", False)
-    assert sub.model_config.get("frozen", False)
+    if hasattr(sub, "_setattr_handler"):
+        with pytest.raises(RuntimeError):
+            # frozen, otherwise it would be a value error
+            sub.blublu = 12  # type: ignore
+    else:
+        assert sub.model_config["frozen"]
 
 
 class OptDiscrim(pydantic.BaseModel):
@@ -176,38 +180,75 @@ def test_optional_discriminator(caplog: tp.Any) -> None:
     assert out == expected
 
 
+class RecursiveLeaf(BaseModel):
+    edge_type: tp.Literal["leaf"] = "leaf"
+
+
+class RecursiveEdge(BaseModel):
+    infra: exca.TaskInfra = exca.TaskInfra(cluster=None)
+    edge_type: tp.Literal["edge"] = "edge"
+    child: "RecursiveElem"
+
+    @infra.apply
+    def run(self) -> None:
+        return
+
+
+RecursiveElem = tp.Annotated[
+    RecursiveLeaf | RecursiveEdge,
+    pydantic.Field(discriminator="edge_type"),
+]
+
+
+def test_recursive_discriminated_union(tmp_path: Path) -> None:
+    """Test that recursive discriminated unions work with infra.config().
+
+    This tests the fix for KeyError when using recursive types with
+    discriminated unions, where model_json_schema() returns a $ref schema.
+    """
+    cfg = RecursiveEdge(
+        infra=exca.TaskInfra(cluster=None, folder=tmp_path), child=RecursiveLeaf()
+    )
+    # This should work without KeyError
+    result = cfg.infra.config(exclude_defaults=True)
+    assert result == {"child": {"edge_type": "leaf"}}
+    # Test with uid=True as well
+    result_uid = cfg.infra.config(uid=True, exclude_defaults=True)
+    assert "child" in result_uid
+    # Test deep recursion
+    cfg_deep = RecursiveEdge(
+        infra=exca.TaskInfra(cluster=None, folder=tmp_path),
+        child=RecursiveEdge(
+            infra=exca.TaskInfra(cluster=None, folder=tmp_path), child=RecursiveLeaf()
+        ),
+    )
+    result_deep = cfg_deep.infra.config(exclude_defaults=True)
+    assert result_deep == {"child": {"child": {"edge_type": "leaf"}, "edge_type": "edge"}}
+
+
+@pytest.mark.parametrize("replace", (True, False))
 @pytest.mark.parametrize("existing_content", [None, "blublu"])
-def test_temporary_save_path(tmp_path: Path, existing_content: str | None) -> None:
+def test_temporary_save_path(
+    tmp_path: Path, existing_content: str | None, replace: bool
+) -> None:
     filepath = tmp_path / "save_and_move_test.txt"
     if existing_content:
         filepath.write_text(existing_content)
-    with utils.temporary_save_path(filepath) as tmp:
+    with utils.temporary_save_path(filepath, replace=replace) as tmp:
         assert str(tmp).endswith(".txt")
         tmp.write_text("12")
         if existing_content:
-            assert filepath.read_text() == existing_content
-    assert filepath.read_text() == "12"
+            assert filepath.read_text("utf8") == existing_content
+    expected = "12"
+    if existing_content is not None and not replace:
+        expected = "blublu"
+    assert filepath.read_text("utf8") == expected
 
 
 def test_temporary_save_path_error() -> None:
     with pytest.raises(FileNotFoundError):
         with utils.temporary_save_path("save_and_move_test"):
             pass
-
-
-def test_recursive_freeze() -> None:
-    d = Discrim(
-        inst={"uid": "D2"},  # type: ignore
-        inst2={"uid": "D1"},  # type: ignore
-        something_else=12,
-        seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
-    )
-    d2 = d.seq[0][0]
-    assert not d2.model_config.get("frozen", False)
-    assert not D2.model_config.get("frozen", False)
-    utils.recursive_freeze(d)
-    assert d2.model_config.get("frozen", False)
-    assert not D2.model_config.get("frozen", False)
 
 
 @pytest.mark.parametrize(
@@ -249,8 +290,7 @@ class MissingForbid(pydantic.BaseModel):
     param: int = 12
 
 
-class WithMissingForbid(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class WithMissingForbid(BaseModel):
     missing: MissingForbid = MissingForbid()
 
 
@@ -268,8 +308,7 @@ class D(pydantic.BaseModel):
     x: int = 12
 
 
-class A12(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class A12(BaseModel):
     _exclude_from_cls_uid = ("y",)
     name: str = "name"
     unneeded: str = "is default"
@@ -277,8 +316,7 @@ class A12(pydantic.BaseModel):
     y: str = "hello"
 
 
-class NewDefault(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class NewDefault(BaseModel):
     a: A12 = A12(x=13)
 
 
@@ -302,8 +340,7 @@ def test_new_default(value: int, expected: str, with_y: bool) -> None:
     assert m2.a.x == value
 
 
-class NewDefaultOther(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class NewDefaultOther(BaseModel):
     a: A12 = A12(x=13, y="stuff")
 
 
@@ -313,8 +350,7 @@ def test_new_default_other() -> None:
     assert out.to_yaml().strip() == "{}"
 
 
-class NewDefaultOther2diff(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class NewDefaultOther2diff(BaseModel):
     a: A12 = A12(x=13, unneeded="something else", y="stuff")
 
 
@@ -325,8 +361,7 @@ def test_new_default_other2diff() -> None:
     assert out.to_yaml().strip() == "a.x: 13"
 
 
-class ActualDefaultOverride(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class ActualDefaultOverride(BaseModel):
     a: A12 = A12(x=12)
     a_default: A12 = A12()
 
@@ -341,8 +376,7 @@ def test_actual_default_override() -> None:
     assert out.to_yaml().strip() == "{}"
 
 
-class DiscrimDump(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class DiscrimDump(BaseModel):
     inst: D1 | D2 = pydantic.Field(D1(), discriminator="uid")
 
 
@@ -353,6 +387,40 @@ def test_dump() -> None:
     dd = DiscrimDump(inst={"uid": "D2"})  # type: ignore
     out = ConfDict.from_model(dd, uid=True, exclude_defaults=True)
     assert out == {"inst": {"uid": "D2"}}
+
+
+D1D2 = tp.Annotated[D1 | D2, pydantic.Field(discriminator="uid")]
+
+
+class OrderedDump(BaseModel):
+    insts: collections.OrderedDict[str, D1D2] = collections.OrderedDict()
+
+
+def test_ordered_dict() -> None:
+    od = OrderedDump(insts={"blublu": {"uid": "D1"}, "stuff": {"uid": "D2"}, "blublu2": {"uid": "D1"}})  # type: ignore
+    out = ConfDict.from_model(od, uid=True, exclude_defaults=True)
+    # check that nothing alters the order
+    assert isinstance(out["insts"], collections.OrderedDict)
+    assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
+    out["insts.blublu.anything"] = 144
+    assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
+    out["insts.blublu2.anything"] = 144
+    assert tuple(out["insts"].keys()) == ("blublu", "stuff", "blublu2")
+    assert isinstance(out["insts"], collections.OrderedDict)
+    # keys should be ordered in name and hash:
+    uid = "insts={blublu={uid=D1,anything=144},stuff.uid=D2,blublu2={uid=D1,anything=144}}-46863fcc"
+    assert out.to_uid() == uid
+
+
+class ComplexDiscrim(BaseModel):
+    inst: dict[str, tuple[D1D2, bool]] | None = None
+
+
+def test_complex_discrim() -> None:
+    d = ComplexDiscrim(inst={"stuff": ({"uid": "D2"}, True)})  # type: ignore
+    out = ConfDict.from_model(d, uid=True, exclude_defaults=True)
+    assert utils.DISCRIMINATOR_FIELD in d.inst["stuff"][0].__dict__  # type: ignore
+    assert "D2" in out.to_uid()
 
 
 class HierarchicalCfg(pydantic.BaseModel):
@@ -374,3 +442,135 @@ def test_find_models() -> None:
         "content.1._a",
     }
     assert all(isinstance(y, A) for y in out.values())
+
+
+def test_fast_unlink(tmp_path: Path) -> None:
+    # file
+    fp = tmp_path / "blublu.txt"
+    fp.touch()
+    assert fp.exists()
+    with utils.fast_unlink(fp):
+        pass
+    assert not fp.exists()
+    # folder
+    fp = tmp_path / "blublu"
+    fp.mkdir()
+    (fp / "stuff.txt").touch()
+    with utils.fast_unlink(fp):
+        pass
+    assert not fp.exists()
+
+
+class ComplexTypesConfig(BaseModel):
+    x: pydantic.DirectoryPath = Path("/")
+    y: datetime.timedelta = datetime.timedelta(minutes=1)
+    # ImportString needs to work (serialize_as_any=False in model_dump)
+    z: pydantic.ImportString = ConfDict
+
+
+def test_complex_types() -> None:
+    c = ComplexTypesConfig()
+    out = ConfDict.from_model(c, uid=True, exclude_defaults=False)
+    expected = """x: /
+y: PT1M
+z: exca.confdict.ConfDict
+"""
+    assert out.to_yaml() == expected
+    assert out.to_uid().startswith("x=-,y=PT1M,z=exca.confdict.ConfDict")
+
+
+class BasicP(pydantic.BaseModel):
+    b: pydantic.BaseModel | None = None
+    infra: exca.TaskInfra = exca.TaskInfra(version="12")
+
+    @infra.apply
+    def func(self) -> int:
+        return 12
+
+
+def test_basic_pydantic() -> None:
+    b = BasicP(b={"uid": "D2"})  # type: ignore
+    with pytest.raises(RuntimeError) as e:
+        b.infra.clone_obj()
+    assert "discriminated union" in e.value.args[0]
+
+
+class CO(BaseModel):
+    stuff: str = "blublu"
+
+    def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
+        return {"override": "success"}
+
+
+class ConfWithOverride(BaseModel):
+    a: A = A()
+    s: CO = CO()
+
+
+@pytest.mark.parametrize("uid", (True, False))
+@pytest.mark.parametrize("exc", (True, False))
+@pytest.mark.parametrize("raw", (True, False))
+@pytest.mark.parametrize("bypass", (True, False))
+@pytest.mark.parametrize("use_exporter", (True, False))
+def test_uid_dict_override(
+    uid: bool, exc: bool, raw: bool, bypass: bool, use_exporter: bool
+) -> None:
+    # use model with override as model or sub-model
+    if raw:
+        model = CO(stuff="blu")
+    else:
+        model = ConfWithOverride(s={"stuff": "blu"})  # type: ignore
+    # use the ConfDict directly, or the exporter (which allows bypassing the override)
+    if use_exporter:
+        exporter = utils.ConfigExporter(
+            uid=uid, exclude_defaults=exc, ignore_first_override=bypass
+        )
+        cfg = ConfDict(exporter.apply(model))
+    else:
+        cfg = ConfDict.from_model(model, uid=uid, exclude_defaults=exc)
+    out = cfg.to_yaml()
+    if uid and exc and not (use_exporter and raw and bypass):
+        assert "override" in out
+    else:
+        assert "override" not in out
+
+
+def test_check_configs(tmp_path: Path) -> None:
+    """Test ConfigDump: creates files, detects inconsistencies, handles corruption."""
+    model = A(x=5, y="test")
+    dump = utils.ConfigDump(model=model)
+
+    # Creates config files
+    dump.check_and_write(tmp_path)
+    assert (tmp_path / "uid.yaml").exists()
+    assert "x: 5" in (tmp_path / "uid.yaml").read_text("utf8")
+
+    # Detects inconsistent uid.yaml (error includes model info)
+    (tmp_path / "uid.yaml").write_text("x: 999\n")
+    with pytest.raises(RuntimeError, match="(?s)Inconsistent.*this is for object"):
+        dump.check_and_write(tmp_path)
+
+    # Handles corrupted files (deletes and recreates)
+    (tmp_path / "uid.yaml").write_text("invalid: yaml: {{")
+    dump.check_and_write(tmp_path)
+    assert "x: 5" in (tmp_path / "uid.yaml").read_text("utf8")
+
+    # Works with list of models (writes as list, not wrapped)
+    models = [A(x=1), A(x=2)]
+    folder2 = tmp_path / "list_test"
+    folder2.mkdir()
+    utils.ConfigDump(model=models).check_and_write(folder2)
+    content = (folder2 / "uid.yaml").read_text("utf8")
+    assert content == "- x: 1\n- x: 2\n"
+
+
+def test_confdict_override_yaml() -> None:
+    """Regression: safe_dump must handle nested ConfDict (dict subclass)."""
+
+    class M(BaseModel):
+        x: str = "blublu"
+
+        def _exca_uid_dict_override(self) -> ConfDict:
+            return ConfDict({"nested": {"value": self.x}})
+
+    assert "hello" in utils.ConfigDump(model=M(x="hello"))._to_yaml("uid")

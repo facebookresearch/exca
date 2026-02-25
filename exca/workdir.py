@@ -6,14 +6,13 @@
 
 import contextlib
 import fnmatch
-import json
+import importlib
 import logging
 import os
 import shutil
 import subprocess
 import sys
 import typing as tp
-from importlib import metadata
 from pathlib import Path
 
 import pydantic
@@ -57,6 +56,9 @@ class WorkDir(pydantic.BaseModel):
     copied: Sequence[str]
         list/tuple of names of files, or folders, or packages installed in editable mode
         to copy to the new working directory folder.
+        Relative paths will be moved to the relative equivalent in the new folder, while for
+        absolute path, the folder/file pointed by the path will be moved directly to the new
+        folder.
     folder: Path/str
         folder to use as working directory,
         if not specified, infra will create one automatically :code:`<infra_uid_folder>/code/<date>-<random_uid>/`.
@@ -83,18 +85,19 @@ class WorkDir(pydantic.BaseModel):
     - The change of working directory (and possibly the copy) only happens when the
       infra is called for submitting the decorated function. Depending on your code,
       this may not be at the very beginning of your execution.
+    - The context is reentrant, upon the second entrance nothing will be updated.
     """
 
     copied: tp.Sequence[str | Path] = []
     folder: str | Path | None = None
     log_commit: bool = False
-    # include and exclude names (use "*.py" for only python)
-    includes: tp.Sequence[str] = ()
+    includes: tp.Sequence[str] = ("*.py",)  # default to only python files
     excludes: tp.Sequence[str] = ("__pycache__", ".git")
 
     # internals
     _paths: tp.List[Path]
     _commits: tp.Dict[str, str] = {}
+    _active: bool = False
     model_config = pydantic.ConfigDict(extra="forbid")
 
     def model_post_init(self, log__: tp.Any) -> None:
@@ -128,17 +131,24 @@ class WorkDir(pydantic.BaseModel):
 
     @contextlib.contextmanager
     def activate(self) -> tp.Iterator[None]:
+        if self._active:
+            yield
+            return
         if self.folder is None:
             raise RuntimeError("folder field must be filled before activation")
         folder = Path(self.folder)
         folder.mkdir(exist_ok=True)
         ignore = Ignore(includes=self.includes, excludes=self.excludes)
         for name, path in zip(self.copied, self._paths):
+            if Path(name).is_absolute():
+                # for local folder we keep the structures, for absolute we copy the last item
+                name = Path(name).name
             out = folder / name
             if not out.exists():
                 if path.is_dir():
                     shutil.copytree(path, out, ignore=ignore)
                 else:
+                    out.parent.mkdir(exist_ok=True, parents=True)
                     shutil.copyfile(path, out, follow_symlinks=True)
                 logger.info("Copied %s to %s", path, out)
         if self._commits:
@@ -147,7 +157,11 @@ class WorkDir(pydantic.BaseModel):
             logger.info("Git hashes are dumped to %s", fp)
             fp.write_text(string, encoding="utf8")
         with chdir(folder):
-            yield
+            self._active = True
+            try:
+                yield
+            finally:
+                self._active = False
 
 
 def identify_path(name: str | Path) -> Path:
@@ -156,36 +170,32 @@ def identify_path(name: str | Path) -> Path:
     - a local folder/file in the current working directory
     - a folder/file with an absolute path
     - a folder in the PYTHONPATH
+    - a folder in sys.path (and not in the base install)
     - a package installed in editable mode
     """
     # local files or folder get precedence
     folders = ["."] + os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    folders.extend([x for x in sys.path if not Path(x).is_relative_to(sys.base_prefix)])
     for folder in folders:
         fp = Path(folder) / name
         if fp.exists():
             return fp.absolute()
-    # otherwise check for editable installations
-    try:
-        pdistrib = metadata.Distribution.from_name(str(name))
-    except Exception as e:  # pylint: disable=broad-except
-        raise ValueError(
-            f"No folder/file named {name} in {os.getcwd()}, "
-            "and failed to import it as well"
-        ) from e
-    direct_url_json = pdistrib.read_text("direct_url.json")
-    if direct_url_json is None:  # folder
-        raise ValueError(f"Package {name} has not been installed from source")
-    direct_url = json.loads(direct_url_json)
-    pkg_is_editable = direct_url.get("dir_info", {}).get("editable", False)
-    if not pkg_is_editable:
-        raise ValueError(f"Package {name} is not editable")
-    tag = "file://"
-    url = direct_url["url"]
-    if not url.startswith(tag):
-        raise ValueError("Package url {url} for {name} is not local")
-    fp = Path(url[len(tag) :]) / name
+    # otherwise check for editable installations (typing fails for importlib?)
+    spec = importlib.util.find_spec(str(name))  # type: ignore
+    if spec is None or spec.origin is None:
+        msg = f"No folder/file named {name} in system paths "
+        msg += "and failed to import it as well"
+        raise ValueError(msg)
+    fp = Path(spec.origin)
+    if fp.name == "__init__.py":
+        fp = fp.parent
+    if fp.is_relative_to(sys.base_prefix):
+        msg = f"Package {name} is not editable (installed in {fp})"
+        raise ValueError(msg)
     if not fp.exists():
-        raise ValueError(f"Expected to copy {fp} but there's nothing there")
+        if not fp.with_name("__init__.py").exists():
+            raise ValueError(f"Expected to copy {fp} but there's nothing there")
+        fp = fp.parent  # setup/pyproject within the package?
     return fp
 
 
@@ -199,10 +209,13 @@ class Ignore:
         self.excludes = list(excludes)
 
     def __call__(self, path: str | Path, names: tp.List[str]) -> tp.Set[str]:
-        included = set(names)
-        for include in self.includes:
-            included = set(fnmatch.filter(included, include))
-        missing = set(names) - set(included)
+        if not self.includes:
+            included = set(names)
+        else:
+            included = set()
+            for include in self.includes:
+                included |= set(fnmatch.filter(set(names), include))
+        missing = set(names) - included
         path = Path(path)
         for excluded in missing:
             # always include subfolders except if explicitely excluded below
@@ -210,4 +223,4 @@ class Ignore:
                 included.add(excluded)
         for exclude in self.excludes:
             included -= set(fnmatch.filter(included, exclude))
-        return set(names) - set(included)
+        return set(names) - included
