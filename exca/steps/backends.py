@@ -160,7 +160,8 @@ class _CachingCall:
         try:
             result = self.func(*args)
         except Exception as e:
-            # Store error in job folder
+            if hasattr(e, "add_note"):
+                e.add_note(f"  -> cached as {self.paths.step_uid}[{self.paths.item_uid}]")
             if not self.paths.error_pkl.exists():
                 with self.paths.error_pkl.open("wb") as f:
                     pickle.dump(e, f)
@@ -357,6 +358,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 self.paths.step_uid,
                 self.paths.item_uid,
             )
+            if hasattr(err, "add_note"):
+                err.add_note("  -> (re-raised from cached error)")
             raise err
 
         cd = self._cache_dict()
