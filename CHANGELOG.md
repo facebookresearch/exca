@@ -5,7 +5,7 @@
 ## 0.5.15
 
 ### Added
-- `exca/steps`: `Func` step wrapping plain functions via `ImportString`.
+- `exca/steps`: `helpers.Func` step wrapping plain functions via `ImportString` (API in progress).
 - `exca/steps`: `_resolve_step()` for steps that decompose into chains internally.
 
 ### Changed
