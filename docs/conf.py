@@ -29,7 +29,14 @@ extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "pythonplusplus", ".pytest_cache"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "pythonplusplus",
+    ".pytest_cache",
+    "internal",
+]
 
 # Prefix document path to section labels, to use:
 # `path/to/file:heading` instead of just `heading`

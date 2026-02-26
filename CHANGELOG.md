@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## 0.5.15
+
+### Added
+- `exca/steps`: `helpers.Func` step wrapping plain functions via `ImportString` (API in progress).
+- `exca/steps`: `_resolve_step()` for steps that decompose into chains internally.
+
+### Changed
+- `exca/steps`: `force` mode now propagates to all downstream steps in a chain.
+
 ## 0.5.14
 
 ### Changed
