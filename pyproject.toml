@@ -3,7 +3,7 @@ name = "exca"
 readme = "README.md"
 authors = [{name = "Meta FAIR"}]
 requires-python = ">=3.10"
-version = "0.5.14"
+version = "0.5.15"
 description = "Execution and caching tool for python"
 
 dependencies = [
