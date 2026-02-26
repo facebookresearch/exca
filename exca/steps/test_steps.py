@@ -6,6 +6,7 @@
 
 """Tests for Step and Chain basic functionality (no caching tests here, see test_cache.py)."""
 
+import collections
 import pickle
 import traceback
 import typing as tp
@@ -408,3 +409,39 @@ def test_chain_error_note() -> None:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
     assert "Add" in formatted and "while running step" in formatted
+
+
+# =============================================================================
+# Chain indexing and slicing
+# =============================================================================
+
+
+def test_chain_indexing() -> None:
+    steps = [conftest.Add(value=1), conftest.Mult(coeff=2), conftest.Add(value=3)]
+    chain = Chain(steps=steps)
+    assert len(chain) == 3
+    assert chain[0].model_dump() == steps[0].model_dump()
+    assert chain[-1].model_dump() == steps[-1].model_dump()
+    with pytest.raises(IndexError):
+        chain[10]
+
+
+def test_chain_slicing(tmp_path: Path) -> None:
+    steps = [conftest.Add(value=1), conftest.Mult(coeff=2), conftest.Add(value=3)]
+    chain = Chain(steps=steps)
+    sub = chain[:2]
+    assert isinstance(sub, Chain) and len(sub) == 2
+    assert sub.run(5.0) == 12.0  # (5+1)*2
+    # infra inherited
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain_infra = Chain(steps=steps, infra=infra)
+    assert chain_infra[1:].infra is not None
+    assert chain_infra[1:].run(5.0) == 13.0  # 5*2+3
+    # OrderedDict keys preserved
+    odict = collections.OrderedDict(add=steps[0], mult=steps[1], add2=steps[2])
+    sub_steps = Chain(steps=odict)[:2].steps
+    assert isinstance(sub_steps, dict)
+    assert list(sub_steps.keys()) == ["add", "mult"]
+    # empty slice raises
+    with pytest.raises(ValueError, match="steps cannot be empty"):
+        chain[5:10]
