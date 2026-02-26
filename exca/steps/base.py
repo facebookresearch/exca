@@ -338,6 +338,30 @@ class Chain(Step):
     def _step_sequence(self) -> tuple[Step, ...]:
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
 
+    def __len__(self) -> int:
+        return len(self._step_sequence())
+
+    @tp.overload
+    def __getitem__(self, index: int) -> Step: ...
+
+    @tp.overload
+    def __getitem__(self, index: slice) -> "Chain": ...
+
+    def __getitem__(self, index: int | slice) -> "Step | Chain":
+        steps = self._step_sequence()
+        if isinstance(index, int):
+            return steps[index]
+        if isinstance(index, slice):
+            sliced = steps[index]
+            if isinstance(self.steps, dict):
+                keys = list(self.steps.keys())[index]
+                return type(self)(
+                    steps=collections.OrderedDict(zip(keys, sliced)),
+                    infra=self.infra,
+                )
+            return type(self)(steps=list(sliced), infra=self.infra)
+        raise TypeError(f"Invalid index type: {type(index)}")
+
     def _is_generator(self) -> bool:
         """Chain is a generator if its first step is a generator."""
         steps = self._step_sequence()
