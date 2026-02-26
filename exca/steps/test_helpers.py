@@ -36,6 +36,10 @@ def no_params() -> str:
     return "hello"
 
 
+def bad_infra_param(infra: int = 0) -> int:
+    return infra
+
+
 def test_execution_and_generator_detection() -> None:
     assert Func(function=scale, factor=3.0).run(5.0) == 15.0
     assert isinstance(Func(function=generate, seed=123).run(), float)
@@ -67,6 +71,11 @@ def test_input_param() -> None:
 def test_validation_errors(kwargs: dict[str, tp.Any], match: str) -> None:
     with pytest.raises((ValueError, Exception), match=match):
         Func(function=scale, **kwargs)
+
+
+def test_reserved_param_names() -> None:
+    with pytest.raises(ValueError, match="conflict with Func fields"):
+        Func(function=bad_infra_param)
 
 
 def test_serialization_and_uid() -> None:

@@ -63,6 +63,14 @@ class Func(Step):
         params = list(sig.parameters.values())
         param_map = {p.name: p for p in params}
 
+        reserved = set(type(self).model_fields)
+        conflicts = reserved & set(param_map)
+        if conflicts:
+            raise ValueError(
+                f"{self.function.__name__} has parameters {conflicts} that conflict"
+                f" with Func fields; rename them"
+            )
+
         if self.input_param is not None:
             resolved = self.input_param
             if resolved not in param_map:
