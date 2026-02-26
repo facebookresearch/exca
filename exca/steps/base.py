@@ -63,15 +63,6 @@ def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
             _set_mode_recursive(step._step_sequence(), mode)
 
 
-def _step_desc(step: "Step") -> str:
-    name = type(step).__name__
-    fields = step.model_fields_set - {"infra"}
-    if not fields:
-        return name
-    params = ", ".join(f"{k}={getattr(step, k)!r}" for k in sorted(fields))
-    return f"{name}({params})"
-
-
 @pydantic.model_validator(mode="before")
 def _infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
     """Convert backend instances to dicts to prevent sharing."""
@@ -250,7 +241,7 @@ class Step(exca.helpers.DiscriminatedModel):
                 result = step.infra.run(step._run, *args)
         except Exception as e:
             if hasattr(e, "add_note"):
-                e.add_note(f"  -> in {_step_desc(step)}")
+                e.add_note(f"  -> in {step!r}")
             raise
 
         # Sync state back to original step's infra (with_input creates a copy)
