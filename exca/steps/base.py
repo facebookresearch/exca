@@ -339,7 +339,7 @@ class Chain(Step):
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
 
     def __len__(self) -> int:
-        return len(self._step_sequence())
+        return len(self.steps)
 
     @tp.overload
     def __getitem__(self, index: int) -> Step: ...
