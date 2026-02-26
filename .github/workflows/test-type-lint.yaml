@@ -31,7 +31,7 @@ jobs:
       uses: actions/cache@v4
       env:
         # change name here (only) to invalidate cache
-        cache-name: cache-conda-env-v0
+        cache-name: cache-conda-env-v1
       with:
           key: ${{ env.cache-name }}-${{ hashFiles('pyproject.toml') }}
           path: ./ci_env
