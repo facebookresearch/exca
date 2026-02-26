@@ -14,7 +14,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -U pip
-          pip install sphinx sphinx_rtd_theme myst_parser pytest
+          pip install sphinx pydata-sphinx-theme sphinx-design sphinx-copybutton myst-parser pytest
           pip install -e .
       - name: Verify basic install
         run: pytest exca/test_task.py::test_task_infra
