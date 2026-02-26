@@ -41,7 +41,7 @@ class Func(Step):
     """
 
     if tp.TYPE_CHECKING:
-
+        # pylint: disable=super-init-not-called
         def __init__(self, **kwargs: tp.Any) -> None: ...
 
     model_config = pydantic.ConfigDict(extra="allow")
