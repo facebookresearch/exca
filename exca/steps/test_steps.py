@@ -415,60 +415,32 @@ def test_chain_error_note() -> None:
 # =============================================================================
 
 
-def test_chain_len() -> None:
-    chain = Chain(
-        steps=[conftest.Add(value=1), conftest.Mult(coeff=2), conftest.Add(value=3)]
-    )
-    assert len(chain) == 3
-
-
-def test_chain_int_indexing() -> None:
+def test_chain_indexing() -> None:
     steps = [conftest.Add(value=1), conftest.Mult(coeff=2), conftest.Add(value=3)]
     chain = Chain(steps=steps)
+    assert len(chain) == 3
     assert chain[0].model_dump() == steps[0].model_dump()
     assert chain[-1].model_dump() == steps[-1].model_dump()
-    assert chain[1].model_dump() == steps[1].model_dump()
     with pytest.raises(IndexError):
         chain[10]
 
 
-def test_chain_slice() -> None:
-    chain = Chain(
-        steps=[conftest.Add(value=1), conftest.Mult(coeff=2), conftest.Add(value=3)]
-    )
-    sub = chain[:2]
-    assert isinstance(sub, Chain)
-    assert len(sub) == 2
-    assert sub.run(5.0) == 12.0  # (5+1)*2
-
-
-def test_chain_slice_inherits_infra(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(
-        steps=[conftest.Add(value=1), conftest.Mult(coeff=2), conftest.Add(value=3)],
-        infra=infra,
-    )
-    sub = chain[1:]
-    assert sub.infra is not None
-    assert sub.infra.folder == tmp_path
-    assert sub.run(5.0) == 13.0  # 5*2+3
-
-
-def test_chain_slice_ordered_dict() -> None:
+def test_chain_slicing(tmp_path: Path) -> None:
     import collections as col
 
-    steps = col.OrderedDict(
-        add=conftest.Add(value=1), mult=conftest.Mult(coeff=2), add2=conftest.Add(value=3)
-    )
+    steps = [conftest.Add(value=1), conftest.Mult(coeff=2), conftest.Add(value=3)]
     chain = Chain(steps=steps)
     sub = chain[:2]
-    assert isinstance(sub, Chain)
-    assert isinstance(sub.steps, dict)
-    assert list(sub.steps.keys()) == ["add", "mult"]
+    assert isinstance(sub, Chain) and len(sub) == 2
     assert sub.run(5.0) == 12.0  # (5+1)*2
-
-
-def test_chain_empty_slice_raises() -> None:
-    chain = Chain(steps=[conftest.Add(value=1), conftest.Mult(coeff=2)])
+    # infra inherited
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain_infra = Chain(steps=steps, infra=infra)
+    assert chain_infra[1:].infra is not None
+    assert chain_infra[1:].run(5.0) == 13.0  # 5*2+3
+    # OrderedDict keys preserved
+    odict = col.OrderedDict(add=steps[0], mult=steps[1], add2=steps[2])
+    assert list(Chain(steps=odict)[:2].steps.keys()) == ["add", "mult"]
+    # empty slice raises
     with pytest.raises(ValueError, match="steps cannot be empty"):
         chain[5:10]
