@@ -40,6 +40,10 @@ class Func(Step):
     15.0
     """
 
+    if tp.TYPE_CHECKING:
+
+        def __init__(self, **kwargs: tp.Any) -> None: ...
+
     model_config = pydantic.ConfigDict(extra="allow")
 
     function: pydantic.ImportString[tp.Callable[..., tp.Any]]
