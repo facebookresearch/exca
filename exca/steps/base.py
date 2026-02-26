@@ -234,10 +234,15 @@ class Step(exca.helpers.DiscriminatedModel):
             raise RuntimeError("Step not properly configured")
 
         args: tp.Any = () if isinstance(prev.value, NoValue) else (prev.value,)
-        if step.infra is None:
-            result = step._run(*args)
-        else:
-            result = step.infra.run(step._run, *args)
+        try:
+            if step.infra is None:
+                result = step._run(*args)
+            else:
+                result = step.infra.run(step._run, *args)
+        except Exception as e:
+            if hasattr(e, "add_note"):
+                e.add_note(f"  -> in {step!r}")
+            raise
 
         # Sync state back to original step's infra (with_input creates a copy)
         if step is not self and self.infra is not None:
@@ -407,10 +412,15 @@ class Chain(Step):
         for i, step in enumerate(steps[start_idx:], start=start_idx + 1):
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i, total, step_name)
-            if step.infra is not None:
-                args = (step.infra.run(step._run, *args),)
-            else:
-                args = (step._run(*args),)
+            try:
+                if step.infra is not None:
+                    args = (step.infra.run(step._run, *args),)
+                else:
+                    args = (step._run(*args),)
+            except Exception as e:
+                if hasattr(e, "add_note"):
+                    e.add_note(f"  -> while running step {i}/{total}: {step_name}")
+                raise
             logger.debug("Completed step %d/%d: %s", i, total, step_name)
 
         return args[0]

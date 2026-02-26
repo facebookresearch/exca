@@ -7,6 +7,7 @@
 """Tests for Step and Chain basic functionality (no caching tests here, see test_cache.py)."""
 
 import pickle
+import traceback
 import typing as tp
 from pathlib import Path
 
@@ -378,3 +379,32 @@ def test_resolve_step_uid_consistency() -> None:
     step_uid = exca.ConfDict.from_model(step, uid=True, exclude_defaults=True).to_uid()
     chain_uid = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_uid()
     assert step_uid == chain_uid
+
+
+# =============================================================================
+# Error notes (Python 3.11+)
+# =============================================================================
+
+_has_add_note = hasattr(Exception(), "add_note")
+
+
+def _format_exc(exc: BaseException) -> str:
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+
+@pytest.mark.skipif(not _has_add_note, reason="requires Python 3.11+")
+def test_step_error_note() -> None:
+    step = conftest.Add(value=5, error=True)
+    with pytest.raises(ValueError) as exc_info:
+        step.run(0)
+    formatted = _format_exc(exc_info.value)
+    assert "Add(" in formatted and "error=True" in formatted
+
+
+@pytest.mark.skipif(not _has_add_note, reason="requires Python 3.11+")
+def test_chain_error_note() -> None:
+    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=5, error=True)])
+    with pytest.raises(ValueError) as exc_info:
+        chain.run(1)
+    formatted = _format_exc(exc_info.value)
+    assert "Add" in formatted and "while running step" in formatted
