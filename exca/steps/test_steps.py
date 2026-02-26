@@ -407,4 +407,4 @@ def test_chain_error_note() -> None:
     with pytest.raises(ValueError) as exc_info:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
-    assert "step 2/2" in formatted and "Add" in formatted
+    assert "Add" in formatted and "while running step" in formatted
