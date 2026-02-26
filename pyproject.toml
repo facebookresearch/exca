@@ -80,6 +80,9 @@ namespaces = false  # to disable scanning PEP 420 namespaces (true by default)
 # still need to install with: pip install --config-settings editable_mode=strict -e .
 "exca" = ["py.typed", ".pyi"]
 
+[tool.pytest.ini_options]
+norecursedirs = ["docs/internal"]
+
 [tool.isort]
 profile = "black"
 line_length = 90
