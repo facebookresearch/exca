@@ -1,0 +1,743 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Tutorials &#8212; Exca 0.5.15 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=953b4072" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=a9ebb0e6"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'infra/tutorials';</script>
+    <link rel="icon" href="../_static/exca.png"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="User guide" href="user-guide.html" />
+    <link rel="prev" title="Exca - Execution and caching" href="introduction.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class=" navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/exca.png" class="logo__image only-light" alt=""/>
+    <img src="../_static/exca.png" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">Exca</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class=" navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="introduction.html">Exca - Execution and caching</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Tutorials</a></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="getting-started.html" class="nav-link">Getting started</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Tutorials</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="tutorials">
+<h1>Tutorials<a class="headerlink" href="#tutorials" title="Link to this heading">#</a></h1>
+<p><code class="docutils literal notranslate"><span class="pre">pydantic</span></code> is a package providing model/configuration classes and allows for parameter validation when instantiating the object. <code class="docutils literal notranslate"><span class="pre">exca</span></code> package builds on top of it, and provides “infra” pydantic configuration that can be part of a parent pydantic configuration and change the way it behaves. In particular, it lets one add caching and remote computation to its methods. Check-out the package <a class="reference internal" href="explanation.html#philosophy"><span class="std std-ref">philosophy</span></a> for more in depths explanation of the “whys” of this package.</p>
+<p>If you are not familiar with <code class="docutils literal notranslate"><span class="pre">pydantic</span></code>, have a look first at the <a class="reference internal" href="#id1">Pydantic models section</a>.</p>
+<section id="installation">
+<h2>Installation<a class="headerlink" href="#installation" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">exca</span></code></p>
+</section>
+<section id="two-types-of-infra-task-and-map">
+<h2>Two types of infra: Task and Map<a class="headerlink" href="#two-types-of-infra-task-and-map" title="Link to this heading">#</a></h2>
+<p>Infras currently come in 2 flavors.</p>
+<section id="taskinfra">
+<h3>TaskInfra<a class="headerlink" href="#taskinfra" title="Link to this heading">#</a></h3>
+<p id="infra-tutorials-taskinfra">Consider you have one pydantic model/config that fully defines one processing to perform, for instance through a <code class="docutils literal notranslate"><span class="pre">process</span></code> method like below:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">typing</span> <span class="k">as</span> <span class="nn">tp</span>
+<span class="kn">import</span> <span class="nn">pydantic</span>
+
+<span class="k">class</span> <span class="nc">TutorialTask</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">param</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+
+    <span class="k">def</span> <span class="nf">process</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">param</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Adding an infra on the <code class="docutils literal notranslate"><span class="pre">process</span></code> model only requires adding an <a class="reference internal" href="reference.html#exca.TaskInfra" title="exca.TaskInfra"><span class="xref myst py py-class"><code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code></span></a> object to the config:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">typing</span> <span class="k">as</span> <span class="nn">tp</span>
+<span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">exca</span>
+
+
+<span class="k">class</span> <span class="nc">TutorialTask</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">param</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">infra</span><span class="p">:</span> <span class="n">exca</span><span class="o">.</span><span class="n">TaskInfra</span> <span class="o">=</span> <span class="n">exca</span><span class="o">.</span><span class="n">TaskInfra</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="s2">&quot;1&quot;</span><span class="p">)</span>
+
+    <span class="nd">@infra</span><span class="o">.</span><span class="n">apply</span>
+    <span class="k">def</span> <span class="nf">process</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">param</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">()</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code> provides configuration for caching and computation, in particular providing a <code class="docutils literal notranslate"><span class="pre">folder</span></code> activates caching through the filesystem:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">task</span> <span class="o">=</span> <span class="n">TutorialTask</span><span class="p">(</span><span class="n">param</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">infra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;folder&quot;</span><span class="p">:</span> <span class="n">tmp_path</span><span class="p">})</span>
+<span class="n">out</span> <span class="o">=</span> <span class="n">task</span><span class="o">.</span><span class="n">process</span><span class="p">()</span>
+<span class="c1"># calling process again will load the cache and not a new random number</span>
+<span class="k">assert</span> <span class="n">out</span> <span class="o">==</span> <span class="n">task</span><span class="o">.</span><span class="n">process</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Adding <code class="docutils literal notranslate"><span class="pre">cluster=&quot;auto&quot;</span></code> to the <code class="docutils literal notranslate"><span class="pre">infra</span></code> would trigger computation either on slurm cluster if available, or in a dedicated process otherwise. See the <a class="reference internal" href="reference.html#exca.TaskInfra" title="exca.TaskInfra"><span class="xref myst py py-class">API reference for all the details</span></a></p>
+</section>
+<section id="map-infra">
+<h3>Map infra<a class="headerlink" href="#map-infra" title="Link to this heading">#</a></h3>
+<p id="tutorial-map">The <code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code> above is limited to methods that do not take additional arguments / computations that are fully defined by the configuration such as an experiment/a training for instance. Consider now that the configuration defines a computation to be applied to a list of items (eg: process a list of images / texts etc), this is the use case for the <a class="reference internal" href="reference.html#exca.MapInfra" title="exca.MapInfra"><span class="xref myst py py-class"><code class="docutils literal notranslate"><span class="pre">MapInfra</span></code></span></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">typing</span> <span class="k">as</span> <span class="nn">tp</span>
+<span class="kn">import</span> <span class="nn">pydantic</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">exca</span> <span class="kn">import</span> <span class="n">MapInfra</span>
+
+<span class="k">class</span> <span class="nc">TutorialMap</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">param</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">infra</span><span class="p">:</span> <span class="n">MapInfra</span> <span class="o">=</span> <span class="n">MapInfra</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="s2">&quot;1&quot;</span><span class="p">)</span>
+
+    <span class="nd">@infra</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">item_uid</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>  
+    <span class="k">def</span> <span class="nf">process</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">items</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Iterable</span><span class="p">[</span><span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">tp</span><span class="o">.</span><span class="n">Iterator</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+        <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">items</span><span class="p">:</span>
+            <span class="k">yield</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">param</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>As opposed to the <code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code>, the <code class="docutils literal notranslate"><span class="pre">MapInfra.apply</span></code> method now requires an <code class="docutils literal notranslate"><span class="pre">item_uid</span></code> parameter that states how to map each item of the input iterable into a unique string which will be used for identification/caching.</p>
+<p>From then, calling <code class="docutils literal notranslate"><span class="pre">whatever.process([1,</span> <span class="pre">2,</span> <span class="pre">3])</span></code> will trigger (possibly) remote computation and caching/storage.
+You can control the remote resources through the <code class="docutils literal notranslate"><span class="pre">infra</span></code> instance.
+Eg: the following  will trigger the computation in the current process (change <code class="docutils literal notranslate"><span class="pre">&quot;cluster&quot;:</span> <span class="pre">None</span></code> to <code class="docutils literal notranslate"><span class="pre">auto</span></code> to have it run on <code class="docutils literal notranslate"><span class="pre">slurm</span></code> cluster if available or in a dedicated process)</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">mapper</span> <span class="o">=</span> <span class="n">TutorialMap</span><span class="p">(</span><span class="n">infra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;cluster&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;folder&quot;</span><span class="p">:</span> <span class="n">tmp_path</span><span class="p">,</span> <span class="s2">&quot;cpus_per_task&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">})</span>
+<span class="n">mapper</span><span class="o">.</span><span class="n">process</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>See the <a class="reference internal" href="reference.html#exca.TaskInfra" title="exca.TaskInfra"><span class="xref myst py py-class">API reference for all the details</span></a></p>
+</section>
+<section id="features-of-mapinfra-and-taskinfra">
+<h3>Features of MapInfra and TaskInfra<a class="headerlink" href="#features-of-mapinfra-and-taskinfra" title="Link to this heading">#</a></h3>
+<p>This section provides an overview of parameters and features of infra, but the full <a class="reference internal" href="reference.html#exca.TaskInfra" title="exca.TaskInfra"><span class="xref myst py py-class">API reference page</span></a> will provide mode options and details if need be.</p>
+<p>Common useful parameters include:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">folder</span></code>: where to create the cache folder</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">mode</span></code>: one of:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">cached</span></code>: cache is returned if available (error or not), otherwise computed (and cached). This is the default behavior.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">force</span></code>: cache is ignored, and result is (re)computed (and cached)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">retry</span></code> (only for <code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code>): cache is returned if available except if it’s an error, otherwise (re)computed (and cached)</p></li>
+</ul>
+</li>
+<li><p>submitit/slurm parameters (eg: <code class="docutils literal notranslate"><span class="pre">gpus_per_node</span></code>, <code class="docutils literal notranslate"><span class="pre">cpus_per_node</span></code>, <code class="docutils literal notranslate"><span class="pre">slurm_partition</span></code>, <code class="docutils literal notranslate"><span class="pre">slurm_constraint</span></code> etc)</p></li>
+</ul>
+<p>All infra object have common features such as:</p>
+<ul class="simple">
+<li><p><strong>config export</strong>: through <code class="docutils literal notranslate"><span class="pre">task.infra.config(uid=False,</span> <span class="pre">exclude_defaults=True)</span></code>.</p></li>
+<li><p><strong>uid/xp folder</strong>: through <code class="docutils literal notranslate"><span class="pre">task.infra.uid_folder()</span></code>. The folder is always populated with the full config, and the reduced uid config. It also contains a symlink to the job folder.</p></li>
+</ul>
+<p>When filesystem caching is used, the folder will contain useful information:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">config.yaml</span></code>: the full configuration (all parameters) of the pydantic model</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">full-uid.yaml</span></code>: the config defining the task/map, including defaults (not including non-uid related configs such as number of workers etc)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">uid.yaml</span></code>: the minimal config defining the task/map (not including defaults, nor non-uid related configs such as number of workers etc).</p></li>
+</ul>
+<p>It will also optionally contain:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">code</span></code> (if <code class="docutils literal notranslate"><span class="pre">workdir</span></code> is specified): a symlink to the directory where the task was executed</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">submitit</span></code> (for <code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code> if <code class="docutils literal notranslate"><span class="pre">cluster</span></code> is not <code class="docutils literal notranslate"><span class="pre">None</span></code>): a symlink to the folder containing all <code class="docutils literal notranslate"><span class="pre">submitit</span></code> related files for the task (stdout, stderr, batch file etc)</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code> also has additional features, in particular:</p>
+<ul class="simple">
+<li><p><em>job access</em>: through <code class="docutils literal notranslate"><span class="pre">task.infra.job()</span></code>. Jobs submitted through <code class="docutils literal notranslate"><span class="pre">submitit</span></code> have <code class="docutils literal notranslate"><span class="pre">stdout()</span></code>, <code class="docutils literal notranslate"><span class="pre">stderr()</span></code> and <code class="docutils literal notranslate"><span class="pre">cancel()</span></code>, and more. All jobs have methods <code class="docutils literal notranslate"><span class="pre">result()</span></code>, <code class="docutils literal notranslate"><span class="pre">done()</span></code>, <code class="docutils literal notranslate"><span class="pre">wait()</span></code>. Calling <code class="docutils literal notranslate"><span class="pre">infra.job()</span></code> submits the job if it does not already exists.</p></li>
+<li><p><em>cache/job clearing</em>: through <code class="docutils literal notranslate"><span class="pre">task.infra.clear_job()</span></code></p></li>
+</ul>
+</section>
+</section>
+<section id="quick-comparison">
+<h2>Quick comparison<a class="headerlink" href="#quick-comparison" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p><strong>feature \ tool</strong></p></th>
+<th class="head text-center"><p>lru_cache</p></th>
+<th class="head text-center"><p>hydra</p></th>
+<th class="head text-center"><p>submitit</p></th>
+<th class="head text-center"><p>stool</p></th>
+<th class="head text-center"><p>exca</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>RAM cache</p></td>
+<td class="text-center"><p>✔</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✔</p></td>
+</tr>
+<tr class="row-odd"><td><p>file cache</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✔</p></td>
+</tr>
+<tr class="row-even"><td><p>remote compute</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✔</p></td>
+<td class="text-center"><p>✔</p></td>
+<td class="text-center"><p>✔</p></td>
+<td class="text-center"><p>✔</p></td>
+</tr>
+<tr class="row-odd"><td><p>pure python (vs commandline)</p></td>
+<td class="text-center"><p>✔</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✔</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✔</p></td>
+</tr>
+<tr class="row-even"><td><p>hierarchical config</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✔</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✘</p></td>
+<td class="text-center"><p>✔</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="simplified-infra-decorator">
+<h2>Simplified infra decorator<a class="headerlink" href="#simplified-infra-decorator" title="Link to this heading">#</a></h2>
+<p>For quick experimentation with infra, the <code class="docutils literal notranslate"><span class="pre">infra.helpers.with_infra</span></code> function decorator can add an infra parameter on most functions (with simple arguments).</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">exca</span>
+
+<span class="nd">@exca</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">with_infra</span><span class="p">(</span><span class="n">folder</span><span class="o">=</span><span class="n">tmp_path</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">my_func</span><span class="p">(</span><span class="n">a</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+
+<span class="n">out</span> <span class="o">=</span> <span class="n">my_func</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+<span class="n">out2</span> <span class="o">=</span> <span class="n">my_func</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+
+<span class="n">np</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_array_equal</span><span class="p">(</span><span class="n">out2</span><span class="p">,</span> <span class="n">out</span><span class="p">)</span>  <span class="c1"># should the same (as cached)</span>
+</pre></div>
+</div>
+<p>On the long run this is not adviced as this will prevent you from using many features of infra (running an array of jobs, checking their status etc)</p>
+</section>
+<section id="pydantic-models">
+<h2>Pydantic models<a class="headerlink" href="#pydantic-models" title="Link to this heading">#</a></h2>
+<p id="id1">This is a quick recap of important features of <code class="docutils literal notranslate"><span class="pre">pydantic</span></code> models. Models do not have an <code class="docutils literal notranslate"><span class="pre">__init__</span></code> method, parameters are instead specified directly in the class (as if they were class attributes, but they will not be):</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pydantic</span>
+
+<span class="k">class</span> <span class="nc">MyModel</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;blublu&quot;</span>
+
+<span class="n">mymodel</span> <span class="o">=</span> <span class="n">MyModel</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">mymodel</span><span class="o">.</span><span class="n">x</span> <span class="o">==</span> <span class="mi">12</span>
+</pre></div>
+</div>
+<p>One can then instantiate it easily with <code class="docutils literal notranslate"><span class="pre">mymodel</span> <span class="pre">=</span> <span class="pre">MyModel(x=12)</span></code> and access attributes like <code class="docutils literal notranslate"><span class="pre">mymodel.x</span></code>. One important feature is the typechecking when instantiating the objects, as <code class="docutils literal notranslate"><span class="pre">x</span></code> is typed as an <code class="docutils literal notranslate"><span class="pre">int</span></code>, the field will not accept a string, and the following code would raise an exception: <code class="docutils literal notranslate"><span class="pre">mymodel</span> <span class="pre">=</span> <span class="pre">MyModel(x=&quot;wrong&quot;)</span></code>.</p>
+<p><strong>Note</strong>: <code class="docutils literal notranslate"><span class="pre">pydantic</span></code> is very similar to the more standard <code class="docutils literal notranslate"><span class="pre">dataclasses</span></code> with a few important features: models are type checked (dataclasses are not), one can set mutable default values like <code class="docutils literal notranslate"><span class="pre">[]</span></code> without risks (with dataclasses this can be buggy or require a factory), and one can use discriminators for sub-configs (<a class="reference internal" href="howto.html#howto-discriminator"><span class="std std-ref">more on that here</span></a>).</p>
+<p>For more safety, one should set <code class="docutils literal notranslate"><span class="pre">extra=&quot;forbid&quot;</span></code> for models as this will trigger an error as well if you instantiate an object with parameters that do not exist in the model:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pydantic</span>
+
+<span class="k">class</span> <span class="nc">MyModel</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">pydantic</span><span class="o">.</span><span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>  <span class="c1"># safer</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;blublu&quot;</span>
+
+<span class="c1"># MyModel(x=12, wrong_parameter=12)  # will not work anymore</span>
+</pre></div>
+</div>
+<p><strong>Note</strong>: adding a default infra automatically sets <code class="docutils literal notranslate"><span class="pre">extra=&quot;forbid&quot;</span></code> as a default in the pydantic class <code class="docutils literal notranslate"><span class="pre">model_config</span></code>, as it is much safer to avoid silent errors.</p>
+<section id="hierarchical-config">
+<h3>Hierarchical config<a class="headerlink" href="#hierarchical-config" title="Link to this heading">#</a></h3>
+<p>One important aspects of models is that they can be composed as one model/config can contain another config. Instantiating such models is simple as the subparameters can be specified as dictionary and `pydantic will take care of transforming them into the correct class:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Parent</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">pydantic</span><span class="o">.</span><span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>  <span class="c1"># safer</span>
+    <span class="n">data</span><span class="p">:</span> <span class="n">MyModel</span>
+
+<span class="n">obj</span> <span class="o">=</span> <span class="n">Parent</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="mi">12</span><span class="p">})</span>
+<span class="k">assert</span> <span class="n">obj</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">x</span> <span class="o">==</span> <span class="mi">12</span>
+</pre></div>
+</div>
+<p>This makes it easy to specify configs as yaml and load them into a model, eg:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">yaml</span>
+
+<span class="n">string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">data:</span>
+<span class="s2">  x: 12</span>
+<span class="s2">  y: whatever</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+<span class="n">dictconfig</span> <span class="o">=</span> <span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">(</span><span class="n">string</span><span class="p">)</span>
+<span class="n">obj</span> <span class="o">=</span> <span class="n">Parent</span><span class="p">(</span><span class="o">**</span><span class="n">dictconfig</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="introduction.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Exca - Execution and caching</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="user-guide.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">User guide</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#installation">Installation</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#two-types-of-infra-task-and-map">Two types of infra: Task and Map</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#taskinfra">TaskInfra</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-infra">Map infra</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#features-of-mapinfra-and-taskinfra">Features of MapInfra and TaskInfra</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-comparison">Quick comparison</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#simplified-infra-decorator">Simplified infra decorator</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pydantic-models">Pydantic models</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hierarchical-config">Hierarchical config</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright Meta Platforms, Inc.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+</div>
+
+  </footer>
+  </body>
+</html>

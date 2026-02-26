@@ -1,0 +1,589 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Planned work &#8212; Exca 0.5.15 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=953b4072" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=a9ebb0e6"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'dev/planned-work';</script>
+    <link rel="icon" href="../_static/exca.png"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class=" navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/exca.png" class="logo__image only-light" alt=""/>
+    <img src="../_static/exca.png" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">Exca</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class=" navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+        
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar hide-on-wide">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Planned work</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="planned-work">
+<h1>Planned work<a class="headerlink" href="#planned-work" title="Link to this heading">#</a></h1>
+<p>Deferred changes that require deprecation periods or break existing callers.
+Non-breaking behavior changes and internal cleanup can proceed without waiting.</p>
+<section id="deprecations-caller-breaking-needs-migration-period">
+<h2>Deprecations (caller-breaking, needs migration period)<a class="headerlink" href="#deprecations-caller-breaking-needs-migration-period" title="Link to this heading">#</a></h2>
+<section id="remove-writer-method">
+<h3>Remove <code class="docutils literal notranslate"><span class="pre">writer()</span></code> method<a class="headerlink" href="#remove-writer-method" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong>Status:</strong> deprecation warning in place, <code class="docutils literal notranslate"><span class="pre">write()</span></code> is the replacement</p></li>
+<li><p><strong>What breaks:</strong> any caller using <code class="docutils literal notranslate"><span class="pre">with</span> <span class="pre">cache.writer()</span> <span class="pre">as</span> <span class="pre">w:</span> <span class="pre">w[key]</span> <span class="pre">=</span> <span class="pre">value</span></code></p></li>
+<li><p><strong>Migration:</strong> change to <code class="docutils literal notranslate"><span class="pre">with</span> <span class="pre">cache.write():</span> <span class="pre">cache[key]</span> <span class="pre">=</span> <span class="pre">value</span></code></p></li>
+<li><p><strong>When:</strong> next major version, or after sufficient warning period</p></li>
+</ul>
+</section>
+<section id="remove-cachedictwriter-import-alias">
+<h3>Remove <code class="docutils literal notranslate"><span class="pre">CacheDictWriter</span></code> import alias<a class="headerlink" href="#remove-cachedictwriter-import-alias" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong>Status:</strong> <code class="docutils literal notranslate"><span class="pre">CacheDictWriter</span> <span class="pre">=</span> <span class="pre">CacheDict</span></code> in <code class="docutils literal notranslate"><span class="pre">__init__.py</span></code>, marked deprecated</p></li>
+<li><p><strong>What breaks:</strong> <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">exca.cachedict</span> <span class="pre">import</span> <span class="pre">CacheDictWriter</span></code></p></li>
+<li><p><strong>Migration:</strong> use <code class="docutils literal notranslate"><span class="pre">CacheDict</span></code> directly</p></li>
+<li><p><strong>When:</strong> alongside <code class="docutils literal notranslate"><span class="pre">writer()</span></code> removal</p></li>
+</ul>
+</section>
+<section id="remove-exca-dumperloader-py-module">
+<h3>Remove <code class="docutils literal notranslate"><span class="pre">exca/dumperloader.py</span></code> module<a class="headerlink" href="#remove-exca-dumperloader-py-module" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong>Status:</strong> legacy DumperLoader subclasses kept for external subclassing.
+Registries are now separated: <code class="docutils literal notranslate"><span class="pre">DumpContext.HANDLERS</span></code> / <code class="docutils literal notranslate"><span class="pre">TYPE_DEFAULTS</span></code>
+for new handlers, <code class="docutils literal notranslate"><span class="pre">DumperLoader.CLASSES</span></code> for legacy subclasses.
+<code class="docutils literal notranslate"><span class="pre">DumperLoader.DEFAULTS</span></code> is empty/deprecated (fallback in <code class="docutils literal notranslate"><span class="pre">_find_handler()</span></code>).</p></li>
+<li><p><strong>What breaks:</strong> any code that subclasses <code class="docutils literal notranslate"><span class="pre">DumperLoader</span></code>, <code class="docutils literal notranslate"><span class="pre">StaticDumperLoader</span></code>,
+<code class="docutils literal notranslate"><span class="pre">MemmapArrayFile</span></code>, etc., or writes to <code class="docutils literal notranslate"><span class="pre">DumperLoader.DEFAULTS</span></code></p></li>
+<li><p><strong>Migration:</strong> switch to <code class="docutils literal notranslate"><span class="pre">&#64;DumpContext.register</span></code> with new-style handlers</p></li>
+<li><p><strong>When:</strong> after confirming no external subclasses are in use</p></li>
+</ul>
+</section>
+</section>
+<section id="internal-cleanup-non-breaking-can-do-anytime">
+<h2>Internal cleanup (non-breaking, can do anytime)<a class="headerlink" href="#internal-cleanup-non-breaking-can-do-anytime" title="Link to this heading">#</a></h2>
+<section id="remove-track-legacy-files-recursion">
+<h3>Remove <code class="docutils literal notranslate"><span class="pre">_track_legacy_files</span></code> recursion<a class="headerlink" href="#remove-track-legacy-files-recursion" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>In <code class="docutils literal notranslate"><span class="pre">dumpcontext.py</span></code>: recursion only needed for legacy <code class="docutils literal notranslate"><span class="pre">DataDict</span></code>
+DumperLoader structures; new <code class="docutils literal notranslate"><span class="pre">DataDict</span></code> handler tracks sub-files
+through <code class="docutils literal notranslate"><span class="pre">ctx.dump()</span></code> calls</p></li>
+<li><p>Remove once legacy DataDict DumperLoader is retired</p></li>
+</ul>
+</section>
+<section id="stop-writing-metadata-tag-header">
+<h3>Stop writing <code class="docutils literal notranslate"><span class="pre">METADATA_TAG</span></code> header<a class="headerlink" href="#stop-writing-metadata-tag-header" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>New JSONL files already use self-describing format (no <code class="docutils literal notranslate"><span class="pre">metadata=</span></code> header)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">JsonlReader</span></code> still reads old format — keep that for backward compat</p></li>
+<li><p>Can remove <code class="docutils literal notranslate"><span class="pre">METADATA_TAG</span></code> constant once no old-format files exist</p></li>
+</ul>
+</section>
+<section id="clean-up-default-class-in-dumperloader-py">
+<h3>Clean up <code class="docutils literal notranslate"><span class="pre">default_class()</span></code> in dumperloader.py<a class="headerlink" href="#clean-up-default-class-in-dumperloader-py" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Legacy method with hardcoded type checks (ndarray, str, pandas, torch, etc.)</p></li>
+<li><p>New code bypasses it entirely (<code class="docutils literal notranslate"><span class="pre">DumpContext._find_handler()</span></code> checks
+<code class="docutils literal notranslate"><span class="pre">TYPE_DEFAULTS</span></code> directly with lazy registration for optional packages)</p></li>
+<li><p>Only called by legacy <code class="docutils literal notranslate"><span class="pre">DataDict.dump()</span></code> in <code class="docutils literal notranslate"><span class="pre">dumperloader.py</span></code></p></li>
+<li><p>Can be simplified or removed once <code class="docutils literal notranslate"><span class="pre">dumperloader.py</span></code> is retired</p></li>
+</ul>
+</section>
+<section id="reinvestigate-cache-type-default-in-dump-dump-entry">
+<h3>Reinvestigate <code class="docutils literal notranslate"><span class="pre">cache_type</span></code> default in <code class="docutils literal notranslate"><span class="pre">dump()</span></code> / <code class="docutils literal notranslate"><span class="pre">dump_entry()</span></code><a class="headerlink" href="#reinvestigate-cache-type-default-in-dump-dump-entry" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>The default <code class="docutils literal notranslate"><span class="pre">cache_type=None</span></code> triggers a three-step auto-detect in <code class="docutils literal notranslate"><span class="pre">dump()</span></code>:
+instance <code class="docutils literal notranslate"><span class="pre">__dump_info__</span></code> → <code class="docutils literal notranslate"><span class="pre">TYPE_DEFAULTS</span></code> → <code class="docutils literal notranslate"><span class="pre">Auto</span></code> fallback</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Auto</span></code> now respects instance <code class="docutils literal notranslate"><span class="pre">__dump_info__</span></code> in <code class="docutils literal notranslate"><span class="pre">_dump_value</span></code> too,
+so the two paths are functionally equivalent</p></li>
+<li><p>However, defaulting to <code class="docutils literal notranslate"><span class="pre">&quot;Auto&quot;</span></code> would cause infinite recursion:
+<code class="docutils literal notranslate"><span class="pre">dump()</span></code> → <code class="docutils literal notranslate"><span class="pre">Auto.__dump_info__</span></code> → <code class="docutils literal notranslate"><span class="pre">_dump_value</span></code> → <code class="docutils literal notranslate"><span class="pre">ctx.dump()</span></code> → loop</p></li>
+<li><p>The three-branch structure in <code class="docutils literal notranslate"><span class="pre">dump()</span></code> is what breaks this cycle</p></li>
+<li><p>If we find a way to avoid the recursion (e.g. an internal flag, or
+having Auto dispatch directly without bouncing through <code class="docutils literal notranslate"><span class="pre">dump()</span></code>),
+we could simplify <code class="docutils literal notranslate"><span class="pre">dump()</span></code> to always delegate to Auto</p></li>
+<li><p>Low priority: current code is correct and clear after the <code class="docutils literal notranslate"><span class="pre">_dump_value</span></code> fix</p></li>
+</ul>
+</section>
+<section id="generalize-dump-count-to-load-side">
+<h3>Generalize <code class="docutils literal notranslate"><span class="pre">_dump_count</span></code> to load side<a class="headerlink" href="#generalize-dump-count-to-load-side" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">_dump_count</span></code> on DumpContext tracks how many <code class="docutils literal notranslate"><span class="pre">dump()</span></code> calls occurred during
+Auto’s <code class="docutils literal notranslate"><span class="pre">_dump_value</span></code> walk. Incremented in <code class="docutils literal notranslate"><span class="pre">dump()</span></code> before the copy, reset
+by Auto’s <code class="docutils literal notranslate"><span class="pre">__dump_info__</span></code>. Used to decide promote vs. encapsulate.</p></li>
+<li><p>Consider adding a symmetric <code class="docutils literal notranslate"><span class="pre">_load_count</span></code> for load-side instrumentation</p></li>
+<li><p>Consider whether ctx copies could be replaced by a metadata dict
+(<code class="docutils literal notranslate"><span class="pre">ctx.meta</span></code>) for handler-local state — but shallow copy semantics for
+mutable containers need careful handling</p></li>
+</ul>
+</section>
+<section id="json-forced-file-parameter">
+<h3>Json forced-file parameter<a class="headerlink" href="#json-forced-file-parameter" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Users may want to ensure data goes to a shared file (not inlined in JSONL),
+e.g. for inspectability or to keep JSONL lines small</p></li>
+<li><p>Mutating <code class="docutils literal notranslate"><span class="pre">Json.MAX_INLINE_SIZE</span></code> is global/thread-unsafe</p></li>
+<li><p>Needs a per-context or per-call mechanism (e.g. ctx attribute, or a
+<code class="docutils literal notranslate"><span class="pre">JsonFile</span></code> handler variant)</p></li>
+</ul>
+</section>
+<section id="remove-auto-pickle-fallback">
+<h3>Remove Auto Pickle fallback<a class="headerlink" href="#remove-auto-pickle-fallback" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Currently <code class="docutils literal notranslate"><span class="pre">Auto._wrap</span></code> falls back to Pickle with DeprecationWarning</p></li>
+<li><p>Eventually should raise TypeError instead (strict mode)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">AutoPickle</span></code> will remain as the explicit opt-in for Pickle fallback</p></li>
+<li><p><strong>When:</strong> after sufficient deprecation period</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deprecations-caller-breaking-needs-migration-period">Deprecations (caller-breaking, needs migration period)</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remove-writer-method">Remove <code class="docutils literal notranslate"><span class="pre">writer()</span></code> method</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remove-cachedictwriter-import-alias">Remove <code class="docutils literal notranslate"><span class="pre">CacheDictWriter</span></code> import alias</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remove-exca-dumperloader-py-module">Remove <code class="docutils literal notranslate"><span class="pre">exca/dumperloader.py</span></code> module</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#internal-cleanup-non-breaking-can-do-anytime">Internal cleanup (non-breaking, can do anytime)</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remove-track-legacy-files-recursion">Remove <code class="docutils literal notranslate"><span class="pre">_track_legacy_files</span></code> recursion</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#stop-writing-metadata-tag-header">Stop writing <code class="docutils literal notranslate"><span class="pre">METADATA_TAG</span></code> header</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#clean-up-default-class-in-dumperloader-py">Clean up <code class="docutils literal notranslate"><span class="pre">default_class()</span></code> in dumperloader.py</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reinvestigate-cache-type-default-in-dump-dump-entry">Reinvestigate <code class="docutils literal notranslate"><span class="pre">cache_type</span></code> default in <code class="docutils literal notranslate"><span class="pre">dump()</span></code> / <code class="docutils literal notranslate"><span class="pre">dump_entry()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generalize-dump-count-to-load-side">Generalize <code class="docutils literal notranslate"><span class="pre">_dump_count</span></code> to load side</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#json-forced-file-parameter">Json forced-file parameter</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remove-auto-pickle-fallback">Remove Auto Pickle fallback</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright Meta Platforms, Inc.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+</div>
+
+  </footer>
+  </body>
+</html>

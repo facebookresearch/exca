@@ -1,0 +1,734 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Serialization &#8212; Exca 0.5.15 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=953b4072" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=a9ebb0e6"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'infra/serialization';</script>
+    <link rel="icon" href="../_static/exca.png"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="API Reference" href="reference.html" />
+    <link rel="prev" title="Explanations" href="explanation.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class=" navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/exca.png" class="logo__image only-light" alt=""/>
+    <img src="../_static/exca.png" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">Exca</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class=" navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="howto.html">How-to guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="explanation.html">Explanations</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Serialization</a></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="user-guide.html" class="nav-link">User guide</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Serialization</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="serialization">
+<h1>Serialization<a class="headerlink" href="#serialization" title="Link to this heading">#</a></h1>
+<p>This guide covers how <code class="docutils literal notranslate"><span class="pre">CacheDict</span></code> serializes and deserializes values under the
+hood, and how to extend the system with custom handlers. <code class="docutils literal notranslate"><span class="pre">CacheDict</span></code> is the
+storage layer used by <code class="docutils literal notranslate"><span class="pre">MapInfra</span></code> and <code class="docutils literal notranslate"><span class="pre">Step</span></code> for caching results. You only need
+this if the built-in handlers don’t cover your types.</p>
+<section id="how-cachedict-stores-data">
+<h2>How CacheDict stores data<a class="headerlink" href="#how-cachedict-stores-data" title="Link to this heading">#</a></h2>
+<p>A <code class="docutils literal notranslate"><span class="pre">CacheDict</span></code> manages a folder on disk. When you write a value:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">exca</span> <span class="kn">import</span> <span class="n">cachedict</span>
+
+<span class="n">cache</span> <span class="o">=</span> <span class="n">cachedict</span><span class="o">.</span><span class="n">CacheDict</span><span class="p">(</span><span class="n">folder</span><span class="o">=</span><span class="s2">&quot;/tmp/my_cache&quot;</span><span class="p">)</span>
+<span class="k">with</span> <span class="n">cache</span><span class="o">.</span><span class="n">write</span><span class="p">():</span>
+    <span class="n">cache</span><span class="p">[</span><span class="s2">&quot;my_key&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+</pre></div>
+</div>
+<p>the value is serialized through a <code class="docutils literal notranslate"><span class="pre">DumpContext</span></code>, which:</p>
+<ol class="arabic simple">
+<li><p>Picks a <strong>handler</strong> for the value (by type or by protocol).</p></li>
+<li><p>Calls the handler’s <code class="docutils literal notranslate"><span class="pre">__dump_info__</span></code> to produce an <strong>info dict</strong> — a
+JSON-serializable description of how the data was stored.</p></li>
+<li><p>Writes the info dict as a line in an <code class="docutils literal notranslate"><span class="pre">*-info.jsonl</span></code> file, tagged with
+<code class="docutils literal notranslate"><span class="pre">#key</span></code> and <code class="docutils literal notranslate"><span class="pre">#type</span></code>.</p></li>
+</ol>
+<p>On read, <code class="docutils literal notranslate"><span class="pre">CacheDict</span></code> parses the JSONL line, looks up the handler by <code class="docutils literal notranslate"><span class="pre">#type</span></code>,
+and calls <code class="docutils literal notranslate"><span class="pre">__load_from_info__</span></code> to reconstruct the value.</p>
+<p>Data files live in a <code class="docutils literal notranslate"><span class="pre">data/</span></code> subdirectory; info files stay in the cache root.</p>
+</section>
+<section id="built-in-handlers">
+<h2>Built-in handlers<a class="headerlink" href="#built-in-handlers" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Handler</p></th>
+<th class="head"><p>Default for</p></th>
+<th class="head"><p>Storage</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">MemmapArray</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">np.ndarray</span></code></p></td>
+<td><p>Shared binary file, loaded via memmap (recommended: fast and memory-efficient)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TorchTensor</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">torch.Tensor</span></code></p></td>
+<td><p>Delegates to MemmapArray internally</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Pickle</span></code></p></td>
+<td><p>—</p></td>
+<td><p>One <code class="docutils literal notranslate"><span class="pre">.pkl</span></code> file per entry</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">PandasDataFrame</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">pd.DataFrame</span></code></p></td>
+<td><p>One <code class="docutils literal notranslate"><span class="pre">.csv</span></code> file per entry</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Json</span></code></p></td>
+<td><p>—</p></td>
+<td><p>Inline in JSONL (small) or shared file (large)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Auto</span></code></p></td>
+<td><p>—</p></td>
+<td><p>Walks dicts/lists recursively, dispatches sub-values</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">AutoPickle</span></code></p></td>
+<td><p>—</p></td>
+<td><p>Like Auto, but uses Pickle for non-JSON-serializable data</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">Auto</span></code> is the default when no specific handler matches. It recursively walks
+containers (dicts, lists, tuples), dispatches recognized types (e.g. numpy
+arrays) to their handlers, and serializes the remaining data via <code class="docutils literal notranslate"><span class="pre">Json</span></code>.
+If the result is not JSON-serializable, <code class="docutils literal notranslate"><span class="pre">Auto</span></code> currently falls back to
+<code class="docutils literal notranslate"><span class="pre">Pickle</span></code> with a deprecation warning. This fallback will eventually be removed;
+use <code class="docutils literal notranslate"><span class="pre">AutoPickle</span></code> explicitly if you need pickle support going forward.</p>
+<p>You can force a specific handler via <code class="docutils literal notranslate"><span class="pre">cache_type</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">cache</span> <span class="o">=</span> <span class="n">cachedict</span><span class="o">.</span><span class="n">CacheDict</span><span class="p">(</span><span class="n">folder</span><span class="o">=</span><span class="s2">&quot;/tmp/my_cache&quot;</span><span class="p">,</span> <span class="n">cache_type</span><span class="o">=</span><span class="s2">&quot;MemmapArray&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="the-handler-protocol">
+<h2>The handler protocol<a class="headerlink" href="#the-handler-protocol" title="Link to this heading">#</a></h2>
+<p>A handler is a class with two required methods and one optional:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">MyHandler</span><span class="p">:</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">__dump_info__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="o">...</span>  <span class="c1"># serialize value, return an info dict</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">__load_from_info__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="o">**</span><span class="n">info</span><span class="p">):</span>
+        <span class="o">...</span>  <span class="c1"># reconstruct value from the info dict</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">__delete_info__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="o">**</span><span class="n">info</span><span class="p">):</span>
+        <span class="o">...</span>  <span class="c1"># optional: clean up files when an entry is deleted</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">ctx</span></code> argument is a <code class="docutils literal notranslate"><span class="pre">DumpContext</span></code> instance that provides file management
+and recursive serialization.</p>
+</section>
+<section id="registering-a-handler">
+<h2>Registering a handler<a class="headerlink" href="#registering-a-handler" title="Link to this heading">#</a></h2>
+<section id="handler-class-serializes-another-type">
+<h3>Handler class (serializes another type)<a class="headerlink" href="#handler-class-serializes-another-type" title="Link to this heading">#</a></h3>
+<p>Use classmethods and <code class="docutils literal notranslate"><span class="pre">default_for</span></code> to become the default handler for a type:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">exca.cachedict</span> <span class="kn">import</span> <span class="n">DumpContext</span>
+
+<span class="nd">@DumpContext</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">default_for</span><span class="o">=</span><span class="n">MyArrayType</span><span class="p">)</span>
+<span class="k">class</span> <span class="nc">MyArrayHandler</span><span class="p">:</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">__dump_info__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DumpContext</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">MyArrayType</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="n">name</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">key_path</span><span class="p">(</span><span class="s2">&quot;.myext&quot;</span><span class="p">)</span>  <span class="c1"># allocate a unique file</span>
+        <span class="n">value</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">folder</span> <span class="o">/</span> <span class="n">name</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;filename&quot;</span><span class="p">:</span> <span class="n">name</span><span class="p">}</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">__load_from_info__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DumpContext</span><span class="p">,</span> <span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MyArrayType</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">MyArrayType</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">folder</span> <span class="o">/</span> <span class="n">filename</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="user-class-the-value-is-the-object">
+<h3>User class (the value IS the object)<a class="headerlink" href="#user-class-the-value-is-the-object" title="Link to this heading">#</a></h3>
+<p>Use instance methods. The class itself is registered by name, and values are
+automatically recognized via <code class="docutils literal notranslate"><span class="pre">hasattr(value,</span> <span class="pre">&quot;__dump_info__&quot;)</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@DumpContext</span><span class="o">.</span><span class="n">register</span>
+<span class="k">class</span> <span class="nc">ExperimentResult</span><span class="p">:</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">features</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="n">config</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">features</span> <span class="o">=</span> <span class="n">features</span>
+
+    <span class="k">def</span> <span class="nf">__dump_info__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DumpContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s2">&quot;config&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">,</span>
+            <span class="s2">&quot;features&quot;</span><span class="p">:</span> <span class="n">ctx</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">features</span><span class="p">),</span>
+        <span class="p">}</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">__load_from_info__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DumpContext</span><span class="p">,</span> <span class="o">**</span><span class="n">info</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;ExperimentResult&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span>
+            <span class="n">config</span><span class="o">=</span><span class="n">info</span><span class="p">[</span><span class="s2">&quot;config&quot;</span><span class="p">],</span>
+            <span class="n">features</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">info</span><span class="p">[</span><span class="s2">&quot;features&quot;</span><span class="p">]),</span>
+        <span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="dumpcontext-api">
+<h2>DumpContext API<a class="headerlink" href="#dumpcontext-api" title="Link to this heading">#</a></h2>
+<p>Handlers interact with <code class="docutils literal notranslate"><span class="pre">DumpContext</span></code> through a small API:</p>
+<section id="file-allocation">
+<h3>File allocation<a class="headerlink" href="#file-allocation" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ctx.key_path(suffix)</span></code></strong> — allocate a unique file path for one-file-per-entry
+handlers. Returns a relative name (e.g. <code class="docutils literal notranslate"><span class="pre">&quot;data/key-ab12cd34.pkl&quot;</span></code>); use
+<code class="docutils literal notranslate"><span class="pre">ctx.folder</span> <span class="pre">/</span> <span class="pre">name</span></code> for the full path. Raises on collision.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ctx.shared_file(suffix)</span></code></strong> — open a shared append-mode file (one per
+writer thread). Returns <code class="docutils literal notranslate"><span class="pre">(file_handle,</span> <span class="pre">relative_name)</span></code>. Use for formats
+where multiple entries share a single file (e.g. MemmapArray’s <code class="docutils literal notranslate"><span class="pre">.data</span></code>).</p></li>
+</ul>
+</section>
+<section id="recursive-serialization">
+<h3>Recursive serialization<a class="headerlink" href="#recursive-serialization" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ctx.dump(value,</span> <span class="pre">*,</span> <span class="pre">cache_type=None)</span></code></strong> — serialize a sub-value. Returns
+an info dict tagged with <code class="docutils literal notranslate"><span class="pre">#type</span></code>. Use this inside <code class="docutils literal notranslate"><span class="pre">__dump_info__</span></code> to
+delegate sub-values to appropriate handlers.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ctx.load(info)</span></code></strong> — deserialize from an info dict. Use this inside
+<code class="docutils literal notranslate"><span class="pre">__load_from_info__</span></code> for sub-values that were serialized with <code class="docutils literal notranslate"><span class="pre">ctx.dump()</span></code>.</p></li>
+</ul>
+</section>
+<section id="read-side-caching">
+<h3>Read-side caching<a class="headerlink" href="#read-side-caching" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ctx.cached(key,</span> <span class="pre">factory)</span></code></strong> — get or create a cached resource (e.g. a
+memmap handle). The <code class="docutils literal notranslate"><span class="pre">key</span></code> should be namespaced to avoid collisions:
+<code class="docutils literal notranslate"><span class="pre">ctx.cached((&quot;MyHandler&quot;,</span> <span class="pre">filename),</span> <span class="pre">lambda:</span> <span class="pre">open_resource(filename))</span></code>.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ctx.invalidate(key)</span></code></strong> — force reload of a cached resource.</p></li>
+</ul>
+</section>
+</section>
+<section id="example-writing-a-shared-file-handler">
+<h2>Example: writing a shared-file handler<a class="headerlink" href="#example-writing-a-shared-file-handler" title="Link to this heading">#</a></h2>
+<p>Handlers that append to a shared file (like MemmapArray) use <code class="docutils literal notranslate"><span class="pre">ctx.shared_file()</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@DumpContext</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">default_for</span><span class="o">=</span><span class="n">MyType</span><span class="p">)</span>
+<span class="k">class</span> <span class="nc">MySharedHandler</span><span class="p">:</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">__dump_info__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DumpContext</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">MyType</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="n">f</span><span class="p">,</span> <span class="n">name</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">shared_file</span><span class="p">(</span><span class="s2">&quot;.mydata&quot;</span><span class="p">)</span>
+        <span class="n">raw</span> <span class="o">=</span> <span class="n">value</span><span class="o">.</span><span class="n">to_bytes</span><span class="p">()</span>
+        <span class="n">offset</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">tell</span><span class="p">()</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">raw</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;filename&quot;</span><span class="p">:</span> <span class="n">name</span><span class="p">,</span> <span class="s2">&quot;offset&quot;</span><span class="p">:</span> <span class="n">offset</span><span class="p">,</span> <span class="s2">&quot;length&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">raw</span><span class="p">)}</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">__load_from_info__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">DumpContext</span><span class="p">,</span> <span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+                           <span class="n">offset</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">length</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MyType</span><span class="p">:</span>
+        <span class="k">with</span> <span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">folder</span> <span class="o">/</span> <span class="n">filename</span><span class="p">)</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;rb&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">f</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="n">offset</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">MyType</span><span class="o">.</span><span class="n">from_bytes</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">length</span><span class="p">))</span>
+</pre></div>
+</div>
+<p>Shared-file handlers don’t need <code class="docutils literal notranslate"><span class="pre">__delete_info__</span></code> since individual entries
+can’t be removed from a shared file. Cleanup happens when the entire cache
+is cleared.</p>
+</section>
+<section id="reserved-keys">
+<h2>Reserved keys<a class="headerlink" href="#reserved-keys" title="Link to this heading">#</a></h2>
+<p>Info dicts must not contain <code class="docutils literal notranslate"><span class="pre">#type</span></code> or <code class="docutils literal notranslate"><span class="pre">#key</span></code> — these are set by
+<code class="docutils literal notranslate"><span class="pre">DumpContext</span></code> automatically. Returning them from <code class="docutils literal notranslate"><span class="pre">__dump_info__</span></code> raises
+<code class="docutils literal notranslate"><span class="pre">ValueError</span></code>.</p>
+</section>
+<section id="backward-compatibility">
+<h2>Backward compatibility<a class="headerlink" href="#backward-compatibility" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">CacheDict</span></code> transparently reads caches written by older versions:</p>
+<ul class="simple">
+<li><p><strong>Old JSONL format</strong> (with <code class="docutils literal notranslate"><span class="pre">metadata=</span></code> header) is detected and parsed.</p></li>
+<li><p><strong>Old handler names</strong> (e.g. <code class="docutils literal notranslate"><span class="pre">MemmapArrayFile</span></code>) are aliased to current handlers.</p></li>
+<li><p><strong>Old DataDict format</strong> (<code class="docutils literal notranslate"><span class="pre">optimized</span></code>/<code class="docutils literal notranslate"><span class="pre">pickled</span></code> structure) is loaded via
+a legacy path in the <code class="docutils literal notranslate"><span class="pre">Auto</span></code> handler.</p></li>
+<li><p><strong>Flat file layout</strong> (no <code class="docutils literal notranslate"><span class="pre">data/</span></code> subdirectory) is loaded correctly since
+info dicts store relative paths.</p></li>
+</ul>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="explanation.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Explanations</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="reference.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">API Reference</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-cachedict-stores-data">How CacheDict stores data</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#built-in-handlers">Built-in handlers</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-handler-protocol">The handler protocol</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-a-handler">Registering a handler</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#handler-class-serializes-another-type">Handler class (serializes another type)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#user-class-the-value-is-the-object">User class (the value IS the object)</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dumpcontext-api">DumpContext API</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#file-allocation">File allocation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#recursive-serialization">Recursive serialization</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#read-side-caching">Read-side caching</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example-writing-a-shared-file-handler">Example: writing a shared-file handler</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reserved-keys">Reserved keys</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#backward-compatibility">Backward compatibility</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright Meta Platforms, Inc.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+</div>
+
+  </footer>
+  </body>
+</html>

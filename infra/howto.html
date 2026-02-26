@@ -1,0 +1,725 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>How-to guide &#8212; Exca 0.5.15 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=953b4072" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=a9ebb0e6"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'infra/howto';</script>
+    <link rel="icon" href="../_static/exca.png"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Explanations" href="explanation.html" />
+    <link rel="prev" title="User guide" href="user-guide.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class=" navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/exca.png" class="logo__image only-light" alt=""/>
+    <img src="../_static/exca.png" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">Exca</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class=" navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">How-to guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="explanation.html">Explanations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="serialization.html">Serialization</a></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="user-guide.html" class="nav-link">User guide</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">How-to guide</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="how-to-guide">
+<h1>How-to guide<a class="headerlink" href="#how-to-guide" title="Link to this heading">#</a></h1>
+<section id="debugging">
+<h2>Debugging<a class="headerlink" href="#debugging" title="Link to this heading">#</a></h2>
+<p>Use the following lines to add more logging during debugging, this will help understand what happens:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">logging</span>
+<span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">&quot;exca&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">DEBUG</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Also, use <code class="docutils literal notranslate"><span class="pre">cluster=None</span></code> or <code class="docutils literal notranslate"><span class="pre">cluster=&quot;debug&quot;</span></code> to avoid distributed computation which is harder to debug.</p>
+<p><strong>Note</strong>: raised error in a decorated task method will have a different type than the actual raised exception (so as to have an error printing the traceback of the initial error)</p>
+<p>When communiating with others for help, make sure to send the stack trace as well as the error, as the stack trace is often much more informative than the sole error.</p>
+</section>
+<section id="asynchronous-computation-with-taskinfra">
+<h2>Asynchronous computation with TaskInfra<a class="headerlink" href="#asynchronous-computation-with-taskinfra" title="Link to this heading">#</a></h2>
+<section id="job">
+<h3>Job<a class="headerlink" href="#job" title="Link to this heading">#</a></h3>
+<p>Results of a cached task computation can be obtained in 2 ways:</p>
+<ul class="simple">
+<li><p>either by calling the method directly <code class="docutils literal notranslate"><span class="pre">task.process()</span></code></p></li>
+<li><p>through the attached <code class="docutils literal notranslate"><span class="pre">job</span> <span class="pre">=</span> <span class="pre">task.infra.job()</span></code> result.</p></li>
+</ul>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">task</span> <span class="o">=</span> <span class="n">TutorialTask</span><span class="p">(</span><span class="n">infra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;folder&quot;</span><span class="p">:</span> <span class="n">tmp_path</span><span class="p">})</span>
+<span class="k">assert</span> <span class="n">task</span><span class="o">.</span><span class="n">process</span><span class="p">()</span> <span class="o">==</span> <span class="n">task</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">job</span><span class="p">()</span><span class="o">.</span><span class="n">result</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Calling <code class="docutils literal notranslate"><span class="pre">job</span> <span class="pre">=</span> <span class="pre">task.infra.job()</span></code> starts the submission if it was not already started, and does not wait for the result, only calling <code class="docutils literal notranslate"><span class="pre">job.result()</span></code> will block until completion. This can let you run other computation in your current process / monitor the job (eg through <code class="docutils literal notranslate"><span class="pre">task.infra.status()</span></code>) etc.</p>
+</section>
+<section id="batching-job-arrays-in-slurm-clusters">
+<h3>Batching (job arrays in slurm clusters)<a class="headerlink" href="#batching-job-arrays-in-slurm-clusters" title="Link to this heading">#</a></h3>
+<p>Submitting one task job at a time is not efficient nor a good practice <em>for slurm clusters</em>, as each submission consumes some of slurm scheduler resources. A better way is to submit arrays of job. With <code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code>, this is done through a <code class="docutils literal notranslate"><span class="pre">job_array</span></code> context:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">task</span> <span class="o">=</span> <span class="n">TutorialTask</span><span class="p">(</span><span class="n">infra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;folder&quot;</span><span class="p">:</span> <span class="n">tmp_path</span><span class="p">})</span>
+
+<span class="k">with</span> <span class="n">task</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">job_array</span><span class="p">()</span> <span class="k">as</span> <span class="n">array</span><span class="p">:</span>  
+    <span class="c1"># &quot;array&quot; is a list to append/extend with tasks to compute</span>
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">):</span>
+        <span class="c1"># the following creates a new task with a new &quot;param&quot; value</span>
+        <span class="n">task_to_compute</span> <span class="o">=</span> <span class="n">task</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">clone_obj</span><span class="p">({</span><span class="s2">&quot;param&quot;</span><span class="p">:</span> <span class="n">k</span><span class="p">})</span>
+        <span class="n">array</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">task_to_compute</span><span class="p">)</span>
+
+<span class="c1"># leaving the context is non-blocking and submits all tasks to compute</span>
+<span class="k">assert</span> <span class="n">array</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">status</span><span class="p">()</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;completed&quot;</span><span class="p">,</span> <span class="s2">&quot;running&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Similarly as with calling <code class="docutils literal notranslate"><span class="pre">task.infra.job()</span></code>, previously computed tasks are not resubmitted, unless <code class="docutils literal notranslate"><span class="pre">infra.mode</span></code> is set to <code class="docutils literal notranslate"><span class="pre">&quot;force&quot;</span></code>, or set to <code class="docutils literal notranslate"><span class="pre">&quot;retry&quot;</span></code> with a previously failed computation.</p>
+</section>
+</section>
+<section id="monitoring">
+<h2>Monitoring<a class="headerlink" href="#monitoring" title="Link to this heading">#</a></h2>
+<p>To monitor running jobs on slurm clusters, one can use the <code class="docutils literal notranslate"><span class="pre">squeue</span></code> command. However, when running a lot of slurm jobs it can become complex to figure out which job does what. We provide a basic helper function to access the logs and config of a given job (assuming default log folder position): <code class="docutils literal notranslate"><span class="pre">exca.helpers.find_slurm_job</span></code>
+See more details in its <a class="reference internal" href="reference.html#exca.helpers.find_slurm_job" title="exca.helpers.find_slurm_job"><span class="xref myst py py-func">API reference</span></a>.</p>
+<p>We also recommend using <a class="reference external" href="https://github.com/kabouzeid/turm">Turm</a>, which provides a real-time interface to access the <code class="docutils literal notranslate"><span class="pre">stdout/stderr</span></code> of running jobs. Simply install it with <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">turm</span></code> and you can then use <code class="docutils literal notranslate"><span class="pre">turm</span> <span class="pre">--slurm-refresh</span> <span class="pre">20</span> <span class="pre">--me</span> <span class="pre">--states</span> <span class="pre">RUNNING</span></code> to check your running jobs (please use at least 20s for the slurm refresh rate to avoid overloading the cluster).</p>
+</section>
+<section id="efficient-caching-cache-and-class-uid-exclusion">
+<h2>Efficient caching: cache and class uid exclusion<a class="headerlink" href="#efficient-caching-cache-and-class-uid-exclusion" title="Link to this heading">#</a></h2>
+<p id="howto-efficient-caching">Consider the following class that defines a <code class="docutils literal notranslate"><span class="pre">process</span></code> function which returns a random torch tensor:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">typing</span> <span class="k">as</span> <span class="nn">tp</span>
+<span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+
+<span class="k">class</span> <span class="nc">UidTask</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">shape</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+    <span class="n">coeff</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">12.0</span>
+    <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span>
+    <span class="n">infra</span><span class="p">:</span> <span class="n">TaskInfra</span> <span class="o">=</span> <span class="n">TaskInfra</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="s2">&quot;1&quot;</span><span class="p">)</span>
+
+    <span class="nd">@infra</span><span class="o">.</span><span class="n">apply</span>
+    <span class="k">def</span> <span class="nf">_internal_cached_method</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+        <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">process</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_internal_cached_method</span><span class="p">()</span>
+        <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">coeff</span> <span class="o">*</span> <span class="n">tensor</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">infra</span></code> uses all parameters of the <code class="docutils literal notranslate"><span class="pre">pydantic.BaseModel</span></code> to define a <code class="docutils literal notranslate"><span class="pre">uid</span></code> (a string) of the class or of the cache. Two objects with a same <code class="docutils literal notranslate"><span class="pre">uid</span></code> should behave the same way / provide the same results. Preferably two objects which provide the same computation should also have the same uid, but there are a couple of issues here.</p>
+<section id="class-uid">
+<h3>Class uid<a class="headerlink" href="#class-uid" title="Link to this heading">#</a></h3>
+<p>The uid of the class takes into account all parameters, you can check the parameters through the <code class="docutils literal notranslate"><span class="pre">config</span></code> for instance:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">task</span> <span class="o">=</span> <span class="n">UidTask</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">coeff</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">task</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">config</span><span class="p">(</span><span class="n">uid</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">==</span> <span class="p">{</span>
+    <span class="s1">&#39;seed&#39;</span><span class="p">:</span> <span class="mi">12</span><span class="p">,</span>
+    <span class="s1">&#39;shape&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span>
+    <span class="s1">&#39;coeff&#39;</span><span class="p">:</span> <span class="mf">3.0</span><span class="p">,</span>
+    <span class="s1">&#39;device&#39;</span><span class="p">:</span> <span class="s1">&#39;cuda&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;infra&#39;</span><span class="p">:</span> <span class="p">{</span><span class="s1">&#39;version&#39;</span><span class="p">:</span> <span class="s1">&#39;1&#39;</span><span class="p">}</span>
+<span class="p">}</span>
+<span class="k">assert</span> <span class="n">task</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">config</span><span class="p">(</span><span class="n">uid</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exclude_defaults</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">==</span> <span class="p">{</span>
+    <span class="s1">&#39;coeff&#39;</span><span class="p">:</span> <span class="mf">3.0</span><span class="p">,</span>
+    <span class="s1">&#39;device&#39;</span><span class="p">:</span> <span class="s1">&#39;cuda&#39;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>In practice the <code class="docutils literal notranslate"><span class="pre">uid</span></code> is computed from the non-default parameters, so the <code class="docutils literal notranslate"><span class="pre">uid</span></code> will be something like <code class="docutils literal notranslate"><span class="pre">coeff=3,device=cuda-4f4ca7cb</span></code> in this case (the last part being a hash for security reasons).</p>
+<p><code class="docutils literal notranslate"><span class="pre">device</span></code> however defines where the computation is performed but has no impact on the actual result, so it should not impact the uid of the class. This parameter should therefore be excluded from the cache, this can be done by either having a <code class="docutils literal notranslate"><span class="pre">_exclude_from_cls_uid</span></code> method or class variable.</p>
+<p>All <code class="docutils literal notranslate"><span class="pre">infra</span></code> parameters except <code class="docutils literal notranslate"><span class="pre">version</span></code> are ignored in such a way because caching or the required resources for computation (number of cpus/gpus for instance) do not impact the actual result of the computation. <code class="docutils literal notranslate"><span class="pre">version</span></code> is therefore the only parameter of the <code class="docutils literal notranslate"><span class="pre">infra</span></code> that will appear in the config even when specifying caching or remote computation options.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">UidTask2</span><span class="p">(</span><span class="n">UidTask</span><span class="p">):</span>
+    <span class="n">_exclude_from_cls_uid</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">ClassVar</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;device&quot;</span><span class="p">]</span>
+
+<span class="n">task2</span> <span class="o">=</span> <span class="n">UidTask2</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">coeff</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">task2</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">config</span><span class="p">(</span><span class="n">uid</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exclude_defaults</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">==</span> <span class="p">{</span><span class="s1">&#39;coeff&#39;</span><span class="p">:</span> <span class="mf">3.0</span><span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="cache-uid">
+<h3>Cache uid<a class="headerlink" href="#cache-uid" title="Link to this heading">#</a></h3>
+<p>Cache also requires a <code class="docutils literal notranslate"><span class="pre">uid</span></code> that will be used to store the results. All parameters ignored from the class <code class="docutils literal notranslate"><span class="pre">uid</span></code> are also ignored for the cache (such as <code class="docutils literal notranslate"><span class="pre">device</span></code>). We can however see in this case that while the <code class="docutils literal notranslate"><span class="pre">UidTask</span></code> does depend on <code class="docutils literal notranslate"><span class="pre">coeff</span></code> parameter (used in <code class="docutils literal notranslate"><span class="pre">process</span></code>), the cache does not, because <code class="docutils literal notranslate"><span class="pre">_internal_cached_method</span></code> does not use it. We can then further ignore <code class="docutils literal notranslate"><span class="pre">coeff</span></code> from the cache by specifying it through the <code class="docutils literal notranslate"><span class="pre">exclude_from_cache_uid</span></code> of the <code class="docutils literal notranslate"><span class="pre">infra.apply</span></code> decorator. This parameter can be one of:</p>
+<ol class="arabic simple">
+<li><p>a list of parameter names to ignore</p></li>
+<li><p>a method defined in the class returning a list of parameters names to ignore</p></li>
+<li><p>the method above specified by name under the format <code class="docutils literal notranslate"><span class="pre">&quot;method:&lt;mehtod_name&gt;&quot;</span></code></p></li>
+</ol>
+<p>The main difference between 2 and 3 is that a method override in a subclass will only be taken into account with option 3.</p>
+</section>
+<section id="updated-task">
+<h3>Updated task<a class="headerlink" href="#updated-task" title="Link to this heading">#</a></h3>
+<p>Here an updated class with better <code class="docutils literal notranslate"><span class="pre">uid</span></code> handling:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">UidTask</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">shape</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+    <span class="n">coeff</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">12.0</span>
+    <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span>
+    <span class="n">infra</span><span class="p">:</span> <span class="n">TaskInfra</span> <span class="o">=</span> <span class="n">TaskInfra</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="s2">&quot;1&quot;</span><span class="p">)</span>
+    <span class="n">_exclude_from_cls_uid</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">ClassVar</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]]</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;device&quot;</span><span class="p">,)</span>
+
+    <span class="nd">@infra</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">exclude_from_cache_uid</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;coeff&quot;</span><span class="p">,))</span>
+    <span class="k">def</span> <span class="nf">_internal_cached_method</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+        <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">process</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_internal_cached_method</span><span class="p">()</span>
+        <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">coeff</span> <span class="o">*</span> <span class="n">tensor</span>
+</pre></div>
+</div>
+<p>and here is an equivalent class with different options for specifying the class and cache exclusions:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">UidTask</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">shape</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+    <span class="n">coeff</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">12.0</span>
+    <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span>
+    <span class="n">infra</span><span class="p">:</span> <span class="n">TaskInfra</span> <span class="o">=</span> <span class="n">TaskInfra</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="s2">&quot;1&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_exclude_from_cls_uid</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="p">(</span><span class="s2">&quot;device&quot;</span><span class="p">,)</span>
+
+    <span class="k">def</span> <span class="nf">_cache_exclusion</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">tp</span><span class="o">.</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="p">[</span><span class="s2">&quot;coeff&quot;</span><span class="p">]</span>
+
+    <span class="nd">@infra</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">exclude_from_cache_uid</span><span class="o">=</span><span class="s2">&quot;method:_cache_exclusion&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">_internal_cached_method</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+        <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">process</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_internal_cached_method</span><span class="p">()</span>
+        <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">coeff</span> <span class="o">*</span> <span class="n">tensor</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="infra-versioning-default-heritage">
+<h2>Infra Versioning &amp; default heritage<a class="headerlink" href="#infra-versioning-default-heritage" title="Link to this heading">#</a></h2>
+<p>All attributes of infra configurations are ignored for uid computation (i.e. modifying eg the type of cluster / number of cpus in the infra will not modify the uid), except their <code class="docutils literal notranslate"><span class="pre">version</span></code> attribute. This allows for cache invalidation. Indeed, changing this value will change the current class uid and therefore lead to the creation of a new cache folder. Cache of classes depending on the class with a new version will not be usable anymore (because of conflicting default version value) and the cache folder of these classes may need to be deleted.</p>
+<p>Furthermore, <strong>all</strong> attributes of the default infra set on a config class serve as seed/default values when you instantiate a config instance. So, when instantiating the <code class="docutils literal notranslate"><span class="pre">TutorialMap</span></code> class (see <a class="reference internal" href="tutorials.html#tutorial-map"><span class="std std-ref">tutorial</span></a>), you will get a <code class="docutils literal notranslate"><span class="pre">version=&quot;1&quot;</span></code> in your instance if you do not override it:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">mapper</span> <span class="o">=</span> <span class="n">TutorialMap</span><span class="p">(</span><span class="n">infra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;folder&quot;</span><span class="p">:</span> <span class="n">tmp_path</span><span class="p">})</span>
+<span class="k">assert</span> <span class="n">mapper</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">version</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span>
+<span class="c1"># even though the default version in a MapInfra is actually &quot;0&quot;:</span>
+<span class="k">assert</span> <span class="n">MapInfra</span><span class="p">(</span><span class="o">**</span><span class="p">{</span><span class="s2">&quot;folder&quot;</span><span class="p">:</span> <span class="n">tmp_path</span><span class="p">})</span><span class="o">.</span><span class="n">version</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span>
+</pre></div>
+</div>
+<p>Be careful, this behavior is limited to infra objects, so as to preset version and computation defaults more easily, other nested config do not behave this way.</p>
+</section>
+<section id="using-pydantic-s-discriminator">
+<h2>Using pydantic’s discriminator<a class="headerlink" href="#using-pydantic-s-discriminator" title="Link to this heading">#</a></h2>
+<p id="howto-discriminator"><code class="docutils literal notranslate"><span class="pre">pydantic</span></code> allows for automatic selection between several sub-configurations, such as between a <code class="docutils literal notranslate"><span class="pre">Dog</span></code> or a <code class="docutils literal notranslate"><span class="pre">Cat</span></code> sub-configuration below:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">typing</span> <span class="k">as</span> <span class="nn">tp</span>
+
+<span class="k">class</span> <span class="nc">Dog</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;dog&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;dog&quot;</span>
+    <span class="n">dog_param</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+
+<span class="k">class</span> <span class="nc">Cat</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;cat&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;cat&quot;</span>
+    <span class="n">cat_param</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;mew&quot;</span>
+
+<span class="k">class</span> <span class="nc">Household</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">pet</span><span class="p">:</span> <span class="n">Dog</span> <span class="o">|</span> <span class="n">Cat</span> <span class="o">=</span> <span class="n">pydantic</span><span class="o">.</span><span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">discriminator</span><span class="o">=</span><span class="s2">&quot;name&quot;</span><span class="p">)</span>
+
+
+<span class="n">household</span> <span class="o">=</span> <span class="n">Household</span><span class="p">(</span><span class="n">pet</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;dog&quot;</span><span class="p">})</span>
+<span class="k">assert</span> <span class="n">household</span><span class="o">.</span><span class="n">pet</span><span class="o">.</span><span class="n">dog_param</span> <span class="o">==</span> <span class="mi">12</span>
+</pre></div>
+</div>
+<p>The syntax requires providing a “discriminator” field which is a constant (a <code class="docutils literal notranslate"><span class="pre">Literal</span></code>) for selecting which class to instantiate. While explicitely stating the discriminator through <code class="docutils literal notranslate"><span class="pre">pydantic.Field</span></code> (as above) or through an annotation (see in <code class="docutils literal notranslate"><span class="pre">pydantic</span></code> documentation) is not strictly necessary with <code class="docutils literal notranslate"><span class="pre">pydantic</span></code>, it is necessary when working with infras so that the discriminator be part of the uid.</p>
+</section>
+<section id="workdir-code-copy">
+<h2>Workdir/code copy<a class="headerlink" href="#workdir-code-copy" title="Link to this heading">#</a></h2>
+<p>Running code on a cluster while still working on the code can be dangereous, as the job will use the state of the code <strong>at start time</strong> and <strong>not at submission time</strong>.</p>
+<p>In order to avoid surprises, both task/map infra support a <code class="docutils literal notranslate"><span class="pre">workdir</span></code> for copying the code to a different working directory where the decorated function will be running from:
+<a class="reference internal" href="reference.html#exca.workdir.WorkDir" title="exca.workdir.WorkDir"><span class="xref myst py py-class">Check its parameters here</span></a>, in particular, the <code class="docutils literal notranslate"><span class="pre">copied</span></code> parameter can be used to select folders or files or packages installed in editable mode that should be copied to the job’s working directory, like in the <a class="reference internal" href="tutorials.html#infra-tutorials-taskinfra"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">TutorialTask</span></code> class from the tutorial section</span></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">task</span> <span class="o">=</span> <span class="n">TutorialTask</span><span class="p">(</span><span class="n">infra</span><span class="o">=</span><span class="p">{</span>
+    <span class="s2">&quot;cluster&quot;</span><span class="p">:</span> <span class="s2">&quot;local&quot;</span><span class="p">,</span> 
+    <span class="s2">&quot;folder&quot;</span><span class="p">:</span> <span class="n">tmp_path</span><span class="p">,</span> 
+    <span class="c1"># will create a copy of exca in a folder and run from there:</span>
+    <span class="s2">&quot;workdir&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;copied&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;exca&quot;</span><span class="p">]},</span>  
+<span class="p">})</span>
+</pre></div>
+</div>
+<p>Note that the change of working directory (and possibly the copy) only happens when the infra is called for submitting the decorated function. Depending on your code, this may not be at the very beginning of your execution.</p>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="user-guide.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">User guide</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="explanation.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Explanations</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debugging">Debugging</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#asynchronous-computation-with-taskinfra">Asynchronous computation with TaskInfra</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#job">Job</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#batching-job-arrays-in-slurm-clusters">Batching (job arrays in slurm clusters)</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#monitoring">Monitoring</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#efficient-caching-cache-and-class-uid-exclusion">Efficient caching: cache and class uid exclusion</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#class-uid">Class uid</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cache-uid">Cache uid</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#updated-task">Updated task</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#infra-versioning-default-heritage">Infra Versioning &amp; default heritage</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#using-pydantic-s-discriminator">Using pydantic’s discriminator</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workdir-code-copy">Workdir/code copy</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright Meta Platforms, Inc.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+</div>
+
+  </footer>
+  </body>
+</html>

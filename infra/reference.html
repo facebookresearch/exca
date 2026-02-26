@@ -1,0 +1,1324 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>API Reference &#8212; Exca 0.5.15 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=953b4072" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=a9ebb0e6"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'infra/reference';</script>
+    <link rel="icon" href="../_static/exca.png"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="prev" title="Serialization" href="serialization.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class=" navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/exca.png" class="logo__image only-light" alt=""/>
+    <img src="../_static/exca.png" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">Exca</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class=" navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="#">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="#">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"></div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">API Reference</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="api-reference">
+<h1>API Reference<a class="headerlink" href="#api-reference" title="Link to this heading">#</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="exca.TaskInfra">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">exca.</span></span><span class="sig-name descname"><span class="pre">TaskInfra</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">folder</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Literal</span><span class="p"><span class="pre">[</span></span><span class="pre">None</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'auto'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'local'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'slurm'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'debug'</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'{folder}/logs/{user}/%j'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">job_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout_min</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nodes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tasks_per_node</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cpus_per_task</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpus_per_node</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mem_gb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_pickle_size_gb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_constraint</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_partition</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_account</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_qos</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_use_srun</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_additional_parameters</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conda_env</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">workdir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">None</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#exca.workdir.WorkDir" title="exca.workdir.WorkDir"><span class="pre">WorkDir</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">permissions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">511</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'0'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Literal</span><span class="p"><span class="pre">[</span></span><span class="s"><span class="pre">'cached'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'retry'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'force'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'read-only'</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'cached'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keep_in_ram</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra" title="Link to this definition">#</a></dt>
+<dd><p>Processing/caching infrastructure ready to be applied to a pydantic.BaseModel method.
+To use it, the configuration must be set as an attribute of a pydantic BaseModel,
+then <code class="code docutils literal notranslate"><span class="pre">&#64;infra.apply</span></code> must be set on the parameter-free method to process/cache.
+This will effectively replace the function with a cached/remotely-computed version of itself</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>folder</strong> (<em>optional Path</em><em> or </em><em>str</em>) – Path to directory for dumping/loading the cache on disk, if provided</p></li>
+<li><p><strong>keep_in_ram</strong> (<em>bool</em>) – if True, adds a cache in RAM of the data once loaded (similar to LRU cache)</p></li>
+<li><p><strong>mode</strong> (<em>str</em>) – <dl class="simple">
+<dt>One of the following:</dt><dd><ul>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;cached&quot;</span></code>: cache is returned if available (error or not),
+otherwise computed (and cached)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;retry&quot;</span></code>: cache is returned if available except if it’s an error,
+otherwise (re)computed (and cached)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;force&quot;</span></code>: cache is ignored, and result are (re)computed (and cached)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;read-only&quot;</span></code>: never compute anything</p></li>
+</ul>
+</dd>
+</dl>
+</p></li>
+<li><p><strong>parameters</strong> (<em>Slurm/submitit</em>)</p></li>
+<li><p><strong>-------------------------</strong></p></li>
+</ul>
+</dd>
+</dl>
+<p>:param Check out <a class="reference internal" href="#exca.slurm.SubmititMixin" title="exca.slurm.SubmititMixin"><code class="xref py py-class docutils literal notranslate"><span class="pre">exca.slurm.SubmititMixin</span></code></a>:
+:param Usage:
+:param —–:
+:param .. code-block:: python:</p>
+<blockquote>
+<div><dl>
+<dt>class MyTask(pydantic.BaseModel):</dt><dd><p>x: int
+infra: exca.TaskInfra = exca.TaskInfra()</p>
+<p>&#64;infra.apply
+def compute(self) -&gt; int:</p>
+<blockquote>
+<div><p>return 2 * self.x</p>
+</div></blockquote>
+</dd>
+</dl>
+<p>cfg = MyTask(12, infra={“folder”: “tmp”, “cluster”: “slurm”})
+assert cfg.compute() == 24  # “compute” runs on slurm and is cached</p>
+</div></blockquote>
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.apply">
+<span class="sig-name descname"><span class="pre">apply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">arg</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">C</span></span></em>, <em class="sig-param"><span class="positional-only-separator o"><abbr title="Positional-only parameter separator (PEP 570)"><span class="pre">/</span></abbr></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">C</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.apply" title="Link to this definition">#</a></dt>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">apply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">exclude_from_cache_uid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Iterable</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Iterable</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">()</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="pre">C</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">C</span><span class="p"><span class="pre">]</span></span></span></span></dt>
+<dd><p>Applies the infra on a method taking no parameter (except <cite>self</cite>)</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>method</strong> (<em>callable</em>) – a method of a pydantic.BaseModel taking as input an iterable of items
+of a type X, and yielding one output of a type Y for each input item.</p></li>
+<li><p><strong>exclude_from_cache_uid</strong> (<em>iterable</em><em> of </em><em>str / method / method name</em>) – fields that must be removed from the uid of the cache (in addition to
+the ones already removed from the class uid)</p></li>
+<li><p><strong>Usage</strong></p></li>
+<li><p><strong>-----</strong></p></li>
+</ul>
+</dd>
+</dl>
+<p>:param either decorate with <code class="code docutils literal notranslate"><span class="pre">&#64;infra.apply</span></code> or <code class="code docutils literal notranslate"><span class="pre">&#64;infra.apply(exclude_from_cache_uid=&lt;whatever&gt;)</span></code>:</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.clear_job">
+<span class="sig-name descname"><span class="pre">clear_job</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.clear_job" title="Link to this definition">#</a></dt>
+<dd><p>Clears and possibly cancels this task’s job
+so that the computation is rerun at the next call</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.clone_obj">
+<span class="sig-name descname"><span class="pre">clone_obj</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Any</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.clone_obj" title="Link to this definition">#</a></dt>
+<dd><p>Create a new decorated object by applying a diff config to the underlying object</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.config">
+<span class="sig-name descname"><span class="pre">config</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">uid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exclude_defaults</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#exca.ConfDict" title="exca.confdict.ConfDict"><span class="pre">ConfDict</span></a></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.config" title="Link to this definition">#</a></dt>
+<dd><p>Exports the task configuration as a ConfigDict
+ConfDict are dict which split on “.” with extra flatten,
+to_uid and to_yaml features</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>uid</strong> (<em>bool</em>) – if True, uses the _exclude_from_cls_uid field/method to filter in and out
+some fields</p></li>
+<li><p><strong>exclude_defaults</strong> (<em>bool</em>) – if True, values that are set to defaults are not included</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.iter_cached">
+<span class="sig-name descname"><span class="pre">iter_cached</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterable</span><span class="p"><span class="pre">[</span></span><span class="pre">BaseModel</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.iter_cached" title="Link to this definition">#</a></dt>
+<dd><p>Iterate over similar tasks in the cache folder</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.job">
+<span class="sig-name descname"><span class="pre">job</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Job</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">LocalJob</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.job" title="Link to this definition">#</a></dt>
+<dd><p>Creates or reload the job corresponding to the task</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.job_array">
+<span class="sig-name descname"><span class="pre">job_array</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">max_workers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">256</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">allow_empty</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">allow_repeated_tasks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.job_array" title="Link to this definition">#</a></dt>
+<dd><p>Creates a list object to populate
+The tasks in the list will be sent as a job array when exiting the context</p>
+<section id="parameter">
+<h2>Parameter<a class="headerlink" href="#parameter" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>max_workers: int</dt><dd><p>maximum number of jobs in the array that can be running at a given time</p>
+</dd>
+<dt>allow_empty: bool</dt><dd><p>if False, an exception will be raised when exiting the context if the array is still empty</p>
+</dd>
+<dt>allow_repeated_tasks: bool</dt><dd><p>if False (default) a same task should not be repeated twice in the array.</p>
+</dd>
+</dl>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.obj_infras">
+<span class="sig-name descname"><span class="pre">obj_infras</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Mapping</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">BaseInfra</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.obj_infras" title="Link to this definition">#</a></dt>
+<dd><p>Returns a dictionary of all infras part of the current model/config
+(including sub-configs)</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.status">
+<span class="sig-name descname"><span class="pre">status</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Literal</span><span class="p"><span class="pre">[</span></span><span class="s"><span class="pre">'not</span> <span class="pre">submitted'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'running'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'completed'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'failed'</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.status" title="Link to this definition">#</a></dt>
+<dd><p>Provides the status of the job
+This can be one of “not submitted”, “running”, “completed” or “failed”</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.uid">
+<span class="sig-name descname"><span class="pre">uid</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.uid" title="Link to this definition">#</a></dt>
+<dd><p>Returns the unique uid of the task</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.TaskInfra.uid_folder">
+<span class="sig-name descname"><span class="pre">uid_folder</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">create</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/task.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.TaskInfra.uid_folder" title="Link to this definition">#</a></dt>
+<dd><p>Folder where this task instance is stored</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="exca.MapInfra">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">exca.</span></span><span class="sig-name descname"><span class="pre">MapInfra</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">folder</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Literal</span><span class="p"><span class="pre">[</span></span><span class="pre">None</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'auto'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'local'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'slurm'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'debug'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'threadpool'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'processpool'</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'{folder}/logs/{user}/%j'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">job_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout_min</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nodes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tasks_per_node</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cpus_per_task</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpus_per_node</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mem_gb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_pickle_size_gb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_constraint</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_partition</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_account</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_qos</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_use_srun</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_additional_parameters</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conda_env</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">workdir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">None</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#exca.workdir.WorkDir" title="exca.workdir.WorkDir"><span class="pre">WorkDir</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">permissions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">511</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'0'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keep_in_ram</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_jobs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">128</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_samples_per_job</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">forbid_single_item_computation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Literal</span><span class="p"><span class="pre">[</span></span><span class="s"><span class="pre">'cached'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'force'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'read-only'</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'cached'</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/map.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.MapInfra" title="Link to this definition">#</a></dt>
+<dd><p>Processing/caching infrastructure ready to be applied to a pydantic.BaseModel method.
+To use it, the configuration can be set as an attribute of a pydantic BaseModel,
+then <cite>&#64;infra.apply(item_uid)</cite> must be set on the method to process/cache
+this will effectively replace the function with a cached/remotely-computed version of itself</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>folder</strong> (<em>optional Path</em><em> or </em><em>str</em>) – Path to directory for dumping/loading the cache on disk, if provided</p></li>
+<li><p><strong>keep_in_ram</strong> (<em>bool</em>) – if True, adds a cache in RAM of the data once loaded (similar to LRU cache)</p></li>
+<li><p><strong>mode</strong> (<em>str</em>) – <dl class="simple">
+<dt>One of the following:</dt><dd><ul>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;cached&quot;</span></code>: cache is returned if available (error or not), otherwise computed (and cached)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;force&quot;</span></code>: cache is ignored, and result are (re)computed (and cached)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;read-only&quot;</span></code>: never compute anything</p></li>
+</ul>
+</dd>
+</dl>
+</p></li>
+<li><p><strong>cluster</strong> (<em>optional str</em>) – <dl class="simple">
+<dt>Where to run the computation, one of:</dt><dd><ul>
+<li><p><code class="code docutils literal notranslate"><span class="pre">None</span></code>: runs in the current thread</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;debug&quot;</span></code>: submitit debug executor (runs in the current process with <cite>ipdb</cite>)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;local&quot;</span></code>: submitit local executor (runs in a dedicated subprocess)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;slurm&quot;</span></code>: submitit slurm executor (runs in a slurm cluster)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;auto&quot;</span></code>: submitit auto executor (uses slurm if available, otherwise local)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;processpool&quot;</span></code>: runs locally in a <cite>concurrent.future.ProcessPoolExecutor</cite></p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;threadpool&quot;</span></code>: runs locally in a <cite>concurrent.future.ThreadPoolExecutor</cite></p></li>
+</ul>
+</dd>
+</dl>
+</p></li>
+<li><p><strong>max_jobs</strong> (<em>optional int</em>) – maximum number of submitit jobs or process/thread workers to submit for
+running all the map processing</p></li>
+<li><p><strong>min_samples_per_job</strong> (<em>optional int</em>) – minimum number of samples to compute within each job</p></li>
+<li><p><strong>forbid_single_item_computation</strong> (<em>bool</em>) – raises if a single item needs to be computed. This can help detect issues
+(and overloading the cluster) when all items are supposed to have been precomputed.</p></li>
+<li><p><strong>parameters</strong> (<em>Slurm/submitit</em>)</p></li>
+<li><p><strong>-------------------------</strong></p></li>
+</ul>
+</dd>
+</dl>
+<p>:param Check out <a class="reference internal" href="#exca.slurm.SubmititMixin" title="exca.slurm.SubmititMixin"><code class="xref py py-class docutils literal notranslate"><span class="pre">exca.slurm.SubmititMixin</span></code></a>:</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<ul class="simple">
+<li><p>the decorated method must take as input an iterable of items of a type X, and yield
+one output of a type Y for each input.</p></li>
+</ul>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.MapInfra.apply">
+<span class="sig-name descname"><span class="pre">apply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">item_uid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">item_uid_max_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">256</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exclude_from_cache_uid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Iterable</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Iterable</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="pre">C</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">C</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/map.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.MapInfra.apply" title="Link to this definition">#</a></dt>
+<dd><p>Applies the infra on a method taking an iterable of items as input</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>method</strong> (<em>callable</em>) – a method of a pydantic.BaseModel taking as input an iterable of items
+of a type X, and yielding one output of a type Y for each input item.</p></li>
+<li><p><strong>item_uid</strong> (<em>callable from item to str</em>) – function returning a uid from the item of a map</p></li>
+<li><p><strong>item_uid_max_length</strong> (<em>int</em><em> or </em><em>None</em>) – maximum length of the item_uid output before it gets shortened for efficiency
+(as all uids need to be read at first call). Use None to deactivate shortening.</p></li>
+<li><p><strong>exclude_from_cache_uid</strong> (<em>iterable</em><em> of </em><em>str / method / method name</em>) – fields that must be removed from the uid of the cache (in addition to
+the ones already removed from the class uid)</p></li>
+<li><p><strong>cache_type</strong> (<em>str</em>) – <p>name of the cache class to use (inferred by default)
+this can for instance be used to enforce eg a memmap instead of loading arrays
+The available options include:
+- <code class="code docutils literal notranslate"><span class="pre">NumpyArray</span></code>:  stores numpy arrays as npy files (default for np.ndarray)
+- <code class="code docutils literal notranslate"><span class="pre">NumpyMemmapArray</span></code>: similar to NumpyArray but reloads arrays as memmaps
+- <code class="code docutils literal notranslate"><span class="pre">MemmapArrayFile</span></code>: stores multiple np.ndarray into a unique memmap file</p>
+<blockquote>
+<div><p>(strongly adviced in case of many arrays)</p>
+</div></blockquote>
+<ul>
+<li><p><code class="code docutils literal notranslate"><span class="pre">PandasDataFrame</span></code>: stores pandas dataframes as csv (default for dataframes)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">ParquetPandasDataFrame</span></code>: stores pandas dataframes as parquet files</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">TorchTensor</span></code>: stores torch.Tensor as .pt file (default for tensors)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">Pickle</span></code>: stores object as pickle file (fallback default)</p></li>
+</ul>
+</p></li>
+<li><p><strong>Usage</strong></p></li>
+<li><p><strong>-----</strong></p></li>
+<li><p><strong>well</strong> (<em>Decorate the method with &#64;infra.apply</em><em>(</em><em>item_uid=&lt;function&gt;</em><em>) </em><em>(</em><em>as</em>)</p></li>
+<li><p><strong>set</strong><strong>)</strong> (<em>as any additional parameter you want to</em>)</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.MapInfra.clone_obj">
+<span class="sig-name descname"><span class="pre">clone_obj</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Any</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/map.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.MapInfra.clone_obj" title="Link to this definition">#</a></dt>
+<dd><p>Create a new decorated object by applying a diff config to the underlying object</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.MapInfra.config">
+<span class="sig-name descname"><span class="pre">config</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">uid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exclude_defaults</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#exca.ConfDict" title="exca.confdict.ConfDict"><span class="pre">ConfDict</span></a></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/map.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.MapInfra.config" title="Link to this definition">#</a></dt>
+<dd><p>Exports the task configuration as a ConfigDict
+ConfDict are dict which split on “.” with extra flatten,
+to_uid and to_yaml features</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>uid</strong> (<em>bool</em>) – if True, uses the _exclude_from_cls_uid field/method to filter in and out
+some fields</p></li>
+<li><p><strong>exclude_defaults</strong> (<em>bool</em>) – if True, values that are set to defaults are not included</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.MapInfra.iter_cached">
+<span class="sig-name descname"><span class="pre">iter_cached</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterable</span><span class="p"><span class="pre">[</span></span><span class="pre">BaseModel</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/map.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.MapInfra.iter_cached" title="Link to this definition">#</a></dt>
+<dd><p>Iterate over similar objects in the cache folder</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.MapInfra.obj_infras">
+<span class="sig-name descname"><span class="pre">obj_infras</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Mapping</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">BaseInfra</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/map.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.MapInfra.obj_infras" title="Link to this definition">#</a></dt>
+<dd><p>Returns a dictionary of all infras part of the current model/config
+(including sub-configs)</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.MapInfra.uid">
+<span class="sig-name descname"><span class="pre">uid</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/map.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.MapInfra.uid" title="Link to this definition">#</a></dt>
+<dd><p>Returns the unique uid of the task</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.MapInfra.uid_folder">
+<span class="sig-name descname"><span class="pre">uid_folder</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">create</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/map.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.MapInfra.uid_folder" title="Link to this definition">#</a></dt>
+<dd><p>Folder where this task instance is stored</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="exca.SubmitInfra">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">exca.</span></span><span class="sig-name descname"><span class="pre">SubmitInfra</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">folder</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Literal</span><span class="p"><span class="pre">[</span></span><span class="pre">None</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'auto'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'local'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'slurm'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'debug'</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'{folder}/logs/{user}/%j'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">job_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout_min</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nodes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tasks_per_node</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cpus_per_task</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpus_per_node</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mem_gb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_pickle_size_gb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_constraint</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_partition</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_account</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_qos</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_use_srun</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_additional_parameters</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conda_env</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">workdir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">None</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#exca.workdir.WorkDir" title="exca.workdir.WorkDir"><span class="pre">WorkDir</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">permissions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">511</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'0'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#exca.SubmitInfra" title="Link to this definition">#</a></dt>
+<dd><p>[Experimental] Processing infrastructure ready to be applied to a pydantic.BaseModel method.
+To use it, the configuration must be set as an attribute of a pydantic BaseModel,
+then <code class="code docutils literal notranslate"><span class="pre">&#64;infra.apply</span></code> must be set on the method to process
+this will effectively replace the function with a remotely-computed version of itself.
+Contrarily to TaskInfra, outputs of the method are not cached, and the method can take arguments</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>folder</strong> (<em>optional Path</em><em> or </em><em>str</em>) – Path to directory for dumping/loading the cache on disk, if provided</p></li>
+<li><p><strong>parameters</strong> (<em>Slurm/submitit</em>)</p></li>
+<li><p><strong>-------------------------</strong></p></li>
+</ul>
+</dd>
+</dl>
+<p>:param Check out <a class="reference internal" href="#exca.slurm.SubmititMixin" title="exca.slurm.SubmititMixin"><code class="xref py py-class docutils literal notranslate"><span class="pre">exca.slurm.SubmititMixin</span></code></a>:
+:param Usage:
+:param —–:
+:param .. code-block:: python:</p>
+<blockquote>
+<div><dl>
+<dt>class MyTask(pydantic.BaseModel):</dt><dd><p>x: int
+infra: exca.TaskInfra = exca.TaskInfra()</p>
+<p>&#64;infra.apply
+def compute(self, y: int) -&gt; int:</p>
+<blockquote>
+<div><p>return 2 * self.x</p>
+</div></blockquote>
+</dd>
+</dl>
+<p>cfg = MyTask(12, infra={“folder”: “tmp”, “cluster”: “slurm”})
+assert cfg.compute(y=1) == 25  # “compute” runs on slurm but is not cached
+job = cfg.infra.submit(y=1)  # runs the computation asynchronously
+assert job.result() == 25</p>
+</div></blockquote>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<ul class="simple">
+<li><p>The decorated method can be a staticmethod to avoid pickling the owner object
+along with the other parameters.</p></li>
+<li><p>This is an experimental infra that is still evolving</p></li>
+</ul>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.SubmitInfra.apply">
+<span class="sig-name descname"><span class="pre">apply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">method</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">C</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">C</span></span></span><a class="headerlink" href="#exca.SubmitInfra.apply" title="Link to this definition">#</a></dt>
+<dd><p>Applies the infra on a method taking no parameter (except <cite>self</cite>)</p>
+<section id="id1">
+<h2>Parameter<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>method: callable</dt><dd><p>a method of a pydantic.BaseModel taking as input an iterable of items
+of a type X, and yielding one output of a type Y for each input item.</p>
+</dd>
+</dl>
+</section>
+<section id="usage">
+<h2>Usage<a class="headerlink" href="#usage" title="Link to this heading">#</a></h2>
+<p>Decorate the method with <code class="code docutils literal notranslate"><span class="pre">&#64;infra.apply</span></code></p>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.SubmitInfra.batch">
+<span class="sig-name descname"><span class="pre">batch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">max_workers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">256</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">None</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#exca.SubmitInfra.batch" title="Link to this definition">#</a></dt>
+<dd><p>Context for batching submissions through infra.submit into a unique array job</p>
+<section id="id2">
+<h2>Parameter<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>max_workers: int</dt><dd><p>maximum number of jobs in the array that can be running at a given time</p>
+</dd>
+</dl>
+</section>
+<section id="id3">
+<h2>Usage<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">cfg</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">batch</span><span class="p">():</span>
+    <span class="n">job1</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">submit</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">job2</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">submit</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<span class="c1"># job1 and job2 are submitted together as a job array</span>
+</pre></div>
+</div>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.SubmitInfra.submit">
+<span class="sig-name descname"><span class="pre">submit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Job</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">LocalJob</span></span></span><a class="headerlink" href="#exca.SubmitInfra.submit" title="Link to this definition">#</a></dt>
+<dd><p>Submit an asynchroneous job. This call is non-blocking and returns a
+<code class="code docutils literal notranslate"><span class="pre">Job</span></code> instance that has a <code class="code docutils literal notranslate"><span class="pre">result()</span></code> method that awaits
+for the computation to be over.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>*args</strong> (<em>parameters</em><em> of </em><em>the decorated method</em>)</p></li>
+<li><p><strong>**kwargs</strong> (<em>parameters</em><em> of </em><em>the decorated method</em>)</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>As a reminder, outputs are not cached so submitting several time will
+run as many jobs.</p>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.SubmitInfra.uid">
+<span class="sig-name descname"><span class="pre">uid</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="headerlink" href="#exca.SubmitInfra.uid" title="Link to this definition">#</a></dt>
+<dd><p>Returns the unique uid of the task</p>
+</dd></dl>
+
+</dd></dl>
+
+<section id="associated-classes-and-functions">
+<h2>Associated classes and functions<a class="headerlink" href="#associated-classes-and-functions" title="Link to this heading">#</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="exca.slurm.SubmititMixin">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">exca.slurm.</span></span><span class="sig-name descname"><span class="pre">SubmititMixin</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">folder</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Literal</span><span class="p"><span class="pre">[</span></span><span class="pre">None</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'auto'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'local'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'slurm'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'debug'</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'{folder}/logs/{user}/%j'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">job_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout_min</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nodes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tasks_per_node</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cpus_per_task</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpus_per_node</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mem_gb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_pickle_size_gb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_constraint</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_partition</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_account</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_qos</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_use_srun</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slurm_additional_parameters</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conda_env</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">workdir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">None</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#exca.workdir.WorkDir" title="exca.workdir.WorkDir"><span class="pre">WorkDir</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/slurm.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.slurm.SubmititMixin" title="Link to this definition">#</a></dt>
+<dd><p>Mixin class for creating a submitit runner infra</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>folder</strong> (<em>optional Path</em><em> or </em><em>str</em>) – Path to directory for dumping/loading the cache on disk, if provided</p></li>
+<li><p><strong>cluster</strong> (<em>optional str</em>) – <dl class="simple">
+<dt>Where to run the computation, one of:</dt><dd><ul>
+<li><p><code class="code docutils literal notranslate"><span class="pre">None</span></code>: runs in the current thread</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;debug&quot;</span></code>: submitit debug executor (runs in the current process with <cite>ipdb</cite>)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;local&quot;</span></code>: submitit local executor (runs in a dedicated subprocess)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;slurm&quot;</span></code>: submitit slurm executor (runs in a slurm cluster)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;auto&quot;</span></code>: submitit auto executor (uses slurm if available, otherwise local)</p></li>
+</ul>
+</dd>
+</dl>
+</p></li>
+<li><p><strong>logs</strong> (<em>Path</em><em> or </em><em>str</em>) – path to the logs for slurm/local jobs.  One can use <code class="code docutils literal notranslate"><span class="pre">{folder}</span></code> in the string
+to define logs as a subfolder of the storage folder, <code class="code docutils literal notranslate"><span class="pre">{user}</span></code> for the user name
+and <code class="code docutils literal notranslate"><span class="pre">%j</span></code> (slurm syntax) for the job id</p></li>
+<li><p><strong>workdir</strong> (optional <a class="reference internal" href="#exca.workdir.WorkDir" title="exca.workdir.WorkDir"><code class="xref py py-class docutils literal notranslate"><span class="pre">exca.workdir.WorkDir</span></code></a>) – pydantic config defining whether and how to copy the current workspace to a directory specific for the job
+and avoid interferences when working on the code. See <a class="reference internal" href="#exca.workdir.WorkDir" title="exca.workdir.WorkDir"><code class="xref py py-class docutils literal notranslate"><span class="pre">exca.workdir.WorkDir</span></code></a> for details.</p></li>
+<li><p><strong>name</strong> (<em>optional str</em>) – name of the job</p></li>
+<li><p><strong>timeout_min</strong> (<em>optional int</em>) – timeout for slurm/local jobs</p></li>
+<li><p><strong>nodes</strong> (<em>optional int</em>) – number of nodes for slurm jobs</p></li>
+<li><p><strong>tasks_per_node</strong> (<em>optional int</em>) – number of task nodes for slurm jobs</p></li>
+<li><p><strong>cpus_per_task</strong> (<em>optional int</em>) – number of cpus per task for slurm jobs</p></li>
+<li><p><strong>gpus_per_node</strong> (<em>optional int</em>) – number of gpus per node for slurm jobs</p></li>
+<li><p><strong>mem_gb</strong> (<em>float</em>) – RAM memory to be used in GB</p></li>
+<li><p><strong>slurm_constraint</strong> (<em>optional str</em>) – node constraint for the job</p></li>
+<li><p><strong>slurm_account</strong> (<em>optional str</em>) – account to use for the job</p></li>
+<li><p><strong>slurm_qos</strong> (<em>optional str</em>) – qos to use for the job</p></li>
+<li><p><strong>slurm_partition</strong> (<em>optional str</em>) – partition for the slurm job</p></li>
+<li><p><strong>slurm_use_srun</strong> (<em>bool</em>) – use srun in the sbatch file. This is the default in submitit, but not adviced
+for jobs triggering more jobs.</p></li>
+<li><p><strong>slurm_additional_parameters</strong> (<em>optional dict</em>) – additional parameters for slurm that are not first class parameters of this config</p></li>
+<li><p><strong>conda_env</strong> (<em>optional str/path</em>) – path or name of a conda environment to use in the job. Note that as submitit uses a pickle
+that needs to be loaded in the job with the new conda env, the pickle needs to be
+compatible. This mostly means that if the env has a different pydantic
+version, the job may fail to reload it. Additionally, to allow for different python
+versions, the job is dumped with pickle and not cloudpickle, so inline functions
+(defined in main or in a notebook) will not be supported.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="exca.workdir.WorkDir">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">exca.workdir.</span></span><span class="sig-name descname"><span class="pre">WorkDir</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">copied</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Path</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">folder</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">log_commit</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">includes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">('*.py',)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">excludes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">('__pycache__',</span> <span class="pre">'.git')</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/workdir.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.workdir.WorkDir" title="Link to this definition">#</a></dt>
+<dd><p>Custom working directory configuration</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>copied</strong> (<em>Sequence</em><em>[</em><em>str</em><em>]</em>) – list/tuple of names of files, or folders, or packages installed in editable mode
+to copy to the new working directory folder.
+Relative paths will be moved to the relative equivalent in the new folder, while for
+absolute path, the folder/file pointed by the path will be moved directly to the new
+folder.</p></li>
+<li><p><strong>folder</strong> (<em>Path/str</em>) – folder to use as working directory,
+if not specified, infra will create one automatically <code class="code docutils literal notranslate"><span class="pre">&lt;infra_uid_folder&gt;/code/&lt;date&gt;-&lt;random_uid&gt;/</span></code>.
+The folder is logged so you should be able to see what happened in your stderr/stdout.
+This parameter can be used in particular to store the code in a specific location
+or reuse workdir from a previous run.</p></li>
+<li><p><strong>includes</strong> (<em>sequence</em><em> of </em><em>str</em>) – file name pattern than must be included (recursively)
+folder are always included except if explitely excluded
+eg: <code class="code docutils literal notranslate"><span class="pre">[&quot;*.py&quot;]</span></code> to include only python files</p></li>
+<li><p><strong>excludes</strong> (<em>sequence</em><em> of </em><em>str</em>) – file/folder name pattern than mush be excluded</p></li>
+<li><p><strong>log_commit</strong> (<em>bool</em>) – if True, raises if current working directory is in a git repository
+with uncommited changes and logs commit otherwise</p></li>
+</ul>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><p>Since python privileges current working directory over installed packages,
+the copied packages should be the one running in the job
+(be careful there can be a few gotchas, eg: for debug cluster or with no cluster,
+the import cannot be not reloaded so the current working directory will be used,
+but that should not make a difference in theses cases)</p></li>
+<li><p>The change of working directory (and possibly the copy) only happens when the
+infra is called for submitting the decorated function. Depending on your code,
+this may not be at the very beginning of your execution.</p></li>
+<li><p>The context is reentrant, upon the second entrance nothing will be updated.</p></li>
+</ul>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="exca.ConfDict">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">exca.</span></span><span class="sig-name descname"><span class="pre">ConfDict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mapping</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">MutableMapping</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Iterable</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict" title="Link to this definition">#</a></dt>
+<dd><p>Dictionary which breaks into sub-dictionnaries on “.” as in a config (see example)
+The data can be specified either through “.” keywords or directly through sub-dicts
+or a mixture of both.
+Lists of dictionaries are processed as list of ConfDict
+Also, it has yaml export capabilities as well as uid computation.</p>
+<p class="rubric">Example</p>
+<p><code class="code docutils literal notranslate"><span class="pre">ConDict({&quot;training.optim.lr&quot;:</span> <span class="pre">0.01})</span> <span class="pre">==</span> <span class="pre">{&quot;training&quot;:</span> <span class="pre">{&quot;optim&quot;:</span> <span class="pre">{&quot;lr&quot;:</span> <span class="pre">0.01}}}</span></code></p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<ul class="simple">
+<li><p>This is designed for configurations, so it probably does not scale well to 100k+ keys</p></li>
+<li><p>dicts are merged expect if containing the key <code class="code docutils literal notranslate"><span class="pre">&quot;=replace=&quot;</span></code>,
+in which case they replace the content. On the other hand, non-dicts always
+replace the content.</p></li>
+</ul>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.copy">
+<span class="sig-name descname"><span class="pre">copy</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">a</span> <span class="pre">shallow</span> <span class="pre">copy</span> <span class="pre">of</span> <span class="pre">D</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.copy" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.flat">
+<span class="sig-name descname"><span class="pre">flat</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.flat" title="Link to this definition">#</a></dt>
+<dd><p>Returns a flat dictionary such as
+{“training.dataloader.lr”: 0.01, “training.optim.name”: “Ada”}</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.from_args">
+<span class="property"><span class="k"><span class="pre">classmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">from_args</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#exca.ConfDict" title="exca.confdict.ConfDict"><span class="pre">ConfDict</span></a></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.from_args" title="Link to this definition">#</a></dt>
+<dd><p>Parses a list of Bash-style arguments (e.g., –key=value) into a ConfDict.
+typically used as <code class="code docutils literal notranslate"><span class="pre">MyConfig(**ConfDict(sys.argv[1:]))</span></code>
+This method supports sub-arguments eg: <code class="code docutils literal notranslate"><span class="pre">--optimizer.lr=0.01</span></code></p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.from_model">
+<span class="property"><span class="k"><span class="pre">classmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">from_model</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">BaseModel</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">uid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exclude_defaults</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#exca.ConfDict" title="exca.confdict.ConfDict"><span class="pre">ConfDict</span></a></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.from_model" title="Link to this definition">#</a></dt>
+<dd><p>Creates a ConfDict based on a pydantic model</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>model</strong> (<em>pydantic.BaseModel</em>) – the model to convert into a dictionary</p></li>
+<li><p><strong>uid</strong> (<em>bool</em>) – if True, uses the _exclude_from_cls_uid field/method to filter in and out
+some fields</p></li>
+<li><p><strong>exclude_defaults</strong> (<em>bool</em>) – if True, values that are set to defaults are not included</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><cite>_exclude_from_cls_uid</cite> needs needs to be a list/tuple/set (or classmethod returning it)
+with either of both of fields:
+- exclude: tuple of field names to be excluded
+- force_include: tuple of fields to include in all cases (even if excluded or set to defaults)</p>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.from_yaml">
+<span class="property"><span class="k"><span class="pre">classmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">from_yaml</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">yaml</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">IO</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">IO</span><span class="p"><span class="pre">[</span></span><span class="pre">bytes</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#exca.ConfDict" title="exca.confdict.ConfDict"><span class="pre">ConfDict</span></a></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.from_yaml" title="Link to this definition">#</a></dt>
+<dd><p>Loads a ConfDict from a yaml string/filepath/file handle.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.get">
+<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">default</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Any</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.get" title="Link to this definition">#</a></dt>
+<dd><p>Return the value for key if key is in the dictionary, else default.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.pop">
+<span class="sig-name descname"><span class="pre">pop</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">k</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">d</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">v,</span> <span class="pre">remove</span> <span class="pre">specified</span> <span class="pre">key</span> <span class="pre">and</span> <span class="pre">return</span> <span class="pre">the</span> <span class="pre">corresponding</span> <span class="pre">value.</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.pop" title="Link to this definition">#</a></dt>
+<dd><p>If the key is not found, return the default if given; otherwise,
+raise a KeyError.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.to_uid">
+<span class="sig-name descname"><span class="pre">to_uid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">None</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.to_uid" title="Link to this definition">#</a></dt>
+<dd><p>Provides a unique string for the config</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.to_yaml">
+<span class="sig-name descname"><span class="pre">to_yaml</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filepath</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.to_yaml" title="Link to this definition">#</a></dt>
+<dd><p>Exports the ConfDict to yaml string
+and optionnaly to a file if a filepath is provided</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.ConfDict.update">
+<span class="sig-name descname"><span class="pre">update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mapping</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">MutableMapping</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Iterable</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/confdict.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.ConfDict.update" title="Link to this definition">#</a></dt>
+<dd><p>Updates recursively the keys of the confdict.
+No key is removed unless a sub-dictionary contains <code class="code docutils literal notranslate"><span class="pre">&quot;=replace=&quot;:</span> <span class="pre">True</span></code>,
+in this case the existing keys in the sub-dictionary are wiped</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="exca.cachedict.CacheDict">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">exca.cachedict.</span></span><span class="sig-name descname"><span class="pre">CacheDict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">folder</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keep_in_ram</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">None</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">permissions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">511</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#exca.cachedict.CacheDict" title="Link to this definition">#</a></dt>
+<dd><p>Dictionary-like object that caches and loads data on disk and ram.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>folder</strong> (<em>optional Path</em><em> or </em><em>str</em>) – Path to directory for dumping/loading the cache on disk</p></li>
+<li><p><strong>keep_in_ram</strong> (<em>bool</em>) – if True, adds a cache in RAM of the data once loaded (similar to LRU cache)</p></li>
+<li><p><strong>cache_type</strong> (<em>str</em><em> or </em><em>None</em>) – <p>type of cache dumper to use (see dumperloader.py file to see existing
+options, this include:</p>
+<blockquote>
+<div><ul>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;NumpyArray&quot;</span></code>: one .npy file for each array, loaded in ram</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;NumpyMemmapArray&quot;</span></code>: one .npy file for each array, loaded as a memmap</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;MemmapArrayFile&quot;</span></code>: one bytes file per worker, loaded as a memmap, and keeping
+an internal cache of the open memmap file (<code class="code docutils literal notranslate"><span class="pre">EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE</span></code> env
+variable can be set to reset the cache at a given number of open files, defaults
+to 100 000)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;TorchTensor&quot;</span></code>: one .pt file per tensor</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;PandasDataframe&quot;</span></code>: one .csv file per pandas dataframe</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;ParquetPandasDataframe&quot;</span></code>: one .parquet file per pandas dataframe (faster to dump and read)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">&quot;DataDict&quot;</span></code>: a dict for which (first-level) fields are dumped using the default
+dumper. This is particularly useful to store dict of arrays which would be then loaded
+as dict of memmaps.</p></li>
+</ul>
+</div></blockquote>
+<p>If <cite>None</cite>, the type will be deduced automatically (Json for JSON-serializable values,
+or a type-specific handler for numpy arrays, tensors, etc.).
+Loading is handled using the cache_type specified in info files.</p>
+</p></li>
+<li><p><strong>permissions</strong> (<em>optional int</em>) – permissions for generated files
+use os.chmod / path.chmod compatible numbers, or None to deactivate
+eg: 0o777 for all rights to all users</p></li>
+<li><p><strong>Usage</strong></p></li>
+<li><p><strong>-----</strong></p></li>
+<li><p><strong>code-block:</strong> (<em>..</em>) – <p>python: mydict = CacheDict(folder, keep_in_ram=True)
+mydict.keys()  # empty if folder was empty
+with mydict.write():</p>
+<blockquote>
+<div><p>mydict[“whatever”] = np.array([0, 1])</p>
+</div></blockquote>
+<p># stored in both memory cache, and disk :)
+mydict2 = CacheDict(folder, keep_in_ram=True)
+# since mydict and mydict2 share the same folder, the
+# key “whatever” will be in mydict2
+assert “whatever” in mydict2</p>
+</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<ul class="simple">
+<li><p>Dicts write to .jsonl files to hold keys and how to read the
+corresponding item. Different threads write to different jsonl
+files to avoid interferences.</p></li>
+<li><p>checking repeatedly for content can be slow if unavailable, as
+this will repeatedly reload all jsonl files</p></li>
+</ul>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.cachedict.CacheDict.frozen_cache_folder">
+<span class="sig-name descname"><span class="pre">frozen_cache_folder</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">None</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#exca.cachedict.CacheDict.frozen_cache_folder" title="Link to this definition">#</a></dt>
+<dd><p>Considers the cache folder as frozen
+to prevents reloading key/json files more than once from now.
+This is useful to speed up __contains__ statement with many missing
+items, which could trigger thousands of file rereads</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.cachedict.CacheDict.keys">
+<span class="sig-name descname"><span class="pre">keys</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#exca.cachedict.CacheDict.keys" title="Link to this definition">#</a></dt>
+<dd><p>Returns the keys in the dictionary
+(triggers a cache folder reading if folder is not None)</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.cachedict.CacheDict.write">
+<span class="sig-name descname"><span class="pre">write</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#exca.cachedict.CacheDict" title="exca.cachedict.core.CacheDict"><span class="pre">CacheDict</span></a><span class="p"><span class="pre">[</span></span><span class="pre">X</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#exca.cachedict.CacheDict.write" title="Link to this definition">#</a></dt>
+<dd><p>Context manager for writing items to the cache.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="exca.cachedict.CacheDict.writer">
+<span class="sig-name descname"><span class="pre">writer</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#exca.cachedict.CacheDict" title="exca.cachedict.core.CacheDict"><span class="pre">CacheDict</span></a><span class="p"><span class="pre">[</span></span><span class="pre">X</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#exca.cachedict.CacheDict.writer" title="Link to this definition">#</a></dt>
+<dd><p>Deprecated: use write() instead.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class" id="module-exca.helpers">
+<dt class="sig sig-object py" id="exca.helpers.DiscriminatedModel">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">exca.helpers.</span></span><span class="sig-name descname"><span class="pre">DiscriminatedModel</span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/helpers.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.helpers.DiscriminatedModel" title="Link to this definition">#</a></dt>
+<dd><p>Preserves the types of child class instance passed in pydantic
+models during serialization and de-serialization. This is achieved
+by injecting a key upon serialization.</p>
+<p>By default the key is “type” but this can be customized throught heritage
+(eg: <code class="code docutils literal notranslate"><span class="pre">class</span> <span class="pre">SubNamedModel(NamedModel,</span> <span class="pre">discriminator_key=&quot;name&quot;)</span></code>)</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>experimental feature</p>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="exca.helpers.DiscriminatedModel.model_config">
+<span class="sig-name descname"><span class="pre">model_config</span></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">{'extra':</span> <span class="pre">'forbid',</span> <span class="pre">'validation_error_cause':</span> <span class="pre">True}</span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/helpers.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.helpers.DiscriminatedModel.model_config" title="Link to this definition">#</a></dt>
+<dd><p>Configuration for the model, should be a dictionary conforming to [<cite>ConfigDict</cite>][pydantic.config.ConfigDict].</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="exca.helpers.find_slurm_job">
+<span class="sig-prename descclassname"><span class="pre">exca.helpers.</span></span><span class="sig-name descname"><span class="pre">find_slurm_job</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">job_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">folder</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Path</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">InfraSlurmJob</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/helpers.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.helpers.find_slurm_job" title="Link to this definition">#</a></dt>
+<dd><p>Attemps to instantiate a submitit.SlurmJob instance from a cache folder and a <cite>job_id</cite>,
+looking for it recursively.
+This is based on default configuration of the log folder position
+(<code class="code docutils literal notranslate"><span class="pre">&lt;cache</span> <span class="pre">folder&gt;/logs/&lt;username&gt;/&lt;job_id&gt;</span></code>), and some additional heuristic that may be
+invalid in other pipelines (skipping logs/wandb folders) so this can fail
+with other configurations and may need adaptations, but should answer 95% of cases.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>job_id</strong> (<em>str</em>) – the job id</p></li>
+<li><p><strong>folder</strong> (<em>str</em><em>, </em><em>Path</em><em> or </em><em>None</em>) – the path of the cache folder. If None, scontrol will be called to try and identify it
+automatically (will fail for non-running jobs)</p></li>
+</ul>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<ul class="simple">
+<li><dl class="simple">
+<dt>a <code class="code docutils literal notranslate"><span class="pre">submitit.Job</span></code> instance has:</dt><dd><ul>
+<li><p><code class="code docutils literal notranslate"><span class="pre">job.paths.stderr/stdout</span></code>: pathlib.Path of the logs</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">job.stderr()/stdout()</span></code>: string of the logs</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">job.result()</span></code>: output of the job (waits in not completed, raises if error)</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">job.done()</span></code>: True if job is completed</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li><dl class="simple">
+<dt>On top of it, the returned job has attributes:</dt><dd><ul>
+<li><p><code class="code docutils literal notranslate"><span class="pre">config</span></code>: the full configuration of the job</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">uid_config</span></code>: the non default uid configuration of the job</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li><p>The search assumes there is only one “logs” folder in the path
+(as we assume the default configuration of the logs path) and will probably
+fail if the cache folder contains /logs/ in it It also assumes there is no /code/ in it.</p></li>
+<li><p>Get the err using this line: <code class="code docutils literal notranslate"><span class="pre">out</span> <span class="pre">=</span> <span class="pre">job.stderr().split(&quot;\n&quot;)</span></code></p></li>
+</ul>
+<p class="rubric">Example</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">job</span> <span class="o">=</span> <span class="n">find_slurm_job</span><span class="p">(</span><span class="n">job_id</span><span class="o">=</span><span class="n">job_id</span><span class="p">,</span> <span class="n">folder</span><span class="o">=</span><span class="n">my_folder</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">job</span><span class="o">.</span><span class="n">uid_config</span><span class="p">)</span>  <span class="c1"># see uid (= simplified) config for this job</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">job</span><span class="o">.</span><span class="n">stdout</span><span class="p">())</span>  <span class="c1"># print stdout of the job</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="exca.helpers.with_infra">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">exca.helpers.</span></span><span class="sig-name descname"><span class="pre">with_infra</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/exca/helpers.py"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#exca.helpers.with_infra" title="Link to this definition">#</a></dt>
+<dd><p>Decorator for adding an infra to a function</p>
+<section id="id4">
+<h3>Usage<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@with_infra</span><span class="p">(</span><span class="n">folder</span><span class="o">=</span><span class="s2">&quot;whatever&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">my_func</span><span class="p">(</span><span class="o">....</span><span class="p">)</span>
+    <span class="o">...</span>
+</pre></div>
+</div>
+<p>or directly <code class="code docutils literal notranslate"><span class="pre">my_func</span> <span class="pre">=</span> <span class="pre">with_infra(folder=&quot;whavetever&quot;)(my_func)</span></code>
+then the function will always use this infra.</p>
+</section>
+</dd></dl>
+
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="serialization.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Serialization</p>
+      </div>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra"><code class="docutils literal notranslate"><span class="pre">TaskInfra</span></code></a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.apply"><code class="docutils literal notranslate"><span class="pre">TaskInfra.apply()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.clear_job"><code class="docutils literal notranslate"><span class="pre">TaskInfra.clear_job()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.clone_obj"><code class="docutils literal notranslate"><span class="pre">TaskInfra.clone_obj()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.config"><code class="docutils literal notranslate"><span class="pre">TaskInfra.config()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.iter_cached"><code class="docutils literal notranslate"><span class="pre">TaskInfra.iter_cached()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.job"><code class="docutils literal notranslate"><span class="pre">TaskInfra.job()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.job_array"><code class="docutils literal notranslate"><span class="pre">TaskInfra.job_array()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.obj_infras"><code class="docutils literal notranslate"><span class="pre">TaskInfra.obj_infras()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.status"><code class="docutils literal notranslate"><span class="pre">TaskInfra.status()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.uid"><code class="docutils literal notranslate"><span class="pre">TaskInfra.uid()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.TaskInfra.uid_folder"><code class="docutils literal notranslate"><span class="pre">TaskInfra.uid_folder()</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.MapInfra"><code class="docutils literal notranslate"><span class="pre">MapInfra</span></code></a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.MapInfra.apply"><code class="docutils literal notranslate"><span class="pre">MapInfra.apply()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.MapInfra.clone_obj"><code class="docutils literal notranslate"><span class="pre">MapInfra.clone_obj()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.MapInfra.config"><code class="docutils literal notranslate"><span class="pre">MapInfra.config()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.MapInfra.iter_cached"><code class="docutils literal notranslate"><span class="pre">MapInfra.iter_cached()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.MapInfra.obj_infras"><code class="docutils literal notranslate"><span class="pre">MapInfra.obj_infras()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.MapInfra.uid"><code class="docutils literal notranslate"><span class="pre">MapInfra.uid()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.MapInfra.uid_folder"><code class="docutils literal notranslate"><span class="pre">MapInfra.uid_folder()</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.SubmitInfra"><code class="docutils literal notranslate"><span class="pre">SubmitInfra</span></code></a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.SubmitInfra.apply"><code class="docutils literal notranslate"><span class="pre">SubmitInfra.apply()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.SubmitInfra.batch"><code class="docutils literal notranslate"><span class="pre">SubmitInfra.batch()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.SubmitInfra.submit"><code class="docutils literal notranslate"><span class="pre">SubmitInfra.submit()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.SubmitInfra.uid"><code class="docutils literal notranslate"><span class="pre">SubmitInfra.uid()</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#associated-classes-and-functions">Associated classes and functions</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.slurm.SubmititMixin"><code class="docutils literal notranslate"><span class="pre">SubmititMixin</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.workdir.WorkDir"><code class="docutils literal notranslate"><span class="pre">WorkDir</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict"><code class="docutils literal notranslate"><span class="pre">ConfDict</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.copy"><code class="docutils literal notranslate"><span class="pre">ConfDict.copy()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.flat"><code class="docutils literal notranslate"><span class="pre">ConfDict.flat()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.from_args"><code class="docutils literal notranslate"><span class="pre">ConfDict.from_args()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.from_model"><code class="docutils literal notranslate"><span class="pre">ConfDict.from_model()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.from_yaml"><code class="docutils literal notranslate"><span class="pre">ConfDict.from_yaml()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.get"><code class="docutils literal notranslate"><span class="pre">ConfDict.get()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.pop"><code class="docutils literal notranslate"><span class="pre">ConfDict.pop()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.to_uid"><code class="docutils literal notranslate"><span class="pre">ConfDict.to_uid()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.to_yaml"><code class="docutils literal notranslate"><span class="pre">ConfDict.to_yaml()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.ConfDict.update"><code class="docutils literal notranslate"><span class="pre">ConfDict.update()</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.cachedict.CacheDict"><code class="docutils literal notranslate"><span class="pre">CacheDict</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.cachedict.CacheDict.frozen_cache_folder"><code class="docutils literal notranslate"><span class="pre">CacheDict.frozen_cache_folder()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.cachedict.CacheDict.keys"><code class="docutils literal notranslate"><span class="pre">CacheDict.keys()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.cachedict.CacheDict.write"><code class="docutils literal notranslate"><span class="pre">CacheDict.write()</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.cachedict.CacheDict.writer"><code class="docutils literal notranslate"><span class="pre">CacheDict.writer()</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.helpers.DiscriminatedModel"><code class="docutils literal notranslate"><span class="pre">DiscriminatedModel</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.helpers.DiscriminatedModel.model_config"><code class="docutils literal notranslate"><span class="pre">DiscriminatedModel.model_config</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.helpers.find_slurm_job"><code class="docutils literal notranslate"><span class="pre">find_slurm_job()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exca.helpers.with_infra"><code class="docutils literal notranslate"><span class="pre">with_infra</span></code></a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright Meta Platforms, Inc.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+</div>
+
+  </footer>
+  </body>
+</html>
