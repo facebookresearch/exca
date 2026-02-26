@@ -6,6 +6,7 @@
 
 """Tests for Step and Chain basic functionality (no caching tests here, see test_cache.py)."""
 
+import collections
 import pickle
 import traceback
 import typing as tp
@@ -426,8 +427,6 @@ def test_chain_indexing() -> None:
 
 
 def test_chain_slicing(tmp_path: Path) -> None:
-    import collections as col
-
     steps = [conftest.Add(value=1), conftest.Mult(coeff=2), conftest.Add(value=3)]
     chain = Chain(steps=steps)
     sub = chain[:2]
@@ -439,7 +438,7 @@ def test_chain_slicing(tmp_path: Path) -> None:
     assert chain_infra[1:].infra is not None
     assert chain_infra[1:].run(5.0) == 13.0  # 5*2+3
     # OrderedDict keys preserved
-    odict = col.OrderedDict(add=steps[0], mult=steps[1], add2=steps[2])
+    odict = collections.OrderedDict(add=steps[0], mult=steps[1], add2=steps[2])
     assert list(Chain(steps=odict)[:2].steps.keys()) == ["add", "mult"]
     # empty slice raises
     with pytest.raises(ValueError, match="steps cannot be empty"):
