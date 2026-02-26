@@ -10,6 +10,7 @@ import os
 import typing as tp
 from concurrent import futures
 from pathlib import Path
+from unittest.mock import patch
 
 import nibabel as nib
 import numpy as np
@@ -322,3 +323,18 @@ def test_orphaned_cleanup_edge_cases(
             assert not fp.exists(), f"{fp.name} should be deleted for: {content!r}"
         else:
             assert fp.exists(), f"{fp.name} should NOT be deleted for: {content!r}"
+
+
+def test_orphaned_cleanup_file_deleted_concurrently(tmp_path: Path) -> None:
+    """File disappears between exists() check and open() in _cleanup_orphaned_jsonl_files."""
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    # Register a reader for a non-existent file, with _meta set so cleanup
+    # doesn't skip it. Patch exists()→True to simulate the race: file was
+    # present at check time but gone by open() time.
+    reader = cd.JsonlReader(tmp_path / "ghost-info.jsonl")
+    reader._meta = {"cache_type": "Json"}
+    cache._jsonl_readers[reader._fp.name] = reader
+    with patch.object(Path, "exists", return_value=True):
+        keys = list(cache.keys())
+    assert keys == []
+    assert reader._fp.name not in cache._jsonl_readers
