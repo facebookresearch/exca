@@ -439,7 +439,9 @@ def test_chain_slicing(tmp_path: Path) -> None:
     assert chain_infra[1:].run(5.0) == 13.0  # 5*2+3
     # OrderedDict keys preserved
     odict = collections.OrderedDict(add=steps[0], mult=steps[1], add2=steps[2])
-    assert list(Chain(steps=odict)[:2].steps.keys()) == ["add", "mult"]
+    sub_steps = Chain(steps=odict)[:2].steps
+    assert isinstance(sub_steps, dict)
+    assert list(sub_steps.keys()) == ["add", "mult"]
     # empty slice raises
     with pytest.raises(ValueError, match="steps cannot be empty"):
         chain[5:10]
