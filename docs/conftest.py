@@ -6,6 +6,8 @@
 
 import typing as tp
 
+collect_ignore_glob = ["internal/**"]
+
 import numpy as np
 import pydantic
 import torch
