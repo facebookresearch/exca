@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- `ContiguousMemmapArray` cache type: reads arrays via file I/O instead of memmap page faults, keeping RSS flat and reducing read overhead.
+
 ## 0.5.15
 
 ### Added

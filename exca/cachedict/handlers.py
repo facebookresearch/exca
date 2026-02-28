@@ -19,6 +19,7 @@ import orjson
 
 from exca import utils
 
+from .contiguous import ContiguousMemmap
 from .dumpcontext import DumpContext
 
 
@@ -81,6 +82,26 @@ class MemmapArray:
                 break
             ctx.invalidate(cache_key)
         return data.view(dtype=dtype).reshape(shape)
+
+
+@DumpContext.register
+class ContiguousMemmapArray:
+    """Like MemmapArray but loads return a ContiguousMemmap proxy that reads
+    data via file I/O instead of faulting memmap pages into RSS.
+
+    Memmap pages stay resident as long as the DumpContext cache holds the
+    memmap object; targeted file I/O reads into freeable heap buffers,
+    keeping RSS flat and often faster.  Trade-off: fancy indexing, stepped
+    slicing, and direct ndarray methods require ``np.asarray()`` first."""
+
+    @classmethod
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+        return MemmapArray.__dump_info__(ctx, value)
+
+    @classmethod
+    def __load_from_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> tp.Any:
+        raw = MemmapArray.__load_from_info__(ctx, **kwargs)
+        return ContiguousMemmap(raw, ctx._resource_cache)
 
 
 @DumpContext.register
