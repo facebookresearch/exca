@@ -352,7 +352,8 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         # submit job if it does not exist
         executor = self.executor()
         if executor is None:
-            job = LocalJob(self._run_method)
+            with self._work_env():
+                job = LocalJob(self._run_method)
             job._name = self._factory()  # for better logging message
         else:
             executor.folder.mkdir(exist_ok=True, parents=True)
