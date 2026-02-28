@@ -186,9 +186,34 @@ class CacheDict(tp.Generic[X]):
                     continue
                 reader = self._jsonl_readers.setdefault(fp.name, JsonlReader(fp))
                 futures.append(executor.submit(reader.read))
-            for future in futures:
-                self._key_info.update(future.result())
+            all_results = [future.result() for future in futures]
+            for result in all_results:
+                self._key_info.update(result)
+        self._blank_duplicate_entries(all_results)
         self._cleanup_orphaned_jsonl_files()
+
+    def _blank_duplicate_entries(self, all_results: list[dict[str, "DumpInfo"]]) -> None:
+        """Blank JSONL entries for keys that lost the last-writer-wins race.
+
+        When multiple workers write the same key to different JSONL files,
+        only one entry per key survives in _key_info.  This method blanks
+        the losers so _cleanup_orphaned_jsonl_files can reclaim their
+        data files.
+        """
+        winners = self._key_info
+        for result in all_results:
+            for key, dinfo in result.items():
+                winner = winners.get(key)
+                if winner is None or dinfo is winner:
+                    continue
+                if dinfo.byte_range[0] == dinfo.byte_range[1]:
+                    continue  # already blanked
+                try:
+                    with dinfo.jsonl.open("rb+") as f:
+                        f.seek(dinfo.byte_range[0])
+                        f.write(b" " * (dinfo.byte_range[1] - dinfo.byte_range[0] - 1))
+                except (FileNotFoundError, OSError):
+                    pass
 
     def _cleanup_orphaned_jsonl_files(self) -> None:
         """Remove jsonl files and their associated data files when they have no valid items."""

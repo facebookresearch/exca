@@ -325,6 +325,32 @@ def test_orphaned_cleanup_edge_cases(
             assert fp.exists(), f"{fp.name} should NOT be deleted for: {content!r}"
 
 
+def _write_fresh(folder: Path, keys: list[str], data: tp.Any) -> None:
+    """Write keys using a fresh CacheDict (simulates a separate process)."""
+    c: cd.CacheDict[tp.Any] = cd.CacheDict(folder=folder, keep_in_ram=False)
+    with c.write():
+        for key in keys:
+            c[key] = data
+
+
+def test_duplicate_entries_blanked_and_cleaned(tmp_path: Path) -> None:
+    """Duplicate keys across workers are blanked, enabling orphan cleanup."""
+    data = np.random.rand(3, 12)
+    keys = ["shared1", "shared2"]
+    # Concurrent writes with separate CacheDict instances (simulates cluster workers)
+    barrier = futures.ThreadPoolExecutor(max_workers=3)
+    jobs = [barrier.submit(_write_fresh, tmp_path, keys, data) for _ in range(3)]
+    [j.result() for j in jobs]
+    barrier.shutdown()
+    n_info = len(list(tmp_path.glob("*-info.jsonl")))
+    assert n_info >= 2, f"expected >=2 info files, got {n_info}"
+    # Fresh cache reads all files → detects duplicates → blanks losers → cleans up
+    cache2: cd.CacheDict[tp.Any] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert set(cache2.keys()) == {"shared1", "shared2"}
+    assert len(list(tmp_path.glob("*-info.jsonl"))) == 1
+    np.testing.assert_array_equal(cache2["shared1"], data)
+
+
 def test_orphaned_cleanup_file_deleted_concurrently(tmp_path: Path) -> None:
     """File disappears between exists() check and open() in _cleanup_orphaned_jsonl_files."""
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
