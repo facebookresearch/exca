@@ -23,7 +23,7 @@ import orjson
 
 from exca import utils
 
-from .dumpcontext import DumpContext
+from .dumpcontext import DumpContext, DumpOptions
 
 X = tp.TypeVar("X")
 
@@ -102,10 +102,12 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram: bool = False,
         cache_type: None | str = None,
         permissions: int | None = 0o777,
+        options: "DumpOptions | None" = None,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
         self.permissions = permissions
         self.cache_type = cache_type
+        self._options = options
         self._keep_in_ram = keep_in_ram
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
@@ -128,6 +130,8 @@ class CacheDict(tp.Generic[X]):
         self._dumper: DumpContext | None = None
         if self.folder is not None:
             self._dumper = DumpContext(self.folder, permissions=self.permissions)
+            if self._options is not None:
+                self._dumper.options = self._options
         self._local = threading.local()  # per-thread write context, see _write_ctx
 
     def __repr__(self) -> str:
@@ -268,6 +272,8 @@ class CacheDict(tp.Generic[X]):
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
             self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
+            if self._options is not None:
+                self._write_ctx.options = self._options
         try:
             if self._write_ctx is not None:
                 with self._write_ctx:

@@ -112,6 +112,38 @@ def test_handler_roundtrip(tmp_path: Path) -> None:
     assert cm_keys
 
 
+def test_options_replace_load(tmp_path: Path) -> None:
+    """options.replace remaps MemmapArray → ContiguousMemmapArray on load,
+    including through Auto for nested arrays."""
+    original = {
+        "features": np.arange(12, dtype=np.float32).reshape(3, 4),
+        "label": "test",
+    }
+    ctx = DumpContext(tmp_path)
+    with ctx:
+        info = ctx.dump(original, cache_type="Auto")
+    assert info["#type"] == "Auto"
+    # load with replace: nested MemmapArray entries become ContiguousMemmap
+    ctx.options.replace["MemmapArray"] = "ContiguousMemmapArray"
+    loaded = ctx.load(info)
+    assert isinstance(loaded["features"], ContiguousMemmap)
+    np.testing.assert_array_equal(np.asarray(loaded["features"]), original["features"])  # type: ignore[arg-type]
+    assert loaded["label"] == "test"
+
+
+def test_options_replace_dump(tmp_path: Path) -> None:
+    """options.replace remaps the handler on the dump side too."""
+    ctx = DumpContext(tmp_path)
+    ctx.options.replace["MemmapArray"] = "ContiguousMemmapArray"
+    original = np.arange(6, dtype=np.float64)
+    with ctx:
+        info = ctx.dump(original)
+    assert info["#type"] == "ContiguousMemmapArray"
+    loaded = ctx.load(info)
+    assert isinstance(loaded, ContiguousMemmap)
+    np.testing.assert_array_equal(np.asarray(loaded), original)
+
+
 # =============================================================================
 # Error cases
 # =============================================================================

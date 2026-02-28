@@ -4,6 +4,7 @@
 
 ### Added
 - `ContiguousMemmapArray` cache type: reads arrays via file I/O instead of memmap page faults, keeping RSS flat and reducing read overhead.
+- `DumpOptions.replace`: remap handler names at dump and load time (e.g. swap in a custom handler without re-dumping).
 
 ## 0.5.15
 
