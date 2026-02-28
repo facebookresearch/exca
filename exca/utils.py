@@ -44,9 +44,6 @@ def _get_uid_info(
             raise TypeError(msg)
         excluded = list(excluded())
     uid_info = {UID_EXCLUDED: set(excluded), FORCE_INCLUDED: set()}
-    if isinstance(excluded, str):
-        msg = "exclude_from_cache_uid should be a list/tuple/set, not a string"
-        raise TypeError(msg)
     # force include discriminator field if available
     if not ignore_discriminator:
         discriminator = model.__dict__.get(DISCRIMINATOR_FIELD, DiscrimStatus.NONE)
@@ -257,6 +254,7 @@ def _get_discriminator(schema: dict[str, tp.Any], name: str) -> str:
         return DiscrimStatus.NONE
     prop = schema["properties"][name]
     discriminator: str = DiscrimStatus.NONE
+    should_have_discrim = False
     # for list and dicts:
     while "items" in prop:
         prop = prop["items"]
@@ -271,7 +269,7 @@ def _get_discriminator(schema: dict[str, tp.Any], name: str) -> str:
         elif not discrims:
             should_have_discrim = True
         elif len(discrims) == 2:
-            raise RuntimeError("Found several discriminators for {name!r}: {discrims}")
+            raise RuntimeError(f"Found several discriminators for {name!r}: {discrims}")
     else:
         any_of = [
             x.get("$ref", "")

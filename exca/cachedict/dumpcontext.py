@@ -414,11 +414,17 @@ class DumpContext:
         Use a namespaced key (e.g. tuple) to avoid collisions across
         handlers: ``ctx.cached(("MemmapArray", filename), factory)``.
         """
-        if key not in self._resource_cache:
-            self._resource_cache[key] = factory()
-        if len(self._resource_cache) > self._max_cache:
+        value = self._resource_cache.get(key)
+        if value is not None:
+            return value
+
+        # Enforce max size BEFORE inserting new item
+        if self._max_cache > 0 and len(self._resource_cache) >= self._max_cache:
             self._resource_cache.clear()
-        return self._resource_cache[key]
+
+        value = factory()
+        self._resource_cache[key] = value
+        return value
 
     def invalidate(self, key: tp.Hashable) -> None:
         """Force reload of a cached resource."""

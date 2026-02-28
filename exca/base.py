@@ -386,16 +386,25 @@ class BaseInfra(pydantic.BaseModel):
         return utils.find_models(self._obj, BaseInfra, stop_on_find=True)
 
     def __eq__(self, other: tp.Any) -> bool:
-        # override __eq__ to avoid recursive checks to private fields
         if type(other) is not type(self):
             return False
-        if self.__dict__ == other.__dict__:
-            if (self._infra_method is None and other._infra_method is None) or (
-                self._infra_method.infra_name == other._infra_method.infra_name  # type: ignore
-            ):
-                if type(self._obj) is type(self._obj):
-                    return True
-        return False
+
+        if self.__dict__ != other.__dict__:
+            return False
+
+        # Compare infra methods safely
+        if self._infra_method is None or other._infra_method is None:
+            if self._infra_method is not other._infra_method:
+                return False
+        else:
+            if self._infra_method.infra_name != other._infra_method.infra_name:
+                return False
+
+        # Compare underlying object types
+        if type(self._obj) is not type(other._obj):
+            return False
+
+        return True
 
 
 @dataclasses.dataclass
@@ -450,7 +459,7 @@ class InfraMethod(BaseInfraMethod):
         elif infra_name.startswith("_"):
             default_imethod = obj.__private_attributes__[infra_name].default._infra_method  # type: ignore
         else:
-            raise RuntimeError("Could not find infra named {infra_name!r} on {obj!r}")
+            raise RuntimeError(f"Could not find infra named {infra_name!r} on {obj!r}")
         if default_imethod is None:
             msg = "Overriding infra in child class was not applied to a method"
             raise RuntimeError(msg)
