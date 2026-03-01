@@ -149,6 +149,25 @@ def test_indexing(tmp_path: Path, key: object, match: str | None) -> None:
 
 
 # =============================================================================
+# Re-serialization (dump a ContiguousMemmap)
+# =============================================================================
+
+
+@pytest.mark.parametrize("cache_type", ["MemmapArray", "Auto", None])
+def test_dump_contiguous_memmap(tmp_path: Path, cache_type: str | None) -> None:
+    """A ContiguousMemmap can be re-dumped; default uses ContiguousMemmapArray."""
+    original = np.arange(12, dtype=np.float64).reshape(3, 4)
+    cm = _make_cm(tmp_path / "src", original)
+    ctx = DumpContext(tmp_path / "dst")
+    with ctx:
+        info = ctx.dump(cm) if cache_type is None else ctx.dump(cm, cache_type=cache_type)
+    loaded = ctx.load(info)
+    np.testing.assert_array_equal(np.asarray(loaded), original)
+    if cache_type is None:
+        assert isinstance(loaded, ContiguousMemmap)
+
+
+# =============================================================================
 # Memory: data comes from file I/O, not memmap page faults
 # =============================================================================
 
