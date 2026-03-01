@@ -40,6 +40,17 @@ class DumpInfo:
     byte_range: tuple[int, int]
     content: dict[str, tp.Any]
 
+    def delete_info(self) -> None:
+        """Overwrite this entry's JSONL bytes with spaces (keep newline).
+
+        A line starting with ``b" "`` marks a deleted item;
+        ``_cleanup_orphaned_jsonl_files`` relies on this convention."""
+        start, end = self.byte_range
+        if start != end:
+            with self.jsonl.open("rb+") as f:
+                f.seek(start)
+                f.write(b" " * (end - start - 1))
+
 
 class CacheDict(tp.Generic[X]):
     """Dictionary-like object that caches and loads data on disk and ram.
@@ -206,12 +217,8 @@ class CacheDict(tp.Generic[X]):
                 winner = winners.get(key)
                 if winner is None or dinfo is winner:
                     continue
-                if dinfo.byte_range[0] == dinfo.byte_range[1]:
-                    continue  # already blanked
                 try:
-                    with dinfo.jsonl.open("rb+") as f:
-                        f.seek(dinfo.byte_range[0])
-                        f.write(b" " * (dinfo.byte_range[1] - dinfo.byte_range[0] - 1))
+                    dinfo.delete_info()
                 except (FileNotFoundError, OSError):
                     pass
 
@@ -226,9 +233,8 @@ class CacheDict(tp.Generic[X]):
             if not reader._fp.exists():
                 del self._jsonl_readers[name]
                 continue
-            # Only clean up if first data line is blanked (by __delitem__),
-            # confirming deleted items; valid/partial first lines may
-            # indicate a concurrent write, so leave those alone.
+            # Only clean up if first data line is blanked (see delete_info);
+            # valid/partial first lines may indicate a concurrent write.
             try:
                 with reader._fp.open("rb") as f:
                     line = f.readline()
@@ -353,12 +359,7 @@ class CacheDict(tp.Generic[X]):
         if self._dumper is None:
             return
         dinfo = self._key_info.pop(key)
-        # Blank out the JSONL line (overwrite JSON bytes with spaces, keep newline)
-        brange = dinfo.byte_range
-        if brange[0] != brange[1]:
-            with dinfo.jsonl.open("rb+") as f:
-                f.seek(brange[0])
-                f.write(b" " * (brange[1] - brange[0] - 1))
+        dinfo.delete_info()
         self._dumper.delete(dinfo.content)
 
     def __contains__(self, key: str) -> bool:
