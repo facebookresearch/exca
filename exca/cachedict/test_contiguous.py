@@ -134,6 +134,7 @@ def test_requires_memmap_backed() -> None:
         ((slice(None), 10), "Non-contiguous"),
         ((slice(1, 3), slice(5, 15)), "Non-contiguous"),
         (slice(None, None, 2), "Non-contiguous"),
+        (slice(None, None, -1), "Non-contiguous"),
         ((slice(None), slice(None, None, 3)), "Non-contiguous"),
     ],
 )

@@ -85,6 +85,8 @@ class ContiguousMemmap:
             return result  # scalar
         if result.size == 0:
             return np.empty(result.shape, dtype=result.dtype)
+        if any(s < 0 for s in result.strides):
+            raise TypeError("Non-contiguous read — use np.asarray(arr)[key] instead.")
         _, span = self._byte_range(result)
         if span != result.size * result.dtype.itemsize:
             raise TypeError("Non-contiguous read — use np.asarray(arr)[key] instead.")
