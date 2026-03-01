@@ -82,6 +82,7 @@ namespaces = false  # to disable scanning PEP 420 namespaces (true by default)
 
 [tool.pytest.ini_options]
 norecursedirs = ["docs/internal"]
+addopts = ["--ignore=build", "--ignore=dist"]
 
 [tool.isort]
 profile = "black"

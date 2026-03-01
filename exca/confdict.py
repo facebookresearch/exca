@@ -138,7 +138,7 @@ class ConfDict(dict[str, tp.Any]):
 
     def __setitem__(self, key: str, val: tp.Any) -> None:
         if not isinstance(key, str):
-            raise TypeError("ConfDict only support str keys, got {key!r}")
+            raise TypeError(f"ConfDict only supports str keys, got {key!r}")
         _set_item(self, key, val)
 
     def __getitem__(self, key: str) -> tp.Any:

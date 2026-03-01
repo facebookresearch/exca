@@ -8,6 +8,7 @@ import collections
 import contextlib
 import functools
 import logging
+import shutil
 import time
 import traceback
 import typing as tp
@@ -177,7 +178,11 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 logger.warning("Ignoring exception: %s", e)
         # remove files
         for name in ("job.pkl", "config.yaml", "submitit", "code"):
-            (xpfolder / name).unlink(missing_ok=True)
+            path = xpfolder / name
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
 
     @contextlib.contextmanager
     def job_array(
