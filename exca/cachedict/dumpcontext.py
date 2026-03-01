@@ -15,6 +15,7 @@ Handler classes live in handlers.py and are registered at import time.
 
 import contextlib
 import copy
+import dataclasses
 import hashlib
 import inspect
 import logging
@@ -77,6 +78,19 @@ def _ensure_optional_defaults() -> None:
         del _OPTIONAL_DEFAULTS[mod_name]
 
 
+@dataclasses.dataclass
+class DumpOptions:
+    """Options that handlers can read or set on a DumpContext.
+
+    ``replace`` remaps handler names in both dump and load paths.
+    For example, ``replace={"MemmapArray": "ContiguousMemmapArray"}``
+    makes all MemmapArray entries load (and dump) through the
+    ContiguousMemmapArray handler instead.
+    """
+
+    replace: dict[str, str] = dataclasses.field(default_factory=dict)
+
+
 class DumpContext:
     """Central orchestrator for serialization lifecycle.
 
@@ -97,15 +111,18 @@ class DumpContext:
         self.key = key
         self.level: int = -1
         self.permissions = permissions
+        self.options = DumpOptions()
+        # write state
         self._thread_id = threading.get_native_id()
         self._prefix = f"{socket.gethostname()}-{self._thread_id}"
-        self._files: dict[str, tp.IO[bytes]] = {}
-        self._loaders: dict[type, DumperLoader] = {}
         self._stack: contextlib.ExitStack | None = None
+        self._files: dict[str, tp.IO[bytes]] = {}
+        self._created_files: list[Path] = []
+        self._dump_count: int = 0
+        # read-side cache
         self._resource_cache: dict[tp.Hashable, tp.Any] = {}
         self._max_cache = int(os.environ.get("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", 100_000))
-        self._dump_count: int = 0
-        self._created_files: list[Path] = []
+        self._loaders: dict[type, DumperLoader] = {}  # legacy DumperLoader instances
 
     # -- Registration --
 
@@ -319,6 +336,9 @@ class DumpContext:
             cls = self._find_handler(type(value))
             if cls is None:
                 cls = self.HANDLERS["Auto"]
+            replacement = self.options.replace.get(cls.__name__)
+            if replacement is not None:
+                cls = self._lookup(replacement)
             info, type_name = ctx._dump_cls(cls, value)
         if "#key" in info:
             raise ValueError(
@@ -376,9 +396,10 @@ class DumpContext:
 
     def _resolve_type(self, info: dict[str, tp.Any]) -> tuple[tp.Any, dict[str, tp.Any]]:
         """Extract #type and #key from an info dict, return (cls, remaining_info).
-        Checks HANDLERS first, then DumperLoader.CLASSES for legacy types."""
+        Applies ``options.replace`` before handler lookup."""
         info = dict(info)
         type_name = info.pop("#type")
+        type_name = self.options.replace.get(type_name, type_name)
         info.pop("#key", None)
         return self._lookup(type_name), info
 
