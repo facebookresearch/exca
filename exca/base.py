@@ -400,8 +400,10 @@ class BaseInfra(pydantic.BaseModel):
             if self._infra_method.infra_name != other._infra_method.infra_name:
                 return False
 
-        # Compare underlying object types
-        if type(self._obj) is not type(other._obj):
+        # Compare underlying object types (either may be unbound)
+        self_obj = getattr(self, "_obj", None)
+        other_obj = getattr(other, "_obj", None)
+        if type(self_obj) is not type(other_obj):
             return False
 
         return True

@@ -185,6 +185,10 @@ def test_discriminated_model_with_infra(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path}
     model = Model(sub={"name": "DiscriminatedWithInfra", "infra": infra})  # type: ignore
     assert "DiscriminatedWithInfra" in model.sub.infra.uid()  # type: ignore
+    # exclude_defaults triggers __eq__ between live and default MapInfra;
+    # the default instance was never bound (_obj unset), so __eq__ must tolerate that
+    model = Model(sub={"name": "DiscriminatedWithInfra"})  # type: ignore
+    _ = model.model_dump(exclude_defaults=True)
 
 
 class UnionModel(pydantic.BaseModel):
