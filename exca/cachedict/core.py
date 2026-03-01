@@ -23,7 +23,7 @@ import orjson
 
 from exca import utils
 
-from .dumpcontext import DumpContext, DumpOptions
+from .dumpcontext import DumpContext
 
 X = tp.TypeVar("X")
 
