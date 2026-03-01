@@ -16,3 +16,4 @@ from exca.dumperloader import host_pid as host_pid
 from . import handlers as handlers
 from .core import DumpInfo as DumpInfo
 from .dumpcontext import DumpContext as DumpContext
+from .dumpcontext import DumpOptions as DumpOptions
