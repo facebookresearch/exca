@@ -26,9 +26,9 @@ from .workdir import WorkDir
 logger = logging.getLogger(__name__)
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
 ExcludeCallable = tp.Callable[[tp.Any], tp.Iterable[str]]
-Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tp.Tuple[str, tp.Any]]
+Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tuple[str, tp.Any]]
 # add functions here that return True if mismatch with cached config can be ignored, else False
-DEFAULT_CHECK_SKIPS: tp.List[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
+DEFAULT_CHECK_SKIPS: list[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
 
 
 class Sentinel:
@@ -120,9 +120,7 @@ class BaseInfra(pydantic.BaseModel):
     _obj: tp.Any = pydantic.PrivateAttr()  # pydantic model the infra is an attribute of
     _checked_configs: bool = False  # only do it once
     _infra_name: str = ""
-    _infra_method: tp.Optional["InfraMethod"] = pydantic.PrivateAttr(
-        None
-    )  # method container
+    _infra_method: "InfraMethod | None" = pydantic.PrivateAttr(None)  # method container
 
     def __setstate__(self, state: tp.Any) -> None:
         if "__dict__" in state:
@@ -143,7 +141,7 @@ class BaseInfra(pydantic.BaseModel):
                         imethod.infra_name = iname
         super().__setstate__(state)
 
-    def __set_name__(self, owner: tp.Type[pydantic.BaseModel], name: str) -> None:
+    def __set_name__(self, owner: type[pydantic.BaseModel], name: str) -> None:
         if not issubclass(owner, pydantic.BaseModel):
             cls = owner.__name__
             msg = f"{self.__class__.__name__} cannot be applied to {cls}:\n"
@@ -155,7 +153,7 @@ class BaseInfra(pydantic.BaseModel):
         owner._model_with_infra_validator_after = model_with_infra_validator_after  # type: ignore
         owner._model_with_infra_validator_before = model_with_infra_validator_before  # type: ignore
 
-    def _exclude_from_cls_uid(self) -> tp.List[str]:
+    def _exclude_from_cls_uid(self) -> list[str]:
         if getattr(self._infra_method, "version", None) is not None:
             return ["."]  # compatibility -> avoid uid change
         return list(set(type(self).model_fields) - {"version"})
@@ -329,7 +327,7 @@ class BaseInfra(pydantic.BaseModel):
                 msg = f"Failed to set permission to {self.permissions} on '{path}'\n({e})"
                 logger.warning(msg)
 
-    def clone_obj(self, *args: tp.Dict[str, tp.Any], **kwargs: tp.Any) -> tp.Any:
+    def clone_obj(self, *args: dict[str, tp.Any], **kwargs: tp.Any) -> tp.Any:
         """Create a new decorated object by applying a diff config to the underlying object"""
         if args:
             if len(args) > 1:
@@ -499,7 +497,7 @@ class InfraMethod(BaseInfraMethod):
 class _InfraMethodPickler:
     """Called for pickling with cloudpickle in cases where pickle does not work (local/main)"""
 
-    def __init__(self, cls: tp.Type[InfraMethod], data: tp.Dict[str, tp.Any]) -> None:
+    def __init__(self, cls: type[InfraMethod], data: dict[str, tp.Any]) -> None:
         self.cls = cls
         self.data = data
 

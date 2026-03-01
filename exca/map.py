@@ -106,8 +106,8 @@ class JobChecker:
 
 
 def to_chunks(
-    items: tp.List[X], *, max_chunks: int | None, min_items_per_chunk: int = 1
-) -> tp.Iterator[tp.List[X]]:
+    items: list[X], *, max_chunks: int | None, min_items_per_chunk: int = 1
+) -> tp.Iterator[list[X]]:
     """Split a list of items into several smaller list of items
 
     Parameters
@@ -191,9 +191,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     mode: Mode = "cached"
 
     # internals
-    _recomputed: tp.Set[str] = set()  # for mode="force"
+    _recomputed: set[str] = set()  # for mode="force"
     _cache_dict: CacheDict[tp.Any] = pydantic.PrivateAttr()
-    _infra_method: tp.Optional["MapInfraMethod"] = pydantic.PrivateAttr(None)
+    _infra_method: "MapInfraMethod | None" = pydantic.PrivateAttr(None)
 
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
@@ -202,7 +202,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             if not parent.exists():
                 raise ValueError(f"Infra folder parent {parent} needs to exist")
 
-    def __getstate__(self) -> tp.Dict[str, tp.Any]:
+    def __getstate__(self) -> dict[str, tp.Any]:
         out = super().__getstate__()
         out["__pydantic_private__"].pop("_cache_dict", None)
         return out
@@ -306,10 +306,10 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
         return applier
 
-    def _find_missing(self, items: tp.Dict[str, tp.Any]) -> tp.Dict[str, tp.Any]:
+    def _find_missing(self, items: dict[str, tp.Any]) -> dict[str, tp.Any]:
         missing = items
         # deduplicate and check in cache
-        cache: tp.Dict[str, tp.Any] = {}
+        cache: dict[str, tp.Any] = {}
         try:
             # triggers folder creation if folder available
             cache = self.cache_dict  # type: ignore
@@ -528,7 +528,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 class MapInfraMethod(base.InfraMethod):
     item_uid: tp.Callable[[tp.Any], str] = base.Sentinel()  # type: ignore
     cache_type: str | None = None
-    params: tp.Tuple[str, ...] = ()
+    params: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         super().__post_init__()

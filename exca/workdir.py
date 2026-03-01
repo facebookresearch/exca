@@ -95,8 +95,8 @@ class WorkDir(pydantic.BaseModel):
     excludes: tp.Sequence[str] = ("__pycache__", ".git")
 
     # internals
-    _paths: tp.List[Path]
-    _commits: tp.Dict[str, str] = {}
+    _paths: list[Path]
+    _commits: dict[str, str] = {}
     _active: bool = False
     model_config = pydantic.ConfigDict(extra="forbid")
 
@@ -208,7 +208,7 @@ class Ignore:
         self.includes = list(includes)
         self.excludes = list(excludes)
 
-    def __call__(self, path: str | Path, names: tp.List[str]) -> tp.Set[str]:
+    def __call__(self, path: str | Path, names: list[str]) -> set[str]:
         if not self.includes:
             included = set(names)
         else:

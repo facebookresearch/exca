@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class FuncConfigProtocol(tp.Protocol[X]):
-    model_fields: tp.ClassVar[tp.Dict[str, pydantic.fields.FieldInfo]]
+    model_fields: tp.ClassVar[dict[str, pydantic.fields.FieldInfo]]
     infra: TaskInfra
 
     def __init__(self, *, infra: TaskInfra, **kwargs: tp.Any) -> None: ...
@@ -38,7 +38,7 @@ class FuncConfig(pydantic.BaseModel):
         extra="forbid", arbitrary_types_allowed=True, protected_namespaces=("model_conf",)
     )
     # as a tuple to avoid getting bounded
-    _func: tp.ClassVar[tp.Tuple[tp.Callable[..., tp.Any]]]
+    _func: tp.ClassVar[tuple[tp.Callable[..., tp.Any]]]
 
     @infra.apply
     def build(self) -> tp.Any:
@@ -53,12 +53,12 @@ class FuncConfig(pydantic.BaseModel):
 
 
 def _unpickle_cfg(
-    func: tp.Callable[..., X], kwargs: tp.Dict[str, tp.Any]
+    func: tp.Callable[..., X], kwargs: dict[str, tp.Any]
 ) -> FuncConfigProtocol[X]:
     return to_config(func, **kwargs)
 
 
-def to_config_model(func: tp.Callable[..., X]) -> tp.Type[FuncConfigProtocol[X]]:
+def to_config_model(func: tp.Callable[..., X]) -> type[FuncConfigProtocol[X]]:
     """Create a pydantic model based on a function, with an additional infra
     argument for caching and remove configuration
 
@@ -112,7 +112,7 @@ def to_config(func: tp.Callable[..., X], **kwargs: tp.Any) -> FuncConfigProtocol
 
 class FunctionWithInfra(tp.Generic[X]):
     def __init__(
-        self, func: tp.Callable[..., X], infra: TaskInfra | tp.Dict[str, tp.Any]
+        self, func: tp.Callable[..., X], infra: TaskInfra | dict[str, tp.Any]
     ) -> None:
         self.infra = infra
         self.func = func
@@ -160,7 +160,7 @@ class with_infra:
         return FunctionWithInfra(func, self.infra)
 
 
-def validate_kwargs(func: tp.Callable[..., tp.Any], kwargs: tp.Dict[str, tp.Any]) -> None:
+def validate_kwargs(func: tp.Callable[..., tp.Any], kwargs: dict[str, tp.Any]) -> None:
     """Validates mandatory/extra args and basic types (str/int/float)
 
     Parameters
@@ -323,7 +323,7 @@ def update_uids(folder: str | Path, dryrun: bool = True):
         shutil.move(folder, newfolder)
 
 
-def _get_subclasses(cls: tp.Type[X]) -> list[tp.Type[X]]:
+def _get_subclasses(cls: type[X]) -> list[type[X]]:
     """Returns all the subclasses of a given class."""
     subclasses = []
     for subclass in cls.__subclasses__():
@@ -334,7 +334,7 @@ def _get_subclasses(cls: tp.Type[X]) -> list[tp.Type[X]]:
 
 # Context variable to track which instances are currently being serialized (to avoid recursion)
 # Uses object IDs so nested DiscriminatedModels each get their discriminator key
-_dumping_ids: contextvars.ContextVar[tp.FrozenSet[int]] = contextvars.ContextVar(
+_dumping_ids: contextvars.ContextVar[frozenset[int]] = contextvars.ContextVar(
     "_dumping_ids", default=frozenset()
 )
 

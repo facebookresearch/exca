@@ -23,7 +23,7 @@ import yaml as _yaml
 from . import utils
 
 logger = logging.getLogger(__name__)
-Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tp.Tuple[str, tp.Any]]
+Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tuple[str, tp.Any]]
 _sentinel = object()
 OVERRIDE = "=replace="
 
@@ -204,13 +204,13 @@ class ConfDict(dict[str, tp.Any]):
         for key, val in kwargs.items():
             self[key] = val
 
-    def flat(self) -> tp.Dict[str, tp.Any]:
+    def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as
         {"training.dataloader.lr": 0.01, "training.optim.name": "Ada"}
         """
         return _flatten(self)  # type: ignore
 
-    def copy(self) -> "ConfDict":
+    def copy(self) -> tp.Self:
         return self.__class__(super().copy())
 
     @classmethod
@@ -249,7 +249,7 @@ class ConfDict(dict[str, tp.Any]):
         return UidMaker(data, version=version).format()
 
     @classmethod
-    def from_args(cls, args: list[str]) -> "ConfDict":
+    def from_args(cls, args: list[str]) -> tp.Self:
         """Parses a list of Bash-style arguments (e.g., --key=value) into a ConfDict.
         typically used as :code:`MyConfig(**ConfDict(sys.argv[1:]))`
         This method supports sub-arguments eg: :code:`--optimizer.lr=0.01`

@@ -184,7 +184,7 @@ class DumpContext:
 
     # -- Write lifecycle --
 
-    def __enter__(self) -> "DumpContext":
+    def __enter__(self) -> tp.Self:
         self._stack = contextlib.ExitStack()
         self._stack.__enter__()
         return self
