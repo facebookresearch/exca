@@ -288,7 +288,11 @@ class StepContainer(pydantic.BaseModel):
         ([conftest.Add(value=1), [conftest.Mult(coeff=2)]], None, 12),
         # dict (auto-converted to named Chain)
         ({"a": conftest.Mult(coeff=2), "b": conftest.Add(value=3)}, ["a", "b"], 13),
-        ({"a": {"type": "Mult", "coeff": 2}, "b": {"type": "Add", "value": 3}}, ["a", "b"], 13),
+        (
+            {"a": {"type": "Mult", "coeff": 2}, "b": {"type": "Add", "value": 3}},
+            ["a", "b"],
+            13,
+        ),
         ({"a": conftest.Mult(coeff=2), "b": {"type": "Add", "value": 3}}, ["a", "b"], 13),
         (collections.OrderedDict(x=conftest.Mult(coeff=2)), ["x"], 10),
     ],
