@@ -386,14 +386,11 @@ def test_resolve_step_uid_consistency() -> None:
 # Error notes (Python 3.11+)
 # =============================================================================
 
-_has_add_note = hasattr(Exception(), "add_note")
-
 
 def _format_exc(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
 
-@pytest.mark.skipif(not _has_add_note, reason="requires Python 3.11+")
 def test_step_error_note() -> None:
     step = conftest.Add(value=5, error=True)
     with pytest.raises(ValueError) as exc_info:
@@ -402,7 +399,6 @@ def test_step_error_note() -> None:
     assert "Add(" in formatted and "error=True" in formatted
 
 
-@pytest.mark.skipif(not _has_add_note, reason="requires Python 3.11+")
 def test_chain_error_note() -> None:
     chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=5, error=True)])
     with pytest.raises(ValueError) as exc_info:

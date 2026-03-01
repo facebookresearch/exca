@@ -35,7 +35,7 @@ T = tp.TypeVar("T", bound=pydantic.BaseModel)
 
 def _get_uid_info(
     model: pydantic.BaseModel, ignore_discriminator: bool = False
-) -> tp.Dict[str, tp.Set[str]]:
+) -> dict[str, set[str]]:
     """Extract uid info from object, and possibly force include the discriminator field"""
     excluded = getattr(model, EXCLUDE_FIELD, [])
     if not isinstance(excluded, (list, set, tuple)):
@@ -221,7 +221,7 @@ class DiscrimStatus:
 
 def to_dict(
     model: pydantic.BaseModel, uid: bool = False, exclude_defaults: bool = False
-) -> tp.Dict[str, tp.Any]:
+) -> dict[str, tp.Any]:
     """DEPRECATED"""
     warnings.warn("to_dict is deprecated, use ConfigExporter.apply", DeprecationWarning)
     exporter = ConfigExporter(uid=uid, exclude_defaults=exclude_defaults)
@@ -287,7 +287,7 @@ def _get_discriminator(schema: dict[str, tp.Any], name: str) -> str:
     return discriminator
 
 
-def _iter_string_values(data: tp.Any) -> tp.Iterable[tp.Tuple[str, str]]:
+def _iter_string_values(data: tp.Any) -> tp.Iterable[tuple[str, str]]:
     """Flattens a dict of dict/list of values and yields only values
     that are strings
     This is designed specifically to find discriminator in pydantic schemas
@@ -413,10 +413,10 @@ def recursive_freeze(obj: tp.Any) -> None:
 
 def find_models(
     obj: tp.Any,
-    Type: tp.Type[T],
+    Type: type[T],
     include_private: bool = True,
     stop_on_find: bool = False,
-) -> tp.Dict[str, T]:
+) -> dict[str, T]:
     """Recursively find submodels
 
     Parameters
@@ -431,7 +431,7 @@ def find_models(
         stop the search when reaching the searched type
     """
     out: dict[str, T] = {}
-    base: tp.Tuple[tp.Type[tp.Any], ...] = (str, int, float, np.ndarray)
+    base: tuple[type[tp.Any], ...] = (str, int, float, np.ndarray)
     if "torch" in sys.modules:
         import torch
 
@@ -459,7 +459,7 @@ def find_models(
     return out
 
 
-def _pydantic_hints(hint: tp.Any) -> tp.List[tp.Type[pydantic.BaseModel]]:
+def _pydantic_hints(hint: tp.Any) -> list[type[pydantic.BaseModel]]:
     """Checks if a type hint contains pydantic models"""
     try:
         if issubclass(hint, pydantic.BaseModel):
@@ -474,9 +474,7 @@ def _pydantic_hints(hint: tp.Any) -> tp.List[tp.Type[pydantic.BaseModel]]:
 
 
 @contextlib.contextmanager
-def fast_unlink(
-    filepath: tp.Union[Path, str], missing_ok: bool = False
-) -> tp.Iterator[None]:
+def fast_unlink(filepath: Path | str, missing_ok: bool = False) -> tp.Iterator[None]:
     """Moves a file to a temporary name at the beginning of the context (fast), and
     deletes it when closing the context (slow)
     """
@@ -593,7 +591,7 @@ def environment_variables(**kwargs: tp.Any) -> tp.Iterator[None]:
 # =============================================================================
 
 # Functions returning True to ignore default mismatches in check_configs()
-DEFAULT_CHECK_SKIPS: tp.List[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
+DEFAULT_CHECK_SKIPS: list[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
 
 
 class ConfigDump:

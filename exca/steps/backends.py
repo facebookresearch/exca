@@ -73,7 +73,7 @@ class StepPaths:
     item_uid: str
 
     @classmethod
-    def from_step(cls, folder: Path, step: "Step", value: tp.Any) -> "StepPaths":
+    def from_step(cls, folder: Path, step: "Step", value: tp.Any) -> tp.Self:
         """Create StepPaths from a step and input value.
 
         step_uid is computed from _chain_hash() giving nested folder structure.
@@ -160,8 +160,7 @@ class _CachingCall:
         try:
             result = self.func(*args)
         except Exception as e:
-            if hasattr(e, "add_note"):
-                e.add_note(f"  -> cached as {self.paths.step_uid}[{self.paths.item_uid}]")
+            e.add_note(f"  -> cached as {self.paths.step_uid}[{self.paths.item_uid}]")
             if not self.paths.error_pkl.exists():
                 with self.paths.error_pkl.open("wb") as f:
                     pickle.dump(e, f)
@@ -358,8 +357,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 self.paths.step_uid,
                 self.paths.item_uid,
             )
-            if hasattr(err, "add_note"):
-                err.add_note("  -> (re-raised from cached error)")
+            err.add_note("  -> (re-raised from cached error)")
             raise err
 
         cd = self._cache_dict()
@@ -465,7 +463,7 @@ class _SubmititBackend(Backend):
     gpus_per_node: int | None = None
     mem_gb: float | None = None
 
-    _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]]
+    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]]
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
         wrapper.paths.ensure_folders()  # Create folders before writing job.pkl
@@ -493,13 +491,13 @@ class _SubmititBackend(Backend):
 class LocalProcess(_SubmititBackend):
     """Subprocess execution + caching."""
 
-    _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.LocalExecutor
+    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]] = submitit.LocalExecutor
 
 
 class SubmititDebug(_SubmititBackend):
     """Debug executor (inline but simulates submitit)."""
 
-    _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.DebugExecutor
+    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]] = submitit.DebugExecutor
 
 
 class Slurm(_SubmititBackend):
@@ -512,10 +510,10 @@ class Slurm(_SubmititBackend):
     use_srun: bool = False
     additional_parameters: dict[str, int | str | float | bool] | None = None
 
-    _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.SlurmExecutor
+    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]] = submitit.SlurmExecutor
 
 
 class Auto(Slurm):
     """Auto-detect executor (local or Slurm)."""
 
-    _EXECUTOR_CLS: tp.ClassVar[tp.Type[submitit.Executor]] = submitit.AutoExecutor
+    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]] = submitit.AutoExecutor

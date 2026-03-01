@@ -56,7 +56,7 @@ class LocalJob:
             raise e
         return self._result[1]
 
-    def results(self) -> tp.Tuple[tp.Any, ...]:
+    def results(self) -> tuple[tp.Any, ...]:
         return (self.result(),)
 
     def wait(self) -> None:

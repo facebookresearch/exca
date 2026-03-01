@@ -112,7 +112,7 @@ class SubmititMixin(pydantic.BaseModel):
     slurm_account: str | None = None
     slurm_qos: str | None = None
     slurm_use_srun: bool = False
-    slurm_additional_parameters: tp.Dict[str, int | str | float | bool] | None = None
+    slurm_additional_parameters: dict[str, int | str | float | bool] | None = None
     # other
     conda_env: Path | str | None = None  # conda env name or path
     workdir: None | WorkDir = None

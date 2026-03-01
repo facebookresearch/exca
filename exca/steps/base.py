@@ -209,7 +209,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
 
-    def with_input(self, value: tp.Any = NoValue()) -> "Step":
+    def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
         """Create copy with Input as _previous (Input holds value or NoValue)."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
@@ -240,8 +240,7 @@ class Step(exca.helpers.DiscriminatedModel):
             else:
                 result = step.infra.run(step._run, *args)
         except Exception as e:
-            if hasattr(e, "add_note"):
-                e.add_note(f"  -> in {step!r}")
+            e.add_note(f"  -> in {step!r}")
             raise
 
         # Sync state back to original step's infra (with_input creates a copy)
@@ -367,7 +366,7 @@ class Chain(Step):
         steps = self._step_sequence()
         return steps[0]._is_generator() if steps else True
 
-    def with_input(self, value: tp.Any = NoValue()) -> "Chain":
+    def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
         """Create copy with optional Input prepended."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
@@ -442,8 +441,7 @@ class Chain(Step):
                 else:
                     args = (step._run(*args),)
             except Exception as e:
-                if hasattr(e, "add_note"):
-                    e.add_note(f"  -> while running step {i}/{total}: {step_name}")
+                e.add_note(f"  -> while running step {i}/{total}: {step_name}")
                 raise
             logger.debug("Completed step %d/%d: %s", i, total, step_name)
 
