@@ -182,9 +182,10 @@ class CacheDict(tp.Generic[X]):
         """Load current info files.
 
         Each writer appends to its own JSONL file, so concurrent writes
-        of the same key produce duplicate entries across files.  The last
-        reader wins (non-deterministic); duplicates waste disk but are not
-        cleaned up automatically — see docs/internal/debug/concurrent-writes.md."""
+        of the same key produce duplicate entries across files.  For
+        duplicates, whichever file comes last in iterdir() order wins
+        (non-deterministic); duplicates waste disk but are not cleaned up
+        automatically — see docs/internal/debug/concurrent-writes.md."""
         if self.folder is None:
             return
         readings = max((r.readings for r in self._jsonl_readers.values()), default=0)

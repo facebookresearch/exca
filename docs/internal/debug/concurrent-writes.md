@@ -28,7 +28,7 @@ An additional `devfair0679` worker wrote 12 non-overlapping recordings.
 On read, `CacheDict._read_info_files()` loads all info files.
 Previously, `_key_info.update()` kept whichever reader returned last
 (non-deterministic) and the other copies remained unreferenced on disk.
-This is now fixed — see "Implemented fix" below.
+See "Open questions" below for approaches considered.
 
 ## Manual dedup command
 
