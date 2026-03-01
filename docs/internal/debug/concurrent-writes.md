@@ -25,12 +25,10 @@ An additional `devfair0679` worker wrote 12 non-overlapping recordings.
   12 keys × 1 copy  = 12 unique entries
 ```
 
-On read, `CacheDict._read_info_files()` loads all info files and
-`_key_info.update()` keeps whichever reader returns last (non-deterministic).
-The other 15 copies of each key's binary data become unreferenced but remain
-on disk — `_cleanup_orphaned_jsonl_files` only removes files whose **first
-line** is blanked (i.e., explicitly deleted), not files that merely lost the
-"last-writer-wins" race.
+On read, `CacheDict._read_info_files()` loads all info files.
+Previously, `_key_info.update()` kept whichever reader returned last
+(non-deterministic) and the other copies remained unreferenced on disk.
+This is now fixed — see "Implemented fix" below.
 
 ## Manual dedup command
 
@@ -67,7 +65,7 @@ TODO in
 
 ---
 
-## TODO: investigate why dedup didn't fire
+## Open questions
 
 ### Question 1: Why didn't MapInfra prevent duplicate submissions?
 
@@ -108,24 +106,20 @@ job sees an empty cache and proceeds.
 
 ### Question 2: Can we deduplicate on the fly and use orphan cleanup?
 
-Current orphan cleanup (`_cleanup_orphaned_jsonl_files`) only deletes
-files whose first line is blanked (confirming explicit deletion via
-`__delitem__`). It deliberately skips files with valid first lines to
-avoid deleting concurrent writes in progress.
+**Rejected** — read-time dedup makes reads mutating, which is unsafe
+when multiple readers/writers operate concurrently (especially on NFS):
 
-Proposed approach:
+- Concurrent readers iterating files in different orders can each
+  blank the other's "winner", losing all copies of a key.
+- Even with deterministic iteration (sorted filenames), a reader
+  blanking entries while a writer appends to the same file has no
+  POSIX guarantees on NFS.
+- The `__getitem__` recovery path (rebuild from disk on
+  `FileNotFoundError`) is fragile and expensive.
 
-- [ ] **Detect duplicate keys at read time** — after `_read_info_files`
-  loads all info files, identify keys that appear in multiple JSONL
-  files.
-- [ ] **Blank duplicate entries** — for each duplicate, blank the entry
-  in the non-winning JSONL file (same as `__delitem__` does). This
-  makes them eligible for orphan cleanup.
-- [ ] **Let existing orphan cleanup handle the rest** — once all entries
-  in a JSONL file are blanked, `_cleanup_orphaned_jsonl_files` will
-  delete the JSONL and its associated `data/` files.
-- [ ] **Safety**: only do this when not inside a `write()` context, to
-  avoid interfering with concurrent writers.
+**Alternative**: a manual `dedup()` method or CLI command that users
+run when no concurrent readers/writers are active. This keeps reads
+non-mutating and safe.
 
 ### Question 3: Can we prevent this at submission time?
 
