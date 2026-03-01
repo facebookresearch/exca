@@ -3,6 +3,46 @@
 Deferred changes that require deprecation periods or break existing callers.
 Non-breaking behavior changes and internal cleanup can proceed without waiting.
 
+## Steps / Chain
+
+### Chain–Step duality when subclassing
+- Downstream projects may subclass both Step and Chain to change the
+  discriminated key (the field pydantic uses for polymorphic dispatch).
+- The problem: Chain is a Step, so the custom Chain must use the custom
+  Step's discriminator, and the custom Step hierarchy must know about
+  the custom Chain.  Keeping these in sync is fragile.
+- Need to figure out a clean pattern for this (metaclass hook?
+  registry? class-level config on Step that Chain inherits?).
+
+### OrderedDict as Chain parameter
+- Chain's validator auto-converts a list of dicts into
+  `Chain(steps=[Step(...), ...])` — each dict is instantiated as a Step.
+- For the `OrderedDict[str, Step]` branch, input would be a dict of
+  dicts.  But a dict is ambiguous: pydantic can interpret it as Step
+  fields (valid Step definition) or as a plain mapping.
+- Need to decide: raise on dict-of-dicts with a clear error, or find
+  a disambiguation strategy (e.g. require explicit `OrderedDict`
+  construction, or use a sentinel key).
+
+### Intermediate Input with uid (cache segmentation)
+- Currently `Input._aligned_step()` returns `[]`, making it invisible
+  in the folder path / uid.
+- Use case: a step produces a simple value (e.g. a string path) from a
+  complex computation.  That value feeds the next step and could serve
+  as the cache key for everything downstream — independent of the full
+  upstream computation history.
+- No concrete proposal yet; needs design work.
+
+### Prevent concurrent duplicate writes
+- Read-time dedup was attempted but reverted: mutating reads are unsafe
+  when multiple readers/writers operate concurrently (especially on NFS),
+  risking data loss from concurrent blanking races.
+- Reconsider if disk waste from duplicates becomes a practical problem;
+  a manual `dedup()` command (run when no concurrent access) may suffice.
+- Open: prevent duplicate submissions at the source (TOCTOU race in
+  `MapInfra._find_missing` / `JobChecker`).
+- See `docs/internal/debug/concurrent-writes.md` for full analysis.
+
 ## Deprecations (caller-breaking, needs migration period)
 
 ### Remove `writer()` method
