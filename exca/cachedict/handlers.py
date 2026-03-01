@@ -48,7 +48,10 @@ class MemmapArray:
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         f, name = ctx.shared_file(".data")
         if not isinstance(value, np.ndarray):
-            raise TypeError(f"Expected numpy array but got {type(value)}")
+            if hasattr(value, "__array__"):
+                value = np.asarray(value)
+            else:
+                raise TypeError(f"Expected numpy array but got {type(value)}")
         if not value.size:
             raise ValueError(f"Cannot dump data with no size: shape={value.shape}")
         offset = f.tell()
@@ -508,3 +511,4 @@ class AutoPickle(Auto):
 
 # Backward-compatible alias for released JSONL files
 DumpContext.HANDLERS["MemmapArrayFile"] = MemmapArray
+DumpContext.TYPE_DEFAULTS[ContiguousMemmap] = ContiguousMemmapArray
