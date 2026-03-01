@@ -40,16 +40,22 @@ class DumpInfo:
     byte_range: tuple[int, int]
     content: dict[str, tp.Any]
 
-    def delete_info(self) -> None:
+    def delete_info(self, *, ignore_errors: bool = False) -> None:
         """Overwrite this entry's JSONL bytes with spaces (keep newline).
 
         A line starting with ``b" "`` marks a deleted item;
-        ``_cleanup_orphaned_jsonl_files`` relies on this convention."""
+        ``_cleanup_orphaned_jsonl_files`` relies on this convention.
+        When *ignore_errors* is True, silently ignores missing/locked files."""
         start, end = self.byte_range
-        if start != end:
+        if start == end:
+            return
+        try:
             with self.jsonl.open("rb+") as f:
                 f.seek(start)
                 f.write(b" " * (end - start - 1))
+        except (FileNotFoundError, OSError):
+            if not ignore_errors:
+                raise
 
 
 class CacheDict(tp.Generic[X]):
@@ -173,7 +179,12 @@ class CacheDict(tp.Generic[X]):
         return iter(keys)
 
     def _read_info_files(self, max_workers: int = 4) -> None:
-        """Load current info files"""
+        """Load current info files.
+
+        Each writer appends to its own JSONL file, so concurrent writes
+        of the same key produce duplicate entries across files.  We keep
+        the first entry seen, blank duplicates (so their files become
+        reclaimable), then clean up fully-blanked orphan files."""
         if self.folder is None:
             return
         readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
@@ -197,30 +208,21 @@ class CacheDict(tp.Generic[X]):
                     continue
                 reader = self._jsonl_readers.setdefault(fp.name, JsonlReader(fp))
                 futures.append(executor.submit(reader.read))
-            all_results = [future.result() for future in futures]
-            for result in all_results:
-                self._key_info.update(result)
-        self._blank_duplicate_entries(all_results)
+            # Merge results; when the same key appears in multiple files
+            # (concurrent writers), keep one arbitrarily and blank the rest.
+            n_duplicates = 0
+            for result in (future.result() for future in futures):
+                for key, dinfo in result.items():
+                    if key in self._key_info:
+                        dinfo.delete_info(ignore_errors=True)
+                        n_duplicates += 1
+                    else:
+                        self._key_info[key] = dinfo
+            if n_duplicates:
+                logger.warning(
+                    "Resolved %d duplicate key(s) across JSONL files", n_duplicates
+                )
         self._cleanup_orphaned_jsonl_files()
-
-    def _blank_duplicate_entries(self, all_results: list[dict[str, "DumpInfo"]]) -> None:
-        """Blank JSONL entries for keys that lost the last-writer-wins race.
-
-        When multiple workers write the same key to different JSONL files,
-        only one entry per key survives in _key_info.  This method blanks
-        the losers so _cleanup_orphaned_jsonl_files can reclaim their
-        data files.
-        """
-        winners = self._key_info
-        for result in all_results:
-            for key, dinfo in result.items():
-                winner = winners.get(key)
-                if winner is None or dinfo is winner:
-                    continue
-                try:
-                    dinfo.delete_info()
-                except (FileNotFoundError, OSError):
-                    pass
 
     def _cleanup_orphaned_jsonl_files(self) -> None:
         """Remove jsonl files and their associated data files when they have no valid items."""
