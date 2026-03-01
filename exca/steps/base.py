@@ -103,6 +103,11 @@ def _infra_validator_after(self: tp.Any) -> tp.Any:
     return self
 
 
+def _is_step(value: tp.Any, disc_key: str) -> bool:
+    """True if value is a Step instance or a dict containing the discriminator key."""
+    return isinstance(value, Step) or (isinstance(value, dict) and disc_key in value)
+
+
 class Step(exca.helpers.DiscriminatedModel):
     """
     Base class for pipeline steps.
@@ -168,10 +173,14 @@ class Step(exca.helpers.DiscriminatedModel):
     def _convert_sequence_to_chain(
         cls, value: tp.Any, handler: pydantic.ValidatorFunctionWrapHandler
     ) -> "Step":
-        """Convert list/tuple to Chain automatically."""
+        """Convert list/tuple/dict to Chain automatically."""
+        key = cls._exca_discriminator_key
         if isinstance(value, (list, tuple)):
-            key = cls._exca_discriminator_key
             value = {key: "Chain", "steps": value}
+        elif isinstance(value, dict) and key not in value and value:
+            if not set(value) <= set(cls.model_fields):
+                if all(_is_step(v, key) for v in value.values()):
+                    value = {key: "Chain", "steps": collections.OrderedDict(value)}
         return handler(value)
 
     def model_post_init(self, __context: tp.Any) -> None:
