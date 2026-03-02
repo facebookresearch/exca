@@ -5,15 +5,6 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 
 ## Steps / Chain
 
-### Chain–Step duality when subclassing
-- Downstream projects may subclass both Step and Chain to change the
-  discriminated key (the field pydantic uses for polymorphic dispatch).
-- The problem: Chain is a Step, so the custom Chain must use the custom
-  Step's discriminator, and the custom Step hierarchy must know about
-  the custom Chain.  Keeping these in sync is fragile.
-- Need to figure out a clean pattern for this (metaclass hook?
-  registry? class-level config on Step that Chain inherits?).
-
 ### Intermediate Input with uid (cache segmentation)
 - Currently `Input._aligned_step()` returns `[]`, making it invisible
   in the folder path / uid.

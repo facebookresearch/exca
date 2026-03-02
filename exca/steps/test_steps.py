@@ -503,7 +503,8 @@ def test_custom_hierarchy_list_to_chain() -> None:
     class Container(pydantic.BaseModel):
         step: CustomStep
 
-    container = Container(step=[CustomMult(coeff=2), CustomMult(coeff=3)])
+    steps: tp.Any = [CustomMult(coeff=2), CustomMult(coeff=3)]
+    container = Container(step=steps)
     assert type(container.step) is CustomChain
 
 
