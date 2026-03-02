@@ -280,18 +280,46 @@ class StepContainer(pydantic.BaseModel):
 
 
 @pytest.mark.parametrize(
-    "steps,expected",
+    "steps,expected_keys,expected",
     [
-        ([conftest.Mult(coeff=2), conftest.Mult(coeff=3)], 30),  # list
-        ((conftest.Mult(coeff=2), {"type": "Add", "value": 10}), 20),  # tuple
-        ([conftest.Add(value=1), [conftest.Mult(coeff=2)]], 12),  # nested
+        # list / tuple
+        ([conftest.Mult(coeff=2), conftest.Mult(coeff=3)], None, 30),
+        ((conftest.Mult(coeff=2), {"type": "Add", "value": 10}), None, 20),
+        ([conftest.Add(value=1), [conftest.Mult(coeff=2)]], None, 12),
+        # dict (auto-converted to named Chain)
+        ({"a": conftest.Mult(coeff=2), "b": conftest.Add(value=3)}, ["a", "b"], 13),
+        (
+            {"a": {"type": "Mult", "coeff": 2}, "b": {"type": "Add", "value": 3}},
+            ["a", "b"],
+            13,
+        ),
+        ({"a": conftest.Mult(coeff=2), "b": {"type": "Add", "value": 3}}, ["a", "b"], 13),
+        (collections.OrderedDict(x=conftest.Mult(coeff=2)), ["x"], 10),
     ],
 )
-def test_sequence_to_chain_conversion(steps: tp.Any, expected: float) -> None:
-    """List/tuple of steps should be automatically converted to a Chain."""
+def test_auto_chain_conversion(
+    steps: tp.Any, expected_keys: list[str] | None, expected: float
+) -> None:
+    """List, tuple, or dict of steps auto-converts to a Chain."""
     container = StepContainer(step=steps)
     assert isinstance(container.step, Chain)
     assert container.step.run(5) == expected
+    if expected_keys is not None:
+        assert isinstance(container.step.steps, dict)
+        assert list(container.step.steps.keys()) == expected_keys
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        {"a": {"coeff": 2}},  # missing discriminator in sub-dict
+        {"a": 42},  # value is not a dict or Step
+    ],
+)
+def test_auto_chain_conversion_errors(steps: tp.Any) -> None:
+    """Dicts without discriminator in values fall through to normal validation and error."""
+    with pytest.raises((pydantic.ValidationError, ValueError)):
+        StepContainer(step=steps)
 
 
 # =============================================================================

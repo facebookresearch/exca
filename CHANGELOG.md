@@ -6,6 +6,7 @@
 - Python 3.11+ support only (dropped 3.10).
 
 ### Added
+- `exca/steps`: dict-of-steps auto-converts to `Chain` with named steps (e.g. `step: Step = {"load": {"type": "LoadData"}, "train": {"type": "Train"}}`).
 - `ContiguousMemmapArray` cache type: reads arrays via file I/O instead of memmap page faults, keeping RSS flat and reducing read overhead.
 - `DumpOptions.replace`: remap handler names at dump and load time (e.g. swap in a custom handler without re-dumping).
 

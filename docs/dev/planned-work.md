@@ -14,16 +14,6 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 - Need to figure out a clean pattern for this (metaclass hook?
   registry? class-level config on Step that Chain inherits?).
 
-### OrderedDict as Chain parameter
-- Chain's validator auto-converts a list of dicts into
-  `Chain(steps=[Step(...), ...])` — each dict is instantiated as a Step.
-- For the `OrderedDict[str, Step]` branch, input would be a dict of
-  dicts.  But a dict is ambiguous: pydantic can interpret it as Step
-  fields (valid Step definition) or as a plain mapping.
-- Need to decide: raise on dict-of-dicts with a clear error, or find
-  a disambiguation strategy (e.g. require explicit `OrderedDict`
-  construction, or use a sentinel key).
-
 ### Intermediate Input with uid (cache segmentation)
 - Currently `Input._aligned_step()` returns `[]`, making it invisible
   in the folder path / uid.
