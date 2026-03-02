@@ -133,6 +133,7 @@ def test_discriminated_model() -> None:
         (BaseNamed, {"name": "World", "string": "Hello"}, World),
         (BaseNamed, {"name": "Hello"}, Hello),
         (Hello, {"name": "World", "string": "Hey"}, World),
+        (Hello, {"name": "Hello"}, Hello),
     ],
 )
 def test_discriminated_model_base_dispatch(
