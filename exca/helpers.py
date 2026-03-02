@@ -438,10 +438,10 @@ class DiscriminatedModel(pydantic.BaseModel):
                 sub_classes = _get_subclasses(cls=cls) + [cls]
                 val_classes: dict[str, tp.Any] = {}
                 for s in sub_classes:
-                    # safety check (same key):
+                    # Skip subclasses with a different discriminator key
+                    # (they belong to a separate dispatch hierarchy)
                     if s._exca_discriminator_key != key:
-                        msg = f"discriminator_key differs for {s} and base class {cls}"
-                        raise RuntimeError(msg)
+                        continue
                     val = s.__name__
                     past = val_classes.get(val, None)
                     if past is not None and past.__module__ != s.__module__:

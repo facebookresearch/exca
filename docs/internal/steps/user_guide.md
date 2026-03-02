@@ -269,6 +269,41 @@ This makes it easy to share steps that "know" their resource needs.
 
 ---
 
+## Custom Step Hierarchies
+
+Projects that need a different discriminator key (e.g., `"name"` instead of the
+default `"type"`) can subclass both `Step` and `Chain`:
+
+```python
+from exca.steps import Step, Chain
+
+class MyStep(Step, discriminator_key="name"):
+    pass
+
+class MyChain(Chain, MyStep):
+    steps: list[MyStep] | OrderedDict[str, MyStep]  # type: ignore
+```
+
+`MyChain` uses diamond inheritance (`Chain -> Step` and `MyStep -> Step`).
+The base order matters: `Chain` must come first so chain methods take priority
+in the MRO.
+
+List-to-chain conversion is automatically wired: when a `list` appears where a
+`MyStep` is expected, it creates a `MyChain` (not the base `Chain`). This is
+handled via `Step._exca_chain_class`, which `Chain.__init_subclass__`
+auto-registers on the nearest non-chain Step ancestor.
+
+```python
+class Container(pydantic.BaseModel):
+    step: MyStep
+
+# Automatically creates MyChain
+c = Container(step=[MyMult(coeff=2), MyMult(coeff=3)])
+assert type(c.step) is MyChain
+```
+
+---
+
 ## Summary
 
 | Feature | Benefit |
