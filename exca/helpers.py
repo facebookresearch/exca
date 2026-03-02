@@ -344,8 +344,20 @@ class DiscriminatedModel(pydantic.BaseModel):
     models during serialization and de-serialization. This is achieved
     by injecting a key upon serialization.
 
-    By default the key is "type" but this can be customized throught heritage
+    By default the key is "type" but this can be customized through heritage
     (eg: :code:`class SubNamedModel(NamedModel, discriminator_key="name")`)
+
+    Subclasses can be instantiated from any ancestor by passing the
+    discriminator key:
+
+    .. code-block:: python
+
+        class Base(DiscriminatedModel, discriminator_key="name"):
+            ...
+        class Child(Base):
+            value: int = 0
+
+        obj = Base(name="Child", value=3)  # returns a Child instance
 
     Note
     ----
@@ -356,6 +368,32 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="forbid", validation_error_cause=True)
     _exca_discriminator_key: tp.ClassVar[str] = "type"
+
+    @classmethod
+    def _get_discriminated_subclasses(cls) -> dict[str, type["DiscriminatedModel"]]:
+        """Map subclass __name__ → class for all subclasses sharing the same discriminator key."""
+        key = cls._exca_discriminator_key
+        val_classes: dict[str, type[DiscriminatedModel]] = {}
+        for s in _get_subclasses(cls) + [cls]:
+            if s._exca_discriminator_key != key:
+                continue
+            val = s.__name__
+            past = val_classes.get(val, None)
+            if past is not None and past.__module__ != s.__module__:
+                msg = f"2 subclasses from different modules are named {val!r}: {past} and {s}."
+                raise RuntimeError(msg)
+            val_classes[val] = s
+        return val_classes
+
+    def __new__(cls, /, **kwargs: tp.Any) -> "DiscriminatedModel":
+        """Dispatch to the right subclass so pydantic __init__ validates the correct model."""
+        key = cls._exca_discriminator_key
+        type_name = kwargs.get(key)
+        if type_name is not None and type_name != cls.__name__:
+            target = cls._get_discriminated_subclasses().get(type_name)
+            if target is not None:
+                return super().__new__(target)
+        return super().__new__(cls)
 
     @classmethod
     def __init_subclass__(
@@ -435,21 +473,7 @@ class DiscriminatedModel(pydantic.BaseModel):
             value = value.copy()
             sub_cls_val = value.pop(key, None)
             if sub_cls_val is not None:
-                sub_classes = _get_subclasses(cls=cls) + [cls]
-                val_classes: dict[str, tp.Any] = {}
-                for s in sub_classes:
-                    # Skip subclasses with a different discriminator key
-                    # (they belong to a separate dispatch hierarchy)
-                    if s._exca_discriminator_key != key:
-                        continue
-                    val = s.__name__
-                    past = val_classes.get(val, None)
-                    if past is not None and past.__module__ != s.__module__:
-                        # if the new class with same name is in the same module, it will
-                        # replace it, otherwise it raises for safety
-                        msg = f"2 subclasses from different modules are named {val!r}: {past} and {s}."
-                        raise RuntimeError(msg)
-                    val_classes[val] = s
+                val_classes = cls._get_discriminated_subclasses()
                 if sub_cls_val not in val_classes:
                     # https://docs.pydantic.dev/latest/concepts/validators/#raising-validation-errors
                     # -> should not use a KeyError for pydantic to handle unions in type

@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import copy
 import pickle
 import typing as tp
 from pathlib import Path
@@ -124,6 +125,25 @@ def test_discriminated_model() -> None:
     # instantiate with string
     model = Model(sub="World")  # type: ignore
     assert isinstance(model.sub, World)
+
+
+@pytest.mark.parametrize(
+    "cls,kwargs,expected_type",
+    [
+        (BaseNamed, {"name": "World", "string": "Hello"}, World),
+        (BaseNamed, {"name": "Hello"}, Hello),
+        (Hello, {"name": "World", "string": "Hey"}, World),
+        (Hello, {"name": "Hello"}, Hello),
+    ],
+)
+def test_discriminated_model_base_dispatch(
+    cls: type[BaseNamed], kwargs: dict[str, tp.Any], expected_type: type[BaseNamed]
+) -> None:
+    obj = cls(**kwargs)  # type: ignore
+    assert isinstance(obj, expected_type)
+    assert isinstance(pickle.loads(pickle.dumps(obj)), expected_type)
+    assert isinstance(copy.deepcopy(obj), expected_type)
+    assert isinstance(cls.model_validate(obj.model_dump()), expected_type)
 
 
 def test_discriminated_model_errors() -> None:
