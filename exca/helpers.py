@@ -344,8 +344,20 @@ class DiscriminatedModel(pydantic.BaseModel):
     models during serialization and de-serialization. This is achieved
     by injecting a key upon serialization.
 
-    By default the key is "type" but this can be customized throught heritage
+    By default the key is "type" but this can be customized through heritage
     (eg: :code:`class SubNamedModel(NamedModel, discriminator_key="name")`)
+
+    Subclasses can be instantiated from any ancestor by passing the
+    discriminator key:
+
+    .. code-block:: python
+
+        class Base(DiscriminatedModel, discriminator_key="name"):
+            ...
+        class Child(Base):
+            value: int = 0
+
+        obj = Base(name="Child", value=3)  # returns a Child instance
 
     Note
     ----
@@ -374,6 +386,7 @@ class DiscriminatedModel(pydantic.BaseModel):
         return val_classes
 
     def __new__(cls, /, **kwargs: tp.Any) -> "DiscriminatedModel":
+        """Dispatch to the right subclass so pydantic __init__ validates the correct model."""
         key = cls._exca_discriminator_key
         type_name = kwargs.get(key)
         if type_name is not None and type_name != cls.__name__:
