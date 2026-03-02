@@ -119,6 +119,18 @@ class ContiguousMemmap:
             result = result.astype(dtype)
         return result
 
+    def __array_ufunc__(
+        self,
+        ufunc: np.ufunc,
+        method: str,
+        *inputs: tp.Any,
+        **kwargs: tp.Any,
+    ) -> tp.Any:
+        raise TypeError(
+            f"ContiguousMemmap does not support ufunc '{ufunc.__name__}' directly "
+            f"— use np.asarray(arr) to read data first."
+        )
+
     def __getattr__(self, name: str) -> tp.Any:
         if name in _SAFE_ATTRS:
             return getattr(self._arr, name)

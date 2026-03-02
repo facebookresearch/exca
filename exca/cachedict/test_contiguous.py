@@ -209,3 +209,12 @@ def test_unsupported_attr_raises(tmp_path: Path, attr: str, match: str) -> None:
     cm = _make_cm(tmp_path, np.arange(10.0))
     with pytest.raises(AttributeError, match=match):
         getattr(cm, attr)
+
+
+def test_arithmetic_and_ufunc_raise(tmp_path: Path) -> None:
+    """Arithmetic operators and numpy ufuncs raise TypeError."""
+    cm = _make_cm(tmp_path, np.arange(1, 13, dtype=np.float64).reshape(3, 4))
+    with pytest.raises(TypeError):
+        cm * 2.0  # type: ignore[operator]
+    with pytest.raises(TypeError, match="does not support ufunc"):
+        np.sqrt(cm)
