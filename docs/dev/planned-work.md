@@ -5,15 +5,6 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 
 ## Steps / Chain
 
-### Chain–Step duality when subclassing
-- Downstream projects may subclass both Step and Chain to change the
-  discriminated key (the field pydantic uses for polymorphic dispatch).
-- The problem: Chain is a Step, so the custom Chain must use the custom
-  Step's discriminator, and the custom Step hierarchy must know about
-  the custom Chain.  Keeping these in sync is fragile.
-- Need to figure out a clean pattern for this (metaclass hook?
-  registry? class-level config on Step that Chain inherits?).
-
 ### Intermediate Input with uid (cache segmentation)
 - Currently `Input._aligned_step()` returns `[]`, making it invisible
   in the folder path / uid.
@@ -56,6 +47,20 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
   `MemmapArrayFile`, etc., or writes to `DumperLoader.DEFAULTS`
 - **Migration:** switch to `@DumpContext.register` with new-style handlers
 - **When:** after confirming no external subclasses are in use
+
+### Simplify permission handling
+- Shared filesystems (NFS) need explicit chmod on created folders and files
+  so other users/jobs can read/write cached results.
+- Old attempt on branch `set-permissions` (aborted — mixed into a large
+  refactor): added `PermissionSetter` utility in `utils.py`, a
+  `permissions: int | None = 0o777` field on `BaseInfra`/`Backend`/`CacheDict`,
+  and chmod calls after each mkdir/file-write.
+- Next attempt should:
+  - Extract the permission logic cleanly (standalone PR, no other refactors)
+  - Also handle submitit log/job folders (currently created by submitit
+    itself, which doesn't set permissions — may need upstream changes in
+    submitit or post-creation fixup)
+  - Consider a umask-based approach as an alternative to post-hoc chmod
 
 ## Internal cleanup (non-breaking, can do anytime)
 

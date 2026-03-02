@@ -149,6 +149,7 @@ class Step(exca.helpers.DiscriminatedModel):
     infra: backends.Backend | None = None
     _previous: Step | None = None
     _step_flags: tp.ClassVar[frozenset[str]] = frozenset()
+    _exca_chain_class: tp.ClassVar[type["Step"] | None] = None
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
@@ -175,12 +176,13 @@ class Step(exca.helpers.DiscriminatedModel):
     ) -> "Step":
         """Convert list/tuple/dict to Chain automatically."""
         key = cls._exca_discriminator_key
+        chain_name = cls._exca_chain_class.__name__ if cls._exca_chain_class else "Chain"
         if isinstance(value, (list, tuple)):
-            value = {key: "Chain", "steps": value}
+            value = {key: chain_name, "steps": value}
         elif isinstance(value, dict) and key not in value and value:
             if not set(value) <= set(cls.model_fields):
                 if all(_is_step(v, key) for v in value.values()):
-                    value = {key: "Chain", "steps": collections.OrderedDict(value)}
+                    value = {key: chain_name, "steps": collections.OrderedDict(value)}
         return handler(value)
 
     def model_post_init(self, __context: tp.Any) -> None:
@@ -337,6 +339,17 @@ class Chain(Step):
     """
 
     steps: tp.Sequence[Step] | collections.OrderedDict[str, Step]
+
+    @classmethod
+    def __init_subclass__(cls, **kwargs: tp.Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Register on the nearest non-chain Step ancestor for list-to-chain auto-conversion
+        for base in cls.__mro__:
+            if base is cls or (isinstance(base, type) and issubclass(base, Chain)):
+                continue
+            if isinstance(base, type) and issubclass(base, Step):
+                base._exca_chain_class = cls
+                break
 
     def model_post_init(self, __context: tp.Any) -> None:
         super().model_post_init(__context)
@@ -524,3 +537,6 @@ class Chain(Step):
                 step.clear_cache()
         if self.infra:
             self.infra.clear_cache()
+
+
+Step._exca_chain_class = Chain

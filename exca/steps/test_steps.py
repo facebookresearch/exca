@@ -469,3 +469,50 @@ def test_chain_slicing(tmp_path: Path) -> None:
     # empty slice raises
     with pytest.raises(ValueError, match="steps cannot be empty"):
         chain[5:10]
+
+
+# =============================================================================
+# Custom Step hierarchies (subclassing with custom discriminator)
+# =============================================================================
+
+
+class CustomStep(Step, discriminator_key="name"):
+    pass
+
+
+class CustomMult(CustomStep):
+    coeff: float = 2.0
+
+    def _run(self, value: float) -> float:
+        return value * self.coeff
+
+
+class CustomChain(Chain, CustomStep):
+    steps: list[CustomStep] | collections.OrderedDict[str, CustomStep]  # type: ignore
+
+
+def test_chain_class_auto_registration() -> None:
+    """_exca_chain_class is auto-wired on the nearest non-chain Step ancestor."""
+    assert Step._exca_chain_class is Chain
+    assert CustomStep._exca_chain_class is CustomChain
+
+
+def test_custom_hierarchy_list_to_chain() -> None:
+    """List-to-chain conversion uses the correct chain class per hierarchy."""
+
+    class Container(pydantic.BaseModel):
+        step: CustomStep
+
+    steps: tp.Any = [CustomMult(coeff=2), CustomMult(coeff=3)]
+    container = Container(step=steps)
+    assert type(container.step) is CustomChain
+
+
+def test_custom_hierarchy_roundtrip() -> None:
+    """Serialization round-trip preserves custom discriminator key."""
+    chain = CustomChain(steps=[CustomMult(coeff=3)])
+    data = chain.model_dump()
+    assert data["name"] == "CustomChain"
+    assert data["steps"][0]["name"] == "CustomMult"
+    restored = CustomStep.model_validate(data)
+    assert type(restored) is CustomChain
