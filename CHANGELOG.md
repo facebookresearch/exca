@@ -2,13 +2,21 @@
 
 ## [Unreleased]
 
+## 0.5.18
+
 ### Changed
 - Python 3.11+ support only (dropped 3.10).
+- `Chain` subclasses auto-register on their nearest `Step` ancestor for list/dict-to-chain coercion.
 
 ### Added
+- `DiscriminatedModel` self-discriminates on instantiation: `Base(type="Child")` returns a `Child` instance.
 - `exca/steps`: dict-of-steps auto-converts to `Chain` with named steps (e.g. `step: Step = {"load": {"type": "LoadData"}, "train": {"type": "Train"}}`).
 - `ContiguousMemmapArray` cache type: reads arrays via file I/O instead of memmap page faults, keeping RSS flat and reducing read overhead.
 - `DumpOptions.replace`: remap handler names at dump and load time (e.g. swap in a custom handler without re-dumping).
+
+### Fixed
+- `DiscriminatedModel` crash during infra dump when `_obj` is unbound.
+- Explicit error message when applying ufuncs to `ContiguousMemmap`.
 
 ## 0.5.15
 
