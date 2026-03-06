@@ -380,7 +380,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             items = next(iter(kwargs.values()))
         # specific function for thread and process pool executors
         if self.cluster in [None, "threadpool", "processpool"]:
-            return self._method_override_futures(items)
+            with self._work_env():
+                return self._method_override_futures(items)
         uid_func = imethod.item_uid
         # we need to keep order for output:
         uid_items = [(uid_func(item), item) for item in items]

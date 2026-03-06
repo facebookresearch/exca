@@ -127,7 +127,7 @@ class SubmititMixin(pydantic.BaseModel):
                     f"cluster={self.cluster} requires a folder to be provided, "
                     "only cluster=None works without folder"
                 )
-            if self.workdir is not None:
+            if self.workdir is not None and self.workdir.folder is None:
                 raise ValueError("Workdir requires a folder")
         if self.tasks_per_node > 1 and not self.slurm_use_srun:
             if self.cluster in ["slurm", "auto"]:
@@ -205,7 +205,8 @@ class SubmititMixin(pydantic.BaseModel):
         if not isinstance(self, base.BaseInfra):
             raise RuntimeError("SubmititMixin should be set a BaseInfra mixin")
         with contextlib.ExitStack() as estack:
-            estack.enter_context(submitit.helpers.clean_env())
+            if self.executor is not None:
+                estack.enter_context(submitit.helpers.clean_env())
             if self.workdir is not None:
                 if self.workdir.folder is None:
                     if self.folder is None:
