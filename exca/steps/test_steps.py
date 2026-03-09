@@ -436,6 +436,47 @@ def test_chain_error_note() -> None:
 
 
 # =============================================================================
+# Clean validation error messages
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "steps,expected_note",
+    [
+        ([{"type": "Mult", "coef": 3.0}], "steps.0.coef"),
+        (
+            [{"type": "Mult", "coeff": "hello"}],
+            "steps.0.coeff: Input should be a valid number",
+        ),
+        ([{"type": "Nope"}], "steps.0: Value error, Unknown subclass discriminator"),
+        ([{"coeff": 3.0}], "steps.0: Value error"),
+        # double nested steps
+        (
+            [[{"type": "Mult", "coeff": 2.0}, {"type": "Add", "biass": 1.0}]],
+            "steps.0.steps.1.biass",
+        ),
+        # dict of steps
+        (
+            {"a": {"type": "Mult", "coef": 3.0}, "b": {"type": "Add", "biass": 1.0}},
+            "steps.b.biass",
+        ),
+    ],
+)
+def test_validation_error_summary_note(steps: tp.Any, expected_note: str) -> None:
+    """Noisy union-type errors get a readable summary note."""
+    with pytest.raises(pydantic.ValidationError) as exc_info:
+        Chain(steps=steps)
+    assert expected_note in "\n".join(getattr(exc_info.value, "__notes__", []))
+
+
+def test_validation_error_no_note_when_clean() -> None:
+    """Clean errors (no union-type noise) should not get a summary note."""
+    with pytest.raises(pydantic.ValidationError) as exc_info:
+        conftest.Mult(coef=3.0)  # type: ignore
+    assert not getattr(exc_info.value, "__notes__", [])
+
+
+# =============================================================================
 # Chain indexing and slicing
 # =============================================================================
 
