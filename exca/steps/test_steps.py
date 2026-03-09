@@ -444,6 +444,12 @@ def test_chain_error_note() -> None:
     "steps,expected_note",
     [
         ([{"type": "Mult", "coef": 3.0}], "steps.0.coef"),
+        (
+            [{"type": "Mult", "coeff": "hello"}],
+            "steps.0.coeff: Input should be a valid number",
+        ),
+        ([{"type": "Nope"}], "steps.0: Value error, Unknown subclass discriminator"),
+        ([{"coeff": 3.0}], "steps.0: Value error"),
         # double nested steps
         (
             [[{"type": "Mult", "coeff": 2.0}, {"type": "Add", "biass": 1.0}]],
