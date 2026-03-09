@@ -339,6 +339,29 @@ _dumping_ids: contextvars.ContextVar[frozenset[int]] = contextvars.ContextVar(
 )
 
 
+def _add_validation_error_note(err: pydantic.ValidationError) -> None:
+    """Annotate a ValidationError with a readable summary.
+
+    Pydantic's union-type validation embeds internal type descriptors in
+    loc paths (``steps.json-or-python[...].0.coef``) and generates
+    spurious errors from rejected union branches.  When detected, this
+    appends a note with cleaned paths.
+    """
+    noise = {"dict_type", "list_type"}
+    lines: list[str] = []
+    needs_note = False
+    for e in err.errors():
+        orig_loc = e.get("loc", ())
+        loc = tuple(p for p in orig_loc if not (isinstance(p, str) and "[" in p))
+        if loc != orig_loc:
+            needs_note = True
+        if e["type"] not in noise:
+            loc_str = ".".join(str(p) for p in loc)
+            lines.append(f"  {loc_str}: {e['msg']}" if loc_str else f"  {e['msg']}")
+    if needs_note and lines:
+        err.add_note("----------\nSummary:\n" + "\n".join(lines))
+
+
 class DiscriminatedModel(pydantic.BaseModel):
     """Preserves the types of child class instance passed in pydantic
     models during serialization and de-serialization. This is achieved
@@ -368,6 +391,15 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="forbid", validation_error_cause=True)
     _exca_discriminator_key: tp.ClassVar[str] = "type"
+
+    if not tp.TYPE_CHECKING:
+
+        def __init__(self, /, **kwargs: tp.Any) -> None:
+            try:
+                super().__init__(**kwargs)
+            except pydantic.ValidationError as e:
+                _add_validation_error_note(e)
+                raise
 
     @classmethod
     def _get_discriminated_subclasses(cls) -> dict[str, type["DiscriminatedModel"]]:
@@ -482,8 +514,7 @@ class DiscriminatedModel(pydantic.BaseModel):
                 sub_cls = val_classes[sub_cls_val]
                 if sub_cls is not cls:
                     return sub_cls(**value)  # type: ignore
-                else:
-                    return handler(value)  # type: ignore
+                # sub_cls is cls: fall through to handler below
             else:
                 subclasses = _get_subclasses(cls=cls)
                 extra_keys = set(value.keys()) - set(cls.model_fields.keys())
