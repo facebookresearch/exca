@@ -457,14 +457,13 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     else futures.ProcessPoolExecutor
                 )
                 jobs = []
-                max_workers = self.max_jobs
-                if max_workers is not None:
-                    max_workers = min(len(missing), max_workers)
+                cpus = max(1, (os.cpu_count() or 1) - 1)
+                max_workers = min(len(missing), cpus)
+                if self.max_jobs is not None:
+                    max_workers = min(max_workers, self.max_jobs)
                 with ExecutorCls(max_workers=max_workers) as ex:
-                    # split in a manageable number of chunks
                     mitems = [ki[1] for ki in missing]
-                    max_workers = ex._max_workers  # type: ignore
-                    chunks = to_chunks(mitems, max_chunks=3 * max_workers)  # type: ignore
+                    chunks = to_chunks(mitems, max_chunks=3 * max_workers)
                     for chunk in chunks:
                         j = ex.submit(
                             self._call_and_store,
