@@ -349,7 +349,7 @@ def _add_validation_error_note(err: pydantic.ValidationError) -> None:
     """
     noise = {"dict_type", "list_type"}
     lines: list[str] = []
-    needs_note = False
+    needs_note = False  # True once any loc path contains union-type noise
     for e in err.errors():
         orig_loc = e.get("loc", ())
         loc = tuple(p for p in orig_loc if not (isinstance(p, str) and "[" in p))
