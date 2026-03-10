@@ -65,8 +65,8 @@ def test_max_pickle_size(tmp_path: Path) -> None:
 def test_task_infra_keep_in_ram() -> None:
     whatever = Whatever(param1=13, infra1={"keep_in_ram": True})  # type: ignore
     assert whatever.process() == 26
-    assert whatever.infra1._cache == 26  # type: ignore
-    whatever.infra1._cache = 13  # type: ignore
+    assert whatever.infra1._state.cache == 26  # type: ignore
+    whatever.infra1._state.cache = 13  # type: ignore
     assert whatever.process() == 13, "Should be using cache"
 
 
@@ -224,11 +224,11 @@ def test_instance_pickling() -> None:
 def test_infra_pickling_with_ram_cache() -> None:
     whatever = Whatever(param1=13, infra1={"keep_in_ram": True})  # type: ignore
     out = whatever.process()
-    assert whatever.infra1._cache == out
+    assert whatever.infra1._state.cache == out
     string = pickle.dumps(whatever)
-    assert whatever.infra1._cache == out
+    assert whatever.infra1._state.cache == out
     bis = pickle.loads(string)
-    assert isinstance(bis.infra1._cache, base.Sentinel)
+    assert isinstance(bis.infra1._state.cache, base.Sentinel)
 
 
 def test_local_job() -> None:

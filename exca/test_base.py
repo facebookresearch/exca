@@ -608,3 +608,11 @@ if __name__ == "__main__":
         model_ = MainCls(param=13, infra={"folder": tmp, "cluster": "local"})  # type: ignore
         assert model_.func() == 26
         assert list(Path(tmp).iterdir())
+
+
+def test_fast_state_no_fallback() -> None:
+    """Catch pydantic upgrades that change PrivateAttr storage."""
+    model = Base(param=1)
+    private = model.infra.__pydantic_private__
+    assert isinstance(private, dict)
+    assert "_state" in private

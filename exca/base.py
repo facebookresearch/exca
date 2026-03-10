@@ -35,6 +35,32 @@ class Sentinel:
     pass
 
 
+@dataclasses.dataclass
+class _BaseInfraState:
+    """Ephemeral/recomputable state, stored as a PrivateAttr in
+    __pydantic_private__ and accessed via _fast_state() to bypass
+    pydantic's __getattr__ on hot paths.  Reset on pickle."""
+
+    checked_configs: bool = False
+    factory: str | None = None
+    uid: str | None = None
+    infra_method: "InfraMethod | None" = None
+    method_override: tp.Any = None
+
+
+def _fast_state(infra: "BaseInfra") -> _BaseInfraState:
+    """Read _state directly from __pydantic_private__, bypassing __getattr__
+    for fast access.
+
+    Falls back to normal access if pydantic's storage changes.
+    See test_fast_state_no_fallback for upgrade detection.
+    """
+    try:
+        return infra.__pydantic_private__["_state"]  # type: ignore[index]
+    except (KeyError, TypeError):
+        return infra._state
+
+
 @pydantic.model_validator(mode="after")
 def model_with_infra_validator_after(obj: pydantic.BaseModel) -> pydantic.BaseModel:
     return _add_name(obj, propagate_defaults=True)
@@ -115,12 +141,19 @@ class BaseInfra(pydantic.BaseModel):
     # {factory} will be replaced by method name and version tag
     # {uid} by the owner class uid
     _uid_string: str = "{method},{version}/{uid}"
-    # information stored for fast access after apply is called
-    _uid: str | None = None  # stored uid once computed (and once model is frozen)
+    _state: _BaseInfraState = pydantic.PrivateAttr(default_factory=_BaseInfraState)
+    _uid: str | None = None  # deprecated: now in _state, kept for backward compat
     _obj: tp.Any = pydantic.PrivateAttr()  # pydantic model the infra is an attribute of
-    _checked_configs: bool = False  # only do it once
     _infra_name: str = ""
     _infra_method: "InfraMethod | None" = pydantic.PrivateAttr(None)  # method container
+
+    def __getstate__(self) -> dict[str, tp.Any]:
+        out = super().__getstate__()
+        # Reset ephemeral state so pickled copies start fresh
+        state = out["__pydantic_private__"].get("_state")
+        if state is not None:
+            out["__pydantic_private__"]["_state"] = type(state)()
+        return out
 
     def __setstate__(self, state: tp.Any) -> None:
         if "__dict__" in state:
@@ -131,6 +164,8 @@ class BaseInfra(pydantic.BaseModel):
         if "__pydantic_private__" in state:
             d = state["__pydantic_private__"]
             d.setdefault("_uid_string", "{method},{version}/{uid}")
+            if "_state" not in d:
+                d["_state"] = type(self)._state.default_factory()  # type: ignore
             # infra method can lose the name, so let's recover it
             # (in private infra in particular)
             iname = d.get("_infra_name", None)
@@ -195,7 +230,8 @@ class BaseInfra(pydantic.BaseModel):
         return cdict
 
     def _check_configs(self, write: bool = True) -> None:
-        if self._checked_configs:
+        state = _fast_state(self)
+        if state.checked_configs:
             return  # already done
         xpfolder = self.uid_folder()
         if xpfolder is None:
@@ -207,7 +243,7 @@ class BaseInfra(pydantic.BaseModel):
             full_uid=self.config(uid=True, exclude_defaults=False),
         )
         dump.check_and_write(xpfolder, write=write)
-        self._checked_configs = True
+        state.checked_configs = True
         # Set permissions on written files
         if write:
             for name in ("uid", "full-uid", "config"):
@@ -219,6 +255,9 @@ class BaseInfra(pydantic.BaseModel):
                         pass
 
     def _factory(self) -> str:
+        state = _fast_state(self)
+        if state.factory is not None:
+            return state.factory
         cls = self._obj.__class__
         if self._infra_method is None:
             raise RuntimeError(f"Infra {self!r} was not applied to a method")
@@ -238,52 +277,61 @@ class BaseInfra(pydantic.BaseModel):
             current_m = getattr(cls, m.__name__)
             if isinstance(current_m, property) and self._infra_method is current_m.fget:
                 factory = f"{cls.__module__}.{cls.__qualname__ }.{name}"
+        state.factory = factory
         return factory
 
     def uid(self) -> str:
         """Returns the unique uid of the task"""
+        state = _fast_state(self)
+        if state.uid is not None:
+            return state.uid
+        # deprecated path: check legacy _uid attribute for backward compat
         if not hasattr(self, "_uid"):
             self._uid = None  # backward-compatibility
-        if self._uid is None:
-            cfg = self.config(uid=True, exclude_defaults=True)
-            uid = cfg.to_uid()
-            uid = uid if uid else "default"
-            params = dict(method=self._factory(), version=self.version, uid=uid)
-            parsed = string.Formatter().parse(self._uid_string)
-            names = {v[1] for v in parsed if v[1] is not None}
-            if names != set(params):
-                msg = f"uid_string {self._uid_string!r} should contain exactly {set(params)}"
-                msg += f"\nbut got {names} for infra applied on {self._obj!r}"
-                raise ValueError(msg)
-            self._uid = self._uid_string.format(**params)
-            utils.recursive_freeze(self._obj)
-            msg = "Froze instance %s after computing its uid: %s"
-            logger.debug(msg, repr(self._obj), self._uid)
-            # compat
-            if self.folder is not None and uid != "default":
-                folder = Path(self.folder) / self._uid
-                if not folder.exists():
-                    params["uid"] = cfg.to_uid(version=2)
-                    old = Path(self.folder) / self._uid_string.format(**params)
-                    if old.exists():
-                        # rename all folders in cache at once if possible
-                        from exca import helpers
+        if self._uid is not None:
+            state.uid = self._uid
+            return self._uid
+        cfg = self.config(uid=True, exclude_defaults=True)
+        uid = cfg.to_uid()
+        uid = uid if uid else "default"
+        params = dict(method=self._factory(), version=self.version, uid=uid)
+        parsed = string.Formatter().parse(self._uid_string)
+        names = {v[1] for v in parsed if v[1] is not None}
+        if names != set(params):
+            msg = f"uid_string {self._uid_string!r} should contain exactly {set(params)}"
+            msg += f"\nbut got {names} for infra applied on {self._obj!r}"
+            raise ValueError(msg)
+        computed = self._uid_string.format(**params)
+        state.uid = computed
+        self._uid = computed  # deprecated: kept for backward compat
+        utils.recursive_freeze(self._obj)
+        msg = "Froze instance %s after computing its uid: %s"
+        logger.debug(msg, repr(self._obj), computed)
+        # compat
+        if self.folder is not None and uid != "default":
+            folder = Path(self.folder) / computed
+            if not folder.exists():
+                params["uid"] = cfg.to_uid(version=2)
+                old = Path(self.folder) / self._uid_string.format(**params)
+                if old.exists():
+                    # rename all folders in cache at once if possible
+                    from exca import helpers
 
-                        helpers.update_uids(self.folder, dryrun=False)
-                    if old.exists():
-                        # if this very cache was not updated
-                        # (eg: because of unexpected uid_string), then fix it manually
-                        msg = "Automatic update fail, manual update to new uid: '%s' -> '%s'"
-                        logger.warning(msg, old, folder)
-                        shutil.move(old, folder)
-            latest = ConfDict.LATEST_UID_VERSION
-            # warn for mixture of versioning
-            if self.folder is not None and ConfDict.UID_VERSION != latest:
-                new = Path(self.folder) / cfg.to_uid(version=latest)
-                if new.exists():
-                    msg = "Found folder with latest version %s but currently using %s"
-                    logger.warning(msg, latest, ConfDict.UID_VERSION)
-        return self._uid
+                    helpers.update_uids(self.folder, dryrun=False)
+                if old.exists():
+                    # if this very cache was not updated
+                    # (eg: because of unexpected uid_string), then fix it manually
+                    msg = "Automatic update fail, manual update to new uid: '%s' -> '%s'"
+                    logger.warning(msg, old, folder)
+                    shutil.move(old, folder)
+        latest = ConfDict.LATEST_UID_VERSION
+        # warn for mixture of versioning
+        if self.folder is not None and ConfDict.UID_VERSION != latest:
+            new = Path(self.folder) / cfg.to_uid(version=latest)
+            if new.exists():
+                msg = "Found folder with latest version %s but currently using %s"
+                logger.warning(msg, latest, ConfDict.UID_VERSION)
+        return computed
 
     def uid_folder(self, create: bool = False) -> Path | None:
         """Folder where this task instance is stored"""
@@ -438,7 +486,16 @@ class InfraMethod(BaseInfraMethod):
     default_infra: BaseInfra | None = None  # COMPAT
 
     def __call__(self, obj: pydantic.BaseModel) -> tp.Any:
-        if self.infra_name is None or not self.infra_name:
+        # fast path: return cached result if this InfraMethod already resolved
+        infra_name = self.infra_name
+        if infra_name:
+            infra = getattr(obj, infra_name, None)
+            if infra is not None:
+                state = _fast_state(infra)
+                if state.infra_method is self and state.method_override is not None:
+                    return state.method_override
+        # full dispatch (first call or legacy/override paths)
+        if not infra_name:
             default_infra = getattr(self, "default_infra", None)  # LEGACY
             if default_infra is not None:
                 self.infra_name = default_infra._infra_name
@@ -455,9 +512,13 @@ class InfraMethod(BaseInfraMethod):
             raise TypeError("infra can only be added to pydantic.BaseModel")
         # get default
         if infra_name in type(obj).model_fields:
-            default_imethod = type(obj).model_fields[infra_name].default._infra_method
+            default_imethod = (
+                type(obj)
+                .model_fields[infra_name]
+                .default.__pydantic_private__["_infra_method"]
+            )
         elif infra_name.startswith("_"):
-            default_imethod = obj.__private_attributes__[infra_name].default._infra_method  # type: ignore
+            default_imethod = obj.__private_attributes__[infra_name].default.__pydantic_private__["_infra_method"]  # type: ignore
         else:
             raise RuntimeError(f"Could not find infra named {infra_name!r} on {obj!r}")
         if default_imethod is None:
@@ -468,12 +529,16 @@ class InfraMethod(BaseInfraMethod):
             msg = "This should only happen when unpickling config which was modified from legacy to decorator"
             logger.warning(msg)
             return None
-        if not hasattr(infra, "_obj"):
+        if "_obj" not in (infra.__pydantic_private__ or {}):
             infra._obj = obj  # only for legacy to decorator change compatibility
         if default_imethod is not self:
             # bypassing infra as it was overriden
             return functools.partial(self.method, obj)
-        return infra._method_override
+        result = infra._method_override
+        state = _fast_state(infra)
+        state.infra_method = self
+        state.method_override = result
+        return result
 
     def check_method_signature(self) -> None:
         sig = inspect.signature(self.method)

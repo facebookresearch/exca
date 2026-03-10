@@ -26,6 +26,14 @@ from . import base, slurm
 from .cachedict import CacheDict
 from .utils import ShortItemUid
 
+
+@dataclasses.dataclass
+class _MapInfraState(base._BaseInfraState):
+    cache_dict: "CacheDict[tp.Any] | None" = None
+    infra_method: "MapInfraMethod | None" = None  # type: ignore[assignment]
+    recomputed: set[str] = dataclasses.field(default_factory=set)
+
+
 MapFunc = tp.Callable[[tp.Sequence[tp.Any]], tp.Iterator[tp.Any]]
 X = tp.TypeVar("X")
 Y = tp.TypeVar("Y")
@@ -191,8 +199,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     mode: Mode = "cached"
 
     # internals
-    _recomputed: set[str] = set()  # for mode="force"
-    _cache_dict: CacheDict[tp.Any] = pydantic.PrivateAttr()
+    _state: _MapInfraState = pydantic.PrivateAttr(default_factory=_MapInfraState)  # type: ignore[assignment]
     _infra_method: "MapInfraMethod | None" = pydantic.PrivateAttr(None)
 
     def model_post_init(self, log__: tp.Any) -> None:
@@ -201,11 +208,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             parent = Path(self.folder).parent
             if not parent.exists():
                 raise ValueError(f"Infra folder parent {parent} needs to exist")
-
-    def __getstate__(self) -> dict[str, tp.Any]:
-        out = super().__getstate__()
-        out["__pydantic_private__"].pop("_cache_dict", None)
-        return out
 
     @property
     def item_uid(self) -> tp.Callable[[tp.Any], str]:
@@ -225,22 +227,25 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
     @property
     def cache_dict(self) -> CacheDict[tp.Any]:
-        if not hasattr(self, "_cache_dict"):
-            imethod = self._infra_method
-            if imethod is None:
-                raise RuntimeError(f"Infra was not applied: {self!r}")
-            cache_type = imethod.cache_type
-            cache_path = self.uid_folder(create=True)
-            if isinstance(self.permissions, str):
-                self._set_permissions(None)
-            if isinstance(self.permissions, str):
-                raise RuntimeError("infra.permissions should have been an integer")
-            self._cache_dict = CacheDict(
-                folder=cache_path,
-                keep_in_ram=self.keep_in_ram,
-                cache_type=cache_type,
-            )
-        return self._cache_dict
+        state: _MapInfraState = base._fast_state(self)  # type: ignore[assignment]
+        if state.cache_dict is not None:
+            return state.cache_dict
+        imethod = self._infra_method
+        if imethod is None:
+            raise RuntimeError(f"Infra was not applied: {self!r}")
+        cache_type = imethod.cache_type
+        cache_path = self.uid_folder(create=True)
+        if isinstance(self.permissions, str):
+            self._set_permissions(None)
+        if isinstance(self.permissions, str):
+            raise RuntimeError("infra.permissions should have been an integer")
+        cd: CacheDict[tp.Any] = CacheDict(
+            folder=cache_path,
+            keep_in_ram=self.keep_in_ram,
+            cache_type=cache_type,
+        )
+        state.cache_dict = cd
+        return cd
 
     # pylint: disable=unused-argument
     def apply(
@@ -308,11 +313,14 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
     def _find_missing(self, items: dict[str, tp.Any]) -> dict[str, tp.Any]:
         missing = items
+        state: _MapInfraState = base._fast_state(self)  # type: ignore[assignment]
         # deduplicate and check in cache
         cache: dict[str, tp.Any] = {}
         try:
-            # triggers folder creation if folder available
-            cache = self.cache_dict  # type: ignore
+            cd = state.cache_dict
+            if cd is None:
+                cd = self.cache_dict
+            cache = cd  # type: ignore
         except ValueError:
             pass  # no caching
         else:
@@ -321,23 +329,22 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             with cache.frozen_cache_folder():
                 # context: avoid reloading info files for each missing __contain__ check
                 missing = {k: item for k, item in missing.items() if k not in cache}
-        self._check_configs(write=True)  # if there is a cache, check config or write it
-        if not hasattr(self, "mode"):  # compatibility
-            self.mode = "cached"
+        if not state.checked_configs:
+            self._check_configs(write=True)
         if self.mode == "force":
             # remove any item already computed, but not items being computed
             # in another process (waited for by JobChecker)
             # will not be removed
-            to_remove = set(items) - set(missing) - self._recomputed
+            to_remove = set(items) - set(missing) - state.recomputed
             if to_remove:
                 msg = "Clearing %s items for %s (infra.mode=%s)"
                 logger.warning(msg, len(to_remove), self.uid(), self.mode)
                 for uid in to_remove:
                     del cache[uid]
-            missing = {x: y for x, y in items.items() if x not in self._recomputed}
+            missing = {x: y for x, y in items.items() if x not in state.recomputed}
             if isinstance(cache, CacheDict):
                 # dont record computed items if no cache
-                self._recomputed |= set(missing)
+                state.recomputed |= set(missing)
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
@@ -361,7 +368,11 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Iterator[tp.Any]:
         """This method replaces the decorated method"""
         # validate parameters
-        imethod = self._infra_method
+        state: _MapInfraState = base._fast_state(self)  # type: ignore[assignment]
+        imethod = state.infra_method
+        if imethod is None:
+            imethod = self._infra_method  # one-time __getattr__ hit
+            state.infra_method = imethod
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
         if len(args) + len(kwargs) != 1:
@@ -419,13 +430,17 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             folder = self.uid_folder()
             if folder is not None:
                 os.utime(folder)  # make sure the modified time is updated
+        cache_dict = self.cache_dict
         msg = "Recovering %s items for %s from %s"
-        # using factory because uid is too slow for here
-        logger.debug(msg, len(items), self._factory(), self.cache_dict)
-        return (self.cache_dict[k] for k, _ in uid_items)
+        logger.debug(msg, len(items), self._factory(), cache_dict)
+        return (cache_dict[k] for k, _ in uid_items)
 
     def _method_override_futures(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
-        imethod = self._infra_method
+        state: _MapInfraState = base._fast_state(self)  # type: ignore[assignment]
+        imethod = state.infra_method
+        if imethod is None:
+            imethod = self._infra_method  # one-time __getattr__ hit
+            state.infra_method = imethod
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
         uid_func = imethod.item_uid  # type: ignore
@@ -490,8 +505,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 for x, y in out.items():
                     cache_dict[x] = y
         msg = "Recovering %s items for %s from %s"
-        # using factory because uid is too slow for here
-        logger.debug(msg, len(uid_items), self._factory(), self.cache_dict)
+        logger.debug(msg, len(uid_items), state.factory, cache_dict)
         return (cache_dict[k] for k, _ in uid_items)
 
     def _call_and_store(

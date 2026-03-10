@@ -139,8 +139,8 @@ def test_map_infra_pickling(tmp_path: Path) -> None:
     assert isinstance(x, np.ndarray)
     string = pickle.dumps(whatever2)
     whatever3 = pickle.loads(string)
-    assert hasattr(whatever2.infra, "_cache_dict")
-    assert not hasattr(whatever3.infra, "_cache_dict")
+    assert whatever2.infra._state.cache_dict is not None
+    assert whatever3.infra._state.cache_dict is None
     assert whatever3.process.__name__ == "_method_override", "Infra not reloaded"
 
 
@@ -309,3 +309,27 @@ def test_item_uid_max_length() -> None:
     out = cfg.infra.item_uid(" ".join([string]) * 64)
     assert len(out) == 32
     assert out.startswith("Hello")
+
+
+@pytest.mark.parametrize("keep_in_ram", [True, False])
+def test_no_pydantic_getattr_on_cached_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_in_ram: bool
+) -> None:
+    """Ensure the cached hot path never triggers pydantic's __getattr__."""
+    whatever = Whatever(infra={"folder": tmp_path, "keep_in_ram": keep_in_ram})  # type: ignore
+    items = [1, 2, 3]
+    list(whatever.process(items))  # populate cache
+    list(whatever.process(items))  # warm up lazy state
+    calls: list[str] = []
+    original = pydantic.BaseModel.__getattr__  # type: ignore[attr-defined]
+
+    def tracking_getattr(self: tp.Any, item: str) -> tp.Any:
+        calls.append(item)
+        return original(self, item)
+
+    monkeypatch.setattr(pydantic.BaseModel, "__getattr__", tracking_getattr)
+    list(whatever.process(items))
+    assert not calls, f"Hot path triggered __getattr__ for: {calls}"
+    # sanity: verify the patch actually catches PrivateAttr access
+    _ = whatever.infra._infra_method
+    assert calls, "Monkeypatch failed to detect __getattr__"
