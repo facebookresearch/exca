@@ -436,6 +436,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 if claimed and self._cache_status() is None:
                     wrapper = _CachingCall(func, self.paths, self.cache_type)
                     job = self._submit(wrapper, *args)
+                    if hasattr(job, "job_id") and hasattr(job, "paths"):
+                        registry.update_worker_info(
+                            [item_uid],
+                            job_id=str(job.job_id),
+                            job_folder=str(job.paths.folder),
+                        )
                     job.result()
             return self._load_cache()
 

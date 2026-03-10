@@ -27,6 +27,13 @@ def test_claim_release_reentrant(tmp_path: Path) -> None:
     claimed2 = reg.claim(uids, pid=pid)
     assert set(claimed2) == set(uids)
 
+    # Update worker info after claim (simulates post-submission update)
+    reg.update_worker_info(["a", "b"], job_id="12345", job_folder="/logs")
+    info = reg.get_inflight(["a", "b"])
+    assert info["a"].job_id == "12345"
+    assert info["a"].job_folder == "/logs"
+    assert info["b"].job_id == "12345"
+
     reg.release(["a", "b"])
     remaining = reg.get_inflight(uids)
     assert list(remaining) == ["c"]

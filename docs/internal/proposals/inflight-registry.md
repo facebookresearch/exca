@@ -2,10 +2,10 @@
 
 ## Problem
 
-The existing `JobChecker` (`exca/map.py`, lines 69-105) has a documented TOCTOU race
+The previous `JobChecker` (`exca/map.py`) had a documented TOCTOU race
 (`docs/internal/debug/concurrent-writes.md`) that caused 17.5x data duplication in
-production. It tracks jobs, not items, and provides no visibility into what each job is
-processing.
+production. It tracked jobs, not items, and provided no visibility into what each job
+was processing.
 
 The goal is not perfection — it's to prevent the obvious duplicate-submission stampede
 (~90% of issues) without introducing bugs. The registry is **advisory, not authoritative**:
@@ -39,9 +39,11 @@ CREATE TABLE IF NOT EXISTS inflight (
 ```
 
 - `item_uid` — the cache key being processed
-- `pid` — OS pid of the claiming process (always available)
-- `job_id` — nullable: Slurm job ID string, only set for `cluster="slurm"` / `"auto"`
-- `job_folder` — nullable: submitit executor folder path, only set alongside `job_id`
+- `pid` — OS pid of the claiming process (always available; used for liveness
+  fallback before job info is recorded)
+- `job_id` — nullable: Slurm job ID string, set via `update_worker_info()` after
+  submission for `cluster="slurm"` / `"auto"`
+- `job_folder` — nullable: submitit executor folder path, set alongside `job_id`
 - `claimed_at` — `time.time()` timestamp, for debugging / last-resort stale detection
 
 ## Liveness Checks
@@ -60,125 +62,171 @@ cases.
 
 ## Core Flow
 
+All callers use the `inflight_session()` context manager, which encapsulates the
+full lifecycle:
+
 ```
-                 ┌──────────────────────┐
-                 │  _find_missing()     │
-                 │  1. Check CacheDict  │
-                 │  2. Check registry   │
-                 │     for each claimed │
-                 │     item: is worker  │
-                 │     alive?           │
-                 │  3. Wait for alive   │
-                 │     workers' items   │
-                 │  4. Reclaim dead     │
-                 │     workers' items   │
-                 └──────┬───────────────┘
-                        │ truly missing items
-                        ▼
-                 ┌──────────────────────┐
-                 │  claim(item_uids)    │
-                 │  INSERT into SQLite  │
-                 │  (before submit)     │
-                 └──────┬───────────────┘
-                        │
-                        ▼
-                 ┌──────────────────────┐
-                 │  executor.submit()   │
-                 │  or pool.submit()    │
-                 └──────┬───────────────┘
-                        │
-                        ▼
-                 ┌──────────────────────┐
-                 │  _call_and_store()   │
-                 │  1. Compute result   │
-                 │  2. Write to cache   │
-                 │  3. release(uid)     │
-                 │     DELETE from SQLite│
-                 └──────────────────────┘
+    ┌──────────────────────────────┐
+    │  inflight_session()          │
+    │  1. wait_for_inflight()      │
+    │     ├─ Slurm: .wait()        │
+    │     ├─ Local: poll liveness   │
+    │     │  (0.5s → 30s backoff)  │
+    │     └─ Reclaim dead workers  │
+    │  2. claim() [BEGIN IMMEDIATE]│
+    │     ├─ Own PID → re-entrant  │
+    │     ├─ Live worker → skip    │
+    │     └─ Dead/unclaimed → take │
+    │  3. yield claimed_uids       │
+    └──────────┬───────────────────┘
+               │
+               ▼
+    ┌──────────────────────────────┐
+    │  Caller submits work         │
+    │  1. executor.submit()        │
+    │  2. update_worker_info()     │
+    │     (records job_id + folder │
+    │      for Slurm liveness)     │
+    │  3. job.result() / wait      │
+    └──────────┬───────────────────┘
+               │
+               ▼
+    ┌──────────────────────────────┐
+    │  finally (session exit)      │
+    │  1. release(claimed_uids)    │
+    │  2. close()                  │
+    └──────────────────────────────┘
 ```
+
+**Self-deadlock prevention**: `wait_for_inflight()` and `claim()` both skip items
+owned by the current PID, so re-entrant / nested calls never block on themselves.
 
 **Wait behavior**: callers need all items complete before returning. For items claimed
 by another live worker:
 
 - Slurm: reconstruct the Job and call `.wait()`
-- Local/pools: poll `CacheDict` at intervals until the item appears (with a timeout
-  as safety net — if the pid dies mid-poll, reclaim and compute)
+- Local/pools: poll with exponential backoff (0.5 s → 30 s cap), checking liveness
+  each iteration. First INFO log after 60 s, then hourly, with item count and PIDs.
 
-## InflightRegistry Class
+## InflightRegistry API
+
+Located in `exca/cachedict/inflight.py`.
 
 ```python
 class InflightRegistry:
-    """Advisory SQLite registry of in-flight cache items.
+    """Advisory SQLite registry of in-flight cache items."""
 
-    All methods gracefully degrade: if the DB is corrupt or inaccessible,
-    they log a warning and behave as if the registry is empty.
-    """
-
-    def __init__(self, cache_folder: Path) -> None:
-        self.db_path = cache_folder / ".inflight.db"
+    def __init__(self, cache_folder: Path, permissions: int | None = 0o777) -> None:
+        # DB at <cache_folder>/inflight.db
         ...
 
     def claim(self, item_uids: list[str], pid: int,
               job_id: str | None = None,
               job_folder: str | None = None) -> list[str]:
         """Atomically claim items not already claimed by a live worker.
-        Returns the list of item_uids actually claimed."""
-        ...
+        Uses BEGIN IMMEDIATE for write-lock serialization.
+        Same-PID items are returned as already ours (re-entrant).
+        Returns the subset of item_uids actually claimed."""
+
+    def update_worker_info(self, item_uids: list[str], *,
+                           job_id: str | None = None,
+                           job_folder: str | None = None) -> None:
+        """Update job_id/job_folder for already-claimed items.
+        Called after submission, when the Slurm job ID is known."""
 
     def release(self, item_uids: list[str]) -> None:
         """Remove items from the registry (done or failed)."""
-        ...
 
-    def get_inflight(self, item_uids: list[str] | None = None) -> dict[str, InflightInfo]:
-        """Return claimed items with their worker info.
-        If item_uids is provided, only return those (WHERE IN query).
-        If None, return all (debugging only — can be large)."""
-        ...
+    def get_inflight(self, item_uids: list[str] | None = None) -> dict[str, _InflightInfo]:
+        """Return claimed items with their worker info."""
 
-    def wait_for_inflight(self, item_uids: list[str]) -> None:
-        """Block until the given items are no longer in-flight
-        (completed by their owner, or owner died and items reclaimed)."""
-        ...
+    def wait_for_inflight(self, item_uids: list[str]) -> list[str]:
+        """Block until items are no longer in-flight.
+        Reclaims items from dead workers and returns their uids."""
+
+    def close(self) -> None: ...
+```
+
+### inflight_session() context manager
+
+```python
+@contextlib.contextmanager
+def inflight_session(
+    registry: InflightRegistry | None,
+    item_uids: list[str],
+    pid: int | None = None,
+    **claim_kwargs: tp.Any,
+) -> tp.Iterator[list[str]]:
+    """Wait → claim → yield claimed → release + close.
+    When registry is None, yields all item_uids (no-op)."""
 ```
 
 ## Integration Points
 
 ### MapInfra (submitit path: slurm / local / auto)
 
-- `_find_missing()`: after cache check, query registry. Wait for live-worker items.
-  Reclaim dead-worker items. Return only truly unclaimed missing items.
-- Before `executor.submit()`: `registry.claim(item_uids, pid, job_id, job_folder)`
-  — claim **before** submit to close the TOCTOU gap.
-- `_call_and_store()`: `registry.release(item_uid)` after writing to cache.
+- `_method_override()`: wraps the submit+wait block in `inflight_session`.
+- After `executor.submit()`: `registry.update_worker_info()` per chunk, recording
+  each job's `job_id` and `paths.folder`.
+- Release happens in `inflight_session`'s finally block.
 
 ### MapInfra (pool path: threadpool / processpool)
 
-- `_method_override_futures()`: same pattern — check registry, claim, submit, release.
-  Uses `pid=os.getpid()`, no `job_id`.
+- `_method_override_futures()`: same `inflight_session` pattern.
+- Uses `pid=os.getpid()`, no `job_id` (all same-host).
 
 ### Steps Backend
 
-- `Backend.run()` / `_CachingCall.__call__()`: claim before compute, release after
-  writing to `CacheDict`. Single-item granularity (steps process one item at a time).
+- `Backend.run()`: wraps compute in `inflight_session` with single-item granularity.
+- After `_submit()`: `registry.update_worker_info()` for submitit backends
+  (detected via `hasattr(job, "job_id")`).
+
+## Claim Serialization
+
+`claim()` uses `BEGIN IMMEDIATE` to acquire the SQLite write lock before reading
+existing ownership. This serializes concurrent claim decisions: one writer completes
+its SELECT+INSERT batch before another can start. On NFS with broken locking, this
+degrades to the same duplicate-work behavior as before (accepted failure mode).
+
+Liveness checks inside `claim()` are grouped by `(pid, job_id, job_folder)` so that
+a single dead Slurm job with many items triggers only one `sacct` round-trip, not one
+per item.
 
 ## Graceful Degradation
 
-Every registry method wraps DB access in try/except:
+Every registry method wraps DB access via `_safe_execute()`:
 
 ```python
-try:
-    # SQLite operation
-except Exception:
-    logger.warning("Inflight registry unavailable, proceeding without coordination")
-    # return empty / do nothing
+def _safe_execute(self, op_name, fallback, fn):
+    conn = self._safe_connect()  # returns None on failure
+    if conn is None:
+        return fallback
+    try:
+        return fn(conn)
+    except Exception:
+        logger.warning("Inflight registry %s failed", op_name, exc_info=True)
+        self._try_reset()  # close + delete DB for auto-recovery
+        return fallback
 ```
 
-If the DB file is corrupt, delete it and recreate on next access. This ensures the
-registry never blocks or breaks actual computation.
+If the DB file is corrupt, `_try_reset()` deletes it so the next access recreates
+a fresh DB. This ensures the registry never blocks or breaks actual computation.
 
 ## Scope
 
-One `.inflight.db` per **cache folder** (not per executor folder). This is the correct
+One `inflight.db` per **cache folder** (not per executor folder). This is the correct
 scope because different experiments sharing the same cache folder is exactly the case
 where coordination matters — which is what `docs/internal/debug/concurrent-writes.md`
 identified as the core problem.
+
+The DB file is visible (no leading dot) for easy manual deletion if needed. File
+permissions default to `0o777` (matching CacheDict's shared-access model) and are
+applied after DB creation.
+
+## Future Considerations
+
+See `registry-updates.md` for potential follow-up improvements:
+
+- **owner_token** for same-process ownership isolation (deferred — niche scenario,
+  CacheDict handles concurrent writes correctly regardless)
+- Narrowing self-deadlock exemption to exact owner identity (follows from owner_token)

@@ -125,11 +125,10 @@ class InflightRegistry:
         conn = sqlite3.connect(
             str(self.db_path),
             timeout=10,
-            isolation_level="DEFERRED",
+            isolation_level=None,
         )
         conn.execute("PRAGMA journal_mode=DELETE")
         conn.execute(_SCHEMA)
-        conn.commit()
         if self.permissions is not None:
             try:
                 self.db_path.chmod(self.permissions)
@@ -209,21 +208,28 @@ class InflightRegistry:
             return []
 
         def _do(conn: sqlite3.Connection) -> list[str]:
-            claimed: list[str] = []
             now = time.time()
+            conn.execute("BEGIN IMMEDIATE")
+            placeholders = ",".join("?" for _ in item_uids)
+            rows = conn.execute(
+                f"SELECT item_uid, pid, job_id, job_folder FROM inflight "
+                f"WHERE item_uid IN ({placeholders})",
+                item_uids,
+            ).fetchall()
+            existing = {uid: (p, jid, jf) for uid, p, jid, jf in rows}
+            # One liveness check per distinct worker, not per item
+            worker_alive: dict[tuple[int, str | None, str | None], bool] = {}
+            claimed: list[str] = []
             for uid in item_uids:
-                row = conn.execute(
-                    "SELECT pid, job_id, job_folder FROM inflight WHERE item_uid = ?",
-                    (uid,),
-                ).fetchone()
-                if row is not None:
-                    existing_pid, existing_job_id, existing_job_folder = row
-                    if existing_pid == pid:
+                if uid in existing:
+                    p, jid, jf = existing[uid]
+                    if p == pid:
                         claimed.append(uid)
                         continue
-                    if _is_worker_alive(
-                        existing_pid, existing_job_id, existing_job_folder
-                    ):
+                    key = (p, jid, jf)
+                    if key not in worker_alive:
+                        worker_alive[key] = _is_worker_alive(p, jid, jf)
+                    if worker_alive[key]:
                         continue
                 conn.execute(
                     "INSERT OR REPLACE INTO inflight "
@@ -232,12 +238,38 @@ class InflightRegistry:
                     (uid, pid, job_id, job_folder, now),
                 )
                 claimed.append(uid)
-            conn.commit()
+            conn.execute("COMMIT")
             return claimed
 
         result = self._safe_execute("claim", list(item_uids), _do)
         logger.debug("Claimed %d/%d items (pid=%d)", len(result), len(item_uids), pid)
         return result
+
+    def update_worker_info(
+        self,
+        item_uids: list[str],
+        *,
+        job_id: str | None = None,
+        job_folder: str | None = None,
+    ) -> None:
+        """Update job_id and job_folder for items already claimed.
+
+        Called after job submission, when the Slurm job ID becomes known.
+        Between claim and update, liveness falls back to PID check.
+        """
+        if not item_uids:
+            return
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.executemany(
+                "UPDATE inflight SET job_id = ?, job_folder = ? WHERE item_uid = ?",
+                [(job_id, job_folder, uid) for uid in item_uids],
+            )
+
+        self._safe_execute("update", None, _do)
+        logger.debug(
+            "Updated worker info for %d items (job_id=%s)", len(item_uids), job_id
+        )
 
     def release(self, item_uids: list[str]) -> None:
         """Remove items from the registry (done or failed)."""
@@ -249,7 +281,6 @@ class InflightRegistry:
                 "DELETE FROM inflight WHERE item_uid = ?",
                 [(uid,) for uid in item_uids],
             )
-            conn.commit()
 
         self._safe_execute("release", None, _do)
         logger.debug("Released %d items", len(item_uids))
@@ -318,7 +349,7 @@ class InflightRegistry:
                 _wait_slurm_job(info.job_id, info.job_folder)
 
         interval = 0.5
-        next_log = time.time() + 3600.0
+        next_log = time.time() + 60.0
         while remaining:
             inflight = self.get_inflight(list(remaining))
             still_waiting: set[str] = set()

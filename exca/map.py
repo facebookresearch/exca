@@ -357,27 +357,39 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 raise RuntimeError(f"Executor is None for {self.cluster!r}")
             # avoid processing same files at same time if several jobs overlap
             np.random.shuffle(missing)
+            registry = self._inflight_registry()
             with inflight.inflight_session(
-                self._inflight_registry(), [k for k, _ in missing]
+                registry, [k for k, _ in missing]
             ) as claimed_uids:
                 claimed_set = set(claimed_uids)
                 missing = [(k, item) for k, item in missing if k in claimed_set]
                 if missing:
                     jobs: list[tp.Any] = []
-                    chunks = list(
+                    uid_item_chunks = list(
                         to_chunks(
-                            [ki[1] for ki in missing],
+                            missing,
                             max_chunks=self.max_jobs,
                             min_items_per_chunk=self.min_samples_per_job,
                         )
                     )
-                    executor.update_parameters(slurm_array_parallelism=len(chunks))
+                    executor.update_parameters(
+                        slurm_array_parallelism=len(uid_item_chunks)
+                    )
                     with self._work_env(), executor.batch():  # submitit>=1.4.6
-                        for chunk in chunks:
+                        for chunk in uid_item_chunks:
                             j = executor.submit(
-                                self._call_and_store, chunk, use_cache_dict=True
+                                self._call_and_store,
+                                [item for _, item in chunk],
+                                use_cache_dict=True,
                             )
                             jobs.append(j)
+                    if registry is not None:
+                        for chunk, j in zip(uid_item_chunks, jobs):
+                            registry.update_worker_info(
+                                [uid for uid, _ in chunk],
+                                job_id=str(j.job_id),
+                                job_folder=str(j.paths.folder),
+                            )
                     # pylint: disable=expression-not-assigned
                     uid = self.uid()
                     msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"
