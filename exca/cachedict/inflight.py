@@ -408,15 +408,35 @@ def inflight_session(
         return
     if pid is None:
         pid = os.getpid()
-    reclaimed = registry.wait_for_inflight(item_uids)
-    if reclaimed:
-        logger.info("Reclaimed %d items from dead workers", len(reclaimed))
-    claimed = registry.claim(item_uids, pid=pid, **claim_kwargs)
-    skipped = len(item_uids) - len(claimed)
-    if skipped:
-        logger.info("Skipped %d items already claimed by other workers", skipped)
+    # Track items already owned by this PID before we start, so that
+    # the finally block only releases items this session actually inserted
+    # (not items inherited from an outer / re-entrant session).
+    pre_owned: set[str] = {
+        uid for uid, info in registry.get_inflight(item_uids).items() if info.pid == pid
+    }
+    # Retry loop: items not claimed were grabbed by another worker between
+    # wait and claim.  Loop back and wait for those rather than silently
+    # skipping them (which would cause cache-miss errors in the caller).
+    all_claimed: list[str] = []
+    remaining = list(item_uids)
+    while remaining:
+        reclaimed = registry.wait_for_inflight(remaining)
+        if reclaimed:
+            logger.info("Reclaimed %d items from dead workers", len(reclaimed))
+        newly_claimed = registry.claim(remaining, pid=pid, **claim_kwargs)
+        all_claimed.extend(newly_claimed)
+        claimed_set = set(newly_claimed)
+        remaining = [uid for uid in remaining if uid not in claimed_set]
+        if remaining:
+            # Items were claimed by another worker between wait and claim.
+            # Check if any are already gone (completed and released).
+            still_inflight = registry.get_inflight(remaining)
+            remaining = [uid for uid in remaining if uid in still_inflight]
+            if remaining:
+                logger.info("Lost claim race for %d items, re-waiting", len(remaining))
     try:
-        yield claimed
+        yield all_claimed
     finally:
-        registry.release(claimed)
+        to_release = [uid for uid in all_claimed if uid not in pre_owned]
+        registry.release(to_release)
         registry.close()

@@ -68,16 +68,20 @@ full lifecycle:
 ```
     ┌──────────────────────────────┐
     │  inflight_session()          │
-    │  1. wait_for_inflight()      │
-    │     ├─ Slurm: .wait()        │
-    │     ├─ Local: poll liveness   │
-    │     │  (0.5s → 30s backoff)  │
-    │     └─ Reclaim dead workers  │
-    │  2. claim() [BEGIN IMMEDIATE]│
-    │     ├─ Own PID → re-entrant  │
-    │     ├─ Live worker → skip    │
-    │     └─ Dead/unclaimed → take │
-    │  3. yield claimed_uids       │
+    │  ┌─ retry loop ────────────┐ │
+    │  │ 1. wait_for_inflight()  │ │
+    │  │    ├─ Slurm: .wait()    │ │
+    │  │    ├─ Local: poll       │ │
+    │  │    │  (0.5s→30s backoff)│ │
+    │  │    └─ Reclaim dead      │ │
+    │  │ 2. claim() [BEGIN IMMED]│ │
+    │  │    ├─ Own PID → ours    │ │
+    │  │    ├─ Live → skip       │ │
+    │  │    └─ Dead/free → take  │ │
+    │  │ 3. unclaimed items?     │ │
+    │  │    └─ re-wait (loop)    │ │
+    │  └─────────────────────────┘ │
+    │  4. yield all claimed_uids   │
     └──────────┬───────────────────┘
                │
                ▼
@@ -223,10 +227,31 @@ The DB file is visible (no leading dot) for easy manual deletion if needed. File
 permissions default to `0o777` (matching CacheDict's shared-access model) and are
 applied after DB creation.
 
-## Future Considerations
+## Same-PID Ownership
 
-See `registry-updates.md` for potential follow-up improvements:
+The registry uses `os.getpid()` as the ownership identity. `claim()` treats
+same-PID items as already owned (re-entrant), and `wait_for_inflight()` skips
+same-PID items to prevent self-deadlock.
 
-- **owner_token** for same-process ownership isolation (deferred — niche scenario,
-  CacheDict handles concurrent writes correctly regardless)
-- Narrowing self-deadlock exemption to exact owner identity (follows from owner_token)
+### Nested release protection
+
+Inner `inflight_session` calls for the same items (e.g., chains, nested Steps)
+must not release the outer session's claims. This is handled by tracking which
+items were already owned at session entry: the `finally` block only releases
+items the session actually inserted, not items inherited from an outer session.
+
+### Remaining limitation: PID is too broad for concurrent ownership
+
+PID-based identity is correct for true re-entrant calls within one logical call
+stack, but too broad for independent concurrent work in the same process:
+
+- **Thread pools**: Workers in a `ThreadPoolExecutor` share the parent PID, so
+  multiple threads can all consider the same item "theirs."
+- **Overlapping MapInfra instances**: Two models writing to the same cache folder
+  in one process share PID-based ownership.
+
+The consequence is duplicate work (not data corruption) — CacheDict is the source
+of truth. Fixing this properly requires an `owner_token` column separate from PID,
+so that ownership is narrowed to the exact session, not the whole process. This is
+deferred pending evidence of significant duplicate work caused by this limitation
+in practice.
