@@ -6,6 +6,7 @@
 
 import collections
 import contextlib
+import dataclasses
 import functools
 import logging
 import shutil
@@ -19,6 +20,12 @@ import pydantic
 import submitit
 
 from . import base, slurm, utils
+
+
+@dataclasses.dataclass
+class _TaskInfraState(base._BaseInfraState):
+    cache: tp.Any = dataclasses.field(default_factory=base.Sentinel)
+
 
 TaskFunc = tp.Callable[[], tp.Any]
 X = tp.TypeVar("X")
@@ -135,13 +142,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
 
     # internal
     _computed: bool = False  # turns to True once computation was launched once
-    # _method: TaskFunc = pydantic.PrivateAttr()
-    _cache: tp.Any = pydantic.PrivateAttr(base.Sentinel())
-
-    def __getstate__(self) -> dict[str, tp.Any]:
-        out = super().__getstate__()
-        out["__pydantic_private__"]["_cache"] = base.Sentinel()
-        return out
+    _state: _TaskInfraState = pydantic.PrivateAttr(default_factory=_TaskInfraState)  # type: ignore[assignment]
 
     @property
     def _effective_mode(self) -> Mode:
@@ -409,13 +410,13 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
 
     # pylint: disable=arguments-differ
     def _method_override(self) -> tp.Any:  # type: ignore
-        # this method replaces the decorated method
-        if not isinstance(getattr(self, "_cache", base.Sentinel()), base.Sentinel):
-            return self._cache
+        state: _TaskInfraState = base._fast_state(self)  # type: ignore[assignment]
+        if not isinstance(state.cache, base.Sentinel):
+            return state.cache
         job = self.job()
         out = job.results()[0]  # only first for multi-tasks
         if self.keep_in_ram:
-            self._cache = out
+            state.cache = out
         return out
 
     @tp.overload

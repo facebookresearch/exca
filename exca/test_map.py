@@ -139,8 +139,8 @@ def test_map_infra_pickling(tmp_path: Path) -> None:
     assert isinstance(x, np.ndarray)
     string = pickle.dumps(whatever2)
     whatever3 = pickle.loads(string)
-    assert hasattr(whatever2.infra, "_cache_dict")
-    assert not hasattr(whatever3.infra, "_cache_dict")
+    assert whatever2.infra._state.cache_dict is not None
+    assert whatever3.infra._state.cache_dict is None
     assert whatever3.process.__name__ == "_method_override", "Infra not reloaded"
 
 
@@ -309,3 +309,32 @@ def test_item_uid_max_length() -> None:
     out = cfg.infra.item_uid(" ".join([string]) * 64)
     assert len(out) == 32
     assert out.startswith("Hello")
+
+
+def test_cached_call_overhead(tmp_path: Path) -> None:
+    """Stress test: measure per-call overhead when all items are cached."""
+    import time
+
+    num_items = 3
+    num_calls = 500
+    whatever = Whatever(
+        infra={"folder": tmp_path, "keep_in_ram": True},  # type: ignore
+    )
+    # populate the cache
+    items = list(range(1, num_items + 1))
+    _ = list(whatever.process(items))
+    # warm-up: ensure all lazy state is initialized
+    for _ in range(5):
+        _ = list(whatever.process(items))
+    # timed run
+    t0 = time.perf_counter()
+    for _ in range(num_calls):
+        _ = list(whatever.process(items))
+    elapsed = time.perf_counter() - t0
+    us_per_call = elapsed / num_calls * 1e6
+    print(
+        f"\n  cached call overhead: {us_per_call:.1f} µs/call ({num_calls} calls, {num_items} items)"
+    )
+    # Generous upper bound — mostly a regression guard.
+    # On a modern laptop, cached calls should be well under 200 µs.
+    assert us_per_call < 500, f"Cached call too slow: {us_per_call:.0f} µs"
