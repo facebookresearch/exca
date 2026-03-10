@@ -30,6 +30,7 @@ from .utils import ShortItemUid
 @dataclasses.dataclass
 class _MapInfraState(base._BaseInfraState):
     cache_dict: "CacheDict[tp.Any] | None" = None
+    infra_method: "MapInfraMethod | None" = None  # type: ignore[assignment]
 
 
 MapFunc = tp.Callable[[tp.Sequence[tp.Any]], tp.Iterator[tp.Any]]
@@ -369,7 +370,11 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Iterator[tp.Any]:
         """This method replaces the decorated method"""
         # validate parameters
-        imethod = self._infra_method
+        state: _MapInfraState = base._fast_state(self)  # type: ignore[assignment]
+        imethod = state.infra_method
+        if imethod is None:
+            imethod = self._infra_method  # one-time __getattr__ hit
+            state.infra_method = imethod
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
         if len(args) + len(kwargs) != 1:
@@ -433,7 +438,11 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         return (cache_dict[k] for k, _ in uid_items)
 
     def _method_override_futures(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
-        imethod = self._infra_method
+        state: _MapInfraState = base._fast_state(self)  # type: ignore[assignment]
+        imethod = state.infra_method
+        if imethod is None:
+            imethod = self._infra_method  # one-time __getattr__ hit
+            state.infra_method = imethod
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
         uid_func = imethod.item_uid  # type: ignore
@@ -497,7 +506,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             with cache_dict.write():
                 for x, y in out.items():
                     cache_dict[x] = y
-        state: _MapInfraState = base._fast_state(self)  # type: ignore[assignment]
         msg = "Recovering %s items for %s from %s"
         logger.debug(msg, len(uid_items), state.factory, cache_dict)
         return (cache_dict[k] for k, _ in uid_items)

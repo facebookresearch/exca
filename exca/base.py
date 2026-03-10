@@ -37,12 +37,15 @@ class Sentinel:
 
 @dataclasses.dataclass
 class _BaseInfraState:
-    """Ephemeral/recomputable state, stored in __dict__ via object.__setattr__
-    to bypass pydantic's __getattr__ on hot paths.  Not serialized."""
+    """Ephemeral/recomputable state, stored as a PrivateAttr in
+    __pydantic_private__ and accessed via _fast_state() to bypass
+    pydantic's __getattr__ on hot paths.  Reset on pickle."""
 
     checked_configs: bool = False
     factory: str | None = None
     uid: str | None = None
+    infra_method: "InfraMethod | None" = None
+    method_override: tp.Any = None
 
 
 def _fast_state(infra: "BaseInfra") -> _BaseInfraState:
@@ -482,7 +485,16 @@ class InfraMethod(BaseInfraMethod):
     default_infra: BaseInfra | None = None  # COMPAT
 
     def __call__(self, obj: pydantic.BaseModel) -> tp.Any:
-        if self.infra_name is None or not self.infra_name:
+        # fast path: return cached result if this InfraMethod already resolved
+        infra_name = self.infra_name
+        if infra_name:
+            infra = getattr(obj, infra_name, None)
+            if infra is not None:
+                state = _fast_state(infra)
+                if state.infra_method is self and state.method_override is not None:
+                    return state.method_override
+        # full dispatch (first call or legacy/override paths)
+        if not infra_name:
             default_infra = getattr(self, "default_infra", None)  # LEGACY
             if default_infra is not None:
                 self.infra_name = default_infra._infra_name
@@ -499,9 +511,13 @@ class InfraMethod(BaseInfraMethod):
             raise TypeError("infra can only be added to pydantic.BaseModel")
         # get default
         if infra_name in type(obj).model_fields:
-            default_imethod = type(obj).model_fields[infra_name].default._infra_method
+            default_imethod = (
+                type(obj)
+                .model_fields[infra_name]
+                .default.__pydantic_private__["_infra_method"]
+            )
         elif infra_name.startswith("_"):
-            default_imethod = obj.__private_attributes__[infra_name].default._infra_method  # type: ignore
+            default_imethod = obj.__private_attributes__[infra_name].default.__pydantic_private__["_infra_method"]  # type: ignore
         else:
             raise RuntimeError(f"Could not find infra named {infra_name!r} on {obj!r}")
         if default_imethod is None:
@@ -512,12 +528,16 @@ class InfraMethod(BaseInfraMethod):
             msg = "This should only happen when unpickling config which was modified from legacy to decorator"
             logger.warning(msg)
             return None
-        if not hasattr(infra, "_obj"):
+        if "_obj" not in (infra.__pydantic_private__ or {}):
             infra._obj = obj  # only for legacy to decorator change compatibility
         if default_imethod is not self:
             # bypassing infra as it was overriden
             return functools.partial(self.method, obj)
-        return infra._method_override
+        result = infra._method_override
+        state = _fast_state(infra)
+        state.infra_method = self
+        state.method_override = result
+        return result
 
     def check_method_signature(self) -> None:
         sig = inspect.signature(self.method)

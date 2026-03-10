@@ -24,6 +24,8 @@ class _BaseInfraState:
     checked_configs: bool = False
     factory: str | None = None
     uid: str | None = None
+    infra_method: InfraMethod | None = None
+    method_override: tp.Any = None
 
 @dataclasses.dataclass
 class _TaskInfraState(_BaseInfraState):
@@ -55,6 +57,8 @@ Anything **temporary / recomputable on demand**:
 | `checked_configs` | `_checked_configs` (pydantic private) | `_check_configs()` |
 | `factory` | (new) | `_factory()` |
 | `uid` | `_uid` (pydantic private) | `uid()` |
+| `infra_method` | `_infra_method` (`PrivateAttr`) | lazy-cached from `_infra_method` |
+| `method_override` | (new) | cached by `InfraMethod.__call__` |
 | `cache` | `_cache` (`PrivateAttr(Sentinel)`) | `job().results()` |
 | `cache_dict` | `_cache_dict` (`PrivateAttr`) | recreated from folder |
 
@@ -68,9 +72,15 @@ Anything **temporary / recomputable on demand**:
   `__getstate__` overrides that previously popped/reset individual
   private attrs.
 
+- **`InfraMethod.__call__` caches its dispatch.**  The property fget
+  resolves `infra._method_override` once, then returns the cached
+  `method_override` on subsequent calls.  `infra_method` doubles as
+  the identity key (needed because parent/child InfraMethods share
+  one infra in inheritance).
+
 ### Results
 
 | Scenario | Before | After |
 |----------|--------|-------|
-| DEBUG off (production) | 14.4 µs | 6.1 µs (**−58 %**) |
-| DEBUG on (test suite) | 32 µs | 24 µs (**−25 %**) |
+| DEBUG off (production) | 14.4 µs | 3.5 µs (**−76 %**) |
+| DEBUG on (test suite) | 32 µs | ~22 µs (**−31 %**) |
