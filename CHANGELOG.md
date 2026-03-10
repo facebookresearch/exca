@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## 0.5.19
+
+### Changed
+- Reduced per-call overhead on cached MapInfra/TaskInfra paths by ~76% via ephemeral `_state` dataclass bypassing pydantic's `__getattr__`.
+
 ## 0.5.18
 
 ### Changed

@@ -321,7 +321,7 @@ def test_no_pydantic_getattr_on_cached_path(
     list(whatever.process(items))  # populate cache
     list(whatever.process(items))  # warm up lazy state
     calls: list[str] = []
-    original = pydantic.BaseModel.__getattr__
+    original = pydantic.BaseModel.__getattr__  # type: ignore[attr-defined]
 
     def tracking_getattr(self: tp.Any, item: str) -> tp.Any:
         calls.append(item)
