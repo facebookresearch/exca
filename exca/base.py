@@ -144,7 +144,6 @@ class BaseInfra(pydantic.BaseModel):
     _state: _BaseInfraState = pydantic.PrivateAttr(default_factory=_BaseInfraState)
     _uid: str | None = None  # deprecated: now in _state, kept for backward compat
     _obj: tp.Any = pydantic.PrivateAttr()  # pydantic model the infra is an attribute of
-    _checked_configs: bool = False  # deprecated: now in _state, kept for backward compat
     _infra_name: str = ""
     _infra_method: "InfraMethod | None" = pydantic.PrivateAttr(None)  # method container
 

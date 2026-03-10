@@ -31,6 +31,7 @@ from .utils import ShortItemUid
 class _MapInfraState(base._BaseInfraState):
     cache_dict: "CacheDict[tp.Any] | None" = None
     infra_method: "MapInfraMethod | None" = None  # type: ignore[assignment]
+    recomputed: set[str] = dataclasses.field(default_factory=set)
 
 
 MapFunc = tp.Callable[[tp.Sequence[tp.Any]], tp.Iterator[tp.Any]]
@@ -198,7 +199,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     mode: Mode = "cached"
 
     # internals
-    _recomputed: set[str] = set()  # for mode="force"
     _state: _MapInfraState = pydantic.PrivateAttr(default_factory=_MapInfraState)  # type: ignore[assignment]
     _infra_method: "MapInfraMethod | None" = pydantic.PrivateAttr(None)
 
@@ -331,22 +331,20 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 missing = {k: item for k, item in missing.items() if k not in cache}
         if not state.checked_configs:
             self._check_configs(write=True)
-        if not hasattr(self, "mode"):  # compatibility
-            self.mode = "cached"
         if self.mode == "force":
             # remove any item already computed, but not items being computed
             # in another process (waited for by JobChecker)
             # will not be removed
-            to_remove = set(items) - set(missing) - self._recomputed
+            to_remove = set(items) - set(missing) - state.recomputed
             if to_remove:
                 msg = "Clearing %s items for %s (infra.mode=%s)"
                 logger.warning(msg, len(to_remove), self.uid(), self.mode)
                 for uid in to_remove:
                     del cache[uid]
-            missing = {x: y for x, y in items.items() if x not in self._recomputed}
+            missing = {x: y for x, y in items.items() if x not in state.recomputed}
             if isinstance(cache, CacheDict):
                 # dont record computed items if no cache
-                self._recomputed |= set(missing)
+                state.recomputed |= set(missing)
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")

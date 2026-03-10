@@ -25,6 +25,7 @@ from . import base, slurm, utils
 @dataclasses.dataclass
 class _TaskInfraState(base._BaseInfraState):
     cache: tp.Any = dataclasses.field(default_factory=base.Sentinel)
+    computed: bool = False
 
 
 TaskFunc = tp.Callable[[], tp.Any]
@@ -141,13 +142,13 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     keep_in_ram: bool = False
 
     # internal
-    _computed: bool = False  # turns to True once computation was launched once
     _state: _TaskInfraState = pydantic.PrivateAttr(default_factory=_TaskInfraState)  # type: ignore[assignment]
 
     @property
     def _effective_mode(self) -> Mode:
         """effective mode after a computation was run (retry/force become cached)"""
-        if self._computed and self.mode != "read-only":
+        state: _TaskInfraState = base._fast_state(self)  # type: ignore[assignment]
+        if state.computed and self.mode != "read-only":
             return "cached"
         return self.mode
 
@@ -232,8 +233,9 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 uid_index[uid] = k
         if allow_repeated_tasks:
             infras = [infras[k] for k in uid_index.values()]  # filter out repeated tasks
+        state: _TaskInfraState = base._fast_state(self)  # type: ignore[assignment]
         if executor is None:
-            self._computed = True  # to ignore mode retry and forced from now on
+            state.computed = True  # to ignore mode retry and forced from now on
             _ = [infra.job() for infra in infras]
         else:
             executor.update_parameters(slurm_array_parallelism=max_workers)
@@ -245,7 +247,8 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             logger.debug("Checking status of %s tasks", len(infras))
             for i in infras:
                 statuses[i.status()].append(i)
-                i._computed = True
+                istate: _TaskInfraState = base._fast_state(i)  # type: ignore[assignment]
+                istate.computed = True
             logger.debug("Found status: %s", {x: len(y) for x, y in statuses.items()})
             missing = list(statuses["not submitted"])
             to_clear: list[Status] = []
@@ -259,7 +262,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                 logger.warning(msg, len(statuses[st]), st, self.mode)
                 missing.extend(statuses[st])
             computed = len(infras) - len(missing)
-            self._computed = True  # to ignore mode retry and forced from now on
+            state.computed = True  # to ignore mode retry and forced from now on
             if not missing:
                 msg = "No job submitted for %s, all %s jobs already computed/ing in '%s'"
                 logger.debug(msg, name, computed, folder.parent)  # type: ignore
@@ -288,7 +291,8 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
     def _set_job(
         self, job: submitit.Job[tp.Any] | LocalJob
     ) -> submitit.Job[tp.Any] | LocalJob:
-        self._computed = True  # to ignore mode retry and forced from now on
+        state: _TaskInfraState = base._fast_state(self)  # type: ignore[assignment]
+        state.computed = True  # to ignore mode retry and forced from now on
         xpfolder = self.uid_folder(create=True)
         if xpfolder is None:
             return job
@@ -351,7 +355,8 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
                         )
                     else:
                         logger.warning("Reloaded failed job %s for %s", jid, self.uid())
-        self._computed = True  # to ignore mode retry and forced from now on
+        state: _TaskInfraState = base._fast_state(self)  # type: ignore[assignment]
+        state.computed = True  # to ignore mode retry and forced from now on
         if job is not None:
             self._check_configs(write=False)
             return job  # type: ignore
