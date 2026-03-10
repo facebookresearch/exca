@@ -164,6 +164,8 @@ class BaseInfra(pydantic.BaseModel):
         if "__pydantic_private__" in state:
             d = state["__pydantic_private__"]
             d.setdefault("_uid_string", "{method},{version}/{uid}")
+            if "_state" not in d:
+                d["_state"] = type(self)._state.default_factory()  # type: ignore
             # infra method can lose the name, so let's recover it
             # (in private infra in particular)
             iname = d.get("_infra_name", None)
