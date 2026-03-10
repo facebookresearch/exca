@@ -2,11 +2,10 @@
 
 ## Context
 
-Profiling `BaseExtractor.__call__` in neuralset with a
-`HuggingFaceText` extractor where all embeddings are pre-cached via
-`prepare`. Each `__call__` retrieves 3 cached items through `MapInfra`.
+Profiling a MapInfra-decorated method where all outputs are pre-cached.
+Each call retrieves 3 cached items through `MapInfra`.
 
-**Total `__call__` time: ~65 µs.** The MapInfra cache-lookup path
+**Total call time: ~65 µs.** The MapInfra cache-lookup path
 (`_method_override` → `_method_override_futures` → `_find_missing`)
 accounts for ~45 µs — roughly 70 % of the call, with zero computation.
 
@@ -111,7 +110,7 @@ Collected via `pstats.print_callers("__getattr__")`:
 | `_factory` | 1 400 |
 | `hasattr` (pydantic internal cascade) | 800 |
 | `cache_dict` property | 600 |
-| `BaseExtractor.__call__` | 400 |
+| caller's `__call__` | 400 |
 | `_check_configs` | 200 |
 | `InfraMethod.__call__` | 200 |
 | `_method_override` | 200 |
