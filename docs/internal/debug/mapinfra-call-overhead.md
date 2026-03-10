@@ -1,70 +1,29 @@
 # MapInfra per-call overhead when data is fully cached
 
-## Context
+## Problem
 
-Profiling a MapInfra-decorated method where all outputs are pre-cached.
-Each call retrieves 3 cached items through `MapInfra`.
-
-**Total call time: ~65 µs.** The MapInfra cache-lookup path
+Profiling a MapInfra-decorated method where all outputs are pre-cached
+(3 items, `keep_in_ram=True`).  The cache-lookup path
 (`_method_override` → `_method_override_futures` → `_find_missing`)
-accounts for ~45 µs — roughly 70 % of the call, with zero computation.
+dominated call time with zero computation, because pydantic's
+`__getattr__` was triggered on every private-attribute access.
 
-## Root cause: eager `_factory()` in `logger.debug`
+The main offenders: `_factory()` (recomputed from 7+ attributes each
+call), `cache_dict` property (`hasattr` check), `_check_configs`
+flag, and `uid()` — all going through pydantic dispatch.
 
-`_method_override_futures` line 495:
+## Fix: `_state` dataclass + `_fast_state` accessor
 
-```python
-logger.debug(msg, len(uid_items), self._factory(), self.cache_dict)
-```
-
-Python evaluates `self._factory()` eagerly even when debug logging is
-disabled. `_factory` accesses 7 private/non-field attributes on the
-pydantic model (`_obj`, `_infra_method` ×4, `version`, plus a
-`getattr` on the class). Each triggers `pydantic.main.__getattr__` →
-`pydantic.fields.__getattr__`.
-
-Over 200 calls this produces 1 400 out of 4 200 total `__getattr__`
-invocations (33 %). The remaining calls come from `cache_dict` property
-(600), `_check_configs` (200), `InfraMethod.__call__` (200),
-`_method_override` (200), `_method_override_futures` (200), and
-`__call__` on the extractor itself (400).
-
-## Suggested fixes
-
-1. **Lazy logging** — use `%s` formatting with a lazy wrapper so
-   `_factory()` is only called when the message is actually emitted:
-
-   ```python
-   class _LazyFactory:
-       __slots__ = ("infra",)
-       def __init__(self, infra): self.infra = infra
-       def __str__(self): return self.infra._factory()
-
-   logger.debug(msg, len(uid_items), _LazyFactory(self), self.cache_dict)
-   ```
-
-   Or guard with `if logger.isEnabledFor(logging.DEBUG)`.
-
-2. **Cache `_factory` result** — `_factory()` returns the same string
-   every time for a given model. Computing it once in `apply()` and
-   storing it would eliminate the repeated attribute lookups.
-
-Either fix would remove ~1 400 `__getattr__` calls per 200
-invocations and save ~15 µs per call (rough estimate from cumtime
-share).
-
-## Chosen approach: `_state` dataclass
-
-Instead of fixing each hot-path attribute individually, we introduce a
-per-class **ephemeral state dataclass** stored via
-`object.__setattr__(self, "_state", ...)` so it lives in `__dict__`,
-completely bypassing pydantic's `__getattr__` / `__pydantic_private__`.
+A per-class **ephemeral state dataclass** stored as a `PrivateAttr`
+holds all recomputable values.  Each method caches into `_state`
+internally; callers just call the method normally.
 
 ```python
 @dataclasses.dataclass
 class _BaseInfraState:
     checked_configs: bool = False
-    factory_cache: str | None = None
+    factory: str | None = None
+    uid: str | None = None
 
 @dataclasses.dataclass
 class _TaskInfraState(_BaseInfraState):
@@ -75,8 +34,17 @@ class _MapInfraState(_BaseInfraState):
     cache_dict: CacheDict | None = None
 ```
 
-Each infra class sets `_state_cls` and `model_post_init` creates the
-right type via `self._state_cls()`.
+Each infra subclass overrides `_state` with its own type:
+
+```python
+class MapInfra(BaseInfra):
+    _state: _MapInfraState = PrivateAttr(default_factory=_MapInfraState)
+```
+
+Hot-path methods access `_state` via `_fast_state(self)`, a free
+function that reads `__pydantic_private__` directly, bypassing
+`__getattr__`.  `test_fast_state_no_fallback` guards against pydantic
+internal changes.
 
 ### What goes in `_state`
 
@@ -84,35 +52,25 @@ Anything **temporary / recomputable on demand**:
 
 | Attribute | Was in | Recomputed by |
 |-----------|--------|---------------|
-| `checked_configs` | `_checked_configs` (pydantic private) | re-runs `_check_configs` |
-| `factory_cache` | (new) | `_factory()` recomputes |
-| `cache` | `_cache` (`PrivateAttr(Sentinel)`) | job re-fetches result |
+| `checked_configs` | `_checked_configs` (pydantic private) | `_check_configs()` |
+| `factory` | (new) | `_factory()` |
+| `uid` | `_uid` (pydantic private) | `uid()` |
+| `cache` | `_cache` (`PrivateAttr(Sentinel)`) | `job().results()` |
 | `cache_dict` | `_cache_dict` (`PrivateAttr`) | recreated from folder |
 
-### Benefits
+### Design rules
 
-1. **Performance** — attribute access on a plain dataclass is a single
-   `__dict__` lookup, no pydantic dispatch. Removes ~2 400 of 4 200
-   `__getattr__` calls per 200 invocations.
-2. **Simpler pickling** — the existing `__getstate__` overrides in
-   `MapInfra` and `TaskInfra` that manually pop/reset private attrs
-   become unnecessary; `_state` is simply excluded from serialization
-   and lazily recreated.
-3. **Type safety** — mypy catches typos and wrong types at the
-   dataclass level.
+- **Methods own their caching.**  `_factory()`, `uid()`,
+  `cache_dict`, `_check_configs()` read/write `_state` internally.
+  Callers never see `_state`.
+- **Pickling resets `_state`.**  `BaseInfra.__getstate__` replaces
+  `_state` with a fresh default.  This replaces the per-subclass
+  `__getstate__` overrides that previously popped/reset individual
+  private attrs.
 
-## Full caller breakdown for `pydantic.__getattr__`
+### Results
 
-Collected via `pstats.print_callers("__getattr__")`:
-
-| Caller | Calls / 200 invocations |
-|--------|-------------------------|
-| `_factory` | 1 400 |
-| `hasattr` (pydantic internal cascade) | 800 |
-| `cache_dict` property | 600 |
-| caller's `__call__` | 400 |
-| `_check_configs` | 200 |
-| `InfraMethod.__call__` | 200 |
-| `_method_override` | 200 |
-| `_method_override_futures` | 200 |
-| **Total** | **4 200** |
+| Scenario | Before | After |
+|----------|--------|-------|
+| DEBUG off (production) | 14.4 µs | 6.1 µs (**−58 %**) |
+| DEBUG on (test suite) | 32 µs | 24 µs (**−25 %**) |
