@@ -311,30 +311,25 @@ def test_item_uid_max_length() -> None:
     assert out.startswith("Hello")
 
 
-def test_cached_call_overhead(tmp_path: Path) -> None:
-    """Stress test: measure per-call overhead when all items are cached."""
-    import time
+@pytest.mark.parametrize("keep_in_ram", [True, False])
+def test_no_pydantic_getattr_on_cached_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_in_ram: bool
+) -> None:
+    """Ensure the cached hot path never triggers pydantic's __getattr__."""
+    whatever = Whatever(infra={"folder": tmp_path, "keep_in_ram": keep_in_ram})  # type: ignore
+    items = [1, 2, 3]
+    list(whatever.process(items))  # populate cache
+    list(whatever.process(items))  # warm up lazy state
+    calls: list[str] = []
+    original = pydantic.BaseModel.__getattr__
 
-    num_items = 3
-    num_calls = 500
-    whatever = Whatever(
-        infra={"folder": tmp_path, "keep_in_ram": True},  # type: ignore
-    )
-    # populate the cache
-    items = list(range(1, num_items + 1))
-    _ = list(whatever.process(items))
-    # warm-up: ensure all lazy state is initialized
-    for _ in range(5):
-        _ = list(whatever.process(items))
-    # timed run
-    t0 = time.perf_counter()
-    for _ in range(num_calls):
-        _ = list(whatever.process(items))
-    elapsed = time.perf_counter() - t0
-    us_per_call = elapsed / num_calls * 1e6
-    print(
-        f"\n  cached call overhead: {us_per_call:.1f} µs/call ({num_calls} calls, {num_items} items)"
-    )
-    # Generous upper bound — mostly a regression guard.
-    # On a modern laptop, cached calls should be well under 200 µs.
-    assert us_per_call < 500, f"Cached call too slow: {us_per_call:.0f} µs"
+    def tracking_getattr(self: tp.Any, item: str) -> tp.Any:
+        calls.append(item)
+        return original(self, item)
+
+    monkeypatch.setattr(pydantic.BaseModel, "__getattr__", tracking_getattr)
+    list(whatever.process(items))
+    assert not calls, f"Hot path triggered __getattr__ for: {calls}"
+    # sanity: verify the patch actually catches PrivateAttr access
+    _ = whatever.infra._infra_method
+    assert calls, "Monkeypatch failed to detect __getattr__"
