@@ -26,6 +26,7 @@ import submitit
 
 import exca
 from exca import utils
+from exca.cachedict import inflight
 
 if tp.TYPE_CHECKING:
     from .base import Step
@@ -429,10 +430,24 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 logger.debug("Recovering job: %s", self.paths.job_pkl)
 
         if job is None:
-            wrapper = _CachingCall(func, self.paths, self.cache_type)
-            job = self._submit(wrapper, *args)
+            item_uid = self.paths.item_uid
+            registry: inflight.InflightRegistry | None = None
+            if type(self) is not Cached:
+                registry = inflight.InflightRegistry(self.paths.cache_folder)
+            with inflight.inflight_session(registry, [item_uid]) as claimed:
+                if claimed and self._cache_status() is None:
+                    wrapper = _CachingCall(func, self.paths, self.cache_type)
+                    job = self._submit(wrapper, *args)
+                    if isinstance(job, submitit.SlurmJob) and registry is not None:
+                        registry.update_worker_info(
+                            [item_uid],
+                            job_id=str(job.job_id),
+                            job_folder=str(job.paths.folder),
+                        )
+                    job.result()
+            return self._load_cache()
 
-        job.result()  # Wait (result is cached, not returned)
+        job.result()
         return self._load_cache()
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:

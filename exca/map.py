@@ -11,19 +11,16 @@ import inspect
 import itertools
 import logging
 import os
-import pickle
 import typing as tp
-import uuid
 from concurrent import futures
 from pathlib import Path
 
 import numpy as np
 import pydantic
 import submitit
-from submitit.core import utils
 
 from . import base, slurm
-from .cachedict import CacheDict
+from .cachedict import CacheDict, inflight
 from .utils import ShortItemUid
 
 
@@ -72,45 +69,6 @@ class CachedMethod:
 
     def __call__(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
         return self.infra._method_override(items)
-
-
-class JobChecker:
-    """Keeps a record of running jobs in a folder
-    and enables waiting for them to complete.
-    """
-
-    def __init__(self, folder: Path | str) -> None:
-        basefolder = utils.JobPaths.get_first_id_independent_folder(folder)
-        self.folder = basefolder / "running-jobs"
-
-    def add(self, jobs: tp.Iterable[tp.Any]) -> None:
-        """Add jobs to the list of running jobs"""
-        self.folder.mkdir(exist_ok=True, parents=True)
-        for job in jobs:
-            if not job.done():
-                job_path = self.folder / (uuid.uuid4().hex[:8] + ".pkl")
-                with job_path.open("wb") as f:
-                    pickle.dump(job, f)
-
-    def wait(self) -> bool:
-        """Wait for completion of running jobs"""
-        waited = False
-        for fp in self.folder.glob("*.pkl"):
-            try:  # avoid concurrency issues with deleted items
-                with fp.open("rb") as f:
-                    job: tp.Any = pickle.load(f)
-            except Exception:  # pylint: disable=broad-except
-                continue
-            if not job.done():
-                msg = "Waiting for completion of pre-existing map job: %s\nin '%s'"
-                logger.info(msg, job, self.folder)
-                job.wait()
-                waited = True
-            # delete the file as it is not needed anymore
-            fp.unlink(missing_ok=True)
-        if waited:
-            logger.info("Waiting is over")
-        return waited
 
 
 def to_chunks(
@@ -247,6 +205,14 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         state.cache_dict = cd
         return cd
 
+    def _inflight_registry(self) -> inflight.InflightRegistry | None:
+        """Create an InflightRegistry for the current cache folder, or None."""
+        cache_folder = self.uid_folder()
+        if cache_folder is None:
+            return None
+        perm = self.permissions if isinstance(self.permissions, int) else None
+        return inflight.InflightRegistry(cache_folder, permissions=perm)
+
     # pylint: disable=unused-argument
     def apply(
         self,
@@ -332,9 +298,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if not state.checked_configs:
             self._check_configs(write=True)
         if self.mode == "force":
-            # remove any item already computed, but not items being computed
-            # in another process (waited for by JobChecker)
-            # will not be removed
             to_remove = set(items) - set(missing) - state.recomputed
             if to_remove:
                 msg = "Clearing %s items for %s (infra.mode=%s)"
@@ -348,13 +311,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
-            executor: submitit.Executor | None = self.executor()
-            if executor is not None:  # wait for items being computed
-                jcheck = JobChecker(folder=executor.folder)
-                jcheck.wait()
-                # update cache dict and recheck as actual checking for keys updates the dict
-                keys = set(self.cache_dict)  # update cache dict
-                missing = {k: item for k, item in missing.items() if k not in keys}
         if len(items) == len(missing) == 1 and self.forbid_single_item_computation:
             key, item = next(iter(missing.items()))
             raise RuntimeError(
@@ -402,34 +358,68 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 raise RuntimeError(f"Executor is None for {self.cluster!r}")
             # avoid processing same files at same time if several jobs overlap
             np.random.shuffle(missing)
-            # run on cluster
-            jobs = []
-            chunks = list(
-                to_chunks(
-                    [ki[1] for ki in missing],
-                    max_chunks=self.max_jobs,
-                    min_items_per_chunk=self.min_samples_per_job,
-                )
-            )
-            executor.update_parameters(slurm_array_parallelism=len(chunks))
-            with self._work_env(), executor.batch():  # submitit>=1.4.6
-                for chunk in chunks:
-                    # select a batch/chunk of samples_per_job items to send to a job
-                    j = executor.submit(self._call_and_store, chunk, use_cache_dict=True)
-                    jobs.append(j)
-            jcheck = JobChecker(folder=executor.folder)
-            jcheck.add(jobs)
-            # pylint: disable=expression-not-assigned
-            uid = self.uid()
-            msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"
-            logger.info(
-                msg, len(missing), uid, len(jobs), executor.cluster, jobs[0].job_id
-            )
-            [j.result() for j in jobs]  # wait for processing to complete
-            logger.info("Finished processing %s samples for %s", len(missing), uid)
-            folder = self.uid_folder()
-            if folder is not None:
-                os.utime(folder)  # make sure the modified time is updated
+            registry = self._inflight_registry()
+            with inflight.inflight_session(
+                registry, [k for k, _ in missing]
+            ) as claimed_uids:
+                claimed_set = set(claimed_uids)
+                # Re-check cache after wait: other workers may have completed
+                # items while we were blocked in inflight_session.
+                if self.folder is not None:
+                    keys = set(self.cache_dict)
+                    missing = [
+                        (k, item)
+                        for k, item in missing
+                        if k in claimed_set and k not in keys
+                    ]
+                else:
+                    missing = [(k, item) for k, item in missing if k in claimed_set]
+                if missing:
+                    jobs: list[tp.Any] = []
+                    uid_item_chunks = list(
+                        to_chunks(
+                            missing,
+                            max_chunks=self.max_jobs,
+                            min_items_per_chunk=self.min_samples_per_job,
+                        )
+                    )
+                    executor.update_parameters(
+                        slurm_array_parallelism=len(uid_item_chunks)
+                    )
+                    with self._work_env(), executor.batch():  # submitit>=1.4.6
+                        for chunk in uid_item_chunks:
+                            j = executor.submit(
+                                self._call_and_store,
+                                [item for _, item in chunk],
+                                use_cache_dict=True,
+                            )
+                            jobs.append(j)
+                    if registry is not None:
+                        for chunk, j in zip(uid_item_chunks, jobs):
+                            if isinstance(j, submitit.SlurmJob):
+                                registry.update_worker_info(
+                                    [uid for uid, _ in chunk],
+                                    job_id=str(j.job_id),
+                                    job_folder=str(j.paths.folder),
+                                )
+                    # pylint: disable=expression-not-assigned
+                    uid = self.uid()
+                    msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"
+                    logger.info(
+                        msg,
+                        len(missing),
+                        uid,
+                        len(jobs),
+                        executor.cluster,
+                        jobs[0].job_id,
+                    )
+                    [j.result() for j in jobs]  # wait for processing to complete
+                    logger.info(
+                        "Finished processing %s samples for %s", len(missing), uid
+                    )
+                    folder = self.uid_folder()
+                    if folder is not None:
+                        os.utime(folder)  # make sure the modified time is updated
         cache_dict = self.cache_dict
         msg = "Recovering %s items for %s from %s"
         logger.debug(msg, len(items), self._factory(), cache_dict)
@@ -455,47 +445,62 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 pool = None
             # avoid processing same files at same time if several jobs overlap
             np.random.shuffle(missing)
-            if pool is None:
-                # run locally
-                msg = "Computing %s missing items"
-                logger.debug(msg, len(missing))
-                cached = self.folder is not None
-                out = self._call_and_store(
-                    [ki[1] for ki in missing], use_cache_dict=cached
-                )
-            elif pool not in ("processpool", "threadpool"):
-                raise RuntimeError(f"Unexpected pool {pool!r}")
-            else:
-                ExecutorCls = (
-                    futures.ThreadPoolExecutor
-                    if pool == "threadpool"
-                    else futures.ProcessPoolExecutor
-                )
-                jobs = []
-                cpus = max(1, (os.cpu_count() or 1) - 1)
-                max_workers = min(len(missing), cpus)
-                if self.max_jobs is not None:
-                    max_workers = min(max_workers, self.max_jobs)
-                with ExecutorCls(max_workers=max_workers) as ex:
-                    mitems = [ki[1] for ki in missing]
-                    chunks = to_chunks(mitems, max_chunks=3 * max_workers)
-                    for chunk in chunks:
-                        j = ex.submit(
-                            self._call_and_store,
-                            chunk,
-                            use_cache_dict=self.folder is not None,
-                        )
-                        jobs.append(j)
-                    uid = self.uid()
-                    msg = "Sent %s items for %s into a %s"
-                    logger.info(msg, len(missing), uid, pool)
-                    iterator = _set_tqdm(futures.as_completed(jobs), total=len(jobs))
-                    for job in iterator:
-                        out.update(job.result())  # raise asap
-                logger.info("Finished processing %s items for %s", len(missing), uid)
-            folder = self.uid_folder()
-            if folder is not None:
-                os.utime(folder)  # make sure the modified time is updated
+            with inflight.inflight_session(
+                self._inflight_registry(), [k for k, _ in missing]
+            ) as claimed_uids:
+                claimed_set = set(claimed_uids)
+                # Re-check cache after wait: other workers may have completed
+                # items while we were blocked in inflight_session.
+                if self.folder is not None:
+                    keys = set(self.cache_dict)
+                    missing = [
+                        (k, item)
+                        for k, item in missing
+                        if k in claimed_set and k not in keys
+                    ]
+                else:
+                    missing = [(k, item) for k, item in missing if k in claimed_set]
+                if pool is None and missing:
+                    msg = "Computing %s missing items"
+                    logger.debug(msg, len(missing))
+                    cached = self.folder is not None
+                    out = self._call_and_store(
+                        [ki[1] for ki in missing], use_cache_dict=cached
+                    )
+                elif missing:
+                    if pool not in ("processpool", "threadpool"):
+                        raise RuntimeError(f"Unexpected pool {pool!r}")
+                    ExecutorCls = (
+                        futures.ThreadPoolExecutor
+                        if pool == "threadpool"
+                        else futures.ProcessPoolExecutor
+                    )
+                    jobs: list[futures.Future[tp.Any]] = []
+                    cpus = max(1, (os.cpu_count() or 1) - 1)
+                    max_workers = min(len(missing), cpus)
+                    if self.max_jobs is not None:
+                        max_workers = min(max_workers, self.max_jobs)
+                    with ExecutorCls(max_workers=max_workers) as ex:
+                        mitems = [ki[1] for ki in missing]
+                        chunks = to_chunks(mitems, max_chunks=3 * max_workers)
+                        for chunk in chunks:
+                            j = ex.submit(
+                                self._call_and_store,
+                                chunk,
+                                use_cache_dict=self.folder is not None,
+                            )
+                            jobs.append(j)
+                        uid = self.uid()
+                        msg = "Sent %s items for %s into a %s"
+                        logger.info(msg, len(missing), uid, pool)
+                        iterator = _set_tqdm(futures.as_completed(jobs), total=len(jobs))
+                        for job in iterator:
+                            out.update(job.result())  # raise asap
+                    logger.info("Finished processing %s items for %s", len(missing), uid)
+                if missing:
+                    folder = self.uid_folder()
+                    if folder is not None:
+                        os.utime(folder)
         try:
             cache_dict = self.cache_dict
         except ValueError:  # no caching
