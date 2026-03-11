@@ -7,11 +7,14 @@
 """ContiguousMemmap: a proxy around numpy memmap views that prevents RSS
 accumulation by using explicit file I/O instead of page faults."""
 
+import threading
 import typing as tp
 
 import numpy as np
 
-_FILE_HANDLE_CACHE: dict[tp.Hashable, tp.Any] = {}  # fallback when no external cache
+from .dumpcontext import _get_store
+
+_FILE_HANDLE_CACHE: threading.local = threading.local()
 _SAFE_ATTRS = frozenset(
     {"shape", "dtype", "ndim", "size", "strides", "itemsize", "nbytes"}
 )
@@ -31,17 +34,15 @@ class ContiguousMemmap:
     Non-contiguous access (fancy indexing, strided slicing) raises TypeError;
     the caller should materialize first via ``np.asarray()``.
 
-    An optional *cache* dict (e.g. ``DumpContext._resource_cache``) stores
-    open file handles keyed by ``("ContiguousMemmap", path)``.  When *cache*
-    is ``None``, a module-level fallback is used (unbounded, not thread-safe
-    for concurrent reads on the same file).
+    An optional *cache* ``threading.local`` (e.g. ``DumpContext._resource_cache``)
+    stores open file handles keyed by ``("ContiguousMemmap", path)``, isolated
+    per thread and per process (fork-safe).  When *cache* is ``None``, a
+    module-level fallback is used.
     """
 
     __slots__ = ("_arr", "_mm", "_cache")
 
-    def __init__(
-        self, arr: np.ndarray, cache: dict[tp.Hashable, tp.Any] | None = None
-    ) -> None:
+    def __init__(self, arr: np.ndarray, cache: threading.local | None = None) -> None:
         # Walk the base chain to the root file-level memmap.
         # Slicing a np.memmap produces another np.memmap whose .offset is
         # copied (not recalculated); only the root's data pointer is
@@ -102,10 +103,11 @@ class ContiguousMemmap:
         buf = np.empty(span, dtype=np.uint8)
         path: str = self._mm.filename  # type: ignore[assignment]
         cache_key = ("ContiguousMemmap", path)
-        fh = self._cache.get(cache_key)
+        store = _get_store(self._cache)
+        fh = store.get(cache_key)
         if fh is None or fh.closed:
             fh = open(path, "rb")  # noqa: SIM115
-            self._cache[cache_key] = fh
+            store[cache_key] = fh
         fh.seek(self._mm.offset + off)
         fh.readinto(buf.data)  # type: ignore[union-attr,attr-defined]
         view: np.ndarray[tp.Any, np.dtype[tp.Any]] = np.ndarray(
