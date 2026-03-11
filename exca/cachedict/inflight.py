@@ -39,55 +39,50 @@ CREATE TABLE IF NOT EXISTS inflight (
 T = tp.TypeVar("T")
 
 
-# -- Liveness helpers ---------------------------------------------------------
-
-
-def _is_pid_alive(pid: int) -> bool:
-    """Check whether a local process is alive (signal 0, no kill)."""
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # exists but we can't signal it
-
-
-def _is_slurm_job_alive(job_id: str, job_folder: str) -> bool:
-    """Check whether a Slurm job is still running via submitit."""
-    try:
-        job: tp.Any = submitit.SlurmJob(job_id=job_id, folder=job_folder)
-        return not job.done()
-    except Exception:
-        return False
-
-
-def _is_worker_alive(pid: int, job_id: str | None, job_folder: str | None) -> bool:
-    """Check if the worker that claimed an item is still alive."""
-    if job_id is not None and job_folder is not None:
-        return _is_slurm_job_alive(job_id, job_folder)
-    return _is_pid_alive(pid)
-
-
-def _wait_slurm_job(job_id: str, job_folder: str) -> None:
-    """Block until a Slurm job finishes."""
-    try:
-        job: tp.Any = submitit.SlurmJob(job_id=job_id, folder=job_folder)
-        if not job.done():
-            job.wait()
-    except Exception:
-        logger.debug("Could not wait for Slurm job %s", job_id, exc_info=True)
-
-
-# -- Internal dataclass (not part of public API) ------------------------------
+# -- Worker identity ----------------------------------------------------------
 
 
 @dataclasses.dataclass(frozen=True)
-class _InflightInfo:
+class WorkerInfo:
+    """Identity of the worker that claimed an item.
+
+    Also serves as the DB row representation when ``claimed_at`` is set.
+    Frozen so it can be used as a dict key for grouping liveness checks.
+    """
+
     pid: int
-    job_id: str | None
-    job_folder: str | None
-    claimed_at: float
+    job_id: str | None = None
+    job_folder: str | None = None
+    claimed_at: float | None = None
+
+    def is_alive(self) -> bool:
+        """Check if this worker is still running."""
+        if self.job_id is not None and self.job_folder is not None:
+            try:
+                job: tp.Any = submitit.SlurmJob(
+                    job_id=self.job_id, folder=self.job_folder
+                )
+                return not job.done()
+            except Exception:
+                return False
+        try:
+            os.kill(self.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # exists but we can't signal it
+
+    def wait(self) -> None:
+        """Block until a Slurm job finishes (no-op for local workers)."""
+        if self.job_id is None or self.job_folder is None:
+            return
+        try:
+            job: tp.Any = submitit.SlurmJob(job_id=self.job_id, folder=self.job_folder)
+            if not job.done():
+                job.wait()
+        except Exception:
+            logger.debug("Could not wait for Slurm job %s", self.job_id, exc_info=True)
 
 
 # -- Registry -----------------------------------------------------------------
@@ -191,10 +186,7 @@ class InflightRegistry:
     def claim(
         self,
         item_uids: list[str],
-        pid: int,
-        *,
-        job_id: str | None = None,
-        job_folder: str | None = None,
+        pid: int | None = None,
     ) -> list[str]:
         """Atomically claim items not already claimed by a live worker.
 
@@ -206,36 +198,45 @@ class InflightRegistry:
         """
         if not item_uids:
             return []
+        if pid is None:
+            pid = os.getpid()
 
+        # Phase 1: liveness checks outside the transaction (can be slow
+        # for Slurm sacct calls — must not hold the DB write lock).
+        existing = self.get_inflight(item_uids)
+        alive_cache: dict[WorkerInfo, bool] = {}
+        for info in existing.values():
+            if info.pid != pid and info not in alive_cache:
+                alive_cache[info] = info.is_alive()
+
+        # Phase 2: short transaction — only SELECT + INSERT, no I/O.
         def _do(conn: sqlite3.Connection) -> list[str]:
             now = time.time()
             conn.execute("BEGIN IMMEDIATE")
             placeholders = ",".join("?" for _ in item_uids)
             rows = conn.execute(
-                f"SELECT item_uid, pid, job_id, job_folder FROM inflight "
+                f"SELECT item_uid, pid, job_id, job_folder, claimed_at FROM inflight "
                 f"WHERE item_uid IN ({placeholders})",
                 item_uids,
             ).fetchall()
-            existing = {uid: (p, jid, jf) for uid, p, jid, jf in rows}
-            # One liveness check per distinct worker, not per item
-            worker_alive: dict[tuple[int, str | None, str | None], bool] = {}
+            fresh = {
+                uid: WorkerInfo(pid=p, job_id=jid, job_folder=jf, claimed_at=cat)
+                for uid, p, jid, jf, cat in rows
+            }
             claimed: list[str] = []
             for uid in item_uids:
-                if uid in existing:
-                    p, jid, jf = existing[uid]
-                    if p == pid:
+                if uid in fresh:
+                    owner = fresh[uid]
+                    if owner.pid == pid:
                         claimed.append(uid)
                         continue
-                    key = (p, jid, jf)
-                    if key not in worker_alive:
-                        worker_alive[key] = _is_worker_alive(p, jid, jf)
-                    if worker_alive[key]:
+                    if alive_cache.get(owner, True):
                         continue
                 conn.execute(
                     "INSERT OR REPLACE INTO inflight "
                     "(item_uid, pid, job_id, job_folder, claimed_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (uid, pid, job_id, job_folder, now),
+                    "VALUES (?, ?, NULL, NULL, ?)",
+                    (uid, pid, now),
                 )
                 claimed.append(uid)
             conn.execute("COMMIT")
@@ -285,12 +286,10 @@ class InflightRegistry:
         self._safe_execute("release", None, _do)
         logger.debug("Released %d items", len(item_uids))
 
-    def get_inflight(
-        self, item_uids: list[str] | None = None
-    ) -> dict[str, _InflightInfo]:
+    def get_inflight(self, item_uids: list[str] | None = None) -> dict[str, WorkerInfo]:
         """Return claimed items with their worker info."""
 
-        def _do(conn: sqlite3.Connection) -> dict[str, _InflightInfo]:
+        def _do(conn: sqlite3.Connection) -> dict[str, WorkerInfo]:
             if item_uids is None:
                 rows = conn.execute(
                     "SELECT item_uid, pid, job_id, job_folder, claimed_at FROM inflight"
@@ -305,7 +304,7 @@ class InflightRegistry:
                     item_uids,
                 ).fetchall()
             return {
-                uid: _InflightInfo(pid=pid, job_id=jid, job_folder=jf, claimed_at=cat)
+                uid: WorkerInfo(pid=pid, job_id=jid, job_folder=jf, claimed_at=cat)
                 for uid, pid, jid, jf, cat in rows
             }
 
@@ -346,7 +345,7 @@ class InflightRegistry:
                 continue
             if info.job_id is not None and info.job_folder is not None:
                 logger.debug("Waiting for Slurm job %s (item %s)", info.job_id, uid)
-                _wait_slurm_job(info.job_id, info.job_folder)
+                info.wait()
 
         interval = 0.5
         next_log = time.time() + 60.0
@@ -359,7 +358,7 @@ class InflightRegistry:
                 info = inflight[uid]
                 if info.pid == my_pid:
                     continue
-                if not _is_worker_alive(info.pid, info.job_id, info.job_folder):
+                if not info.is_alive():
                     logger.debug(
                         "Reclaiming item %s from dead worker (pid=%d)", uid, info.pid
                     )
@@ -391,8 +390,6 @@ class InflightRegistry:
 def inflight_session(
     registry: InflightRegistry | None,
     item_uids: list[str],
-    pid: int | None = None,
-    **claim_kwargs: tp.Any,
 ) -> tp.Iterator[list[str]]:
     """Wait for in-flight items, claim available ones, release+close on exit.
 
@@ -406,8 +403,7 @@ def inflight_session(
     if registry is None:
         yield list(item_uids)
         return
-    if pid is None:
-        pid = os.getpid()
+    pid = os.getpid()
     # Track items already owned by this PID before we start, so that
     # the finally block only releases items this session actually inserted
     # (not items inherited from an outer / re-entrant session).
@@ -423,13 +419,11 @@ def inflight_session(
         reclaimed = registry.wait_for_inflight(remaining)
         if reclaimed:
             logger.info("Reclaimed %d items from dead workers", len(reclaimed))
-        newly_claimed = registry.claim(remaining, pid=pid, **claim_kwargs)
+        newly_claimed = registry.claim(remaining, pid=pid)
         all_claimed.extend(newly_claimed)
         claimed_set = set(newly_claimed)
         remaining = [uid for uid in remaining if uid not in claimed_set]
         if remaining:
-            # Items were claimed by another worker between wait and claim.
-            # Check if any are already gone (completed and released).
             still_inflight = registry.get_inflight(remaining)
             remaining = [uid for uid in remaining if uid in still_inflight]
             if remaining:

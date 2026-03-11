@@ -11,8 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from . import inflight as inflight_mod
-from .inflight import InflightRegistry, inflight_session
+from .inflight import InflightRegistry, WorkerInfo, inflight_session
 
 
 def test_registry_operations(tmp_path: Path) -> None:
@@ -58,7 +57,7 @@ def test_graceful_degradation(tmp_path: Path, caplog: pytest.LogCaptureFixture) 
 
     # Seed the DB
     reg = InflightRegistry(tmp_path)
-    reg.claim(["warmup"], pid=os.getpid())
+    reg.claim(["warmup"])
     reg.release(["warmup"])
     reg.close()
     assert db_path.exists()
@@ -74,7 +73,7 @@ def test_graceful_degradation(tmp_path: Path, caplog: pytest.LogCaptureFixture) 
 
         reg2 = InflightRegistry(tmp_path)
         with caplog.at_level(logging.WARNING):
-            claimed = reg2.claim(["a"], pid=os.getpid())
+            reg2.claim(["a"])
             reg2.get_inflight(["a"])
             reg2.release(["a"])
         reg2.close()
@@ -84,7 +83,7 @@ def test_graceful_degradation(tmp_path: Path, caplog: pytest.LogCaptureFixture) 
 
         # Auto-recovery: next access recreates a working DB
         reg3 = InflightRegistry(tmp_path)
-        claimed = reg3.claim(["recovered"], pid=os.getpid())
+        claimed = reg3.claim(["recovered"])
         assert claimed == ["recovered"]
         assert "recovered" in reg3.get_inflight(["recovered"])
         reg3.release(["recovered"])
@@ -146,7 +145,7 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
 
     # Own PID: skipped to prevent self-deadlock
     reg3 = InflightRegistry(tmp_path)
-    reg3.claim(["mine"], pid=os.getpid())
+    reg3.claim(["mine"])
     assert reg3.wait_for_inflight(["mine"]) == []
     assert "mine" in reg3.get_inflight(["mine"])
     reg3.release(["mine"])
@@ -162,6 +161,7 @@ def test_inflight_session_retries_lost_claim(
     wait_calls = 0
     alive_calls = 0
     original_wait = InflightRegistry.wait_for_inflight
+    original_is_alive = WorkerInfo.is_alive
 
     def wait_then_inject(self: InflightRegistry, item_uids: list[str]) -> list[str]:
         nonlocal wait_calls
@@ -173,15 +173,15 @@ def test_inflight_session_retries_lost_claim(
             rival.close()
         return result
 
-    def patched_alive(pid: int, job_id: str | None, job_folder: str | None) -> bool:
+    def patched_is_alive(self: WorkerInfo) -> bool:
         nonlocal alive_calls
-        if pid == competitor_pid:
+        if self.pid == competitor_pid:
             alive_calls += 1
             return alive_calls == 1  # alive first check, dead on retry
-        return inflight_mod._is_worker_alive(pid, job_id, job_folder)
+        return original_is_alive(self)
 
     monkeypatch.setattr(InflightRegistry, "wait_for_inflight", wait_then_inject)
-    monkeypatch.setattr(inflight_mod, "_is_worker_alive", patched_alive)
+    monkeypatch.setattr(WorkerInfo, "is_alive", patched_is_alive)
 
     reg = InflightRegistry(tmp_path)
     with inflight_session(reg, ["x"]) as claimed:
