@@ -174,9 +174,8 @@ class InflightRegistry:
             try:
                 self.db_path.chmod(self.permissions)
             except Exception:
-                logger.warning(
-                    "Failed to set permissions on %s", self.db_path, exc_info=True
-                )
+                msg = "Failed to set permissions on %s"
+                logger.warning(msg, self.db_path, exc_info=True)
         self._conn = conn
         return conn
 
@@ -185,11 +184,8 @@ class InflightRegistry:
         try:
             return self._connect()
         except Exception:
-            logger.warning(
-                "Inflight registry unavailable at %s, proceeding without coordination",
-                self.db_path,
-                exc_info=True,
-            )
+            msg = "Inflight registry unavailable at %s, proceeding without coordination"
+            logger.warning(msg, self.db_path, exc_info=True)
             self._try_reset()
             return None
 
@@ -238,12 +234,8 @@ class InflightRegistry:
                     pass
                 if attempt < 2:
                     delay = random.uniform(0, attempt + 1)
-                    logger.debug(
-                        "Inflight registry %s: lock contention, retry %d in %.1fs",
-                        op_name,
-                        attempt + 1,
-                        delay,
-                    )
+                    msg = "Inflight registry %s: lock contention, retry %d in %.1fs"
+                    logger.debug(msg, op_name, attempt + 1, delay)
                     time.sleep(delay)
                     continue
                 break
@@ -347,9 +339,8 @@ class InflightRegistry:
             )
 
         self._safe_execute("update", None, _do)
-        logger.debug(
-            "Updated worker info for %d items (job_id=%s)", len(item_uids), job_id
-        )
+        msg = "Updated worker info for %d items (job_id=%s)"
+        logger.debug(msg, len(item_uids), job_id)
 
     def release(self, item_uids: list[str]) -> None:
         """Remove items from the registry (done or failed)."""
@@ -410,11 +401,8 @@ class InflightRegistry:
             # Jitter to de-synchronize callers that start simultaneously
             # (e.g. Slurm array jobs), reducing claim contention.
             time.sleep(random.uniform(0, 0.5))
-            logger.warning(
-                "Waiting for %d in-flight items (of %d requested)",
-                len(inflight),
-                len(item_uids),
-            )
+            msg = "Waiting for %d in-flight items (of %d requested)"
+            logger.warning(msg, len(inflight), len(item_uids))
         for uid, info in list(inflight.items()):
             if info.pid == my_pid:
                 remaining.discard(uid)
@@ -439,9 +427,8 @@ class InflightRegistry:
                 if info not in alive_cache:
                     alive_cache[info] = info.is_alive()
                 if not alive_cache[info]:
-                    logger.debug(
-                        "Reclaiming item %s from dead worker (pid=%d)", uid, info.pid
-                    )
+                    msg = "Reclaiming item %s from dead worker (pid=%d)"
+                    logger.debug(msg, uid, info.pid)
                     dead_uids.append(uid)
                 else:
                     still_waiting.add(uid)
@@ -453,11 +440,8 @@ class InflightRegistry:
                 now = time.time()
                 if now >= next_log:
                     pids = {inflight[u].pid for u in remaining if u in inflight}
-                    logger.info(
-                        "Still waiting for %d in-flight items (pids: %s)",
-                        len(remaining),
-                        pids,
-                    )
+                    msg = "Still waiting for %d in-flight items (pids: %s)"
+                    logger.info(msg, len(remaining), pids)
                     next_log = now + 3600.0
                 time.sleep(interval)
                 interval = min(interval * 2, 30.0)
@@ -508,11 +492,8 @@ def inflight_session(
             break
         # claim() rolled back — some items held by live workers that
         # appeared between wait_for_inflight and claim (lost-claim race).
-        logger.info(
-            "Claim race: got %d/%d items, re-waiting",
-            len(claimed),
-            len(item_uids),
-        )
+        msg = "Claim race: got %d/%d items, re-waiting"
+        logger.info(msg, len(claimed), len(item_uids))
         time.sleep(random.uniform(0.5, 2.0))
     try:
         yield claimed
