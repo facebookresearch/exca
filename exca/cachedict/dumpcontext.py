@@ -36,6 +36,16 @@ logger = logging.getLogger(__name__)
 _UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
 
 
+def _get_store(tls: threading.local) -> dict[tp.Hashable, tp.Any]:
+    """Return the per-thread dict from *tls*, resetting after fork."""
+    pid = os.getpid()
+    d = tp.cast(dict[tp.Hashable, tp.Any], tls.__dict__)
+    if d.get("__pid__") != pid:
+        d.clear()
+        d["__pid__"] = pid
+    return d
+
+
 def string_uid(string: str) -> str:
     """Convert a string to a safe filename with a hash suffix."""
     out = string.translate(_UNSAFE_TABLE)
@@ -119,8 +129,8 @@ class DumpContext:
         self._files: dict[str, tp.IO[bytes]] = {}
         self._created_files: list[Path] = []
         self._dump_count: int = 0
-        # read-side cache
-        self._resource_cache: dict[tp.Hashable, tp.Any] = {}
+        # read-side cache (per-thread, fork-safe via _get_store)
+        self._resource_cache: threading.local = threading.local()
         self._max_cache = int(os.environ.get("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", 100_000))
         self._loaders: dict[type, DumperLoader] = {}  # legacy DumperLoader instances
 
@@ -435,21 +445,22 @@ class DumpContext:
         Use a namespaced key (e.g. tuple) to avoid collisions across
         handlers: ``ctx.cached(("MemmapArray", filename), factory)``.
         """
-        value = self._resource_cache.get(key)
+        store = _get_store(self._resource_cache)
+        value = store.get(key)
         if value is not None:
             return value
 
         # Enforce max size BEFORE inserting new item
-        if self._max_cache > 0 and len(self._resource_cache) >= self._max_cache:
-            self._resource_cache.clear()
+        if self._max_cache > 0 and len(store) >= self._max_cache:
+            store.clear()
 
         value = factory()
-        self._resource_cache[key] = value
+        store[key] = value
         return value
 
     def invalidate(self, key: tp.Hashable) -> None:
         """Force reload of a cached resource."""
-        self._resource_cache.pop(key, None)
+        _get_store(self._resource_cache).pop(key, None)
 
 
 # Import handlers to trigger registration via @DumpContext.register.

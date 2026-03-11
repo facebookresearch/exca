@@ -6,6 +6,7 @@
 
 """Tests for DumpContext, @DumpContext.register, and handler classes."""
 
+import os
 import typing as tp
 from pathlib import Path
 
@@ -465,3 +466,38 @@ def test_load_strips_key_from_info(tmp_path: Path) -> None:
     assert "#key" in info
     loaded = ctx.load(info)
     assert loaded.value == 42
+
+
+# =============================================================================
+# Resource cache: fork isolation
+# =============================================================================
+
+
+def test_resource_cache_isolated_after_fork(tmp_path: Path) -> None:
+    """DumpContext.cached() returns fresh resources in a forked child,
+    not stale entries inherited from the parent."""
+    ctx = DumpContext(tmp_path)
+
+    def _factory() -> str:
+        _factory.calls += 1  # type: ignore[attr-defined]
+        return "parent_value"
+
+    _factory.calls = 0  # type: ignore[attr-defined]
+    ctx.cached("k", _factory)
+    assert _factory.calls == 1  # type: ignore[attr-defined]
+    # parent sees cached value (no second factory call)
+    ctx.cached("k", _factory)
+    assert _factory.calls == 1  # type: ignore[attr-defined]
+
+    r_fd, w_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(r_fd)
+        child_val = ctx.cached("k", lambda: "child_value")
+        os.write(w_fd, b"1" if child_val == "child_value" else b"0")
+        os.close(w_fd)
+        os._exit(0)
+    os.close(w_fd)
+    assert os.read(r_fd, 1) == b"1", "child must re-run factory, not inherit parent cache"
+    os.close(r_fd)
+    os.waitpid(pid, 0)
