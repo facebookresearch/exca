@@ -153,10 +153,12 @@ the view maps to a contiguous byte range in the file, a single
 `readinto` suffices. Non-contiguous views (strided slicing, etc.) raise
 `TypeError` — the caller must materialize first via `np.asarray()`.
 
-**File handle cache:** `_FILE_HANDLE_CACHE` keeps one open file handle per
-`.data` file path, avoiding `open`/`close` syscall overhead per read.
-Thread-safe for `num_workers=0`; with forked workers, each process gets
-its own file descriptor table.
+**File handle cache:** Both `DumpContext._resource_cache` and the module-level
+`_FILE_HANDLE_CACHE` are `threading.local` instances accessed through
+`_get_store()`, which resets the per-thread dict when `os.getpid()` changes.
+This makes the cache fork-safe (children reopen their own FDs instead of
+inheriting the parent's shared kernel file descriptions) and thread-safe
+(each thread gets its own cache, auto-cleaned on thread exit).
 
 ## Change to MemmapArray
 
