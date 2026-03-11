@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pydantic
+import submitit
 
 from . import base, slurm
 from .cachedict import CacheDict, inflight
@@ -362,7 +363,17 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 registry, [k for k, _ in missing]
             ) as claimed_uids:
                 claimed_set = set(claimed_uids)
-                missing = [(k, item) for k, item in missing if k in claimed_set]
+                # Re-check cache after wait: other workers may have completed
+                # items while we were blocked in inflight_session.
+                if self.folder is not None:
+                    keys = set(self.cache_dict)
+                    missing = [
+                        (k, item)
+                        for k, item in missing
+                        if k in claimed_set and k not in keys
+                    ]
+                else:
+                    missing = [(k, item) for k, item in missing if k in claimed_set]
                 if missing:
                     jobs: list[tp.Any] = []
                     uid_item_chunks = list(
@@ -385,11 +396,12 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                             jobs.append(j)
                     if registry is not None:
                         for chunk, j in zip(uid_item_chunks, jobs):
-                            registry.update_worker_info(
-                                [uid for uid, _ in chunk],
-                                job_id=str(j.job_id),
-                                job_folder=str(j.paths.folder),
-                            )
+                            if isinstance(j, submitit.SlurmJob):
+                                registry.update_worker_info(
+                                    [uid for uid, _ in chunk],
+                                    job_id=str(j.job_id),
+                                    job_folder=str(j.paths.folder),
+                                )
                     # pylint: disable=expression-not-assigned
                     uid = self.uid()
                     msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"
@@ -437,7 +449,17 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 self._inflight_registry(), [k for k, _ in missing]
             ) as claimed_uids:
                 claimed_set = set(claimed_uids)
-                missing = [(k, item) for k, item in missing if k in claimed_set]
+                # Re-check cache after wait: other workers may have completed
+                # items while we were blocked in inflight_session.
+                if self.folder is not None:
+                    keys = set(self.cache_dict)
+                    missing = [
+                        (k, item)
+                        for k, item in missing
+                        if k in claimed_set and k not in keys
+                    ]
+                else:
+                    missing = [(k, item) for k, item in missing if k in claimed_set]
                 if pool is None and missing:
                     msg = "Computing %s missing items"
                     logger.debug(msg, len(missing))

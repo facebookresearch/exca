@@ -431,12 +431,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         if job is None:
             item_uid = self.paths.item_uid
-            registry = inflight.InflightRegistry(self.paths.cache_folder)
+            registry: inflight.InflightRegistry | None = None
+            if type(self) is not Cached:
+                registry = inflight.InflightRegistry(self.paths.cache_folder)
             with inflight.inflight_session(registry, [item_uid]) as claimed:
                 if claimed and self._cache_status() is None:
                     wrapper = _CachingCall(func, self.paths, self.cache_type)
                     job = self._submit(wrapper, *args)
-                    if hasattr(job, "job_id") and hasattr(job, "paths"):
+                    if isinstance(job, submitit.SlurmJob) and registry is not None:
                         registry.update_worker_info(
                             [item_uid],
                             job_id=str(job.job_id),

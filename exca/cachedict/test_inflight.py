@@ -143,6 +143,19 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
     reg2.close()
     reg.close()
 
+    # Non-Slurm job with fake job_id: must not hang, reclaimed as dead.
+    # Regression test for the case where a non-Slurm submitit job
+    # (DebugExecutor/LocalExecutor) accidentally gets job_id recorded.
+    reg_ns = InflightRegistry(tmp_path)
+    reg_ns.claim(["non_slurm"], pid=dead_pid)
+    reg_ns.update_worker_info(["non_slurm"], job_id="99999", job_folder="/nonexistent")
+    info = reg_ns.get_inflight(["non_slurm"])["non_slurm"]
+    assert not info.is_alive(), "fake Slurm job should not appear alive"
+    reg_ns2 = InflightRegistry(tmp_path)
+    assert reg_ns2.wait_for_inflight(["non_slurm"]) == ["non_slurm"]
+    reg_ns2.close()
+    reg_ns.close()
+
     # Own PID: skipped to prevent self-deadlock
     reg3 = InflightRegistry(tmp_path)
     reg3.claim(["mine"])

@@ -42,9 +42,31 @@ CREATE TABLE IF NOT EXISTS inflight (
 - `pid` — OS pid of the claiming process (always available; used for liveness
   fallback before job info is recorded)
 - `job_id` — nullable: Slurm job ID string, set via `update_worker_info()` after
-  submission for `cluster="slurm"` / `"auto"`
+  submission for actual Slurm jobs only (`isinstance(job, submitit.SlurmJob)`)
 - `job_folder` — nullable: submitit executor folder path, set alongside `job_id`
 - `claimed_at` — `time.time()` timestamp, for debugging / last-resort stale detection
+
+## WorkerInfo
+
+Worker identity is represented by a frozen dataclass:
+
+```python
+@dataclasses.dataclass(frozen=True)
+class WorkerInfo:
+    pid: int
+    job_id: str | None = None
+    job_folder: str | None = None
+    claimed_at: float | None = None
+
+    def is_alive(self) -> bool: ...
+    def wait(self) -> None: ...
+```
+
+- `is_alive()` — Slurm path if `job_id` is set (reconstructs `SlurmJob`, checks
+  `.done()`), otherwise PID check via `os.kill(pid, 0)`.
+- `wait()` — blocking wait for Slurm jobs; no-op for local workers.
+
+Frozen so it can be used as a dict key for grouping liveness checks in `claim()`.
 
 ## Liveness Checks
 
@@ -52,13 +74,11 @@ Two strategies based on what's available:
 
 - **Slurm** (`job_id IS NOT NULL`): reconstruct `submitit.SlurmJob(job_id=job_id,
   folder=job_folder)`, call `.done()`. submitit handles `sacct` throttling internally.
+  Only recorded for actual Slurm jobs — `DebugExecutor` and `LocalExecutor` jobs
+  are excluded to prevent incorrect Slurm liveness checks on non-Slurm jobs.
 - **Local / pools** (`job_id IS NULL`): `os.kill(pid, 0)` — signal 0 checks process
   existence without killing it. Works for submitit `LocalExecutor` (subprocess),
   `ProcessPoolExecutor`, and `ThreadPoolExecutor` (all same-host, PID = parent process).
-
-Note: `submitit.LocalJob.done()` cannot detect a running subprocess when reconstructed
-in a different process (no `_process` handle), so we use PID check for all non-Slurm
-cases.
 
 ## Core Flow
 
@@ -74,24 +94,27 @@ full lifecycle:
     │  │    ├─ Local: poll       │ │
     │  │    │  (0.5s→30s backoff)│ │
     │  │    └─ Reclaim dead      │ │
-    │  │ 2. claim() [BEGIN IMMED]│ │
-    │  │    ├─ Own PID → ours    │ │
-    │  │    ├─ Live → skip       │ │
-    │  │    └─ Dead/free → take  │ │
-    │  │ 3. unclaimed items?     │ │
-    │  │    └─ re-wait (loop)    │ │
+    │  │ 2. claim() all-or-none  │ │
+    │  │    ├─ All claimable     │ │
+    │  │    │  → COMMIT, break   │ │
+    │  │    └─ Live blocker      │ │
+    │  │       → ROLLBACK, retry │ │
     │  └─────────────────────────┘ │
-    │  4. yield all claimed_uids   │
+    │  3. yield all claimed_uids   │
     └──────────┬───────────────────┘
                │
                ▼
     ┌──────────────────────────────┐
     │  Caller submits work         │
-    │  1. executor.submit()        │
-    │  2. update_worker_info()     │
-    │     (records job_id + folder │
+    │  1. Re-check cache (refresh  │
+    │     after wait avoids re-    │
+    │     submitting done items)   │
+    │  2. executor.submit()        │
+    │  3. update_worker_info()     │
+    │     (Slurm jobs only —       │
+    │      records job_id + folder │
     │      for Slurm liveness)     │
-    │  3. job.result() / wait      │
+    │  4. job.result() / wait      │
     └──────────┬───────────────────┘
                │
                ▼
@@ -110,7 +133,8 @@ by another live worker:
 
 - Slurm: reconstruct the Job and call `.wait()`
 - Local/pools: poll with exponential backoff (0.5 s → 30 s cap), checking liveness
-  each iteration. First INFO log after 60 s, then hourly, with item count and PIDs.
+  each iteration. Jitter (0–0.5 s) before the first poll de-synchronizes concurrent
+  callers. First INFO log after 60 s, then hourly, with item count and PIDs.
 
 ## InflightRegistry API
 
@@ -124,13 +148,11 @@ class InflightRegistry:
         # DB at <cache_folder>/inflight.db
         ...
 
-    def claim(self, item_uids: list[str], pid: int,
-              job_id: str | None = None,
-              job_folder: str | None = None) -> list[str]:
-        """Atomically claim items not already claimed by a live worker.
-        Uses BEGIN IMMEDIATE for write-lock serialization.
-        Same-PID items are returned as already ours (re-entrant).
-        Returns the subset of item_uids actually claimed."""
+    def claim(self, item_uids: list[str],
+              pid: int | None = None) -> list[str]:
+        """All-or-nothing claim: COMMIT if all items claimable, ROLLBACK
+        otherwise. Returns all item_uids on success, or only pre-owned
+        items (same PID) on rollback. pid defaults to os.getpid()."""
 
     def update_worker_info(self, item_uids: list[str], *,
                            job_id: str | None = None,
@@ -141,7 +163,7 @@ class InflightRegistry:
     def release(self, item_uids: list[str]) -> None:
         """Remove items from the registry (done or failed)."""
 
-    def get_inflight(self, item_uids: list[str] | None = None) -> dict[str, _InflightInfo]:
+    def get_inflight(self, item_uids: list[str] | None = None) -> dict[str, WorkerInfo]:
         """Return claimed items with their worker info."""
 
     def wait_for_inflight(self, item_uids: list[str]) -> list[str]:
@@ -158,11 +180,11 @@ class InflightRegistry:
 def inflight_session(
     registry: InflightRegistry | None,
     item_uids: list[str],
-    pid: int | None = None,
-    **claim_kwargs: tp.Any,
 ) -> tp.Iterator[list[str]]:
     """Wait → claim → yield claimed → release + close.
-    When registry is None, yields all item_uids (no-op)."""
+    When registry is None, yields all item_uids (no-op).
+    The registry connection is closed on exit; callers must call
+    update_worker_info() inside the with block."""
 ```
 
 ## Integration Points
@@ -170,48 +192,70 @@ def inflight_session(
 ### MapInfra (submitit path: slurm / local / auto)
 
 - `_method_override()`: wraps the submit+wait block in `inflight_session`.
-- After `executor.submit()`: `registry.update_worker_info()` per chunk, recording
-  each job's `job_id` and `paths.folder`.
+- After the session wait, re-checks `cache_dict` to skip items completed by others
+  during the wait (avoids needless re-submission).
+- After `executor.submit()`: `registry.update_worker_info()` per chunk, but only
+  for actual Slurm jobs (`isinstance(j, submitit.SlurmJob)`).
 - Release happens in `inflight_session`'s finally block.
 
 ### MapInfra (pool path: threadpool / processpool)
 
-- `_method_override_futures()`: same `inflight_session` pattern.
-- Uses `pid=os.getpid()`, no `job_id` (all same-host).
+- `_method_override_futures()`: same `inflight_session` pattern with cache refresh.
+- Uses `pid=os.getpid()` (default), no `job_id` (all same-host).
 
 ### Steps Backend
 
 - `Backend.run()`: wraps compute in `inflight_session` with single-item granularity.
-- After `_submit()`: `registry.update_worker_info()` for submitit backends
-  (detected via `hasattr(job, "job_id")`).
+- Registry is only created for non-inline backends (`type(self) is not Cached`).
+- After `_submit()`: `registry.update_worker_info()` for Slurm jobs only
+  (`isinstance(job, submitit.SlurmJob)`).
 
-## Claim Serialization
+## All-or-Nothing Claim
 
-`claim()` uses `BEGIN IMMEDIATE` to acquire the SQLite write lock before reading
-existing ownership. This serializes concurrent claim decisions: one writer completes
-its SELECT+INSERT batch before another can start. On NFS with broken locking, this
-degrades to the same duplicate-work behavior as before (accepted failure mode).
+`claim()` uses all-or-nothing semantics enforced at the database level:
 
-Liveness checks inside `claim()` are grouped by `(pid, job_id, job_folder)` so that
-a single dead Slurm job with many items triggers only one `sacct` round-trip, not one
-per item.
+1. **Phase 1 (outside transaction)**: Read existing claims, perform liveness checks
+   grouped by `(pid, job_id, job_folder)` so that a single dead Slurm job with many
+   items triggers only one `sacct` round-trip.
+2. **Phase 2 (`BEGIN IMMEDIATE` transaction)**: Re-read ownership, apply cached
+   liveness verdicts. If every item is claimable (free, dead, or already ours) →
+   INSERT OR REPLACE + `COMMIT`. If any item is held by a live worker →
+   `ROLLBACK` — nothing is written, no partial claims are visible.
+
+This prevents hold-and-wait deadlocks: a worker never holds a subset of items while
+blocking on the rest. The `inflight_session` retry loop simply waits and re-tries
+`claim()` until it succeeds — no release-on-retry needed because `ROLLBACK` ensures
+nothing was written.
+
+On rollback, `claim()` returns only items already owned by the caller's PID
+(re-entrant / nested calls). On commit, it returns all requested items.
+
+On NFS with broken locking, this degrades to the same duplicate-work behavior as
+before (accepted failure mode).
+
+## Contention Hardening
+
+Designed for 100+ simultaneous callers (e.g., Slurm array jobs) hitting the same DB:
+
+- **Busy timeout: 60 s** — SQLite retries lock acquisition internally. Zero overhead
+  when uncontested; only blocks when another writer holds the lock. 60 s accommodates
+  NFS lock latency (10–100 ms per operation) × 100+ callers.
+- **Transient retry with backoff**: `_safe_execute()` distinguishes between transient
+  lock errors (`sqlite3.OperationalError` with "locked" / "busy") and permanent errors
+  (corruption, schema issues). Transient errors are retried up to 3 times with random
+  backoff (0.5–2 s × attempt). Permanent errors trigger graceful degradation. This
+  prevents the failure mode where a lock timeout causes `claim()` to return all items
+  as "claimed" (the degradation fallback), leading to duplicate submissions.
+- **Wait jitter**: `wait_for_inflight()` adds 0–0.5 s random sleep when items are
+  inflight, de-synchronizing callers that start simultaneously.
 
 ## Graceful Degradation
 
 Every registry method wraps DB access via `_safe_execute()`:
 
-```python
-def _safe_execute(self, op_name, fallback, fn):
-    conn = self._safe_connect()  # returns None on failure
-    if conn is None:
-        return fallback
-    try:
-        return fn(conn)
-    except Exception:
-        logger.warning("Inflight registry %s failed", op_name, exc_info=True)
-        self._try_reset()  # close + delete DB for auto-recovery
-        return fallback
-```
+- Transient lock errors → retry with random backoff (up to 3 attempts)
+- Permanent errors → log warning, `_try_reset()` (close + delete DB for auto-recovery),
+  return fallback value
 
 If the DB file is corrupt, `_try_reset()` deletes it so the next access recreates
 a fresh DB. This ensures the registry never blocks or breaks actual computation.

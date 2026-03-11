@@ -15,8 +15,11 @@ warning and behave as if the registry is empty).
 
 import contextlib
 import dataclasses
+import functools
 import logging
 import os
+import random
+import shutil
 import sqlite3
 import time
 import typing as tp
@@ -39,6 +42,32 @@ CREATE TABLE IF NOT EXISTS inflight (
 T = tp.TypeVar("T")
 
 
+# -- Helpers ------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=1)
+def _has_sacct() -> bool:
+    """Check whether sacct is available (cached after first call).
+
+    Secondary safety net: on machines without sacct (dev, CI), submitit's
+    SlurmJob.done() silently returns False instead of raising, making dead
+    jobs appear alive and causing wait_for_inflight to hang. The primary
+    defense is the isinstance(job, SlurmJob) gate in callers that prevents
+    non-Slurm job info from being recorded in the first place.
+    """
+    return shutil.which("sacct") is not None
+
+
+def _is_pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 # -- Worker identity ----------------------------------------------------------
 
 
@@ -55,30 +84,44 @@ class WorkerInfo:
     job_folder: str | None = None
     claimed_at: float | None = None
 
+    def __post_init__(self) -> None:
+        # Pre-register with submitit's shared SlurmInfoWatcher so that
+        # batch sacct calls cover all workers created in the same
+        # get_inflight() result set (one sacct call instead of N).
+        job: tp.Any = None
+        if self.job_id is not None and self.job_folder is not None and _has_sacct():
+            try:
+                job = submitit.SlurmJob(job_id=self.job_id, folder=self.job_folder)
+            except Exception:
+                pass
+        object.__setattr__(self, "_job", job)
+
+    @classmethod
+    def _from_row(
+        cls, row: tuple[str, int, str | None, str | None, float]
+    ) -> tuple[str, "WorkerInfo"]:
+        """Convert a (item_uid, pid, job_id, job_folder, claimed_at) row."""
+        uid, pid, job_id, job_folder, claimed_at = row
+        return uid, cls(
+            pid=pid, job_id=job_id, job_folder=job_folder, claimed_at=claimed_at
+        )
+
     def is_alive(self) -> bool:
         """Check if this worker is still running."""
-        if self.job_id is not None and self.job_folder is not None:
+        job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
+        if job is not None:
             try:
-                job: tp.Any = submitit.SlurmJob(
-                    job_id=self.job_id, folder=self.job_folder
-                )
                 return not job.done()
             except Exception:
                 return False
-        try:
-            os.kill(self.pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True  # exists but we can't signal it
+        return _is_pid_alive(self.pid)
 
     def wait(self) -> None:
         """Block until a Slurm job finishes (no-op for local workers)."""
-        if self.job_id is None or self.job_folder is None:
+        job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
+        if job is None:
             return
         try:
-            job: tp.Any = submitit.SlurmJob(job_id=self.job_id, folder=self.job_folder)
             if not job.done():
                 job.wait()
         except Exception:
@@ -117,9 +160,12 @@ class InflightRegistry:
         if self._conn is not None:
             return self._conn
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Autocommit (isolation_level=None): most methods rely on implicit
+        # per-statement transactions; claim() uses explicit BEGIN IMMEDIATE
+        # / COMMIT to serialize concurrent claims.
         conn = sqlite3.connect(
             str(self.db_path),
-            timeout=10,
+            timeout=60,
             isolation_level=None,
         )
         conn.execute("PRAGMA journal_mode=DELETE")
@@ -170,16 +216,42 @@ class InflightRegistry:
     def _safe_execute(
         self, op_name: str, fallback: T, fn: tp.Callable[[sqlite3.Connection], T]
     ) -> T:
-        """Run *fn* against the DB connection with graceful degradation."""
+        """Run *fn* against the DB connection with graceful degradation.
+
+        Transient lock errors (``sqlite3.OperationalError`` with "locked"
+        or "busy") are retried with random backoff. Other errors trigger
+        graceful degradation (log + return fallback).
+        """
         conn = self._safe_connect()
         if conn is None:
             return fallback
-        try:
-            return fn(conn)
-        except Exception:
-            logger.warning("Inflight registry %s failed", op_name, exc_info=True)
-            self._try_reset()
-            return fallback
+        for attempt in range(3):
+            try:
+                return fn(conn)
+            except sqlite3.OperationalError as e:
+                if "locked" not in str(e) and "busy" not in str(e):
+                    break
+                # Rollback any aborted transaction before retrying.
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                if attempt < 2:
+                    delay = random.uniform(0.5, 2.0) * (attempt + 1)
+                    logger.debug(
+                        "Inflight registry %s: lock contention, retry %d in %.1fs",
+                        op_name,
+                        attempt + 1,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                break
+            except Exception:
+                break
+        logger.warning("Inflight registry %s failed", op_name, exc_info=True)
+        self._try_reset()
+        return fallback
 
     # -- Core operations ------------------------------------------------------
 
@@ -188,13 +260,17 @@ class InflightRegistry:
         item_uids: list[str],
         pid: int | None = None,
     ) -> list[str]:
-        """Atomically claim items not already claimed by a live worker.
+        """Atomically claim all requested items, or none (except pre-owned).
 
-        Returns the list of item_uids actually claimed (subset of input).
-        Items already claimed by the same ``pid`` are returned as-is
-        (re-entrant / nested calls within the same process).
-        Items already claimed by a different live worker are skipped.
-        Items claimed by a dead worker are reclaimed.
+        All-or-nothing semantics enforced at the database level via
+        ROLLBACK: if any item is held by a live worker with a different
+        PID, the entire transaction is rolled back and no new claims are
+        written. This prevents partial-claim hold-and-wait deadlocks
+        across concurrent sessions with overlapping item sets.
+
+        Returns the list of item_uids actually claimed. On success this
+        equals *item_uids*. On rollback it contains only items already
+        owned by *pid* (re-entrant / nested calls).
         """
         if not item_uids:
             return []
@@ -210,6 +286,9 @@ class InflightRegistry:
                 alive_cache[info] = info.is_alive()
 
         # Phase 2: short transaction — only SELECT + INSERT, no I/O.
+        # All-or-nothing: COMMIT if every item is claimable, ROLLBACK
+        # otherwise. This guarantees no partial claims are visible to
+        # other workers.
         def _do(conn: sqlite3.Connection) -> list[str]:
             now = time.time()
             conn.execute("BEGIN IMMEDIATE")
@@ -219,28 +298,28 @@ class InflightRegistry:
                 f"WHERE item_uid IN ({placeholders})",
                 item_uids,
             ).fetchall()
-            fresh = {
-                uid: WorkerInfo(pid=p, job_id=jid, job_folder=jf, claimed_at=cat)
-                for uid, p, jid, jf, cat in rows
-            }
-            claimed: list[str] = []
+            fresh = dict(WorkerInfo._from_row(r) for r in rows)
+            pre_owned: list[str] = []
+            to_insert: list[str] = []
             for uid in item_uids:
                 if uid in fresh:
                     owner = fresh[uid]
                     if owner.pid == pid:
-                        claimed.append(uid)
+                        pre_owned.append(uid)
                         continue
                     if alive_cache.get(owner, True):
-                        continue
-                conn.execute(
-                    "INSERT OR REPLACE INTO inflight "
-                    "(item_uid, pid, job_id, job_folder, claimed_at) "
-                    "VALUES (?, ?, NULL, NULL, ?)",
-                    (uid, pid, now),
-                )
-                claimed.append(uid)
+                        # Live worker blocks us — rollback everything.
+                        conn.execute("ROLLBACK")
+                        return pre_owned
+                to_insert.append(uid)
+            conn.executemany(
+                "INSERT OR REPLACE INTO inflight "
+                "(item_uid, pid, job_id, job_folder, claimed_at) "
+                "VALUES (?, ?, NULL, NULL, ?)",
+                [(uid, pid, now) for uid in to_insert],
+            )
             conn.execute("COMMIT")
-            return claimed
+            return pre_owned + to_insert
 
         result = self._safe_execute("claim", list(item_uids), _do)
         logger.debug("Claimed %d/%d items (pid=%d)", len(result), len(item_uids), pid)
@@ -290,23 +369,17 @@ class InflightRegistry:
         """Return claimed items with their worker info."""
 
         def _do(conn: sqlite3.Connection) -> dict[str, WorkerInfo]:
+            query = "SELECT item_uid, pid, job_id, job_folder, claimed_at FROM inflight"
             if item_uids is None:
-                rows = conn.execute(
-                    "SELECT item_uid, pid, job_id, job_folder, claimed_at FROM inflight"
-                ).fetchall()
+                rows = conn.execute(query).fetchall()
+            elif not item_uids:
+                return {}
             else:
-                if not item_uids:
-                    return {}
                 placeholders = ",".join("?" for _ in item_uids)
                 rows = conn.execute(
-                    f"SELECT item_uid, pid, job_id, job_folder, claimed_at "
-                    f"FROM inflight WHERE item_uid IN ({placeholders})",
-                    item_uids,
+                    f"{query} WHERE item_uid IN ({placeholders})", item_uids
                 ).fetchall()
-            return {
-                uid: WorkerInfo(pid=pid, job_id=jid, job_folder=jf, claimed_at=cat)
-                for uid, pid, jid, jf, cat in rows
-            }
+            return dict(WorkerInfo._from_row(r) for r in rows)
 
         return self._safe_execute("query", {}, _do)
 
@@ -334,6 +407,9 @@ class InflightRegistry:
 
         inflight = self.get_inflight(list(remaining))
         if inflight:
+            # Jitter to de-synchronize callers that start simultaneously
+            # (e.g. Slurm array jobs), reducing claim contention.
+            time.sleep(random.uniform(0, 0.5))
             logger.debug(
                 "Waiting for %d in-flight items (of %d requested)",
                 len(inflight),
@@ -351,21 +427,27 @@ class InflightRegistry:
         next_log = time.time() + 60.0
         while remaining:
             inflight = self.get_inflight(list(remaining))
+            alive_cache: dict[WorkerInfo, bool] = {}
             still_waiting: set[str] = set()
+            dead_uids: list[str] = []
             for uid in remaining:
                 if uid not in inflight:
                     continue
                 info = inflight[uid]
                 if info.pid == my_pid:
                     continue
-                if not info.is_alive():
+                if info not in alive_cache:
+                    alive_cache[info] = info.is_alive()
+                if not alive_cache[info]:
                     logger.debug(
                         "Reclaiming item %s from dead worker (pid=%d)", uid, info.pid
                     )
-                    self.release([uid])
-                    reclaimed.append(uid)
+                    dead_uids.append(uid)
                 else:
                     still_waiting.add(uid)
+            if dead_uids:
+                self.release(dead_uids)
+                reclaimed.extend(dead_uids)
             remaining = still_waiting
             if remaining:
                 now = time.time()
@@ -399,6 +481,9 @@ def inflight_session(
     Self-deadlock is prevented internally: ``wait_for_inflight`` skips items
     owned by the current PID, and ``claim`` treats same-PID rows as already
     ours.
+
+    The registry connection is closed on exit; callers must perform any
+    ``update_worker_info`` calls inside the ``with`` block.
     """
     if registry is None:
         yield list(item_uids)
@@ -410,27 +495,28 @@ def inflight_session(
     pre_owned: set[str] = {
         uid for uid, info in registry.get_inflight(item_uids).items() if info.pid == pid
     }
-    # Retry loop: items not claimed were grabbed by another worker between
-    # wait and claim.  Loop back and wait for those rather than silently
-    # skipping them (which would cause cache-miss errors in the caller).
-    all_claimed: list[str] = []
-    remaining = list(item_uids)
-    while remaining:
-        reclaimed = registry.wait_for_inflight(remaining)
+    # Retry loop: wait for inflight items, then claim. claim() uses
+    # all-or-nothing semantics (ROLLBACK if any item is held by a live
+    # worker), so no partial claims are ever written — no release needed
+    # on retry, and no hold-and-wait deadlock is possible.
+    while True:
+        reclaimed = registry.wait_for_inflight(item_uids)
         if reclaimed:
             logger.info("Reclaimed %d items from dead workers", len(reclaimed))
-        newly_claimed = registry.claim(remaining, pid=pid)
-        all_claimed.extend(newly_claimed)
-        claimed_set = set(newly_claimed)
-        remaining = [uid for uid in remaining if uid not in claimed_set]
-        if remaining:
-            still_inflight = registry.get_inflight(remaining)
-            remaining = [uid for uid in remaining if uid in still_inflight]
-            if remaining:
-                logger.info("Lost claim race for %d items, re-waiting", len(remaining))
+        claimed = registry.claim(item_uids, pid=pid)
+        if len(claimed) == len(item_uids):
+            break
+        # claim() rolled back — some items held by live workers that
+        # appeared between wait_for_inflight and claim (lost-claim race).
+        logger.info(
+            "Claim race: got %d/%d items, re-waiting",
+            len(claimed),
+            len(item_uids),
+        )
+        time.sleep(random.uniform(0.5, 2.0))
     try:
-        yield all_claimed
+        yield claimed
     finally:
-        to_release = [uid for uid in all_claimed if uid not in pre_owned]
+        to_release = [uid for uid in claimed if uid not in pre_owned]
         registry.release(to_release)
         registry.close()
