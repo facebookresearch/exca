@@ -117,8 +117,12 @@ def test_map_infra_cache_dict_calls(tmp_path: Path) -> None:
     assert max(r.readings for r in cd._jsonl_readers.values()) == 1
     _ = list(whatever.process([2, 3, 4]))
     assert max(r.readings for r in cd._jsonl_readers.values()) == 1
-    _ = list(whatever.process([5]))
-    assert max(r.readings for r in cd._jsonl_readers.values()) == 2
+    for _ in range(2):
+        _ = list(whatever.process([5]))
+        # +2 reads: _find_missing + inflight cache re-check
+        assert max(r.readings for r in cd._jsonl_readers.values()) == 3
+    _ = list(whatever.process([6]))
+    assert max(r.readings for r in cd._jsonl_readers.values()) == 5
 
 
 def test_missing_yield() -> None:
