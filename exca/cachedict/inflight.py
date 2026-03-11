@@ -165,7 +165,7 @@ class InflightRegistry:
         # / COMMIT to serialize concurrent claims.
         conn = sqlite3.connect(
             str(self.db_path),
-            timeout=60,
+            timeout=20,
             isolation_level=None,
         )
         conn.execute("PRAGMA journal_mode=DELETE")
@@ -237,7 +237,7 @@ class InflightRegistry:
                 except Exception:
                     pass
                 if attempt < 2:
-                    delay = random.uniform(0.5, 2.0) * (attempt + 1)
+                    delay = random.uniform(0, attempt + 1)
                     logger.debug(
                         "Inflight registry %s: lock contention, retry %d in %.1fs",
                         op_name,
@@ -410,7 +410,7 @@ class InflightRegistry:
             # Jitter to de-synchronize callers that start simultaneously
             # (e.g. Slurm array jobs), reducing claim contention.
             time.sleep(random.uniform(0, 0.5))
-            logger.debug(
+            logger.warning(
                 "Waiting for %d in-flight items (of %d requested)",
                 len(inflight),
                 len(item_uids),
@@ -424,7 +424,7 @@ class InflightRegistry:
                 info.wait()
 
         interval = 0.5
-        next_log = time.time() + 60.0
+        next_log = time.time() + 3600.0
         while remaining:
             inflight = self.get_inflight(list(remaining))
             alive_cache: dict[WorkerInfo, bool] = {}
