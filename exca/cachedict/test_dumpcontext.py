@@ -477,12 +477,17 @@ def test_resource_cache_isolated_after_fork(tmp_path: Path) -> None:
     """DumpContext.cached() returns fresh resources in a forked child,
     not stale entries inherited from the parent."""
     ctx = DumpContext(tmp_path)
-    calls: list[int] = []
-    ctx.cached("k", lambda: (calls.append(1), "parent_value")[1])
-    assert len(calls) == 1
+
+    def _factory() -> str:
+        _factory.calls += 1  # type: ignore[attr-defined]
+        return "parent_value"
+
+    _factory.calls = 0  # type: ignore[attr-defined]
+    ctx.cached("k", _factory)
+    assert _factory.calls == 1  # type: ignore[attr-defined]
     # parent sees cached value (no second factory call)
-    ctx.cached("k", lambda: "should_not_run")
-    assert len(calls) == 1
+    ctx.cached("k", _factory)
+    assert _factory.calls == 1  # type: ignore[attr-defined]
 
     r_fd, w_fd = os.pipe()
     pid = os.fork()
