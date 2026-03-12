@@ -1,0 +1,811 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Exca - Execution and caching &#8212; Exca 0.5.15 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=953b4072" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=a9ebb0e6"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'infra/introduction';</script>
+    <link rel="icon" href="../_static/exca.png"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Tutorials" href="tutorials.html" />
+    <link rel="prev" title="Getting started" href="getting-started.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class=" navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/exca.png" class="logo__image only-light" alt=""/>
+    <img src="../_static/exca.png" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">Exca</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class=" navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="reference.html">
+    API Reference
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Exca - Execution and caching</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tutorials.html">Tutorials</a></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="getting-started.html" class="nav-link">Getting started</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Exca - Execution and caching</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="exca-execution-and-caching">
+<h1>Exca - Execution and caching<a class="headerlink" href="#exca-execution-and-caching" title="Link to this heading">#</a></h1>
+<p>This is an explanation to why <code class="docutils literal notranslate"><span class="pre">exca</span></code> was built. If you are only intereseted in how to use it, you can move to <a class="reference internal" href="tutorials.html"><span class="std std-doc">tutorials</span></a> and <a class="reference internal" href="howto.html"><span class="std std-doc">how-to</span></a> pages.</p>
+<p>Here are the challenges we want to face:</p>
+<ol class="arabic simple">
+<li><p>config validation and remote computation</p></li>
+<li><p>hierarchical computation and modularity</p></li>
+<li><p>experiment/computation caching</p></li>
+</ol>
+<section id="challenge-1-early-configuration-validation">
+<h2>Challenge #1: Early configuration validation<a class="headerlink" href="#challenge-1-early-configuration-validation" title="Link to this heading">#</a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>srun<span class="w"> </span>--cpus-per-task<span class="o">=</span><span class="m">4</span><span class="w"> </span>--time<span class="o">=</span><span class="m">60</span><span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>mytask<span class="w"> </span>--z<span class="o">=</span><span class="m">12</span>
+
+&gt;&gt;<span class="w"> </span>srun:<span class="w"> </span>job<span class="w"> </span><span class="m">34633429</span><span class="w"> </span>queued<span class="w"> </span>and<span class="w"> </span>waiting<span class="w"> </span><span class="k">for</span><span class="w"> </span>resources
+&gt;&gt;<span class="w"> </span>srun:<span class="w"> </span>job<span class="w"> </span><span class="m">34633429</span><span class="w"> </span>has<span class="w"> </span>been<span class="w"> </span>allocated<span class="w"> </span>resources
+...
+...
+&gt;&gt;<span class="w"> </span>usage:<span class="w"> </span>mytask.py<span class="w"> </span><span class="o">[</span>-h<span class="o">]</span><span class="w"> </span><span class="o">[</span>--x<span class="w"> </span>X<span class="o">]</span><span class="w"> </span><span class="o">[</span>--y<span class="w"> </span>Y<span class="o">]</span>
+&gt;&gt;<span class="w"> </span>mytask.py:<span class="w"> </span>error:<span class="w"> </span>unrecognized<span class="w"> </span>arguments:<span class="w"> </span>--z<span class="o">=</span><span class="m">12</span>
+&gt;&gt;<span class="w"> </span>srun:<span class="w"> </span>error:<span class="w"> </span>learnfair0478:<span class="w"> </span>task<span class="w"> </span><span class="m">0</span>:<span class="w"> </span>Exited<span class="w"> </span>with<span class="w"> </span><span class="nb">exit</span><span class="w"> </span>code<span class="w"> </span><span class="m">2</span>
+</pre></div>
+</div>
+<p>Or similarly:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mytask.py:<span class="w"> </span>error:<span class="w"> </span>argument<span class="w"> </span>--y:<span class="w"> </span>invalid<span class="w"> </span>int<span class="w"> </span>value:<span class="w"> </span><span class="s1">&#39;blublu&#39;</span>
+</pre></div>
+</div>
+<section id="observations-and-consequences">
+<h3>Observations and consequences<a class="headerlink" href="#observations-and-consequences" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Configurations should be validated before running on the cluster!</p>
+<ul>
+<li><p>need some tool for validation
+→ verify configurations locally first
+→ in Python
+→ submit from Python as well (avoid boilerplate additional bash command)</p></li>
+</ul>
+</li>
+<li><p>Resource configuration (srun params) and computation configurations (mytask params) come in 2 different places (and sometimes formats)
+→ specify resource configuration within the same configuration as the computation configuration? (while keeping them distinct in some way?!)</p></li>
+</ul>
+</section>
+<section id="parameter-validation-with-pydantic">
+<h3>Parameter validation with Pydantic<a class="headerlink" href="#parameter-validation-with-pydantic" title="Link to this heading">#</a></h3>
+<p>Pydantic (21k★ on github) works like dataclasses, but with (fast) validation:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pydantic</span>
+
+<span class="k">class</span> <span class="nc">MyTask</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">pydantic</span><span class="o">.</span><span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>  <span class="c1"># pydantic boilerplate</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;blublu&quot;</span>
+
+<span class="n">mytask</span> <span class="o">=</span> <span class="n">MyTask</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+<span class="n">mytask</span><span class="o">.</span><span class="n">x</span>  <span class="c1"># this is 12</span>
+
+<span class="c1"># MyTask(x=&quot;blublu&quot;)  </span>
+<span class="c1"># &gt;&gt; ValidationError: 1 validation error for MyTask (x hould be a valid integer)</span>
+</pre></div>
+</div>
+<p>Pydantic supports hierarchical configurations:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Parent</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">task</span><span class="p">:</span> <span class="n">MyTask</span>
+
+<span class="n">obj</span> <span class="o">=</span> <span class="n">Parent</span><span class="p">(</span><span class="n">task</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="mi">12</span><span class="p">})</span>  <span class="c1"># parses the dict into a MyTask class</span>
+<span class="n">obj</span><span class="o">.</span><span class="n">task</span><span class="o">.</span><span class="n">x</span>  <span class="c1"># this is 12</span>
+</pre></div>
+</div>
+<section id="note-discarded-options">
+<h4>Note: discarded options<a class="headerlink" href="#note-discarded-options" title="Link to this heading">#</a></h4>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">dataclasses</span></code>: no dynamic type check</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">omegaconf</span></code>: can typecheck (when using dataclasses) but is slow and not well-maintained</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">attrs</span></code>: probably usable (but smaller community 5k★ Vs 21k★)</p></li>
+</ul>
+</section>
+</section>
+<section id="local-remote-submission-with-exca">
+<h3>Local/remote submission with exca<a class="headerlink" href="#local-remote-submission-with-exca" title="Link to this heading">#</a></h3>
+<p>Convenient pattern (more on this later): tie computation to the config class:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">MyTask</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;blublu&quot;</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">pydantic</span><span class="o">.</span><span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>  <span class="c1"># pydantic boilerplate</span>
+
+    <span class="k">def</span> <span class="nf">compute</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+        <span class="k">return</span> <span class="mi">2</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">x</span>
+</pre></div>
+</div>
+<p>Then if we want to enable remote computation, we add a <code class="docutils literal notranslate"><span class="pre">exca.TaskInfra</span></code> subconfiguration:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">MyTask</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">x</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">y</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;blublu&quot;</span>
+    <span class="n">infra</span><span class="p">:</span> <span class="n">exca</span><span class="o">.</span><span class="n">TaskInfra</span> <span class="o">=</span> <span class="n">exca</span><span class="o">.</span><span class="n">TaskInfra</span><span class="p">()</span>
+    <span class="c1"># note: automatically sets extra=&quot;forbid&quot;</span>
+
+    <span class="nd">@infra</span><span class="o">.</span><span class="n">apply</span>
+    <span class="k">def</span> <span class="nf">compute</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+        <span class="k">return</span> <span class="mi">2</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">x</span>
+</pre></div>
+</div>
+<p>By default, this changes nothing, but you can now parametrize the infra to run the <code class="docutils literal notranslate"><span class="pre">compute</span></code> method on slurm, eg:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">config</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">x: 12</span>
+<span class="s2">y: whatever</span>
+<span class="s2">infra:  # resource parameters</span>
+<span class="s2">  cluster: slurm</span>
+<span class="s2">  folder: </span><span class="si">{</span><span class="n">tmp_path</span><span class="si">}</span>
+<span class="s2">  cpus_per_task: 4</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+<span class="n">dictconfig</span> <span class="o">=</span> <span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+<span class="n">obj</span> <span class="o">=</span> <span class="n">MyTask</span><span class="p">(</span><span class="o">**</span><span class="n">dictconfig</span><span class="p">)</span>  <span class="c1"># validation happens locally</span>
+<span class="n">out</span> <span class="o">=</span> <span class="n">obj</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>  <span class="c1"># runs in a slurm job!</span>
+<span class="k">assert</span> <span class="n">out</span> <span class="o">==</span> <span class="mi">24</span> 
+</pre></div>
+</div>
+<p>Note that the config now holds both the computation parameters (<code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code>) as well as the resources parameters (through <code class="docutils literal notranslate"><span class="pre">infra</span></code>) but they are separated through the hierarchical structure of the config.</p>
+</section>
+</section>
+<section id="challenge-2-complex-experiments-hierarchical-configurations">
+<h2>Challenge #2: Complex experiments - hierarchical configurations<a class="headerlink" href="#challenge-2-complex-experiments-hierarchical-configurations" title="Link to this heading">#</a></h2>
+<p>Do’s and don’ts with <code class="docutils literal notranslate"><span class="pre">pydantic</span></code>’s configurations</p>
+<section id="parametrizing-pattern">
+<h3>Parametrizing pattern<a class="headerlink" href="#parametrizing-pattern" title="Link to this heading">#</a></h3>
+<p>Seen in many codebases:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">ConvCfg</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">kernel</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">channels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span>
+
+
+<span class="k">class</span> <span class="nc">ConvModel</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">layers</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">kernel</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layers</span> <span class="o">=</span> <span class="n">layers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">kernel</span> <span class="o">=</span> <span class="n">kernel</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">channels</span> <span class="o">=</span> <span class="n">channels</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">other</span> <span class="o">=</span> <span class="n">other</span>
+        <span class="o">...</span>  <span class="c1"># build layers, add forward method</span>
+
+
+<span class="c1"># then in your code</span>
+<span class="n">cfg</span> <span class="o">=</span> <span class="n">ConvCfg</span><span class="p">(</span><span class="n">layers</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">kernel</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">channels</span><span class="o">=</span><span class="mi">16</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">ConvModel</span><span class="p">(</span><span class="n">layers</span><span class="o">=</span><span class="n">cfg</span><span class="o">.</span><span class="n">layers</span><span class="p">,</span> <span class="n">kernel</span><span class="o">=</span><span class="n">cfg</span><span class="o">.</span><span class="n">kernel</span><span class="p">,</span> <span class="n">channels</span><span class="o">=</span><span class="n">cfg</span><span class="o">.</span><span class="n">channels</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Issues:</p>
+<ul class="simple">
+<li><p>a lot of duplicated code/work</p></li>
+<li><p>easy to mess up when propagating a new parameter as it needs 4 changes: the config, the model init parameters, the content of the init, the instantiation of the model from the config (any typo? any mismatch generating a silent bug?)</p></li>
+<li><p>some defaults may not be configurable</p></li>
+</ul>
+<p>Here is a simpler pattern:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">ConvCfg</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">kernel</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">channels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span>
+
+    <span class="k">def</span> <span class="nf">build</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">:</span>
+        <span class="c1"># instantiate when needed</span>
+        <span class="c1"># (do not slow down config initialization)</span>
+        <span class="k">return</span> <span class="n">ConvModel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>  
+
+
+<span class="k">class</span> <span class="nc">ConvModel</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cfg</span><span class="p">:</span> <span class="n">ConvCfg</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cfg</span> <span class="o">=</span> <span class="n">cfg</span>
+        <span class="o">...</span>  <span class="c1"># build layers, add forward method</span>
+
+<span class="c1"># then in your code</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">ConvCfg</span><span class="p">()</span><span class="o">.</span><span class="n">build</span><span class="p">()</span>
+</pre></div>
+</div>
+<p><strong>Cost</strong>: classes become coupled (then again, you don’t need importing <code class="docutils literal notranslate"><span class="pre">ConvModel</span></code> anymore)</p>
+<p><strong>Benefit</strong>: fixes all issues mentioned above with 1 set of defaults, in a single place</p>
+</section>
+<section id="one-step-further-discriminated-unions">
+<h3>One step further - Discriminated unions<a class="headerlink" href="#one-step-further-discriminated-unions" title="Link to this heading">#</a></h3>
+<p>Pipelines often get complex, and require if-else conditions depending on configurations, for instance:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">typing</span> <span class="k">as</span> <span class="nn">tp</span>
+
+<span class="k">class</span> <span class="nc">ModelCfg</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;conv&quot;</span><span class="p">,</span> <span class="s2">&quot;transformer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;conv&quot;</span>  <span class="c1"># special discriminator field</span>
+    <span class="c1"># shared parameters</span>
+    <span class="n">layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="c1"># convolution parameters</span>
+    <span class="n">kernel</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">channels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="c1"># transformer parameters</span>
+    <span class="n">embeddings</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span>
+
+    <span class="k">def</span> <span class="nf">build</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">==</span> <span class="s2">&quot;conv&quot;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">ConvModel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">TransformerModel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This creates coupling between different models into a unique config where some parameters are ignored depending on the cases, and can become messier and messier with more models.
+Fortunately, <code class="docutils literal notranslate"><span class="pre">pydantic</span></code>’s discriminated unions easily address this issue:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">ConvCfg</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;conv&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;conv&quot;</span>  <span class="c1"># special discriminator field</span>
+    <span class="n">layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">kernel</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">channels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span>
+
+    <span class="k">def</span> <span class="nf">build</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">ConvModel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="c1">#instantiate when needed</span>
+
+<span class="o">...</span>
+
+<span class="k">class</span> <span class="nc">TransformerCfg</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">pydantic</span><span class="o">.</span><span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>  <span class="c1"># pydantic boilerplate: safer</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">tp</span><span class="o">.</span><span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;transformer&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;transformer&quot;</span>  <span class="c1"># special discriminator field</span>
+    <span class="n">layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
+    <span class="n">embeddings</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span>
+
+    <span class="k">def</span> <span class="nf">build</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">TransformerModel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+
+<span class="o">...</span>
+
+<span class="k">class</span> <span class="nc">Trainer</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model</span><span class="p">:</span> <span class="n">ConvCfg</span> <span class="o">|</span> <span class="n">TransformerCfg</span> <span class="o">=</span> <span class="n">pydantic</span><span class="o">.</span><span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">discriminator</span><span class="o">=</span><span class="s2">&quot;name&quot;</span><span class="p">)</span>
+    <span class="n">optimizer</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;Adam&quot;</span>
+    <span class="n">infra</span><span class="p">:</span> <span class="n">TaskInfra</span> <span class="o">=</span> <span class="n">TaskInfra</span><span class="p">()</span>
+
+    <span class="nd">@infra</span><span class="o">.</span><span class="n">apply</span>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+        <span class="n">model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">build</span><span class="p">()</span>  <span class="c1"># build either one of the model</span>
+        <span class="c1"># specific location for this very config:</span>
+        <span class="n">ckpt_path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">uid_folder</span><span class="p">()</span> <span class="o">/</span> <span class="s2">&quot;checkpoint.pt&quot;</span>
+        <span class="k">if</span> <span class="n">ckpt_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+           <span class="c1"># load</span>
+           <span class="o">...</span>
+        <span class="o">...</span>
+        <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">loader</span><span class="p">:</span>
+            <span class="o">...</span>
+        <span class="k">return</span> <span class="n">accuracy</span>
+
+
+<span class="n">string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">model:</span>
+<span class="s2">  name: transformer  # specifies which model</span>
+<span class="s2">  embeddings: 256  # only accepts transformer specific parameters</span>
+<span class="s2">optimizer: SGD</span>
+<span class="s2">&quot;&quot;&quot;</span>
+<span class="n">trainer</span> <span class="o">=</span> <span class="n">Trainer</span><span class="p">(</span><span class="o">**</span><span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">(</span><span class="n">string</span><span class="p">))</span>
+
+<span class="nb">isinstance</span><span class="p">(</span><span class="n">trainer</span><span class="o">.</span><span class="n">model</span><span class="p">,</span> <span class="n">TransformerCfg</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Discriminated unions make it easier to make <strong>modular pipelines</strong> as one can swap part of the experiment by others very easily, and still get full parameter validation.</p>
+</section>
+</section>
+<section id="challenge-3-experiment-computation-caching">
+<h2>Challenge #3: Experiment/computation caching<a class="headerlink" href="#challenge-3-experiment-computation-caching" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">exca</span></code> can also handle <strong>caching of the computation result</strong> with no extra effort, so any computation already performed will only be recomputed if explicitely required.</p>
+<p>A lot of additional benefits also come for free:</p>
+<ul class="simple">
+<li><p>sub-configs can have their own infra.</p></li>
+<li><p>running a grid search only requires a <code class="docutils literal notranslate"><span class="pre">for</span></code> loop.</p></li>
+<li><p>computations can be packed into a job array.</p></li>
+<li><p>computation can be performed in a dedicated working directory to avoid interfering with the code.</p></li>
+</ul>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">string</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">model:</span>
+<span class="s2">  name: transformer  # specifies which model</span>
+<span class="s2">  embeddings: 256</span>
+<span class="s2">optimizer: SGD</span>
+<span class="s2">infra:</span>
+<span class="s2">  gpus_per_node: 8</span>
+<span class="s2">  cpus_per_task: 80</span>
+<span class="s2">  slurm_constraint: volta32gb</span>
+<span class="s2">  folder: </span><span class="si">{</span><span class="n">tmp_path</span><span class="si">}</span>
+<span class="s2">  cluster: slurm</span>
+<span class="s2">  slurm_partition: learnfair</span>
+<span class="s2">  workdir:</span>
+<span class="s2">    copied:</span>
+<span class="s2">      - . # copies current working directory into a dedicated workdir</span>
+<span class="s2">      # - whatever_other_file_or_folder</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+<span class="n">trainer</span> <span class="o">=</span> <span class="n">Trainer</span><span class="p">(</span><span class="o">**</span><span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">(</span><span class="n">string</span><span class="p">))</span>
+<span class="k">with</span> <span class="n">trainer</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">job_array</span><span class="p">()</span> <span class="k">as</span> <span class="n">array</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">layers</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">12</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">15</span><span class="p">]:</span>
+        <span class="n">array</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">trainer</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">clone_obj</span><span class="p">({</span><span class="s2">&quot;model.layers&quot;</span><span class="p">:</span> <span class="n">layers</span><span class="p">}))</span>
+<span class="c1"># leaving the context submits all trainings in a job array</span>
+<span class="c1"># and is non-blocking</span>
+
+<span class="c1"># show one of the slurm jobs</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">array</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">infra</span><span class="o">.</span><span class="n">job</span><span class="p">())</span>
+</pre></div>
+</div>
+<p>Overall with this way of experimenting, you easily get:</p>
+<ul class="simple">
+<li><p>modular pipeline with simple building blocks</p></li>
+<li><p>easy remote computation configuration</p></li>
+<li><p>validated configuration before sending to remote cluster through a job array</p></li>
+<li><p>cached results so that only missing elements of the array get sent</p></li>
+</ul>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="getting-started.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Getting started</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="tutorials.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Tutorials</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#challenge-1-early-configuration-validation">Challenge #1: Early configuration validation</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#observations-and-consequences">Observations and consequences</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameter-validation-with-pydantic">Parameter validation with Pydantic</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#note-discarded-options">Note: discarded options</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#local-remote-submission-with-exca">Local/remote submission with exca</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#challenge-2-complex-experiments-hierarchical-configurations">Challenge #2: Complex experiments - hierarchical configurations</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parametrizing-pattern">Parametrizing pattern</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#one-step-further-discriminated-unions">One step further - Discriminated unions</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#challenge-3-experiment-computation-caching">Challenge #3: Experiment/computation caching</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright Meta Platforms, Inc.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+</div>
+
+  </footer>
+  </body>
+</html>
