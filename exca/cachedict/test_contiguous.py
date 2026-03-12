@@ -211,6 +211,37 @@ def test_unsupported_attr_raises(tmp_path: Path, attr: str, match: str) -> None:
         getattr(cm, attr)
 
 
+def test_dump_fault_report(tmp_path: Path) -> None:
+    """_dump_fault_report writes a valid JSON file with expected fields."""
+    import json
+
+    from .contiguous import _dump_fault_report
+
+    result = np.array([1.0, 2.0, 999.0, 4.0])
+    expected = np.array([1.0, 2.0, 3.0, 4.0])
+    report_path = _dump_fault_report(
+        path=str(tmp_path / "data.npy"),
+        file_offset=128,
+        span=32,
+        shape=(4,),
+        dtype=np.dtype("float64"),
+        strides=(8,),
+        result=result,
+        expected=expected,
+    )
+    assert report_path.exists()
+    report = json.loads(report_path.read_text())
+    assert report["n_mismatched_elements"] == 1
+    assert report["first_mismatched_index"] == 2
+    assert report["shape"] == [4]
+    assert report["dtype"] == "float64"
+    assert report["source_file"].endswith("data.npy")
+    assert report["file_offset"] == 128
+    assert report["span"] == 32
+    assert report["result_sample"][2] == 999.0
+    assert report["expected_sample"][2] == 3.0
+
+
 def test_arithmetic_and_ufunc_raise(tmp_path: Path) -> None:
     """Arithmetic operators and numpy ufuncs raise TypeError."""
     cm = _make_cm(tmp_path, np.arange(1, 13, dtype=np.float64).reshape(3, 4))

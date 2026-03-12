@@ -452,7 +452,10 @@ class DumpContext:
 
         # Enforce max size BEFORE inserting new item
         if self._max_cache > 0 and len(store) >= self._max_cache:
+            pid = store.get("__pid__")
             store.clear()
+            if pid is not None:
+                store["__pid__"] = pid
 
         value = factory()
         store[key] = value

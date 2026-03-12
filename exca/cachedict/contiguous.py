@@ -7,12 +7,66 @@
 """ContiguousMemmap: a proxy around numpy memmap views that prevents RSS
 accumulation by using explicit file I/O instead of page faults."""
 
+import json
+import logging
+import os
 import threading
 import typing as tp
+from pathlib import Path
 
 import numpy as np
 
 from .dumpcontext import _get_store
+
+logger = logging.getLogger(__name__)
+
+
+def _dump_fault_report(
+    path: str,
+    file_offset: int,
+    span: int,
+    shape: tuple[int, ...],
+    dtype: np.dtype[tp.Any],
+    strides: tuple[int, ...],
+    result: np.ndarray,
+    expected: np.ndarray,
+    *,
+    n_read: int | None = None,
+    fh_reused: bool | None = None,
+    cache_size: int | None = None,
+    cache_keys: list[str] | None = None,
+) -> Path:
+    """Write a diagnostic report next to the source file and return its path."""
+    mismatch = ~np.equal(result.ravel(), expected.ravel())
+    mismatch_indices = np.where(mismatch)[0]
+    report_dir = Path(path).parent
+    report_path = (
+        report_dir / f"contiguous-fault-{os.getpid()}-{threading.get_ident()}.json"
+    )
+    report: dict[str, tp.Any] = {
+        "pid": os.getpid(),
+        "thread": threading.get_ident(),
+        "source_file": path,
+        "file_offset": file_offset,
+        "span": span,
+        "n_read": n_read,
+        "short_read": n_read != span if n_read is not None else None,
+        "fh_reused": fh_reused,
+        "cache_size": cache_size,
+        "cache_keys": cache_keys,
+        "shape": list(shape),
+        "dtype": str(dtype),
+        "strides": list(strides),
+        "n_mismatched_elements": int(mismatch_indices.size),
+        "first_mismatched_index": (
+            int(mismatch_indices[0]) if mismatch_indices.size else -1
+        ),
+        "result_sample": result.ravel()[:20].tolist(),
+        "expected_sample": expected.ravel()[:20].tolist(),
+    }
+    report_path.write_text(json.dumps(report, indent=2))
+    return report_path
+
 
 _FILE_HANDLE_CACHE: threading.local = threading.local()
 _SAFE_ATTRS = frozenset(
@@ -105,11 +159,12 @@ class ContiguousMemmap:
         cache_key = ("ContiguousMemmap", path)
         store = _get_store(self._cache)
         fh = store.get(cache_key)
-        if fh is None or fh.closed:
+        fh_reused = fh is not None and not fh.closed
+        if not fh_reused:
             fh = open(path, "rb")  # noqa: SIM115
             store[cache_key] = fh
         fh.seek(self._mm.offset + off)
-        fh.readinto(buf.data)  # type: ignore[union-attr,attr-defined]
+        n_read = fh.readinto(buf.data)  # type: ignore[union-attr,attr-defined]
         view: np.ndarray[tp.Any, np.dtype[tp.Any]] = np.ndarray(
             self._arr.shape,
             self._arr.dtype,
@@ -117,6 +172,25 @@ class ContiguousMemmap:
             strides=self._arr.strides,
         )
         result = np.ascontiguousarray(view)
+        expected = np.ascontiguousarray(self._arr)
+        if not np.array_equal(result, expected):
+            cache_keys = [k for k in store if k != "__pid__"]
+            report = _dump_fault_report(
+                path,
+                self._mm.offset + off,
+                span,
+                self._arr.shape,
+                self._arr.dtype,
+                self._arr.strides,
+                result,
+                expected,
+                n_read=n_read,
+                fh_reused=fh_reused,
+                cache_size=len(cache_keys),
+                cache_keys=[str(k) for k in cache_keys],
+            )
+            logger.error("ContiguousMemmap fault detected, report: %s", report)
+            raise AssertionError(f"ContiguousMemmap data mismatch — report at {report}")
         if dtype is not None:
             result = result.astype(dtype)
         return result
