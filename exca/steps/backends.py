@@ -353,12 +353,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if self.paths.error_pkl.exists():
             with self.paths.error_pkl.open("rb") as f:
                 err = pickle.load(f)
-            logger.warning(
-                "Re-raising cached error for %s[%s] (use mode='retry' to recompute)",
-                self.paths.step_uid,
-                self.paths.item_uid,
+            err.add_note(
+                f"  -> in {self.paths.error_pkl.parent}\n"
+                f"     reraising from cache, use mode='retry' to recompute"
             )
-            err.add_note("  -> (re-raised from cached error)")
             raise err
 
         cd = self._cache_dict()
