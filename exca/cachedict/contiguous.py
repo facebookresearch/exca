@@ -109,7 +109,12 @@ class ContiguousMemmap:
             fh = open(path, "rb")  # noqa: SIM115
             store[cache_key] = fh
         fh.seek(self._mm.offset + off)
-        fh.readinto(buf.data)  # type: ignore[union-attr,attr-defined]
+        n = fh.readinto(buf.data)  # type: ignore[union-attr,attr-defined]
+        if n != span:
+            raise IOError(
+                f"ContiguousMemmap: short read on {path} "
+                f"(expected {span} bytes at offset {self._mm.offset + off}, got {n})"
+            )
         view: np.ndarray[tp.Any, np.dtype[tp.Any]] = np.ndarray(
             self._arr.shape,
             self._arr.dtype,
