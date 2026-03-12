@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## 0.5.20
+
+### Changed
+- Replaced `JobChecker` with SQLite-based advisory registry for tracking inflight jobs.
+
+### Fixed
+- `ContiguousMemmap` read failure after fork due to stale file descriptors.
+
 ## 0.5.19
 
 ### Changed
