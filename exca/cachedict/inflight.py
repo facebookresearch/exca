@@ -106,14 +106,30 @@ class WorkerInfo:
             pid=pid, job_id=job_id, job_folder=job_folder, claimed_at=claimed_at
         )
 
-    def is_alive(self) -> bool:
-        """Check if this worker is still running."""
+    def is_alive(self, no_job_timeout: float = 600.0) -> bool:
+        """Check if this worker is still running.
+
+        Parameters
+        ----------
+        no_job_timeout:
+            When no Slurm job info is associated with the claim, the
+            only liveness signal is the PID. If ``claimed_at`` is older
+            than this many seconds and no ``job_id`` was ever set, the
+            worker is presumed dead (the claim → update_worker_info
+            window is normally seconds, not minutes).
+        """
         job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
         if job is not None:
             try:
                 return not job.done()
             except Exception:
                 return False
+        if (
+            self.claimed_at is not None
+            and self.job_id is None
+            and (time.time() - self.claimed_at) > no_job_timeout
+        ):
+            return False
         return _is_pid_alive(self.pid)
 
     def wait(self) -> None:
@@ -158,7 +174,13 @@ class InflightRegistry:
     def _connect(self) -> sqlite3.Connection:
         """Lazy-open the DB connection, creating the table if needed."""
         if self._conn is not None:
-            return self._conn
+            if not self.db_path.exists():
+                logger.warning(
+                    "Inflight DB deleted externally, reconnecting: %s", self.db_path
+                )
+                self._close_conn()
+            else:
+                return self._conn
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # Autocommit (isolation_level=None): most methods rely on implicit
         # per-statement transactions; claim() uses explicit BEGIN IMMEDIATE
@@ -441,7 +463,8 @@ class InflightRegistry:
                 if now >= next_log:
                     pids = {inflight[u].pid for u in remaining if u in inflight}
                     msg = "Still waiting for %d in-flight items (pids: %s)"
-                    logger.info(msg, len(remaining), pids)
+                    msg += " — to unblock, delete %s or kill the pids"
+                    logger.info(msg, len(remaining), pids, self.db_path)
                     next_log = now + 3600.0
                 time.sleep(interval)
                 interval = min(interval * 2, 30.0)
@@ -452,15 +475,28 @@ class InflightRegistry:
 # -- Public context manager ---------------------------------------------------
 
 
+_LOCAL_JOB_ID = "local"
+
+
 @contextlib.contextmanager
 def inflight_session(
     registry: InflightRegistry | None,
     item_uids: list[str],
+    *,
+    local: bool = False,
 ) -> tp.Iterator[list[str]]:
     """Wait for in-flight items, claim available ones, release+close on exit.
 
     When *registry* is ``None`` (no cache folder), yields all *item_uids*
     unchanged so that callers never need a ``None`` guard.
+
+    Parameters
+    ----------
+    local:
+        Set to ``True`` when items will be processed locally (no Slurm
+        submission). This marks the claims with ``job_id="local"`` so
+        that ``is_alive`` can distinguish "local work in progress" from
+        "Slurm submission that never completed ``update_worker_info``".
 
     Self-deadlock is prevented internally: ``wait_for_inflight`` skips items
     owned by the current PID, and ``claim`` treats same-PID rows as already
@@ -495,6 +531,8 @@ def inflight_session(
         msg = "Claim race: got %d/%d items, re-waiting"
         logger.info(msg, len(claimed), len(item_uids))
         time.sleep(random.uniform(0.5, 2.0))
+    if local:
+        registry.update_worker_info(claimed, job_id=_LOCAL_JOB_ID)
     try:
         yield claimed
     finally:
