@@ -396,11 +396,16 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                             jobs.append(j)
                     if registry is not None:
                         for chunk, j in zip(uid_item_chunks, jobs):
+                            uids = [uid for uid, _ in chunk]
                             if isinstance(j, submitit.SlurmJob):
                                 registry.update_worker_info(
-                                    [uid for uid, _ in chunk],
+                                    uids,
                                     job_id=str(j.job_id),
                                     job_folder=str(j.paths.folder),
+                                )
+                            else:
+                                registry.update_worker_info(
+                                    uids, job_id=inflight._LOCAL_JOB_ID
                                 )
                     # pylint: disable=expression-not-assigned
                     uid = self.uid()
@@ -446,7 +451,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             # avoid processing same files at same time if several jobs overlap
             np.random.shuffle(missing)
             with inflight.inflight_session(
-                self._inflight_registry(), [k for k, _ in missing]
+                self._inflight_registry(), [k for k, _ in missing], local=True
             ) as claimed_uids:
                 claimed_set = set(claimed_uids)
                 # Re-check cache after wait: other workers may have completed
