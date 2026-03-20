@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS inflight (
 """
 
 T = tp.TypeVar("T")
+_QUERY_BATCH_SIZE = 500
 
 
 # -- Helpers ------------------------------------------------------------------
@@ -370,10 +371,14 @@ class InflightRegistry:
             return
 
         def _do(conn: sqlite3.Connection) -> None:
+            # Explicit transaction: one fsync instead of one per row
+            # (critical on NFS with large item counts).
+            conn.execute("BEGIN")
             conn.executemany(
                 "DELETE FROM inflight WHERE item_uid = ?",
                 [(uid,) for uid in item_uids],
             )
+            conn.execute("COMMIT")
 
         self._safe_execute("release", None, _do)
         logger.debug("Released %d items", len(item_uids))
@@ -388,10 +393,14 @@ class InflightRegistry:
             elif not item_uids:
                 return {}
             else:
-                placeholders = ",".join("?" for _ in item_uids)
-                rows = conn.execute(
-                    f"{query} WHERE item_uid IN ({placeholders})", item_uids
-                ).fetchall()
+                rows = []
+                # Chunk to avoid huge IN (?, ?, …) clauses that hit
+                # SQLite's placeholder limit or waste parser time.
+                for i in range(0, len(item_uids), _QUERY_BATCH_SIZE):
+                    batch = item_uids[i : i + _QUERY_BATCH_SIZE]
+                    placeholders = ",".join("?" for _ in batch)
+                    sql = f"{query} WHERE item_uid IN ({placeholders})"
+                    rows.extend(conn.execute(sql, batch).fetchall())
             return dict(WorkerInfo._from_row(r) for r in rows)
 
         return self._safe_execute("query", {}, _do)
@@ -425,13 +434,18 @@ class InflightRegistry:
             time.sleep(random.uniform(0, 0.5))
             msg = "Waiting for %d in-flight items (of %d requested)"
             logger.warning(msg, len(inflight), len(item_uids))
+        # Deduplicate by job_id: many items may share one Slurm array job,
+        # so we wait once per job instead of once per item.
+        waited_jobs: set[str] = set()
         for uid, info in list(inflight.items()):
             if info.pid == my_pid:
                 remaining.discard(uid)
                 continue
             if info.job_id is not None and info.job_folder is not None:
-                logger.debug("Waiting for Slurm job %s (item %s)", info.job_id, uid)
-                info.wait()
+                if info.job_id not in waited_jobs:
+                    logger.debug("Waiting for Slurm job %s", info.job_id)
+                    info.wait()
+                    waited_jobs.add(info.job_id)
 
         interval = 0.5
         next_log = time.time() + 3600.0

@@ -229,6 +229,44 @@ def test_db_deletion_unblocks_wait(
     reg.close()
 
 
+def test_large_batch_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercises bulk performance: dedup Slurm waits, transactional release,
+    chunked get_inflight."""
+    dead_pid = 2**20 + 7
+
+    # Slurm wait deduplication: 5 items across 2 jobs → 2 wait() calls
+    wait_calls: list[str] = []
+    original_wait = inflight.WorkerInfo.wait
+
+    def tracking_wait(self: inflight.WorkerInfo) -> None:
+        if self.job_id is not None:
+            wait_calls.append(self.job_id)
+        original_wait(self)
+
+    monkeypatch.setattr(inflight.WorkerInfo, "wait", tracking_wait)
+    reg = inflight.InflightRegistry(tmp_path)
+    for uid in ["a", "b", "c", "d", "e"]:
+        reg.claim([uid], pid=dead_pid)
+    reg.update_worker_info(["a", "b", "c"], job_id="111", job_folder="/nonexistent")
+    reg.update_worker_info(["d", "e"], job_id="222", job_folder="/nonexistent")
+    waiter = inflight.InflightRegistry(tmp_path)
+    waiter.wait_for_inflight(["a", "b", "c", "d", "e"])
+    assert sorted(wait_calls) == ["111", "222"]
+    waiter.close()
+    reg.close()
+
+    # Chunked get_inflight + transactional release with > _QUERY_BATCH_SIZE items
+    reg2 = inflight.InflightRegistry(tmp_path)
+    n = inflight._QUERY_BATCH_SIZE * 3 + 17
+    uids = [f"item_{i}" for i in range(n)]
+    reg2.claim(uids)
+    assert len(reg2.get_inflight(uids)) == n
+    assert len(reg2.get_inflight(uids + ["missing"])) == n
+    reg2.release(uids)
+    assert reg2.get_inflight(uids) == {}
+    reg2.close()
+
+
 def test_inflight_session_retries_lost_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
