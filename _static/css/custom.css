@@ -1,0 +1,267 @@
+/* ==========================================================================
+   Exca Documentation – Custom Styles (PyData Sphinx Theme)
+   ========================================================================== */
+
+/* ---------- Brand colors ---------- */
+:root {
+    --exca-primary: #4361ee;
+    --exca-primary-light: #7b8ff5;
+    --exca-primary-dark: #2b47c7;
+    --exca-accent: #f72585;
+    --exca-bg-light: #f8f9fa;
+    --exca-card-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+html[data-theme="dark"] {
+    --exca-primary: #7b8ff5;
+    --exca-primary-dark: #4361ee;
+    --exca-bg-light: #1a1a2e;
+    --exca-card-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* ---------- Hero landing section ---------- */
+.hero-banner {
+    background: linear-gradient(135deg, var(--exca-primary) 0%, var(--exca-primary-dark) 100%);
+    border-radius: 16px;
+    padding: 3rem 2.5rem;
+    margin-bottom: 2.5rem;
+    color: #fff;
+    text-align: center;
+}
+
+html[data-theme="dark"] .hero-banner {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border: 1px solid rgba(123, 143, 245, 0.3);
+}
+
+.hero-banner h1 {
+    font-size: 2.6rem;
+    font-weight: 700;
+    margin-bottom: 0.6rem;
+    color: #fff;
+}
+
+.hero-banner p {
+    font-size: 1.15rem;
+    opacity: 0.92;
+    max-width: 650px;
+    margin: 0 auto 1.5rem;
+    line-height: 1.6;
+    color: #fff;
+}
+
+.hero-banner .sd-btn-primary {
+    background-color: #fff;
+    color: var(--exca-primary-dark);
+    border: none;
+    font-weight: 600;
+    padding: 0.6rem 1.8rem;
+    border-radius: 8px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.hero-banner .sd-btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.hero-banner .sd-btn-outline-light {
+    border-color: rgba(255, 255, 255, 0.6);
+    color: #fff;
+    font-weight: 600;
+    padding: 0.6rem 1.8rem;
+    border-radius: 8px;
+}
+
+.hero-banner .sd-btn-outline-light:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+/* ---------- Feature cards ---------- */
+.sd-card {
+    border-radius: 12px !important;
+    border: 1px solid rgba(0, 0, 0, 0.06) !important;
+    box-shadow: var(--exca-card-shadow) !important;
+    transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+    overflow: hidden;
+}
+
+.sd-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12) !important;
+}
+
+html[data-theme="dark"] .sd-card {
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+html[data-theme="dark"] .sd-card:hover {
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3) !important;
+}
+
+.sd-card .sd-card-header {
+    font-weight: 600;
+    font-size: 1.1rem;
+    padding: 1.2rem 1.5rem 0.6rem;
+    border-bottom: none !important;
+    background: transparent !important;
+}
+
+.sd-card .sd-card-body {
+    padding: 0.6rem 1.5rem 1.5rem;
+}
+
+.sd-card .sd-card-footer {
+    padding: 0 1.5rem 1.2rem;
+    border-top: none !important;
+    background: transparent !important;
+}
+
+/* ---------- Section headers ---------- */
+.section-header {
+    text-align: center;
+    margin: 2.5rem 0 1.5rem;
+}
+
+.section-header h2 {
+    font-weight: 700;
+    color: var(--exca-primary);
+}
+
+html[data-theme="dark"] .section-header h2 {
+    color: var(--exca-primary);
+}
+
+.section-header p {
+    max-width: 600px;
+    margin: 0 auto;
+    opacity: 0.8;
+}
+
+/* ---------- Install snippet ---------- */
+.install-snippet {
+    text-align: center;
+    margin: 1.5rem 0 2rem;
+}
+
+.install-snippet code {
+    font-size: 1.05rem;
+    background: var(--exca-bg-light);
+    padding: 0.6rem 1.6rem;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    letter-spacing: 0.02em;
+}
+
+html[data-theme="dark"] .install-snippet code {
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ---------- Comparison table ---------- */
+.comparison-table table {
+    border-collapse: separate;
+    border-spacing: 0;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: var(--exca-card-shadow);
+    width: 100%;
+    margin: 1.5rem 0;
+}
+
+.comparison-table th {
+    background: var(--exca-primary) !important;
+    color: #fff !important;
+    font-weight: 600;
+    padding: 0.8rem 1rem;
+}
+
+.comparison-table td {
+    padding: 0.7rem 1rem;
+}
+
+.comparison-table tr:nth-child(even) td {
+    background: var(--exca-bg-light);
+}
+
+/* ---------- Quick links strip ---------- */
+.quick-links {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin: 1.5rem 0 2rem;
+}
+
+.quick-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1.2rem;
+    border-radius: 8px;
+    font-weight: 500;
+    text-decoration: none;
+    background: var(--exca-bg-light);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    transition: all 0.15s ease;
+}
+
+.quick-links a:hover {
+    background: var(--exca-primary);
+    color: #fff;
+    border-color: var(--exca-primary);
+}
+
+html[data-theme="dark"] .quick-links a {
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ---------- Misc polish ---------- */
+.bd-main .bd-content .bd-article-container {
+    max-width: 960px;
+}
+
+/* Code block styling */
+div.highlight {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.copy-button {
+    border-radius: 6px !important;
+}
+
+/* Badge-style feature labels */
+.feature-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 50px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.feature-badge-cache {
+    background: rgba(67, 97, 238, 0.12);
+    color: var(--exca-primary);
+}
+
+.feature-badge-cluster {
+    background: rgba(247, 37, 133, 0.12);
+    color: var(--exca-accent);
+}
+
+.feature-badge-config {
+    background: rgba(76, 175, 80, 0.12);
+    color: #2e7d32;
+}
+
+/* ---------- Logo in navbar ---------- */
+.navbar-brand img {
+    max-height: 40px;
+}
+
+/* Smooth scrolling */
+html {
+    scroll-behavior: smooth;
+}
