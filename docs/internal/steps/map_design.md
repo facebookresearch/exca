@@ -362,3 +362,65 @@ a final `Sequence[...]`, this guarantee needs an explicit contract. Either:
 
 Without that clarification, a vectorized implementation that fails before
 returning cannot persist the already-computed prefix.
+
+---
+
+## Addendum: Further Decisions
+
+### `item_uid` set + reset deserves its own proposal
+
+The ability for a step to define `item_uid` on its input is required for map
+semantics. The possibility for a downstream step to reset/re-key the item
+identity goes together with it, because both define how per-item caching
+flows through a chain.
+
+This likely deserves a dedicated proposal covering both:
+- how a step defines `item_uid` for incoming items
+- when/how a step may explicitly reset the uid generation for downstream
+  caching
+- how this interacts with chains and final-step caching
+
+### Backend role in batch orchestration
+
+Top-level dispatch still happens in `Step.run()` / `Chain.run()`, with a
+lazy `Items` carrier flowing through the chain. But backends may still play
+an important role when execution strategy depends on the backend, for
+example:
+- Slurm array submission
+- local process / pool execution
+- backend-specific chunk submission and waiting
+
+So the orchestration is likely split between:
+- a generic batch layer (uids, ordering, laziness, per-item caching)
+- backend-specific execution hooks for how missing work is actually run
+
+### `_run_batch_items()` should be iterator-based
+
+`_run_batch_items()` should expose a streaming contract: one output per
+input item, yielded in order.
+
+Rationale:
+- we cannot assume outputs fit in memory
+- the batch path should preserve the iterator-based nature of map
+- streaming output aligns better with per-item caching and fail-fast
+  semantics
+
+A step that truly requires full-batch realization can still materialize its
+inputs internally, but the external hook contract should stay iterator-like.
+
+### Chain final cache is the final step cache
+
+The `Chain` is just the sequence of steps. In both scalar and batch modes,
+the effective final cache is the cache of the final step.
+
+Batch mode does not introduce:
+- a cache entry for the `Items` object itself
+- a separate chain-level batch artifact distinct from the final step output
+
+This is the same idea as the current scalar behavior, extended to per-item
+batch caching.
+
+### Related document
+
+For the full `item_uid` options analysis and recommendation, see
+[`item_uid_design.md`](item_uid_design.md).
