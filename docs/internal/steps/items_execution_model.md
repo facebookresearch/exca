@@ -1,19 +1,23 @@
-# Item UID Design for Steps
+# Items Execution Model
 
-This document is a **proposal** that isolates the `item_uid` question from
-the broader map/batch design. It is expected to be revised as
+This document is a **proposal** for the execution model that underpins both
+scalar and batch processing in the steps module. It covers identity
+(`item_uid`), the Items carrier, and the dispatch architecture
+(`run` → `_run_items` → `_run`). It is expected to be revised as
 implementation reveals simplifications or new constraints.
 
-The goal is a single identity mechanism that works for both:
-- scalar `step.run(value)`
-- batch `step.run(Items(...))`
+The goal is a unified execution model where:
+- scalar `step.run(value)` and batch `step.run(Items(...))` share the same
+  identity resolution and carrier machinery
+- the step is the sole owner of uid policy
 
 The current scalar Steps implementation falls back to
 `ConfDict(value=value).to_uid()` for cache identity. MapInfra, by contrast,
 requires an explicit `item_uid` callable at the decoration site.
 
-For Steps, the design should stay step-centric: the step is the sole owner of
-uid policy.
+For the batch infrastructure concerns that build on this model (job
+distribution, `_run_batch_items`, error handling, backend hooks), see
+[`map_design.md`](map_design.md).
 
 ---
 
@@ -317,6 +321,81 @@ Reasons:
 
 ---
 
+## Execution Model
+
+### `run()` dispatches to `_run_items`
+
+`Step.run()` is the public entry point. It constructs an Items carrier and
+delegates to `_run_items`:
+
+- `step.run(value)` — wraps into a singleton carrier, calls `_run_items`,
+  extracts and returns the single result.
+- `step.run(Items(...))` — calls `_run_items`, returns an iterator.
+- `step.run()` (generator, no input) — wraps into `Items([NoValue()])`,
+  calls `_run_items`, extracts and returns the single result.
+
+The wrapping and unwrapping is trivial inline logic in `run()`, not separate
+helper functions.
+
+### `_run_items` defaults to calling `_run` per item
+
+The default `Step._run_items(items)` implementation:
+
+1. For each item in the carrier: resolve uid via the One Rule.
+2. Check cache per item.
+3. For cache misses: call `_run(value)` (or `_run_batch_items` if
+   overridden).
+4. Return a new Items carrier with results and updated carried uids.
+
+Step authors continue to implement `_run`. The Items machinery is
+transparent to them — they never see Items unless they want to.
+
+### Three hooks at different levels
+
+The naming is similar but the roles are distinct:
+
+| Hook | Level | Receives | Returns | Who overrides |
+|------|-------|----------|---------|---------------|
+| `_run_items` | Framework orchestration | `Items` carrier (uids, state) | `Items` carrier | Chain (to flow carrier through steps) |
+| `_run_batch_items` | User computation (vectorized) | `Sequence[T]` (raw values, cache misses) | `Sequence[R]` (raw results) | Step authors (GPU, vectorized ops) |
+| `_run` | User computation (per-item) | single value `T` | single result `R` | Step authors (default) |
+
+`_run_items` orchestrates: uid resolution, cache, dispatch. `_run` and
+`_run_batch_items` compute: no uid awareness, no cache awareness.
+`_run_batch_items` is defined in [`map_design.md`](map_design.md) as a
+batch optimization hook.
+
+### Chain overrides `_run_items`, not `_run`
+
+Chain's execution is inherently Items-level: it flows the carrier through a
+sequence of steps. It overrides `_run_items`, not `_run`:
+
+```python
+# Conceptual shape
+def _run_items(self, items: Items) -> Items:
+    for step in self._step_sequence():
+        items = step._run_items(items)
+    return items
+```
+
+The existing `Chain._run` logic (force propagation, backward cache-skip
+walk, per-step `infra.run()` calls) will need a significant refactor to
+operate on the Items carrier. This is expected — the current chain loop was
+designed before uid threading existed.
+
+### Generator steps
+
+A generator step (`_run` takes no arguments) receives a singleton carrier
+whose item is the `NoValue` sentinel. The framework detects this and calls
+`_run()` with no arguments.
+
+Whether `NoValue` can be simplified — for example, by treating it as a
+property of the carrier rather than a sentinel value occupying an item
+slot — is an open implementation question. Any simplification that reduces
+`NoValue` plumbing would be welcome.
+
+---
+
 ## Considered Alternatives / Add-ons
 
 ### MapInfra-style explicit callable at the map site
@@ -338,8 +417,8 @@ Earlier drafts had `Items(items, uids=..., steps=...)` so the caller could
 supply external ids or an upstream chain for cache-backed iteration.
 
 Rejected because:
-- if the step owns uid policy, caller-provided uids are a backdoor around it —
-  any ID the caller knows can be derived by the step's `item_uid(value)`
+- caller-provided uids make the caller co-own uid policy, which this proposal
+  intentionally rejects — the step is the sole owner
 - cache-backed iteration and resumption are framework-internal concerns;
   the framework already knows the chain context when executing `step.run()`
 - removing these from the public constructor keeps `Items` minimal:
@@ -370,18 +449,26 @@ A tempting implementation split would be:
 - scalar runner keeps a local `current_uid`
 - batch runner uses `Items`
 
-This is ugly because it duplicates the same state transition logic in two
-places. Since `Items` is both the public entry form and the internal carrier,
-the scalar case should normalize to a singleton `Items` and go through the
-same engine.
+Threading `(value, uid)` through a chain is structurally the same as a
+singleton Items carrier — the carrier exists either way, just informally.
+An informal carrier (two local variables) is harder to extend when the
+carrier gains new state (e.g. `_steps` tracking for chain hash). Since
+`Items` is both the public entry form and the internal carrier, the scalar
+case should normalize to a singleton `Items` and go through `_run_items`
+(see [Execution Model](#execution-model)).
 
 ---
 
-## Consequences for `map_design.md`
+## Relationship to `map_design.md`
 
-If this proposal is accepted, `map_design.md` should describe:
-- `Step.item_uid(self, value)` as the single uid hook
-- the unified set/preserve/reset rule
-- the fact that scalar and batch use the same mechanism
-- how the framework internally manages carried uids and upstream chain context
-  during batch execution
+This document defines the core execution model. `map_design.md` builds on
+it for batch-specific concerns:
+- `_run_batch_items` as a vectorized computation hook
+- job distribution and chunking (`max_jobs`, `to_chunks`)
+- error handling (fail fast, partial results, retry)
+- backend-specific execution (Slurm arrays, local pools)
+- deduplication mechanics
+- progress tracking
+
+`map_design.md` assumes the identity model, Items carrier, and `_run_items`
+dispatch defined here.
