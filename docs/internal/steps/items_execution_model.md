@@ -67,26 +67,82 @@ class Step:
         fall back to ``ConfDict(value=value).to_uid()``.
         """
         return None
-
-
-class Items:
-    def __init__(self, items: Iterable[Any] | Sequence[Any]) -> None:  # exact type TBD
-        self._steps: list[Step] = []       # chain since last uid reset
-        self._uids: list[str] | None = None  # per-item carried uid, or None before first step
-
-    def __iter__(self) -> Iterator[Any]: ...  # lazy
 ```
+
+### Items: entry point, carrier, and lazy executor
+
+Items is a single class that serves three roles:
+
+1. **Public entry point** — users create `Items(values)` and pass it to
+   `step.run()`.
+2. **Internal carrier** — flows between steps, carrying uids and chain
+   context.
+3. **Lazy execution layer** — each step's `_process_items` returns a new
+   Items that wraps the upstream Items with cache-or-compute logic.
+
+```python
+class Items:
+    def __init__(self, values: Iterable[Any] | Sequence[Any]) -> None:
+        """Public constructor."""
+        self._values = values
+        self._step: Step | None = None
+        self._upstream: Items | None = None
+        self._steps: list[Step] = []       # chain since last uid reset
+        self._uids: list[str] | None = None
+
+    @classmethod
+    def _from_step(cls, step: Step, upstream: "Items") -> "Items":
+        """Internal: wrap upstream with step's cache-or-compute logic."""
+        items = cls.__new__(cls)
+        items._values = None
+        items._step = step
+        items._upstream = upstream
+        # _steps and _uids updated during iteration
+        return items
+
+    def __iter__(self) -> Iterator[Any]:
+        if self._step is None:
+            yield from self._values        # direct mode
+        else:
+            ...                             # lazy: uid, cache, _run
+```
+
+A chain of three steps produces a linked list of Items:
+
+```
+Items(step=C, upstream=Items(step=B, upstream=Items(step=A, upstream=Items(values))))
+```
+
+Each node knows its step and its upstream. Iteration pulls through the
+chain: the outermost Items asks its step to resolve each item (uid, cache
+check), pulling from upstream only on cache miss. No separate lazy wrapper
+class — Items itself is the wrapper.
+
+`_process_items` returns a new Items node:
+
+```python
+def _process_items(self, items: Items) -> Items:
+    return Items._from_step(self, items)
+```
+
+This is a starting point — the implementation may diverge if the merged
+approach becomes unwieldy, but the interface (`_process_items` receives
+Items, returns Items) stays the same regardless.
 
 ### Public vs internal
 
 The **public** surface of `Items` is:
 
-1. **Construction** — `Items(images)`.
+1. **Construction** — `Items(values)`.
 2. **Passing to `step.run()`** — the only thing users do after construction.
 
-`Items.__iter__` must be lazy so that large datasets need not be materialized
-upfront. The exact input type accepted by the constructor (`Iterable` vs
-`Sequence`) is not settled by this design.
+The internal construction (`_from_step`) and all carrier state (`_step`,
+`_upstream`, `_steps`, `_uids`) are framework-private. Users never see
+them.
+
+`Items.__iter__` must be lazy so that large datasets need not be
+materialized upfront. The exact input type accepted by the public
+constructor (`Iterable` vs `Sequence`) is not settled by this design.
 
 The public API remains:
 - `step.run(value)` for a single value
