@@ -125,13 +125,29 @@ folder may need to reflect which step last set the uid. This interaction
 needs to be worked out during implementation and may simplify or restructure
 `_chain_hash()`.
 
+**Potential simplification**: the carrier's `_steps` list may replace the
+existing `_previous` / `with_input` / `_aligned_chain()` machinery entirely.
+Today, `run()` calls `with_input(value)` which deep-copies the step and
+sets `_previous = Input(value)`. The copy is needed because `_previous` is
+mutable state on the step — without it, concurrent `run()` calls would
+clobber each other. The infra's ram_cache must then be synced back from the
+copy to the original.
+
+With Items as carrier, the chain context lives on the carrier, not on the
+step. The step is never mutated by `run()`, so no deep copy is needed, no
+sync-back is required, and concurrent `run()` calls on the same step are
+safe by construction (each gets its own carrier). This would collapse
+`_previous`, `with_input`, `_aligned_chain()`, and the `model_copy` +
+state sync-back pattern into the carrier's `_steps` list.
+
 At chain entry the carrier has no uids and no upstream steps. After each
 step, the framework updates the carried uids and appends the step to the
 upstream chain.
 
-For cache-backed resumption (a previous step is fully cached), the framework
-lazily yields `(uid, result)` entries from that step's `CacheDict`, without
-re-running the step.
+Cache-backed resumption is handled by Items laziness: each step's
+`_process_items` returns a lazy carrier whose items check cache on demand
+and only pull from upstream on a miss. See
+[Chain execution](#chain-overrides-_process_items-not-_run) for details.
 
 The scalar case (`step.run(value)`) normalizes to a singleton Items
 internally. There should not be:
@@ -325,8 +341,9 @@ Reasons:
 
 ### `run()` dispatches to `_process_items`
 
-`Step.run()` is the public entry point. It constructs an Items carrier and
-delegates to `_process_items`:
+`Step.run()` is the public entry point. It calls `_resolve_step()` first
+(which may expand the step into a Chain), then constructs an Items carrier
+and delegates to `_process_items`:
 
 - `step.run(value)` — wraps into a singleton carrier, calls
   `_process_items`, extracts and returns the single result.
@@ -374,10 +391,28 @@ def _process_items(self, items: Items) -> Items:
     return items
 ```
 
+This forward loop is simple because Items is lazy. Each step's
+`_process_items` wraps the incoming carrier in a new lazy layer — no data
+is loaded or computed at this point. The returned Items represents a
+deferred pipeline: "check my cache; if miss, pull from upstream."
+
+Execution is pull-based: when the consumer iterates the final Items, each
+item resolution walks backward through the lazy layers until it hits a
+cache hit or reaches the first step. If the last step is cached, upstream
+steps are never touched — the backward-walk optimization from today's
+`Chain._run` falls out for free, without special chain-level logic.
+
+For uid resolution:
+- **Preserve uid** (common case): the uid is known from the carrier without
+  pulling upstream values. Cache can be checked immediately.
+- **Reset uid**: must pull the upstream value to call `item_uid(value)`,
+  triggering upstream execution up to the reset point. This is inherent —
+  you need the value to know the new uid.
+
 The existing `Chain._run` logic (force propagation, backward cache-skip
-walk, per-step `infra.run()` calls) will need a significant refactor to
-operate on the Items carrier. This is expected — the current chain loop was
-designed before uid threading existed.
+walk, per-step `infra.run()` calls) is replaced by this lazy forward
+composition. The complexity moves from chain orchestration into the Items
+laziness model.
 
 ### Generator steps
 
