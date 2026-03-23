@@ -3,7 +3,7 @@
 This document is a **proposal** for the execution model that underpins both
 scalar and batch processing in the steps module. It covers identity
 (`item_uid`), the Items carrier, and the dispatch architecture
-(`run` → `_run_items` → `_run`). It is expected to be revised as
+(`run` → `_process_items` → `_run`). It is expected to be revised as
 implementation reveals simplifications or new constraints.
 
 The goal is a unified execution model where:
@@ -16,7 +16,7 @@ The current scalar Steps implementation falls back to
 requires an explicit `item_uid` callable at the decoration site.
 
 For the batch infrastructure concerns that build on this model (job
-distribution, `_run_batch_items`, error handling, backend hooks), see
+distribution, `_run_batch`, error handling, backend hooks), see
 [`map_design.md`](map_design.md).
 
 ---
@@ -323,28 +323,27 @@ Reasons:
 
 ## Execution Model
 
-### `run()` dispatches to `_run_items`
+### `run()` dispatches to `_process_items`
 
 `Step.run()` is the public entry point. It constructs an Items carrier and
-delegates to `_run_items`:
+delegates to `_process_items`:
 
-- `step.run(value)` — wraps into a singleton carrier, calls `_run_items`,
-  extracts and returns the single result.
-- `step.run(Items(...))` — calls `_run_items`, returns an iterator.
+- `step.run(value)` — wraps into a singleton carrier, calls
+  `_process_items`, extracts and returns the single result.
+- `step.run(Items(...))` — calls `_process_items`, returns an iterator.
 - `step.run()` (generator, no input) — wraps into `Items([NoValue()])`,
-  calls `_run_items`, extracts and returns the single result.
+  calls `_process_items`, extracts and returns the single result.
 
 The wrapping and unwrapping is trivial inline logic in `run()`, not separate
 helper functions.
 
-### `_run_items` defaults to calling `_run` per item
+### `_process_items` defaults to calling `_run` per item
 
-The default `Step._run_items(items)` implementation:
+The default `Step._process_items(items)` implementation:
 
 1. For each item in the carrier: resolve uid via the One Rule.
 2. Check cache per item.
-3. For cache misses: call `_run(value)` (or `_run_batch_items` if
-   overridden).
+3. For cache misses: call `_run(value)` (or `_run_batch` if overridden).
 4. Return a new Items carrier with results and updated carried uids.
 
 Step authors continue to implement `_run`. The Items machinery is
@@ -352,29 +351,26 @@ transparent to them — they never see Items unless they want to.
 
 ### Three hooks at different levels
 
-The naming is similar but the roles are distinct:
-
-| Hook | Level | Receives | Returns | Who overrides |
-|------|-------|----------|---------|---------------|
-| `_run_items` | Framework orchestration | `Items` carrier (uids, state) | `Items` carrier | Chain (to flow carrier through steps) |
-| `_run_batch_items` | User computation (vectorized) | `Sequence[T]` (raw values, cache misses) | `Sequence[R]` (raw results) | Step authors (GPU, vectorized ops) |
+| Hook | Role | Receives | Returns | Who overrides |
+|------|------|----------|---------|---------------|
+| `_process_items` | Framework orchestration (uid, cache, dispatch) | `Items` carrier (uids, state) | `Items` carrier | Chain; advanced steps (see [set-level steps](#set-level-steps)) |
+| `_run_batch` | User computation (vectorized) | `Sequence[T]` (raw values, cache misses) | `Sequence[R]` (raw results) | Step authors (GPU, vectorized ops) |
 | `_run` | User computation (per-item) | single value `T` | single result `R` | Step authors (default) |
 
-`_run_items` orchestrates: uid resolution, cache, dispatch. `_run` and
-`_run_batch_items` compute: no uid awareness, no cache awareness.
-`_run_batch_items` is defined in [`map_design.md`](map_design.md) as a
-batch optimization hook.
+`_process_items` orchestrates: uid resolution, cache, dispatch. `_run` and
+`_run_batch` compute: no uid awareness, no cache awareness. `_run_batch` is
+defined in [`map_design.md`](map_design.md) as a batch optimization hook.
 
-### Chain overrides `_run_items`, not `_run`
+### Chain overrides `_process_items`, not `_run`
 
 Chain's execution is inherently Items-level: it flows the carrier through a
-sequence of steps. It overrides `_run_items`, not `_run`:
+sequence of steps. It overrides `_process_items`, not `_run`:
 
 ```python
 # Conceptual shape
-def _run_items(self, items: Items) -> Items:
+def _process_items(self, items: Items) -> Items:
     for step in self._step_sequence():
-        items = step._run_items(items)
+        items = step._process_items(items)
     return items
 ```
 
@@ -393,6 +389,32 @@ Whether `NoValue` can be simplified — for example, by treating it as a
 property of the carrier rather than a sentinel value occupying an item
 slot — is an open implementation question. Any simplification that reduces
 `NoValue` plumbing would be welcome.
+
+### Set-level steps
+
+Some algorithms need to see all items at once to produce any result — PCA,
+k-means, vocabulary building. Their output for each item depends on the
+full input set, not just that item. This breaks two assumptions of the
+default `_process_items`: per-item uid independence and per-item caching.
+
+For example, a PCA step applied to HuggingFace embeddings computes a "set
+uid" by hashing all sorted item uids, then composes each item's cache key
+as `{set_uid},{item_uid}`. If one item is added or removed, every cache
+entry is invalidated. Caching is all-or-nothing: partial hits are errors
+because the PCA projection matrix depends on the full set.
+
+This is not in scope for v1, but `_process_items` is designed to be
+overrideable for this reason. The current thinking for handling set-level
+steps is: the step overrides `_process_items`, computes the set uid from
+all items on the first (batch) call, stores it as internal state, fits the
+model, and caches all per-item results. Subsequent per-item calls reuse
+the stored set uid for cache lookups. This avoids adding a separate
+`prepare` phase to the framework — the first `_process_items` call with
+the full batch *is* the preparation, and per-item calls after it are pure
+cache reads.
+
+This approach may be reconsidered if more set-level patterns emerge during
+implementation.
 
 ---
 
@@ -454,8 +476,8 @@ singleton Items carrier — the carrier exists either way, just informally.
 An informal carrier (two local variables) is harder to extend when the
 carrier gains new state (e.g. `_steps` tracking for chain hash). Since
 `Items` is both the public entry form and the internal carrier, the scalar
-case should normalize to a singleton `Items` and go through `_run_items`
-(see [Execution Model](#execution-model)).
+case should normalize to a singleton `Items` and go through
+`_process_items` (see [Execution Model](#execution-model)).
 
 ---
 
@@ -463,12 +485,12 @@ case should normalize to a singleton `Items` and go through `_run_items`
 
 This document defines the core execution model. `map_design.md` builds on
 it for batch-specific concerns:
-- `_run_batch_items` as a vectorized computation hook
+- `_run_batch` as a vectorized computation hook
 - job distribution and chunking (`max_jobs`, `to_chunks`)
 - error handling (fail fast, partial results, retry)
 - backend-specific execution (Slurm arrays, local pools)
 - deduplication mechanics
 - progress tracking
 
-`map_design.md` assumes the identity model, Items carrier, and `_run_items`
-dispatch defined here.
+`map_design.md` assumes the identity model, Items carrier, and
+`_process_items` dispatch defined here.

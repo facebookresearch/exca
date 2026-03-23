@@ -3,7 +3,7 @@
 This document covers the **batch infrastructure** for the steps module:
 job distribution, vectorized execution, error handling, and backend hooks.
 
-For the core execution model (identity, Items carrier, `_run_items` dispatch)
+For the core execution model (identity, Items carrier, `_process_items` dispatch)
 that both scalar and batch share, see
 [`items_execution_model.md`](items_execution_model.md). For the full
 exploration of rejected alternatives, see
@@ -38,7 +38,7 @@ with its per-step infrastructure model.
 ### Identity and dispatch
 
 The `item_uid` hook, Items carrier, One Rule (set/preserve/reset), and
-`_run_items` dispatch are defined in
+`_process_items` dispatch are defined in
 [`items_execution_model.md`](items_execution_model.md). This document
 builds on that model for batch-specific concerns.
 
@@ -61,9 +61,9 @@ folder/
 - `job_uid` = `item_uid` for single-item jobs,
   `hash(sorted(item_uids))` for batch chunks.
 
-### `_run_batch_items` hook
+### `_run_batch` hook
 
-Steps can optionally override `_run_batch_items` for efficient batch
+Steps can optionally override `_run_batch` for efficient batch
 processing (GPU inference, vectorized ops). The default calls `_run` per
 item.
 
@@ -84,15 +84,15 @@ class GPUClassifier(Step):
         return img.filename
 
     def _run(self, img: Image) -> str:
-        return self._run_batch_items([img])[0]
+        return self._run_batch([img])[0]
 
-    def _run_batch_items(self, images: Sequence[Image]) -> Sequence[str]:
+    def _run_batch(self, images: Sequence[Image]) -> Sequence[str]:
         return self._model.predict(images)
 ```
 
 In both patterns, results are cached per-item using `item_uid`. Job
 distribution is controlled by `max_jobs`. Each job processes a chunk via
-`_run_batch_items`.
+`_run_batch`.
 
 ### Error handling
 
@@ -150,7 +150,7 @@ Some algorithms (PCA, k-means) need all items at once and cannot
 meaningfully process a single item. How should `_run()` behave?
 
 Options:
-- Auto-wrap: `_run(value)` calls `_run_batch_items([value])[0]`
+- Auto-wrap: `_run(value)` calls `_run_batch([value])[0]`
 - Raise: `_run()` raises, forcing the user to use batch mode
 - Separate step type: batch-only steps are a distinct subclass
 
@@ -210,7 +210,7 @@ better fit for per-item batch work.
 The statement "partial results are cached" is naturally true for the
 default per-item execution path and for streaming batch implementations.
 
-For fully vectorized `_run_batch_items()` implementations that only return
+For fully vectorized `_run_batch()` implementations that only return
 a final `Sequence[...]`, this guarantee needs an explicit contract. Either:
 - the batch API must support incremental result emission/storage, or
 - the guarantee should be weakened for all-or-nothing batch kernels
@@ -236,9 +236,9 @@ So the orchestration is likely split between:
 - a generic batch layer (uids, ordering, laziness, per-item caching)
 - backend-specific execution hooks for how missing work is actually run
 
-### `_run_batch_items()` should be iterator-based
+### `_run_batch()` should be iterator-based
 
-`_run_batch_items()` should expose a streaming contract: one output per
+`_run_batch()` should expose a streaming contract: one output per
 input item, yielded in order.
 
 Rationale:
