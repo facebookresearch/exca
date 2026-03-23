@@ -394,13 +394,16 @@ def _process_items(self, items: Items) -> Items:
 This forward loop is simple because Items is lazy. Each step's
 `_process_items` wraps the incoming carrier in a new lazy layer — no data
 is loaded or computed at this point. The returned Items represents a
-deferred pipeline: "check my cache; if miss, pull from upstream."
+deferred pipeline: "check my cache; if hit, return cached; if miss, pull
+from upstream, compute, cache the result, and return it."
 
 Execution is pull-based: when the consumer iterates the final Items, each
 item resolution walks backward through the lazy layers until it hits a
-cache hit or reaches the first step. If the last step is cached, upstream
-steps are never touched — the backward-walk optimization from today's
-`Chain._run` falls out for free, without special chain-level logic.
+cache hit or reaches the first step. On the way back up, each step that
+computed (cache miss) writes its result to cache before returning it
+downstream. If the last step is cached, upstream steps are never touched —
+the backward-walk optimization from today's `Chain._run` falls out for
+free, without special chain-level logic.
 
 For uid resolution:
 - **Preserve uid** (common case): the uid is known from the carrier without
