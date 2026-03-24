@@ -451,15 +451,19 @@ class Chain(Step):
         return steps[0]._is_generator() if steps else True
 
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
-        """Create copy with optional Input prepended."""
+        """Create copy with Input(value) as _previous.
+
+        Unlike the base Step (which stores value in _previous directly),
+        Chain flattens/resolves child steps and rebuilds. The value goes
+        into _previous so that _get_input_value finds it — keeping cache
+        paths consistent between run() and has_cache().
+        """
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
         expanded = _resolve_all(self._step_sequence())
         steps: list[tp.Any] = [s.model_dump() for s in expanded]
-        if not isinstance(value, NoValue):
-            steps = [Input(value=value)] + steps
         chain = type(self)(steps=steps, infra=self.infra)
-        chain._previous = Input(value=NoValue())  # Mark chain as configured
+        chain._previous = Input(value=value)
         chain._init()
         # Sync cache_type: chain and last step share cache entry, must use same format
         last_step = chain._step_sequence()[-1]
@@ -488,7 +492,12 @@ class Chain(Step):
             previous = step
 
     def _run(self, value: tp.Any = NoValue()) -> tp.Any:
-        """Execute steps, using intermediate caches."""
+        """Execute steps, using intermediate caches.
+
+        When called via Backend.run(uid=...), self.infra._paths carries
+        the per-item uid which is propagated to child steps so that
+        intermediate caches use the correct key.
+        """
         steps = self._step_sequence()
 
         # Propagate force to downstream steps
@@ -501,27 +510,19 @@ class Chain(Step):
             elif force_active:
                 _set_mode_recursive([step], "force")
 
-        # Find latest cached result to skip already-computed steps
-        start_idx = 0
-        args: tp.Any = () if isinstance(value, NoValue) else (value,)
-        for k, step in enumerate(reversed(steps)):
-            if step.infra is None:
-                continue
-            if step.infra.mode == "force":
-                continue
-            if step.infra.has_cache():
-                args = (step.infra.cached_result(),)
-                start_idx = len(steps) - k
-                break
+        # Per-item uid from chain's Backend.run(uid=...) — propagate to child steps
+        item_uid = None
+        if self.infra is not None and self.infra._paths is not None:
+            item_uid = self.infra._paths.item_uid
 
-        # Run remaining steps
+        args: tp.Any = () if isinstance(value, NoValue) else (value,)
         total = len(steps)
-        for i, step in enumerate(steps[start_idx:], start=start_idx + 1):
+        for i, step in enumerate(steps, start=1):
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i, total, step_name)
             try:
                 if step.infra is not None:
-                    args = (step.infra.run(step._run, *args),)
+                    args = (step.infra.run(step._run, *args, uid=item_uid),)
                 else:
                     args = (step._run(*args),)
             except Exception as e:
@@ -532,31 +533,43 @@ class Chain(Step):
         return args[0]
 
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
-        chain = self.with_input(value) if self._previous is None else self
+        """Handle force propagation, then delegate to Step.run.
 
-        # Track force steps to reset after run
+        When any child step has force mode, the chain-level cache must be
+        invalidated — otherwise Backend.run returns the stale chain-level
+        hit without ever calling chain._run (which is where child force
+        takes effect). After execution, force modes on the *original*
+        steps are reset so subsequent calls use cache.
+        """
+        if isinstance(value, Items):
+            return super().run(value)
+
+        # Collect original steps with force (for reset after run)
         force_steps = [
             s
             for s in self._step_sequence() + (self,)
             if s.infra is not None and s.infra.mode == "force"
         ]
 
-        # Propagate force to all internal steps recursively
-        if chain.infra is not None and chain.infra.mode == "force":
-            _set_mode_recursive(chain._step_sequence(), "force")
+        if not force_steps:
+            return super().run(value)
 
-        if chain.infra is None:
-            result = chain._run()
-        else:
-            if force_steps:
-                chain.infra.clear_cache()
-            # Note: if the last step also has infra, it shares the same cache entry
-            # (same step_uid from _aligned_step flattening, same item_uid from original
-            # input). The last step writes first, chain finds cache hit - no duplication.
-            result = chain.infra.run(chain._run)
+        # Create configured copy (same copy Step.run would make)
+        configured = self.with_input(value) if self._previous is None else self
 
-        # Reset force on original steps after successful run
-        # (object.__setattr__ bypasses frozen model validation for TaskInfra)
+        # Propagate chain-level force to all children
+        if configured.infra is not None and configured.infra.mode == "force":
+            _set_mode_recursive(configured._step_sequence(), "force")
+
+        # Clear chain cache so Backend.run re-executes chain._run
+        if configured.infra is not None:
+            configured.infra.clear_cache()
+
+        # Delegate actual execution to Step.run (configured has _previous
+        # set, so Step.run uses it directly without another with_input)
+        result = Step.run(configured, value)
+
+        # Reset force on *original* steps (copies are discarded)
         for step in force_steps:
             object.__setattr__(step.infra, "mode", "cached")
 

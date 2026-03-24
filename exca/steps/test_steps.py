@@ -223,12 +223,11 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     assert result == 12.0  # (5 + 1) * 2
 
     # Check folder propagated to nested chain's step
-    # with_input() prepends Input to outer chain: [Input, inner_chain, Mult]
+    # with_input() sets Input(5.0) as _previous; steps remain [inner_chain, Mult]
     configured = outer_chain.with_input(5.0)
-    inner = configured._step_sequence()[1]  # Index 1 = inner_chain
+    inner = configured._step_sequence()[0]
     assert isinstance(inner, Chain)
-    # inner_chain's _step_sequence() is just [Add] (no Input prepended to inner)
-    inner_step = inner._step_sequence()[0]  # Index 0 = Add
+    inner_step = inner._step_sequence()[0]  # Add
     assert inner_step.infra is not None
     assert (
         inner_step.infra.folder == tmp_path

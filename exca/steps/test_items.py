@@ -187,3 +187,75 @@ def test_items_error_note() -> None:
         list(step.run(Items([0])))
     notes = getattr(exc_info.value, "__notes__", [])
     assert any("Add" in n for n in notes)
+
+
+# =============================================================================
+# Chain + Items (Phase 3)
+# =============================================================================
+
+
+def test_chain_items_no_infra() -> None:
+    """Chain forward-composes through Items without caching."""
+    from .base import Chain
+
+    chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Add(value=3.0)])
+    assert list(chain.run(Items([1.0, 5.0]))) == [5.0, 13.0]
+
+
+def test_chain_items_cached(tmp_path: Path) -> None:
+    """Chain with cached steps reuses results on second run."""
+    from .base import Chain
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(
+        steps=[conftest.Add(randomize=True, infra=infra), conftest.Mult(coeff=2.0)]
+    )
+    first = list(chain.run(Items([1.0, 2.0])))
+    second = list(chain.run(Items([1.0, 2.0])))
+    assert first == second
+
+
+def test_chain_items_cache_compat_with_scalar(tmp_path: Path) -> None:
+    """Chain scalar and Items paths share cache entries."""
+    from .base import Chain
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(
+        steps=[conftest.Add(randomize=True, infra=infra), conftest.Mult(coeff=2.0)]
+    )
+    scalar = chain.run(5.0)
+    items = list(chain.run(Items([5.0])))
+    assert items == [scalar]
+
+
+def test_chain_items_force(tmp_path: Path) -> None:
+    """Force propagates through chain and recomputes all items."""
+    from .base import Chain
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=[conftest.Add(randomize=True, infra=infra)], infra=infra)
+    first = list(chain.run(Items([1.0, 2.0])))
+    chain.infra.mode = "force"  # type: ignore[union-attr]
+    second = list(chain.run(Items([1.0, 2.0])))
+    assert second != first, "force should recompute"
+
+
+def test_chain_items_error_note() -> None:
+    """Errors during chain Items execution include step context."""
+    from .base import Chain
+
+    chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Add(value=5, error=True)])
+    with pytest.raises(ValueError) as exc_info:
+        list(chain.run(Items([0])))
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("Add" in n for n in notes)
+
+
+def test_nested_chain_items(tmp_path: Path) -> None:
+    """Nested chain forward-composes recursively with Items."""
+    from .base import Chain
+
+    inner = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Add(value=1.0)])
+    outer = Chain(steps=[inner, conftest.Mult(coeff=3.0)])
+    # 5 -> inner: 5*2+1=11 -> outer: 11*3=33
+    assert list(outer.run(Items([5.0]))) == [33.0]
