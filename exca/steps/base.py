@@ -27,6 +27,7 @@ from exca import utils
 
 from . import backends
 from .backends import NoValue
+from .items import Items
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,22 @@ class Step(exca.helpers.DiscriminatedModel):
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
+
+    # =========================================================================
+    # Item identity and Items dispatch
+    # =========================================================================
+
+    def item_uid(self, value: tp.Any) -> str | None:
+        """Uid policy for the value entering this step.
+
+        Return ``None`` to leave the uid unchanged (preserve incoming).
+        Return a non-empty string to set or reset the uid.
+        """
+        return None
+
+    def _process_items(self, items: Items) -> Items:
+        """Wrap upstream Items with this step's cache-or-compute logic."""
+        return Items._from_step(self, items)
 
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
         """Create copy with Input as _previous (Input holds value or NoValue)."""
