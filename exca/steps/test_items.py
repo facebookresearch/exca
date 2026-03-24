@@ -4,14 +4,16 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for Items carrier and item_uid resolution (Phase 1 foundation)."""
+"""Tests for Items carrier, item_uid resolution, and Items execution path."""
 
 import typing as tp
+from pathlib import Path
 
 import pytest
 
 import exca
 
+from . import conftest
 from .base import Step
 from .items import Items
 
@@ -78,7 +80,7 @@ def test_from_step_structure() -> None:
 
 
 # =============================================================================
-# _effective_uid: the One Rule
+# _derive_uid: the One Rule
 # =============================================================================
 
 
@@ -96,7 +98,7 @@ def test_from_step_structure() -> None:
     ],
     ids=["set", "fallback", "preserve", "reset"],
 )
-def test_effective_uid(
+def test_derive_uid(
     step: Step | None,
     incoming_uid: str | None,
     value: tp.Any,
@@ -107,11 +109,81 @@ def test_effective_uid(
 
     if step is None:
         step = conftest.Mult(coeff=2.0)
-    assert Items._effective_uid(step, incoming_uid, value) == expected_uid
+    assert step._derive_uid(incoming_uid, value) == expected_uid
 
 
-def test_effective_uid_empty_string_rejected() -> None:
+def test_derive_uid_empty_string_rejected() -> None:
     """item_uid returning empty string is an error."""
     step = FixedUidStep(uid="")
     with pytest.raises(ValueError, match="non-empty string"):
-        Items._effective_uid(step, None, "x")
+        step._derive_uid(None, "x")
+
+
+# =============================================================================
+# Items execution path (Phase 2)
+# =============================================================================
+
+
+def test_items_no_infra() -> None:
+    """step.run(Items(...)) works without caching (no infra)."""
+    step = conftest.Mult(coeff=3.0)
+    results = step.run(Items([2.0, 5.0, 10.0]))
+    assert list(results) == [6.0, 15.0, 30.0]
+
+
+def test_items_with_cache(tmp_path: Path) -> None:
+    """Items path caches per-item and reuses on second run."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(randomize=True, infra=infra)
+    values = [1.0, 2.0, 3.0]
+
+    first = list(step.run(Items(values)))
+    second = list(step.run(Items(values)))
+    assert first == second, "second run should return cached results"
+
+
+def test_items_cache_compat_with_scalar(tmp_path: Path) -> None:
+    """Items and scalar paths produce identical cache entries."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(randomize=True, infra=infra)
+
+    scalar_result = step.run(5.0)
+    items_results = list(step.run(Items([5.0])))
+    assert items_results == [scalar_result], "Items should find scalar's cache"
+
+
+@pytest.mark.parametrize("mode", ["force", "read-only"])
+def test_items_modes(tmp_path: Path, mode: str) -> None:
+    """Force recomputes; read-only raises on miss, hits on cached."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(randomize=True, infra=infra)
+
+    first = list(step.run(Items([1.0, 2.0])))
+
+    if mode == "force":
+        object.__setattr__(step.infra, "mode", "force")
+        second = list(step.run(Items([1.0, 2.0])))
+        assert second != first, "force should recompute"
+    else:
+        object.__setattr__(step.infra, "mode", "read-only")
+        cached = list(step.run(Items([1.0, 2.0])))
+        assert cached == first, "read-only should return cached"
+        with pytest.raises(RuntimeError, match="read-only"):
+            list(step.run(Items([999.0])))
+
+
+def test_items_custom_uid(tmp_path: Path) -> None:
+    """Custom item_uid changes per-item cache keys."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = FixedUidStep(uid="same-for-all", infra=infra)
+    results = list(step.run(Items(["a", "b"])))
+    assert results == ["a", "a"], "second item hits first item's cache (same uid)"
+
+
+def test_items_error_note() -> None:
+    """Errors during Items execution include step context."""
+    step = conftest.Add(value=5, error=True)
+    with pytest.raises(ValueError) as exc_info:
+        list(step.run(Items([0])))
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("Add" in n for n in notes)

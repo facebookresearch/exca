@@ -69,65 +69,72 @@ class Step:
         return None
 ```
 
-### Items: entry point, carrier, and lazy executor
+### Items: thin carrier
 
-Items is a single class that serves three roles:
+Items serves two roles:
 
 1. **Public entry point** — users create `Items(values)` and pass it to
    `step.run()`.
-2. **Internal carrier** — flows between steps, carrying uids and chain
-   context.
-3. **Lazy execution layer** — each step's `_process_items` returns a new
-   Items that wraps the upstream Items with cache-or-compute logic.
+2. **Internal carrier** — flows between steps as a linked list of lazy
+   nodes. Each node stores its step reference and upstream Items, but
+   contains no processing logic itself.
 
 ```python
 class Items:
-    def __init__(self, values: Iterable[Any] | Sequence[Any]) -> None:
+    __slots__ = ("_values", "_upstream", "_steps")
+
+    def __init__(self, values: Iterable[Any]) -> None:
         """Public constructor."""
         self._values = values
-        self._step: Step | None = None
         self._upstream: Items | None = None
-        self._steps: list[Step] = []       # chain since last uid reset
-        self._uids: list[str] | None = None
+        self._steps: list[Step] = []
 
     @classmethod
     def _from_step(cls, step: Step, upstream: "Items") -> "Items":
-        """Internal: wrap upstream with step's cache-or-compute logic."""
+        """Internal: create a lazy node wrapping upstream with step."""
         items = cls.__new__(cls)
         items._values = None
-        items._step = step
         items._upstream = upstream
-        # _steps and _uids updated during iteration
+        items._steps = list(upstream._steps) + [step]
         return items
 
-    def __iter__(self) -> Iterator[Any]:
-        if self._step is None:
-            yield from self._values        # direct mode
+    def _iter_with_uids(self) -> Iterator[tuple[Any, str | None]]:
+        """Yield (result, uid) pairs — internal protocol for chaining."""
+        if not self._steps:
+            yield from ((v, None) for v in self._values)
         else:
-            ...                             # lazy: uid, cache, _run
+            yield from self._steps[-1]._iter_items(self._upstream)
+
+    def __iter__(self) -> Iterator[Any]:
+        for value, _uid in self._iter_with_uids():
+            yield value
 ```
 
-A chain of three steps produces a linked list of Items:
+Items is deliberately thin — it stores structure (linked list of
+step nodes) and provides the `_iter_with_uids` protocol, but all
+processing logic (uid resolution, caching, `_run` dispatch) lives
+on Step. UIDs are not stored on Items; they flow ephemerally through
+the `_iter_with_uids` generator protocol and are consumed by the
+next step.
+
+A chain of three steps produces a linked list:
 
 ```
-Items(step=C, upstream=Items(step=B, upstream=Items(step=A, upstream=Items(values))))
+Items(steps=[A,B,C], upstream=Items(steps=[A,B], upstream=Items(steps=[A], upstream=Items(values))))
 ```
 
-Each node knows its step and its upstream. Iteration pulls through the
-chain: the outermost Items asks its step to resolve each item (uid, cache
-check), pulling from upstream only on cache miss. No separate lazy wrapper
-class — Items itself is the wrapper.
+Iteration is pull-based: `Items._iter_with_uids()` delegates to
+`step._iter_items(upstream)`, which pulls from upstream on demand.
 
-`_process_items` returns a new Items node:
+`_process_items` creates the lazy node:
 
 ```python
 def _process_items(self, items: Items) -> Items:
     return Items._from_step(self, items)
 ```
 
-This is a starting point — the implementation may diverge if the merged
-approach becomes unwieldy, but the interface (`_process_items` receives
-Items, returns Items) stays the same regardless.
+`_iter_items` on Step does all the work (see
+[Step owns per-item processing](#step-owns-per-item-processing)).
 
 ### Public vs internal
 
@@ -136,13 +143,15 @@ The **public** surface of `Items` is:
 1. **Construction** — `Items(values)`.
 2. **Passing to `step.run()`** — the only thing users do after construction.
 
-The internal construction (`_from_step`) and all carrier state (`_step`,
-`_upstream`, `_steps`, `_uids`) are framework-private. Users never see
-them.
+Users do not interact with UIDs. UIDs are purely internal framework
+machinery — computed, carried, and consumed by the framework without
+user involvement.
+
+The internal construction (`_from_step`) and all carrier state
+(`_upstream`, `_steps`) are framework-private. Users never see them.
 
 `Items.__iter__` must be lazy so that large datasets need not be
-materialized upfront. The exact input type accepted by the public
-constructor (`Iterable` vs `Sequence`) is not settled by this design.
+materialized upfront.
 
 The public API remains:
 - `step.run(value)` for a single value
@@ -150,55 +159,49 @@ The public API remains:
 
 ### Internal state
 
-`Items` is not just the public entry point — it is also the **carrier** that
-flows between steps in a chain. As it moves through the chain, the framework
-attaches internal state. The user creates `Items(values)`; by the time it
-reaches step N, it carries everything needed for cache resolution and uid
-propagation.
+Items is a thin carrier — it stores structure, not processing logic.
 
-Internal state per item:
-- **value** — the current value (output of the previous step, or original
-  input for the first step).
-- **carried uid** — the current uid for this item (set/preserved/reset by the
-  One Rule at each step).
+Per-item state (value and carried uid) flows ephemerally through the
+`_iter_with_uids` generator protocol. UIDs are never stored on the Items
+object; they are computed by `_iter_items` on Step, yielded as
+`(value, uid)` tuples, and consumed by the next step. Values are not
+materialized unless explicitly required.
 
-Internal state on the Items object:
-- **upstream steps** (`_steps`) — the step chain traversed **since the last
-  uid reset**. When a step resets the uid, the upstream chain restarts from
-  that step. Needed for cache folder resolution: only the steps since the
-  last reset contribute to the folder hash for the current item.
+Structural state on the Items object:
+- **`_steps`** — the step chain accumulated so far. Each `_from_step`
+  call appends the step. Used to identify the current step
+  (`_steps[-1]`) and for future folder computation.
+- **`_upstream`** — pointer to the previous Items node.
+- **`_values`** — the root values (only on the root node).
 
-`_steps` is shared across all items in the batch. This assumes that a given
-step's `item_uid` either always returns a uid or always returns `None` — i.e.,
-the decision to set/reset is uniform across items at each step (the uid
-*values* differ per item, but the reset *point* is the same for all). Per-item
-branching of `_steps` is not supported.
+**Open question**: the current `_chain_hash()` logic computes the folder
+from step configs only; it does not account for per-item uid resets.
+Introducing carried uids makes the chain hash and the item uid
+interdependent — the folder may need to reflect which step last set
+the uid. This interaction needs to be worked out during implementation
+and may simplify or restructure `_chain_hash()`.
 
-**Open question**: the current `_chain_hash()` logic computes the folder from
-step configs only; it does not account for per-item uid resets. Introducing
-carried uids makes the chain hash and the item uid interdependent — the
-folder may need to reflect which step last set the uid. This interaction
-needs to be worked out during implementation and may simplify or restructure
-`_chain_hash()`.
-
-**Potential simplification**: the carrier's `_steps` list may replace the
-existing `_previous` / `with_input` / `_aligned_chain()` machinery entirely.
-Today, `run()` calls `with_input(value)` which deep-copies the step and
-sets `_previous = Input(value)`. The copy is needed because `_previous` is
+**Tension with the copy pattern**: today, `run()` calls
+`with_input(value)` which deep-copies the step and sets
+`_previous = Input(value)`. The copy is needed because `_previous` is
 mutable state on the step — without it, concurrent `run()` calls would
-clobber each other. The infra's ram_cache must then be synced back from the
-copy to the original.
+clobber each other. The infra's `_ram_cache` must then be synced back
+from the copy to the original. With Items as carrier, the chain context
+could live on the carrier instead of the step, which might simplify or
+eliminate the copy pattern. Whether that pans out depends on how
+`_chain_hash()` and Backend evolve.
 
-With Items as carrier, the chain context lives on the carrier, not on the
-step. The step is never mutated by `run()`, so no deep copy is needed, no
-sync-back is required, and concurrent `run()` calls on the same step are
-safe by construction (each gets its own carrier). This would collapse
-`_previous`, `with_input`, `_aligned_chain()`, and the `model_copy` +
-state sync-back pattern into the carrier's `_steps` list.
-
-At chain entry the carrier has no uids and no upstream steps. After each
-step, the framework updates the carried uids and appends the step to the
-upstream chain.
+**Known issue — force mode and the copy pattern**: `run()` calls
+`with_input()` which deep-copies the step. Force-mode reset and
+`_ram_cache` sync must then be applied back to the original step after
+execution. For scalar this works (execution is immediate). For batch the
+Items are lazy — `run()` returns before iteration, so the original's
+force mode is not reset, making batch force sticky. Additionally,
+`_ram_cache` on Backend caches a single value, which is useless for
+batch (CacheDict already has a built-in memory cache that works
+per-uid). These may need revisiting — possible directions include
+removing the copy pattern or deprecating `_ram_cache` in favor of
+CacheDict, but the right fix is unclear.
 
 Cache-backed resumption is handled by Items laziness: each step's
 `_process_items` returns a lazy carrier whose items check cache on demand
@@ -210,9 +213,9 @@ internally. There should not be:
 - one scalar runner that manually threads a local `current_uid`
 - a separate batch runner that uses `Items`
 
-That split would duplicate the core uid logic. The clean implementation shape
-is Items as both public entry form and internal carrier, with one chain
-engine.
+That split would duplicate the core uid logic. The clean implementation
+shape is Items as both public entry form and internal carrier, with one
+chain engine.
 
 ---
 
@@ -401,38 +404,61 @@ Reasons:
 (which may expand the step into a Chain), then constructs an Items carrier
 and delegates to `_process_items`:
 
-- `step.run(value)` — wraps into a singleton carrier, calls
+- `step.run(value)` — wraps into `Items([value])`, calls
   `_process_items`, extracts and returns the single result.
-- `step.run(Items(...))` — calls `_process_items`, returns an iterator.
+- `step.run(Items(...))` — calls `_process_items`, returns the Items.
 - `step.run()` (generator, no input) — wraps into `Items([NoValue()])`,
   calls `_process_items`, extracts and returns the single result.
 
-The wrapping and unwrapping is trivial inline logic in `run()`, not separate
-helper functions.
+The wrapping and unwrapping is trivial inline logic in `run()`, not
+separate helper functions. There is **one code path** for scalar and
+batch — scalar is just Items with one element.
 
-### `_process_items` defaults to calling `_run` per item
+### Step owns per-item processing
 
-The default `Step._process_items(items)` implementation:
+Items is a thin carrier. The step owns all processing logic through two
+methods:
 
-1. For each item in the carrier: resolve uid via the One Rule.
-2. Check cache per item.
-3. For cache misses: call `_run(value)` (or `_run_batch` if overridden).
-4. Return a new Items carrier with results and updated carried uids.
+- **`_process_items(items) -> Items`** — creates the lazy Items node.
+  Default: `Items._from_step(self, items)`. Chain overrides this for
+  forward composition.
+
+- **`_iter_items(upstream) -> Iterator[(result, uid)]`** — the core
+  per-item processing generator. Called lazily by
+  `Items._iter_with_uids()` when the Items node is iterated. This method:
+
+  1. Iterates upstream items via `upstream._iter_with_uids()`.
+  2. Resolves uid per item via `Step._derive_uid()`.
+  3. Delegates to `infra.run(self._run, value, uid=uid)` for
+     cache-or-compute with full backend support (submitit, inflight
+     dedup, retry, error caching).
+  4. Yields `(result, uid)` pairs.
+
+  Steps without infra call `self._run(value)` directly.
+
+Currently `_iter_items` delegates to `infra.run()` per item with a
+`uid` parameter override. This reuses the existing Backend feature set
+rather than reimplementing caching logic. The per-item override may
+not be the long-term interface — Backend may evolve for multi-item
+computation — but it works for now.
 
 Step authors continue to implement `_run`. The Items machinery is
 transparent to them — they never see Items unless they want to.
 
 ### Three hooks at different levels
 
-| Hook | Role | Receives | Returns | Who overrides |
-|------|------|----------|---------|---------------|
-| `_process_items` | Framework orchestration (uid, cache, dispatch) | `Items` carrier (uids, state) | `Items` carrier | Chain; advanced steps (see [set-level steps](#set-level-steps)) |
-| `_run_batch` | User computation (vectorized) | `Sequence[T]` (raw values, cache misses) | `Sequence[R]` (raw results) | Step authors (GPU, vectorized ops) |
-| `_run` | User computation (per-item) | single value `T` | single result `R` | Step authors (default) |
+- **`_process_items`** — Framework orchestration. Receives and returns
+  `Items` carrier. Override point for Chain (forward composition) and
+  advanced steps (set-level, see below).
+- **`_run_batch`** — User computation (vectorized). Receives
+  `Sequence[T]` (raw values, cache misses), returns `Sequence[R]`.
+  Step authors override for GPU / vectorized ops. Defined in
+  [`map_design.md`](map_design.md).
+- **`_run`** — User computation (per-item). Receives single value `T`,
+  returns single result `R`. Step authors override (default).
 
-`_process_items` orchestrates: uid resolution, cache, dispatch. `_run` and
-`_run_batch` compute: no uid awareness, no cache awareness. `_run_batch` is
-defined in [`map_design.md`](map_design.md) as a batch optimization hook.
+`_process_items` orchestrates: uid resolution, cache, dispatch. `_run`
+and `_run_batch` compute: no uid awareness, no cache awareness.
 
 ### Chain overrides `_process_items`, not `_run`
 
@@ -462,16 +488,18 @@ the backward-walk optimization from today's `Chain._run` falls out for
 free, without special chain-level logic.
 
 For uid resolution:
-- **Preserve uid** (common case): the uid is known from the carrier without
-  pulling upstream values. Cache can be checked immediately.
+- **Preserve uid** (common case): the uid is unchanged. In principle,
+  cache could be checked without pulling upstream values (an
+  optimization not yet implemented).
 - **Reset uid**: must pull the upstream value to call `item_uid(value)`,
   triggering upstream execution up to the reset point. This is inherent —
   you need the value to know the new uid.
 
 The existing `Chain._run` logic (force propagation, backward cache-skip
-walk, per-step `infra.run()` calls) is replaced by this lazy forward
-composition. The complexity moves from chain orchestration into the Items
-laziness model.
+walk, per-step `infra.run()` calls) could be replaced by this lazy
+forward composition — the backward-walk optimization would fall out
+naturally from per-step cache checks. Whether this simplification is
+worth pursuing depends on how Chain migration goes.
 
 ### Generator steps
 
@@ -533,8 +561,10 @@ Earlier drafts had `Items(items, uids=..., steps=...)` so the caller could
 supply external ids or an upstream chain for cache-backed iteration.
 
 Rejected because:
-- caller-provided uids make the caller co-own uid policy, which this proposal
-  intentionally rejects — the step is the sole owner
+- users do not interact with UIDs — UIDs are purely internal framework
+  machinery
+- caller-provided uids make the caller co-own uid policy, which this
+  proposal intentionally rejects — the step is the sole owner
 - cache-backed iteration and resumption are framework-internal concerns;
   the framework already knows the chain context when executing `step.run()`
 - removing these from the public constructor keeps `Items` minimal:

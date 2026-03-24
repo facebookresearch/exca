@@ -371,8 +371,22 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Execution
     # =========================================================================
 
-    def run(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> tp.Any:
-        """Execute function with caching based on mode."""
+    def run(
+        self, func: tp.Callable[..., tp.Any], *args: tp.Any, uid: str | None = None
+    ) -> tp.Any:
+        """Execute function with caching based on mode.
+
+        If *uid* is provided it overrides the item_uid that would normally
+        be derived from the step's input value.  Used by ``_iter_items``
+        so that Items-path execution reuses the full Backend feature set
+        (submitit, inflight dedup, retry, error caching).
+        """
+        if uid is not None:
+            self._paths = StepPaths(
+                base_folder=self.folder,  # type: ignore[arg-type]
+                step_uid=self._step._chain_hash(),  # type: ignore[union-attr]
+                item_uid=uid,
+            )
         # Check config consistency before running
         self._check_configs(write=True)
 

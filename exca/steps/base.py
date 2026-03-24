@@ -233,9 +233,47 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         return None
 
+    def _derive_uid(self, incoming_uid: str | None, value: tp.Any) -> str:
+        """Derive the item uid for *value* at this step (the One Rule).
+
+        1. If ``self.item_uid(value)`` returns a non-empty string, use it.
+        2. Else if *incoming_uid* exists, preserve it.
+        3. Else fall back to ``ConfDict(value=value).to_uid()``.
+        """
+        uid = self.item_uid(value)
+        if uid is not None:
+            if not uid:
+                raise ValueError("item_uid() must return a non-empty string or None")
+            return uid
+        if incoming_uid is not None:
+            return incoming_uid
+        return exca.ConfDict(value=value).to_uid()
+
     def _process_items(self, items: Items) -> Items:
         """Wrap upstream Items with this step's cache-or-compute logic."""
         return Items._from_step(self, items)
+
+    def _iter_items(self, upstream: Items) -> tp.Iterator[tuple[tp.Any, str | None]]:
+        """Lazily process upstream items: uid resolution, cache, _run.
+
+        Called by Items._iter_with_uids when this step's Items node is iterated.
+        Delegates to ``infra.run(uid=...)`` for full backend support.
+        """
+        for value, incoming_uid in upstream._iter_with_uids():
+            if isinstance(value, NoValue):
+                uid = incoming_uid or backends._NOINPUT_UID
+                args: tuple[tp.Any, ...] = ()
+            else:
+                uid = self._derive_uid(incoming_uid, value)
+                args = (value,)
+            try:
+                if self.infra is not None:
+                    yield self.infra.run(self._run, *args, uid=uid), uid
+                else:
+                    yield self._run(*args), uid
+            except Exception as e:
+                e.add_note(f"  -> in {self!r}")
+                raise
 
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
         """Create copy with Input as _previous (Input holds value or NoValue)."""
@@ -249,34 +287,41 @@ class Step(exca.helpers.DiscriminatedModel):
         return step
 
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
-        """Execute with caching and backend handling."""
+        """Execute with caching and backend handling.
+
+        Scalar values are wrapped in ``Items([value])`` and go through
+        ``_process_items`` — one code path for scalar and batch.
+        """
         built = self._resolve_step()
         if built is not self:
             return built.run(value)
 
-        step = self.with_input(value) if self._previous is None else self
-        prev = step._previous
+        batch = isinstance(value, Items)
+        if self._previous is None:
+            step = self.with_input()
+        else:
+            step = self
+            # Honor value stored by with_input() when run() has no explicit arg
+            if (
+                not batch
+                and isinstance(value, NoValue)
+                and isinstance(self._previous, Input)
+            ):
+                value = self._previous.value
 
-        # prev is always Input after with_input()
-        if not isinstance(prev, Input):
-            raise RuntimeError("Step not properly configured")
+        items = value if batch else Items([value])
+        result_items = step._process_items(items)
 
-        args: tp.Any = () if isinstance(prev.value, NoValue) else (prev.value,)
-        try:
-            if step.infra is None:
-                result = step._run(*args)
-            else:
-                result = step.infra.run(step._run, *args)
-        except Exception as e:
-            e.add_note(f"  -> in {step!r}")
-            raise
+        if batch:
+            return result_items
 
-        # Sync state back to original step's infra (with_input creates a copy)
+        result = next(iter(result_items))
+        # deprecated: _ram_cache sync should be replaced by CacheDict's
+        # built-in memory cache, removing this sync-back entirely.
         if step is not self and self.infra is not None:
             self.infra._ram_cache = step.infra._ram_cache  # type: ignore[union-attr]
             if self.infra.mode == "force":
                 object.__setattr__(self.infra, "mode", "cached")
-
         return result
 
     def forward(self, value: tp.Any = NoValue()) -> tp.Any:  # deprecated: use run()
