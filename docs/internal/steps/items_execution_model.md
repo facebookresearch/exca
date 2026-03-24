@@ -4,7 +4,9 @@ This document is a **proposal** for the execution model that underpins both
 scalar and batch processing in the steps module. It covers identity
 (`item_uid`), the Items carrier, and the dispatch architecture
 (`run` → `_process_items` → `_run`). It is expected to be revised as
-implementation reveals simplifications or new constraints.
+implementation reveals simplifications or new constraints. API changes
+— both internal and public — should be considered any time they lead to
+a simpler or clearer implementation.
 
 The goal is a unified execution model where:
 - scalar `step.run(value)` and batch `step.run(Items(...))` share the same
@@ -181,27 +183,23 @@ interdependent — the folder may need to reflect which step last set
 the uid. This interaction needs to be worked out during implementation
 and may simplify or restructure `_chain_hash()`.
 
-**Tension with the copy pattern**: today, `run()` calls
-`with_input(value)` which deep-copies the step and sets
-`_previous = Input(value)`. The copy is needed because `_previous` is
-mutable state on the step — without it, concurrent `run()` calls would
-clobber each other. The infra's `_ram_cache` must then be synced back
-from the copy to the original. With Items as carrier, the chain context
-could live on the carrier instead of the step, which might simplify or
-eliminate the copy pattern. Whether that pans out depends on how
-`_chain_hash()` and Backend evolve.
+**Copy pattern**: `run()` calls `with_input()` which deep-copies the
+step and sets `_previous = Input(value)`. The copy is needed because
+`_previous` is mutable state and `_init` modifies child steps. The
+copy could be made cheaper (see
+[`with_input` and `_previous`](#with_input-and-_previous)), but
+eliminating it requires `Backend` to become stateless (no `_paths`,
+`_ram_cache` stored on the instance).
 
-**Known issue — force mode and the copy pattern**: `run()` calls
-`with_input()` which deep-copies the step. Force-mode reset and
-`_ram_cache` sync must then be applied back to the original step after
+**Known issue — force mode and the copy pattern**: force-mode reset and
+`_ram_cache` sync must be applied back to the original step after
 execution. For scalar this works (execution is immediate). For batch the
 Items are lazy — `run()` returns before iteration, so the original's
 force mode is not reset, making batch force sticky. Additionally,
 `_ram_cache` on Backend caches a single value, which is useless for
 batch (CacheDict already has a built-in memory cache that works
-per-uid). These may need revisiting — possible directions include
-removing the copy pattern or deprecating `_ram_cache` in favor of
-CacheDict, but the right fix is unclear.
+per-uid). Deprecating `_ram_cache` in favor of CacheDict is the likely
+fix.
 
 Cache-backed resumption is handled by Items laziness: each step's
 `_process_items` returns a lazy carrier whose items check cache on demand
@@ -495,11 +493,104 @@ For uid resolution:
   triggering upstream execution up to the reset point. This is inherent —
   you need the value to know the new uid.
 
-The existing `Chain._run` logic (force propagation, backward cache-skip
-walk, per-step `infra.run()` calls) could be replaced by this lazy
-forward composition — the backward-walk optimization would fall out
-naturally from per-step cache checks. Whether this simplification is
-worth pursuing depends on how Chain migration goes.
+#### Chain with infra
+
+When a Chain has its own `infra`, it wraps the lazy pipeline in an
+additional caching layer. `_process_items` becomes:
+
+```python
+def _process_items(self, items: Items) -> Items:
+    # (1) Eagerly propagate force downstream before building lazy chain
+    self._propagate_force()
+    if self.infra is not None:
+        # Opaque wrapper: chain-level cache around lazy internals
+        return Items._from_step(self, items)
+    else:
+        # Transparent: compose lazily through children
+        for step in self._step_sequence():
+            items = step._process_items(items)
+        return items
+```
+
+The chain-level cache and the last child step's cache share the same
+entry (same `step_uid` from `_aligned_step` flattening, same `item_uid`
+from the input). On a chain cache hit, upstream steps are never touched.
+On a miss, `Chain._run` builds the lazy pipeline from children and
+consumes it:
+
+```python
+def _run(self, value=NoValue()):
+    items = Items([NoValue()] if isinstance(value, NoValue) else [value])
+    for step in self._step_sequence():
+        items = step._process_items(items)
+    return next(iter(items))
+```
+
+Each child step checks its own cache independently — the backward-walk
+optimization is implicit in the laziness. No manual `start_idx`
+calculation or explicit uid propagation needed.
+
+#### Force mode and lazy composition
+
+Force mode interacts with lazy composition at two levels:
+
+1. **Force on a child step**: the child's `Backend.run` sees
+   `mode="force"`, clears its cache, and re-executes. Downstream steps
+   re-execute because their inputs change (they are downstream in the
+   lazy pipeline).
+
+2. **Force on a child when chain has infra**: the chain-level cache must
+   also be invalidated, otherwise `Backend.run` returns the stale
+   chain-level hit without reaching `Chain._run`. This is handled by
+   `_process_items` promoting child force to the chain level before
+   returning the opaque `Items._from_step`.
+
+Force propagation (step N has force → downstream steps also get force)
+must happen eagerly, before lazy composition. The lazy pipeline itself
+does not propagate force — it just sees the modes that were set.
+
+Force mode reset on original steps (so subsequent calls use cache) is
+handled by `Chain.run` after `super().run()` returns:
+
+```python
+def run(self, value=NoValue()):
+    result = super().run(value)
+    for step in self._step_sequence():
+        if step.infra and step.infra.mode == "force":
+            object.__setattr__(step.infra, "mode", "cached")
+    return result
+```
+
+The exact force semantics are messy (the copy pattern means force reset
+only works for scalar, not batch — see known issues below). The current
+goal is to get lazy composition working with reasonable force behavior,
+not to perfect force semantics.
+
+#### `with_input` and `_previous`
+
+`with_input(value)` remains the API for configuring a step with an input
+value. It creates a copy (needed because `_previous` is mutable state and
+`_init` modifies child steps). The copy is used for:
+
+- **Cache operations**: `step.with_input(5.0).has_cache()` — the copy has
+  `_previous = Input(5.0)`, allowing `_get_input_value()` to find the
+  value and compute the cache path.
+- **`run()` setup**: `Step.run` calls `with_input()` to create a
+  configured copy before building the Items pipeline. This is needed for
+  `_chain_hash()` (which walks `_previous`) and folder propagation (via
+  `_init`).
+
+`_previous` carries two things: chain structure (for `_chain_hash`) and
+input value (for `_get_input_value`). Both are needed at query time, not
+construction time, because users may mutate step configs after
+construction.
+
+The copy in `Chain.with_input` could be made cheaper (currently it
+serializes/deserializes all child steps via `model_dump`). Using
+`model_copy(deep=True)` + `_init` instead would be a pragmatic
+improvement. Eliminating the copy entirely is possible if `Backend`
+becomes more stateless (no `_paths`, `_ram_cache` stored on the
+instance), but that is a larger refactor.
 
 ### Generator steps
 

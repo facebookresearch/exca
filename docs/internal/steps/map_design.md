@@ -2,6 +2,8 @@
 
 This document covers the **batch infrastructure** for the steps module:
 job distribution, vectorized execution, error handling, and backend hooks.
+API changes should be considered any time they lead to a simpler or
+clearer implementation.
 
 For the core execution model (identity, Items carrier, `_process_items` dispatch)
 that both scalar and batch share, see
