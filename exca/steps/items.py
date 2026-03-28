@@ -30,12 +30,12 @@ class Items:
     Internal state is framework-private; users only construct and pass.
     """
 
-    __slots__ = ("_values", "_upstream", "_steps")
+    __slots__ = ("_values", "_upstream", "_step")
 
     def __init__(self, values: tp.Iterable[tp.Any]) -> None:
         self._values: tp.Iterable[tp.Any] | None = values
         self._upstream: Items | None = None
-        self._steps: list[Step] = []
+        self._step: Step | None = None
 
     @classmethod
     def _from_step(cls, step: "Step", upstream: "Items") -> "Items":
@@ -43,17 +43,17 @@ class Items:
         items = cls.__new__(cls)
         items._values = None
         items._upstream = upstream
-        items._steps = list(upstream._steps) + [step]
+        items._step = step
         return items
 
     def _iter_with_uids(self) -> tp.Iterator[tuple[tp.Any, str | None]]:
         """Yield (result, uid) pairs — internal protocol for chaining."""
-        if not self._steps:
+        if self._step is None:
             assert self._values is not None
             yield from ((v, None) for v in self._values)
         else:
             assert self._upstream is not None
-            yield from self._steps[-1]._iter_items(self._upstream)
+            yield from self._step._iter_items(self._upstream)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         for value, _uid in self._iter_with_uids():

@@ -227,8 +227,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def paths(self) -> StepPaths:
         """Get StepPaths for this step (cached).
 
-        Auto-configures generators (no input). For transformers, requires
-        initialization via with_input().
+        Used by external API (has_cache, clear_cache, job).
+        In the run path, _paths is set directly by run().
         """
         if self._paths is not None:
             return self._paths
@@ -238,15 +238,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             )
         if self._step is None:
             raise RuntimeError("Backend not attached to a Step")
-        # Auto-configure generators; require initialization for transformers
-        if self._step._previous is None:
-            if self._step._is_generator():
-                # Use _configured_step to get auto-configured version
-                pass  # _get_input_value handles this via _configured_step
-            else:
-                raise RuntimeError(
-                    "Step not initialized. Use step.with_input(value) first."
-                )
+        if self._step._previous is None and not self._step._is_generator():
+            raise RuntimeError("Step not initialized. Use step.with_input(value) first.")
         value = self._get_input_value()
         self._paths = StepPaths.from_step(self.folder, self._step, value)
         return self._paths
@@ -371,23 +364,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Execution
     # =========================================================================
 
-    def run(
-        self, func: tp.Callable[..., tp.Any], *args: tp.Any, uid: str | None = None
-    ) -> tp.Any:
+    def run(self, func: tp.Callable[..., tp.Any], *args: tp.Any, uid: str) -> tp.Any:
         """Execute function with caching based on mode.
 
-        If *uid* is provided it overrides the item_uid that would normally
-        be derived from the step's input value.  Used by ``_iter_items``
-        so that Items-path execution reuses the full Backend feature set
-        (submitit, inflight dedup, retry, error caching).
+        *uid* is the per-item cache key, provided by ``run_items``.
         """
-        if uid is not None:
-            self._paths = StepPaths(
-                base_folder=self.folder,  # type: ignore[arg-type]
-                step_uid=self._step._chain_hash(),  # type: ignore[union-attr]
-                item_uid=uid,
-            )
-        # Check config consistency before running
+        self._paths = StepPaths(
+            base_folder=self.folder,  # type: ignore[arg-type]
+            step_uid=self._step._chain_hash(),  # type: ignore[union-attr]
+            item_uid=uid,
+        )
         self._check_configs(write=True)
 
         # Check RAM cache first (survives disk deletion)
@@ -466,6 +452,23 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         job.result()
         return self._load_cache()
+
+    def run_items(
+        self,
+        func: tp.Callable[..., tp.Any],
+        items: list[tuple[str, tuple[tp.Any, ...]]],
+    ) -> tp.Iterator[tuple[tp.Any, str]]:
+        """Execute items with caching. Yields (result, uid) in input order.
+
+        Each item is ``(uid, args)`` where *uid* is the per-item cache key
+        and *args* is the argument tuple for *func*.
+
+        Currently delegates to ``run()`` per item.  This is the hook that
+        will be upgraded for batch job submission (chunking, submitit
+        arrays) without changing callers.
+        """
+        for uid, args in items:
+            yield self.run(func, *args, uid=uid), uid
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
         """Submit wrapper for execution. Default: inline execution."""

@@ -14,6 +14,7 @@ import pytest
 import exca
 
 from . import conftest
+from .backends import NoValue
 from .base import Step
 from .items import Items
 
@@ -62,7 +63,7 @@ def test_items_lazy_input() -> None:
 
 
 def test_from_step_structure() -> None:
-    """_from_step creates a linked list with accumulated _steps, no aliasing."""
+    """_from_step creates a linked list: each node holds one step reference."""
     from . import conftest
 
     step_a = conftest.Mult(coeff=2.0)
@@ -71,52 +72,54 @@ def test_from_step_structure() -> None:
     node_a = Items._from_step(step_a, root)
     node_b = Items._from_step(step_b, node_a)
 
-    assert root._steps == [] and root._upstream is None
-    assert node_a._steps == [step_a] and node_a._upstream is root
-    assert node_b._steps == [step_a, step_b] and node_b._upstream is node_a
-
-    node_b._steps.append(conftest.Add())
-    assert node_a._steps == [step_a], "mutating child must not affect parent"
+    assert root._step is None and root._upstream is None
+    assert node_a._step is step_a and node_a._upstream is root
+    assert node_b._step is step_b and node_b._upstream is node_a
 
 
 # =============================================================================
-# _derive_uid: the One Rule
+# _prepare_item: the One Rule + NoValue handling
 # =============================================================================
 
 
 @pytest.mark.parametrize(
-    "step,incoming_uid,value,expected_uid",
+    "step,incoming_uid,value,expected_uid,expected_args",
     [
         # set: step returns uid, no incoming
-        (FixedUidStep(uid="my-uid"), None, "x", "my-uid"),
+        (FixedUidStep(uid="my-uid"), None, "x", "my-uid", ("x",)),
         # fallback: step returns None, no incoming -> ConfDict
-        (None, None, 42, exca.ConfDict(value=42).to_uid()),
+        (None, None, 42, exca.ConfDict(value=42).to_uid(), (42,)),
         # preserve: step returns None, incoming exists
-        (None, "keep-me", 99, "keep-me"),
+        (None, "keep-me", 99, "keep-me", (99,)),
         # reset: step returns uid, replaces incoming
-        (FixedUidStep(uid="new"), "old", "x", "new"),
+        (FixedUidStep(uid="new"), "old", "x", "new", ("x",)),
+        # novalue: generator with no incoming uid
+        (None, None, NoValue(), "__exca_no_input__", ()),
+        # novalue with incoming uid: preserve
+        (None, "gen-uid", NoValue(), "gen-uid", ()),
     ],
-    ids=["set", "fallback", "preserve", "reset"],
+    ids=["set", "fallback", "preserve", "reset", "novalue", "novalue-uid"],
 )
-def test_derive_uid(
+def test_prepare_item(
     step: Step | None,
     incoming_uid: str | None,
     value: tp.Any,
     expected_uid: str,
+    expected_args: tuple[tp.Any, ...],
 ) -> None:
-    """All four One Rule outcomes: set, fallback, preserve, reset."""
+    """All One Rule outcomes plus NoValue handling."""
     from . import conftest
 
     if step is None:
         step = conftest.Mult(coeff=2.0)
-    assert step._derive_uid(incoming_uid, value) == expected_uid
+    assert step._prepare_item(value, incoming_uid) == (expected_uid, expected_args)
 
 
-def test_derive_uid_empty_string_rejected() -> None:
+def test_prepare_item_empty_string_rejected() -> None:
     """item_uid returning empty string is an error."""
     step = FixedUidStep(uid="")
     with pytest.raises(ValueError, match="non-empty string"):
-        step._derive_uid(None, "x")
+        step._prepare_item("x", None)
 
 
 # =============================================================================

@@ -696,6 +696,137 @@ case should normalize to a singleton `Items` and go through
 
 ---
 
+## Query API — open design
+
+The current query API (`has_cache`, `clear_cache`, `job`) relies on
+`with_input` to configure a step copy before querying.  This section
+captures architectural insights and open questions for replacing it
+with an Items-based query surface.
+
+### Architectural insights
+
+**Items carries chain context — `_previous` is not needed for queries.**
+The Items linked list (`_step` / `_upstream`) encodes the same
+step-sequence information as the `_previous` chain.  `step_uid`
+(`_chain_hash`) can be computed by walking `_upstream` to collect the
+step sequence, then hashing — no `_previous` links required.  This
+works for standalone steps, opaque chains, *and* transparent chains.
+
+**Preserved uid means no upstream execution for queries.**
+When no step overrides `item_uid()` (the default), the uid flows
+unchanged from root to tip.  Cache queries can use root values
+directly — no upstream computation.  Only when a step resets the uid
+(rare) does the query need upstream results.  This raises the
+question of whether intermediate `item_uid` overrides are worth
+keeping — or whether the concept could be dropped entirely (an
+alternative would be some form of uid linkage across steps, but that
+adds its own complexity).
+
+**`clear_cache` should wipe everything (open to reconsideration).**
+No per-item deletion.  `shutil.rmtree(step_folder)` removes all
+cached items, jobs, and logs for the step.  This eliminates the need
+for `item_uid` (or `with_input`) in `clear_cache`.
+
+### Roadblocks
+
+**1. One API, not two.**
+`with_input` unified generators and transformers under a single query
+pattern.  Any replacement must preserve that — no coexisting
+generator-specific and transformer-specific query paths.  Every query
+method must work naturally for both cases.
+
+**2. `job()` is the hardest case and must be designed now.**
+- Generator / TaskArray: one job, no input.  Must return the Slurm job.
+- Batch / Map: multiple jobs, multiple inputs.  Note that there is no
+  strict per-item job — in MapInfra, several items may be computed
+  within the same job.  Per-item job tracking is not clearly supported
+  today.
+- These must be the same API shape.  Putting `job()` on Items is
+  natural for batch but requires generators to go through Items too.
+
+**3. Generator asymmetry.**
+Items represents "a batch of values to process."  Generators have no
+input values.  Forcing `Items([NoValue()])` or `Items()` is
+mechanically possible but semantically odd — a generator in a chain is
+more like "the input source" than "a step that processes items."
+A generator could also be seen as parameterizable (different configs,
+seeds, datasets), which connects to grid-search over Chain parameters.
+
+**4. Intermediate `item_uid` — cost vs benefit.**
+`item_uid()` overrides add complexity: queries on downstream steps
+require upstream execution to resolve the overridden uid.  Benefits
+(cache collapse, cache split) are real but uncommon.  Worth
+questioning whether this justifies the complexity cost for the common
+(uid-preserved) case.  Furthermore, the query problem with overridden
+uids was not considered in the original design — if a downstream
+step's cache key depends on an upstream override, how does one check
+or access the cache without re-executing the upstream chain?  This
+is currently unsolved.
+
+### Current direction
+
+**`Items()` as the universal entry point.**  `Items()` (no args) means
+"one run, no input / no modifications."  For generators this is
+natural: `Items()` = `Items([NoValue()])`.  In the future, `NoValue`
+could evolve into something like a diff descriptor that overrides
+step parameters when non-null.  `NoValue()` is the degenerate case
+where nothing is overridden and no value is provided.  The full
+progression:
+- `Items()` — one run, default config (generators, or run-as-is)
+- `Items([value])` — one run with input
+- `Items([v1, v2, ...])` — batch
+- Eventually: `Items([Diff(...), Diff(...)])` — grid search over
+  chain parameters
+
+This unifies generators and transformers under a single API:
+`step.run(Items(...)).has_cache()`, `step.run(Items(...)).jobs()`, etc.
+
+**`Input`, `_previous`, and `with_input` become obsolete.**
+These three are artifacts of the same unification mechanism.  `Input`
+was created to hold the input value and anchor the `_previous` chain.
+`with_input` deep-copies a step and wires up `_previous` links so
+that `_chain_hash` and `_get_input_value` can walk back to find the
+value.
+
+With Items as the universal carrier, all three purposes are
+superseded:
+- **Value carrier**: Items holds values directly in its root
+  `_values`.
+- **Chain context**: the Items linked list (`_step` / `_upstream`)
+  already encodes the step sequence — same information as `_previous`.
+- **`_chain_hash`**: can be computed by walking the Items chain
+  instead of `_previous`.
+
+For execution, `step_uid` (currently from `_chain_hash` via
+`_previous`) would be computed from the Items chain in `_iter_items`
+and passed explicitly to `run_items` / `Backend.run` — the same
+pattern already used for `item_uid`.
+
+Removing `Input`, `_previous`, and `with_input` eliminates:
+- the deep-copy on every `run()` call
+- the `_init` method that wires up `_previous` links and propagates
+  folders
+- the `_configured_step` / `_get_input_value` indirection in Backend
+- the `StepPaths.from_step` helper
+
+### Other options considered (not selected)
+
+- **Query methods on Items** (`step.run(Items([5.0])).has_cache()`):
+  elegant for transformers, awkward for generators.
+- **Query methods on Step with optional Items**
+  (`step.has_cache(Items([5.0]))`):  works for both, but "optional
+  Items on every method" may not scale.
+- **`run()` always returns Items**: unifies everything but breaks the
+  scalar `step.run()` → result convenience.
+- **Chain parameter variants via Items**: Items could carry diffs to
+  Chain parameters — not limited to generator configs, but potentially
+  changing any step in the chain.  This generalises to grid-search
+  over Chain configurations (analogous to TaskInfra), though it raises
+  significant caching questions (different step configs → different
+  `step_uid`s).
+
+---
+
 ## Relationship to `map_design.md`
 
 This document defines the core execution model. `map_design.md` builds on
