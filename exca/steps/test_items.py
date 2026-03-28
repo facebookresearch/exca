@@ -262,3 +262,81 @@ def test_nested_chain_items(tmp_path: Path) -> None:
     outer = Chain(steps=[inner, conftest.Mult(coeff=3.0)])
     # 5 -> inner: 5*2+1=11 -> outer: 11*3=33
     assert list(outer.run(Items([5.0]))) == [33.0]
+
+
+# =============================================================================
+# Items query API (has_cache, clear_cache, job)
+# =============================================================================
+
+
+def test_items_query_has_cache(tmp_path: Path) -> None:
+    """Items.has_cache() matches with_input().has_cache()."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Mult(coeff=3.0, infra=infra)
+
+    step.run(5.0)
+    result_items = step.run(Items([5.0]))
+    assert result_items.has_cache()
+    assert step.with_input(5.0).has_cache()
+
+
+def test_items_query_clear_cache(tmp_path: Path) -> None:
+    """Items.clear_cache() wipes cache; subsequent has_cache() returns False."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Mult(coeff=3.0, infra=infra)
+
+    step.run(5.0)
+    result_items = step.run(Items([5.0]))
+    assert result_items.has_cache()
+    result_items.clear_cache()
+    assert not result_items.has_cache()
+    assert not step.with_input(5.0).has_cache()
+
+
+def test_items_query_generator(tmp_path: Path) -> None:
+    """Items query works for generators (no input value)."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(value=42.0, infra=infra)
+
+    step.run()
+    result_items = step.run(Items([NoValue()]))
+    assert result_items.has_cache()
+    result_items.clear_cache()
+    assert not result_items.has_cache()
+
+
+def test_items_query_chain(tmp_path: Path) -> None:
+    """Items query works for chains with infra."""
+    from .base import Chain
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(
+        steps=[conftest.Add(value=1.0), conftest.Mult(coeff=2.0)],
+        infra=infra,
+    )
+
+    chain.run(5.0)
+    result_items = chain.run(Items([5.0]))
+    assert result_items.has_cache()
+    assert chain.with_input(5.0).has_cache()
+    result_items.clear_cache()
+    assert not result_items.has_cache()
+
+
+def test_items_query_after_batch_run(tmp_path: Path) -> None:
+    """Items query works after consuming a batch pipeline."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Mult(coeff=3.0, infra=infra)
+
+    result_items = step.run(Items([5.0]))
+    assert not result_items.has_cache()
+    list(result_items)
+    assert result_items.has_cache()
+
+
+def test_items_query_no_infra() -> None:
+    """Items query returns False / None when no infra."""
+    step = conftest.Mult(coeff=3.0)
+    result_items = step.run(Items([5.0]))
+    assert not result_items.has_cache()
+    assert result_items.job() is None

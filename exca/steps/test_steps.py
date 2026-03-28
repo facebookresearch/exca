@@ -234,26 +234,30 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     ), "folder should propagate to nested chain steps"
 
 
-def test_run_mutation_cache_consistency(tmp_path: Path) -> None:
-    """Cache should work even if _run mutates self (bug: cache key changes mid-execution)."""
+def test_run_mutation_changes_cache_key(tmp_path: Path) -> None:
+    """Without deep copy, _run mutations change the step identity (cache key).
+
+    Steps that mutate self during _run will get a different cache key
+    on subsequent calls because the step config changed.
+    """
 
     class Counter(Step):
         count: int = 0
         infra: backends.Backend | None = None
 
         def _run(self) -> int:
-            self.count += 1  # Mutation during _run changes cache key!
+            self.count += 1
             return self.count
 
     counter = Counter(infra={"backend": "Cached", "folder": tmp_path})  # type: ignore
 
-    # First run - should cache result
     result1 = counter.run()
-    assert result1 == 1, "first call should return 1"
+    assert result1 == 1
+    assert counter.count == 1
 
-    # Second run - should return cached result, not None
     result2 = counter.run()
-    assert result2 == 1, "second call should return cached result (bug: returns None)"
+    assert result2 == 2, "step mutated, different cache key, recomputes"
+    assert counter.count == 2
 
 
 def test_none_as_valid_input() -> None:

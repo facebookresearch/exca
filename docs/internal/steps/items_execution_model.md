@@ -183,28 +183,48 @@ interdependent — the folder may need to reflect which step last set
 the uid. This interaction needs to be worked out during implementation
 and may simplify or restructure `_chain_hash()`.
 
-**Copy pattern**: `run()` calls `with_input()` which deep-copies the
-step and sets `_previous = Input(value)`. The copy is needed because
-`_previous` is mutable state and `_init` modifies child steps. The
-copy could be made cheaper (see
-[`with_input` and `_previous`](#with_input-and-_previous)), but
-eliminating it requires `Backend` to become stateless (no `_paths`,
-`_ram_cache` stored on the instance).
+**No deep copy in run path**: `Step.run` builds the Items pipeline
+directly on the original step (no `with_input` copy). `step_uid` is
+computed from the Items chain. Backend run-time state (`_paths`,
+`_checked_configs`) is reset per batch in `run_items`. `with_input`
+and `_previous` are kept for the legacy cache query API only.
 
-**Known issue — force mode and the copy pattern**: force-mode reset and
-`_ram_cache` sync must be applied back to the original step after
-execution. For scalar this works (execution is immediate). For batch the
-Items are lazy — `run()` returns before iteration, so the original's
-force mode is not reset, making batch force sticky. Additionally,
+**Force mode is force-always**: `Step.run` no longer deep-copies via
+`with_input`. Force propagation in `Chain._process_items` mutates the
+original step instances. Force mode stays set until the user explicitly
+resets it to `"cached"`.
+
+The previous implementation tried to emulate TaskInfra's "force-once"
+behavior (force on first call, then auto-switch to cached) by resetting
+`infra.mode` after execution. This was a hack: it only worked for scalar
+runs (where execution is immediate) but not for batch (Items are lazy —
+`run()` returns before iteration, so force was never consumed). With
+Maps/iterables the problem is worse: MapInfra forces once per uid and
+skips already-recomputed items, which a simple mode reset cannot
+reproduce.
+
+For now we dropped force-once and use force-always. Reconsidering
+force-once is worth doing if it can be achieved cleanly — likely via
+a state-tracking mechanism similar to TaskInfra's `state.computed` /
+MapInfra's `state.recomputed`, rather than mutating the `mode` field.
+
 `_ram_cache` on Backend caches a single value, which is useless for
 batch (CacheDict already has a built-in memory cache that works
 per-uid). Deprecating `_ram_cache` in favor of CacheDict is the likely
 fix.
 
-Cache-backed resumption is handled by Items laziness: each step's
-`_process_items` returns a lazy carrier whose items check cache on demand
-and only pull from upstream on a miss. See
-[Chain execution](#chain-overrides-_process_items-not-_run) for details.
+**Lazy execution principle**: uids propagate eagerly (cheap — no
+`_run`), values are computed lazily (only on cache miss). A downstream
+step in cached mode must not trigger upstream `_run` if the downstream
+cache has a hit. `Items._iter_uids()` propagates uids through the chain
+by calling `_prepare_item` at each step without running `_run`.
+`_iter_items` for the infra case checks the cache using these uids
+first; only on a miss does it fall back to `_iter_with_uids` which runs
+the full upstream pipeline.
+
+When a step overrides `item_uid()` (intermediate uid reset), the uid
+depends on the upstream value, so uid-only propagation cannot skip
+`_run`. This case is deferred.
 
 The scalar case (`step.run(value)`) normalizes to a singleton Items
 internally. There should not be:
@@ -546,51 +566,33 @@ Force mode interacts with lazy composition at two levels:
    returning the opaque `Items._from_step`.
 
 Force propagation (step N has force → downstream steps also get force)
-must happen eagerly, before lazy composition. The lazy pipeline itself
-does not propagate force — it just sees the modes that were set.
+must happen eagerly in `Chain._process_items`, before lazy composition.
+The lazy pipeline itself does not propagate force — it just sees the
+modes that were set. Propagation mutates the original step instances.
 
-Force mode reset on original steps (so subsequent calls use cache) is
-handled by `Chain.run` after `super().run()` returns:
-
-```python
-def run(self, value=NoValue()):
-    result = super().run(value)
-    for step in self._step_sequence():
-        if step.infra and step.infra.mode == "force":
-            object.__setattr__(step.infra, "mode", "cached")
-    return result
-```
-
-The exact force semantics are messy (the copy pattern means force reset
-only works for scalar, not batch — see known issues below). The current
-goal is to get lazy composition working with reasonable force behavior,
-not to perfect force semantics.
+Force is currently force-always: mode stays set until the user
+explicitly resets it to `"cached"`. There is no auto-reset after
+execution. See [force mode is force-always](#force-mode-is-force-always)
+for rationale and future directions.
 
 #### `with_input` and `_previous`
 
-`with_input(value)` remains the API for configuring a step with an input
-value. It creates a copy (needed because `_previous` is mutable state and
-`_init` modifies child steps). The copy is used for:
+`with_input(value)` creates a deep copy with `_previous = Input(value)`.
+It is used for:
 
-- **Cache operations**: `step.with_input(5.0).has_cache()` — the copy has
-  `_previous = Input(5.0)`, allowing `_get_input_value()` to find the
-  value and compute the cache path.
-- **`run()` setup**: `Step.run` calls `with_input()` to create a
-  configured copy before building the Items pipeline. This is needed for
-  `_chain_hash()` (which walks `_previous`) and folder propagation (via
-  `_init`).
+- **Legacy cache operations**: `step.with_input(5.0).has_cache()` — the
+  copy has `_previous = Input(5.0)`, allowing `_chain_hash()` and
+  `Backend.paths` to compute the cache path.
 
-`_previous` carries two things: chain structure (for `_chain_hash`) and
-input value (for `_get_input_value`). Both are needed at query time, not
-construction time, because users may mutate step configs after
-construction.
+`Step.run` no longer calls `with_input`. It builds the Items pipeline
+directly on the original step. `step_uid` is computed from the Items
+chain (`Items._aligned_steps()`), not from `_previous`. Folder
+propagation happens in `Chain.model_post_init` via `_propagate_folder`.
 
-The copy in `Chain.with_input` could be made cheaper (currently it
-serializes/deserializes all child steps via `model_dump`). Using
-`model_copy(deep=True)` + `_init` instead would be a pragmatic
-improvement. Eliminating the copy entirely is possible if `Backend`
-becomes more stateless (no `_paths`, `_ram_cache` stored on the
-instance), but that is a larger refactor.
+`with_input`, `_previous`, `_init`, and `Input` are kept for the legacy
+cache query API (`step.with_input(v).has_cache()`) but are superseded
+by the Items query API (`step.run(Items([v])).has_cache()`) for new
+code.
 
 ### Generator steps
 

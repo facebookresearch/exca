@@ -38,6 +38,20 @@ class NoValue:
     """Sentinel for unset/missing value (e.g., generator has no input)."""
 
 
+class _LazyArgs(tuple):
+    """Marker for lazy args in Backend.run — resolved only on cache miss."""
+
+    _thunk: tp.Callable[[], tuple[tp.Any, ...]]
+
+    def __new__(cls, thunk: tp.Callable[[], tuple[tp.Any, ...]]) -> "_LazyArgs":
+        obj = super().__new__(cls)
+        obj._thunk = thunk
+        return obj
+
+    def resolve(self) -> tuple[tp.Any, ...]:
+        return self._thunk()
+
+
 # =============================================================================
 # StepPaths: Helper class for path management
 # =============================================================================
@@ -72,20 +86,6 @@ class StepPaths:
     base_folder: Path
     step_uid: str
     item_uid: str
-
-    @classmethod
-    def from_step(cls, folder: Path, step: "Step", value: tp.Any) -> tp.Self:
-        """Create StepPaths from a step and input value.
-
-        step_uid is computed from _chain_hash() giving nested folder structure.
-        item_uid is computed from the input value (or sentinel for generators).
-        """
-        step_uid = step._chain_hash()
-        if isinstance(value, NoValue):
-            item_uid = _NOINPUT_UID
-        else:
-            item_uid = exca.ConfDict(value=value).to_uid()
-        return cls(base_folder=folder, step_uid=step_uid, item_uid=item_uid)
 
     @property
     def step_folder(self) -> Path:
@@ -225,10 +225,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     @property
     def paths(self) -> StepPaths:
-        """Get StepPaths for this step (cached).
+        """Get StepPaths for this step.
 
-        Used by external API (has_cache, clear_cache, job).
-        In the run path, _paths is set directly by run().
+        In the run path, ``_paths`` is set directly by ``run()``.
+        For the external API (has_cache, job, etc.), computes from
+        the step's ``_chain_hash`` and ``_previous`` chain.
         """
         if self._paths is not None:
             return self._paths
@@ -238,60 +239,43 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             )
         if self._step is None:
             raise RuntimeError("Backend not attached to a Step")
-        if self._step._previous is None and not self._step._is_generator():
-            raise RuntimeError("Step not initialized. Use step.with_input(value) first.")
-        value = self._get_input_value()
-        self._paths = StepPaths.from_step(self.folder, self._step, value)
+        step_uid = self._step._chain_hash()
+        if self._step._previous is None:
+            if not self._step._is_generator():
+                raise RuntimeError(
+                    "Step not initialized. Use step.with_input(value) first."
+                )
+            item_uid = _NOINPUT_UID
+        else:
+            from .base import Input
+
+            item_uid = _NOINPUT_UID
+            current = self._step
+            while current._previous is not None:
+                if isinstance(current._previous, Input):
+                    val = current._previous.value
+                    if not isinstance(val, NoValue):
+                        item_uid = exca.ConfDict(value=val).to_uid()
+                    break
+                current = current._previous
+        self._paths = StepPaths(
+            base_folder=self.folder, step_uid=step_uid, item_uid=item_uid
+        )
         return self._paths
 
-    # Legacy methods for compatibility (used by has_cache, clear_cache, etc.)
-    def _configured_step(self) -> "Step":
-        """Get configured step, auto-configuring generators."""
-        if self._step is None:
-            raise RuntimeError("Backend not attached to a Step")
-        if self._step._previous is not None:
-            return self._step  # Already configured
-
-        if self._step._is_generator():
-            # Auto-configure generator with NoValue (returns new step, doesn't mutate)
-            return self._step.with_input()
-        else:
-            raise RuntimeError(
-                "Step requires input but with_input() was not called. "
-                "Use step.with_input(value).has_cache() or step.run(value)."
-            )
-
-    def _get_input_value(self) -> tp.Any:
-        """Extract input value from configured step's Input predecessor."""
-        from .base import Input  # Local import to avoid circular dependency
-
-        step = self._configured_step()
-        # Walk back to find Input step
-        current = step
-        while current._previous is not None:
-            if isinstance(current._previous, Input):
-                return current._previous.value
-            current = current._previous
-        return NoValue()  # Generator case
-
-    def _check_configs(self, write: bool = True) -> None:
-        """Check and write config files for cache consistency.
-
-        The config represents the full computation path (aligned chain), not just
-        this step. This ensures chain and its last step write identical configs
-        when sharing the same cache folder.
-        """
+    def _check_configs(
+        self, write: bool = True, aligned_steps: list["Step"] | None = None
+    ) -> None:
+        """Check and write config files for cache consistency."""
         if self._checked_configs:
             return
-        if self.folder is None:
+        if self.folder is None or self._step is None:
             return
-        step = self._configured_step()
         folder = self.paths.step_folder
         folder.mkdir(exist_ok=True, parents=True)
-
-        # Use the full aligned chain as the config (list of steps)
-        # This ensures consistent configs whether written by chain or step
-        utils.ConfigDump(model=step._aligned_chain()).check_and_write(folder, write=write)
+        if aligned_steps is None:
+            aligned_steps = self._step._aligned_chain()  # legacy: external API path
+        utils.ConfigDump(model=aligned_steps).check_and_write(folder, write=write)
         self._checked_configs = True
 
     # =========================================================================
@@ -315,9 +299,15 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return self._load_cache()
 
     def clear_cache(self) -> None:
-        """Delete cached result (both disk and RAM)."""
+        """Delete all cached results for this step (both disk and RAM)."""
         self._ram_cache = NoValue()
-        self.paths.clear_cache()
+        if self.folder is None or self._step is None:
+            return
+        step_folder = self.folder / self._step._chain_hash()
+        if step_folder.exists():
+            shutil.rmtree(step_folder)
+        self._paths = None
+        self._checked_configs = False
 
     def job(self) -> submitit.Job[tp.Any] | None:
         """Get submitit job for this step, or None."""
@@ -364,17 +354,26 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Execution
     # =========================================================================
 
-    def run(self, func: tp.Callable[..., tp.Any], *args: tp.Any, uid: str) -> tp.Any:
+    def run(
+        self,
+        func: tp.Callable[..., tp.Any],
+        *args: tp.Any,
+        uid: str,
+        step_uid: str,
+        aligned_steps: list["Step"],
+    ) -> tp.Any:
         """Execute function with caching based on mode.
 
-        *uid* is the per-item cache key, provided by ``run_items``.
+        *uid* is the per-item cache key, *step_uid* the cache folder key,
+        and *aligned_steps* the flat step list for config checking — all
+        provided by ``run_items``.
         """
         self._paths = StepPaths(
             base_folder=self.folder,  # type: ignore[arg-type]
-            step_uid=self._step._chain_hash(),  # type: ignore[union-attr]
+            step_uid=step_uid,
             item_uid=uid,
         )
-        self._check_configs(write=True)
+        self._check_configs(write=True, aligned_steps=aligned_steps)
 
         # Check RAM cache first (survives disk deletion)
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
@@ -394,12 +393,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             return self._load_cache()  # Raises if error
 
         if self.mode == "force" and status is not None:
-            self.clear_cache()
+            self._ram_cache = NoValue()
+            self.paths.clear_cache()
         elif self.mode == "retry" and status == "error":
             logger.warning(
                 "Retrying failed step: %s[%s]", self.paths.step_uid, self.paths.item_uid
             )
-            self.clear_cache()
+            self._ram_cache = NoValue()
+            self.paths.clear_cache()
 
         # Check job recovery (for submitit backends)
         job = self.job()
@@ -429,6 +430,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         if job is None:
             item_uid = self.paths.item_uid
+            if args and isinstance(args[0], _LazyArgs):
+                args = args[0].resolve()
             registry: inflight.InflightRegistry | None = None
             if type(self) is not Cached:
                 registry = inflight.InflightRegistry(self.paths.cache_folder)
@@ -457,6 +460,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self,
         func: tp.Callable[..., tp.Any],
         items: list[tuple[str, tuple[tp.Any, ...]]],
+        *,
+        step_uid: str,
+        aligned_steps: list["Step"],
     ) -> tp.Iterator[tuple[tp.Any, str]]:
         """Execute items with caching. Yields (result, uid) in input order.
 
@@ -467,8 +473,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         will be upgraded for batch job submission (chunking, submitit
         arrays) without changing callers.
         """
+        self._checked_configs = False
         for uid, args in items:
-            yield self.run(func, *args, uid=uid), uid
+            yield self.run(
+                func, *args, uid=uid, step_uid=step_uid, aligned_steps=aligned_steps
+            ), uid
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
         """Submit wrapper for execution. Default: inline execution."""
