@@ -38,20 +38,6 @@ class NoValue:
     """Sentinel for unset/missing value (e.g., generator has no input)."""
 
 
-class _LazyArgs(tuple):
-    """Marker for lazy args in Backend.run — resolved only on cache miss."""
-
-    _thunk: tp.Callable[[], tuple[tp.Any, ...]]
-
-    def __new__(cls, thunk: tp.Callable[[], tuple[tp.Any, ...]]) -> "_LazyArgs":
-        obj = super().__new__(cls)
-        obj._thunk = thunk
-        return obj
-
-    def resolve(self) -> tuple[tp.Any, ...]:
-        return self._thunk()
-
-
 # =============================================================================
 # StepPaths: Helper class for path management
 # =============================================================================
@@ -357,16 +343,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def run(
         self,
         func: tp.Callable[..., tp.Any],
-        *args: tp.Any,
+        args: tuple[tp.Any, ...] | tp.Callable[[], tuple[tp.Any, ...]],
+        *,
         uid: str,
         step_uid: str,
         aligned_steps: list["Step"],
     ) -> tp.Any:
         """Execute function with caching based on mode.
 
-        *uid* is the per-item cache key, *step_uid* the cache folder key,
-        and *aligned_steps* the flat step list for config checking — all
-        provided by ``run_items``.
+        *args* is either a tuple of arguments for *func*, or a callable
+        that returns such a tuple (lazy — only called on cache miss).
         """
         self._paths = StepPaths(
             base_folder=self.folder,  # type: ignore[arg-type]
@@ -430,8 +416,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         if job is None:
             item_uid = self.paths.item_uid
-            if args and isinstance(args[0], _LazyArgs):
-                args = args[0].resolve()
+            if callable(args):
+                args = args()
             registry: inflight.InflightRegistry | None = None
             if type(self) is not Cached:
                 registry = inflight.InflightRegistry(self.paths.cache_folder)
@@ -459,7 +445,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def run_items(
         self,
         func: tp.Callable[..., tp.Any],
-        items: list[tuple[str, tuple[tp.Any, ...]]],
+        items: tp.Sequence[
+            tuple[str, tuple[tp.Any, ...] | tp.Callable[[], tuple[tp.Any, ...]]]
+        ],
         *,
         step_uid: str,
         aligned_steps: list["Step"],
@@ -467,16 +455,13 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """Execute items with caching. Yields (result, uid) in input order.
 
         Each item is ``(uid, args)`` where *uid* is the per-item cache key
-        and *args* is the argument tuple for *func*.
-
-        Currently delegates to ``run()`` per item.  This is the hook that
-        will be upgraded for batch job submission (chunking, submitit
-        arrays) without changing callers.
+        and *args* is an argument tuple for *func* or a callable returning
+        one (lazy — only resolved on cache miss).
         """
         self._checked_configs = False
         for uid, args in items:
             yield self.run(
-                func, *args, uid=uid, step_uid=step_uid, aligned_steps=aligned_steps
+                func, args, uid=uid, step_uid=step_uid, aligned_steps=aligned_steps
             ), uid
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:

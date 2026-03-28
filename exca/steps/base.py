@@ -14,6 +14,7 @@ Backends holds a reference to its owning Step for cache key computation.
 from __future__ import annotations
 
 import collections
+import functools
 import inspect
 import logging
 import typing as tp
@@ -273,6 +274,22 @@ class Step(exca.helpers.DiscriminatedModel):
             return incoming_uid, (value,)
         return exca.ConfDict(value=value).to_uid(), (value,)
 
+    def _upstream_args(
+        self,
+        root_val: tp.Any,
+        steps: list[Step],
+        incoming_uid: str | None,
+    ) -> tuple[tp.Any, ...]:
+        """Rebuild the upstream pipeline for a single item and return args.
+
+        Used as a lazy thunk by ``_iter_items``: only called on cache miss.
+        """
+        single = Items([root_val])
+        for s in steps:
+            single = s._process_items(single)
+        value = next(iter(single))
+        return self._prepare_item(value, incoming_uid)[1]
+
     def _iter_items(self, upstream: Items) -> tp.Iterator[tuple[tp.Any, str | None]]:
         """Process upstream items: uid resolution, cache, _run.
 
@@ -298,22 +315,13 @@ class Step(exca.helpers.DiscriminatedModel):
 
         # Eagerly propagate uids (no _run), create lazy thunks for values.
         # Backend.run checks cache first; the thunk is only called on miss.
-        lazy_items: list[tuple[str, tuple[tp.Any, ...]]] = []
-        for root_val, incoming_uid in upstream._iter_uids():
-            cache_uid, _ = self._prepare_item(root_val, incoming_uid)
-
-            def _thunk(
-                rv: tp.Any = root_val,
-                st: list[Step] = steps,
-                u: str | None = incoming_uid,
-            ) -> tuple[tp.Any, ...]:
-                single = Items([rv])
-                for s in st:
-                    single = s._process_items(single)
-                value = next(iter(single))
-                return self._prepare_item(value, u)[1]
-
-            lazy_items.append((cache_uid, (backends._LazyArgs(_thunk),)))
+        lazy_items = [
+            (
+                self._prepare_item(root_val, uid)[0],
+                functools.partial(self._upstream_args, root_val, steps, uid),
+            )
+            for root_val, uid in upstream._iter_uids()
+        ]
 
         self.infra._checked_configs = False
         try:
