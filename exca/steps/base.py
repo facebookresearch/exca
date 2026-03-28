@@ -276,18 +276,12 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _upstream_args(
         self,
+        upstream: Items,
         root_val: tp.Any,
-        steps: list[Step],
         incoming_uid: str | None,
     ) -> tuple[tp.Any, ...]:
-        """Rebuild the upstream pipeline for a single item and return args.
-
-        Used as a lazy thunk by ``_iter_items``: only called on cache miss.
-        """
-        single = Items([root_val])
-        for s in steps:
-            single = s._process_items(single)
-        value = next(iter(single))
+        """Lazy thunk for ``_iter_items``: only called on cache miss."""
+        value, _ = upstream._resolve_value(root_val)
         return self._prepare_item(value, incoming_uid)[1]
 
     def _iter_items(self, upstream: Items) -> tp.Iterator[tuple[tp.Any, str | None]]:
@@ -311,14 +305,11 @@ class Step(exca.helpers.DiscriminatedModel):
 
         aligned = upstream._aligned_steps() + self._aligned_step()
         step_uid = _compute_step_uid(aligned)
-        steps = upstream._step_list()
 
-        # Eagerly propagate uids (no _run), create lazy thunks for values.
-        # Backend.run checks cache first; the thunk is only called on miss.
         lazy_items = [
             (
                 self._prepare_item(root_val, uid)[0],
-                functools.partial(self._upstream_args, root_val, steps, uid),
+                functools.partial(self._upstream_args, upstream, root_val, uid),
             )
             for root_val, uid in upstream._iter_uids()
         ]

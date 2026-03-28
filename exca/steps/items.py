@@ -58,12 +58,22 @@ class Items:
         assert self._upstream is not None
         return self._upstream._aligned_steps() + self._step._aligned_step()
 
-    def _step_list(self) -> list["Step"]:
-        """Steps in the chain, from root to this node (excluding root)."""
-        if self._step is None:
-            return []
-        assert self._upstream is not None
-        return self._upstream._step_list() + [self._step]
+    def _resolve_value(self, root_val: tp.Any) -> tuple[tp.Any, str | None]:
+        """Run the upstream pipeline for a single root value.
+
+        Returns ``(value, uid)``.  Used as a lazy thunk on cache miss:
+        rebuilds a single-item pipeline through the same step chain.
+        """
+        steps: list[Step] = []
+        node = self
+        while node._step is not None:
+            steps.append(node._step)
+            assert node._upstream is not None
+            node = node._upstream
+        single: Items = Items([root_val])
+        for s in reversed(steps):
+            single = s._process_items(single)
+        return next(single._iter_with_uids())
 
     def _iter_with_uids(self) -> tp.Iterator[tuple[tp.Any, str | None]]:
         """Yield (result, uid) pairs — internal protocol for chaining."""

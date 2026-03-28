@@ -213,14 +213,17 @@ batch (CacheDict already has a built-in memory cache that works
 per-uid). Deprecating `_ram_cache` in favor of CacheDict is the likely
 fix.
 
-**Lazy execution principle**: uids propagate eagerly (cheap — no
-`_run`), values are computed lazily (only on cache miss). A downstream
-step in cached mode must not trigger upstream `_run` if the downstream
-cache has a hit. `Items._iter_uids()` propagates uids through the chain
-by calling `_prepare_item` at each step without running `_run`.
-`_iter_items` for the infra case checks the cache using these uids
-first; only on a miss does it fall back to `_iter_with_uids` which runs
-the full upstream pipeline.
+**Lazy execution principle (hard requirement)**: a downstream cache hit
+must NEVER trigger upstream `_run`. This is not an optimization — it is
+a correctness requirement. Upstream steps may be arbitrarily expensive
+and may not have their own cache.
+
+Implementation: uids propagate eagerly through the chain (cheap — no
+`_run`), via `Items._iter_uids()` which calls `_prepare_item` at each
+step. Values are computed lazily: `_iter_items` for a step with infra
+passes lazy callables to `Backend.run`; the callable is only invoked on
+cache miss, rebuilding the upstream pipeline for that single item via
+`Items._resolve_value`.
 
 When a step overrides `item_uid()` (intermediate uid reset), the uid
 depends on the upstream value, so uid-only propagation cannot skip
