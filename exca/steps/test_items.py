@@ -15,7 +15,7 @@ import exca
 
 from . import conftest
 from .backends import NoValue
-from .base import Step
+from .base import Chain, Step
 from .items import Items
 
 
@@ -340,3 +340,26 @@ def test_items_query_no_infra() -> None:
     result_items = step.run(Items([5.0]))
     assert not result_items.has_cache()
     assert result_items.job() is None
+
+
+def test_chain_cache_reuse_across_runs(tmp_path: Path) -> None:
+    """Cache from a shorter run is reused when more items are added."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain2 = Chain(
+        steps=[conftest.RandomAppend(), conftest.RandomAppend(infra=infra)],
+    )
+    result_ab = tuple(chain2.run(Items(["a", "b"])))
+    result_abc = tuple(chain2.run(Items(["a", "b", "c"])))
+    assert result_abc[:2] == result_ab, "first 2 items should come from cache"
+
+    # Now 3-step chain: same first 2 steps, one more RandomAppend
+    chain3 = Chain(
+        steps=[
+            conftest.RandomAppend(),
+            conftest.RandomAppend(infra=infra),
+            conftest.RandomAppend(),
+        ],
+        infra=infra,
+    )
+    result_3step = tuple(chain3.run(Items(["a", "b", "c"])))
+    assert tuple(x[:3] for x in result_3step) == result_abc
