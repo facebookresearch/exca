@@ -832,6 +832,75 @@ Removing `Input`, `_previous`, and `with_input` eliminates:
 
 ---
 
+## Hard requirements
+
+These are correctness invariants, not optimizations. Breaking any of
+them is a bug.
+
+1. **No unnecessary recomputation**: a downstream cache hit must NEVER
+   trigger upstream `_run`. Upstream steps may require GPUs, hours of
+   compute, or external resources — running them "just in case" is not
+   acceptable. This applies to every step in the chain, whether or not
+   the upstream step has its own cache/infra.
+
+2. **Cache determinism**: given the same step configuration and the same
+   input uid, the cache key must be identical across runs, processes,
+   and machines. Cache keys depend on step config (`ConfDict.to_uid`)
+   and input identity, never on Python object ids, timestamps, or
+   randomness.
+
+3. **Cache sharing across chain lengths**: if a step with infra appears
+   in two chains (e.g., a 2-step chain and a 3-step chain), and the
+   upstream steps are identical, the cache must be shared. Extending a
+   pipeline with more steps must not invalidate earlier caches. (Tested
+   by `test_chain_cache_reuse_across_runs`.)
+
+4. **Scalar/batch equivalence**: `step.run(value)` and
+   `list(step.run(Items([value])))[0]` must produce the same result and
+   use the same cache entry. There is one execution engine, not two.
+
+5. **Lazy iteration**: `Items.__iter__` is lazy. Large datasets must not
+   be materialized upfront. `step.run(Items(...))` returns before any
+   `_run` executes.
+
+6. **Force mode correctness**: `mode="force"` must clear the cache and
+   recompute. It must propagate to downstream steps in a chain (their
+   inputs changed). It must cancel running jobs if applicable.
+
+---
+
+## Behavioral changes from previous implementation
+
+This section documents intentional departures from the pre-Items
+implementation. Some may need to be revisited or fixed as the design
+matures.
+
+1. **Force is force-always** (was force-once): the previous
+   implementation reset `infra.mode` from `"force"` to `"cached"` after
+   a single execution, emulating TaskInfra's force-once semantics. This
+   was a hack that only worked for scalar runs (where execution is
+   immediate). With lazy Items, `run()` returns before iteration, so the
+   mode reset happened before force was ever consumed. Force mode now
+   stays set until the user explicitly resets it to `"cached"`.
+   Reconsidering force-once is worth doing if achievable cleanly (see
+   [internal state](#internal-state)).
+
+2. **No deep copy in the run path**: `Step.run` no longer calls
+   `with_input` (which deep-copied the entire step tree). The Items
+   pipeline is built directly on the original step instances. This means
+   a step that mutates itself during `_run` will produce a different
+   cache key on the next run (the mutation is visible). Previously the
+   deep copy masked this. This is correct behavior: self-mutation
+   changes the step's identity.
+
+3. **`Backend.run` accepts lazy args**: the `args` parameter is now
+   `tuple | Callable`. A callable is only invoked on cache miss. This
+   enables the lazy execution principle without changing the cache
+   checking logic. Callers that always have args ready can pass a tuple
+   as before.
+
+---
+
 ## Relationship to `map_design.md`
 
 This document defines the core execution model. `map_design.md` builds on
