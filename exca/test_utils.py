@@ -371,7 +371,7 @@ def test_actual_default_override() -> None:
     out = ConfDict.from_model(m, uid=True, exclude_defaults=True)
     assert out.to_yaml().strip() == "a.x: 13"
     #
-    m = ActualDefaultOverride(a={"x": 12, "y": "stuff"}, a_default={"x": 12, "y": "stuff"})  # type: ignore
+    m = ActualDefaultOverride(a={"x": 12, "y": "stuff"}, a_default={"x": 12, "y": "stuff"})  # type: ignore  # fmt: skip
     out = ConfDict.from_model(m, uid=True, exclude_defaults=True)
     assert out.to_yaml().strip() == "{}"
 
@@ -397,7 +397,7 @@ class OrderedDump(BaseModel):
 
 
 def test_ordered_dict() -> None:
-    od = OrderedDump(insts={"blublu": {"uid": "D1"}, "stuff": {"uid": "D2"}, "blublu2": {"uid": "D1"}})  # type: ignore
+    od = OrderedDump(insts={"blublu": {"uid": "D1"}, "stuff": {"uid": "D2"}, "blublu2": {"uid": "D1"}})  # type: ignore  # fmt: skip
     out = ConfDict.from_model(od, uid=True, exclude_defaults=True)
     # check that nothing alters the order
     assert isinstance(out["insts"], collections.OrderedDict)

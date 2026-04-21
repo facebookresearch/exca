@@ -79,20 +79,12 @@ jobs:
         # check readmes (only README.md and docs/ folder, not internal specs)
         pytest --markdown-docs -m markdown-docs README.md docs/
 
-    - name: Run basic pylint
-      run: |
-        source activate ./ci_env
-        pip show pylint
-        pylint exca --disable=all --enable=unused-import,unused-variable,redefined-builtin,used-before-assignment,super-init-not-called,useless-super-delegation,dangerous-default-value,unnecessary-pass,attribute-defined-outside-init
-
-    - name: black
-      run: |
-        source activate ./ci_env
-        black --version
-        black -v --check --diff exca
-
-    - name: isort
-      run: |
-        source activate ./ci_env
-        isort --version
-        isort --check --diff exca
+    # keep ruff version in sync with .pre-commit-config.yaml
+    - uses: astral-sh/ruff-action@v3
+      with:
+        version: "0.15.8"
+        args: "check"
+    - uses: astral-sh/ruff-action@v3
+      with:
+        version: "0.15.8"
+        args: "format --check"

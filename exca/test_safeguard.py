@@ -20,9 +20,10 @@ def test_package_version() -> None:
 
 
 def test_logging() -> None:
-    line = "from . import logconf  # noqa"
+    # check that logconf is imported for side effects (logger configuration)
     fp = Path(__file__).with_name("base.py")
-    assert line in fp.read_text()
+    text = fp.read_text()
+    assert "logconf" in text, "base.py must import logconf to configure logging"
 
 
 def test_slurm_in_doc() -> None:

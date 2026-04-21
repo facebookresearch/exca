@@ -17,8 +17,10 @@ from pathlib import Path
 import pydantic
 
 # pylint: disable=unused-import
-from . import logconf  # noqa
-from . import utils
+from . import (
+    logconf,  # noqa
+    utils,
+)
 from .confdict import ConfDict as ConfDict
 from .workdir import WorkDir
 
@@ -269,14 +271,14 @@ class BaseInfra(pydantic.BaseModel):
             msg = f"{cls.__name__}: set infra.apply_on(version=None) and "
             msg += f"infra: {c} = {c}(version={version!r}) for latest syntax"
             logger.warning(msg)
-        factory = f"{cls.__module__}.{cls.__qualname__ }.{name}"
+        factory = f"{cls.__module__}.{cls.__qualname__}.{name}"
         if isinstance(self._infra_method, InfraMethod):  # NOT LEGACY
             m = self._infra_method.method
-            factory = f"{m.__module__}.{m.__qualname__ }"
+            factory = f"{m.__module__}.{m.__qualname__}"
             # if the method is not overriden, then use the current class name
             current_m = getattr(cls, m.__name__)
             if isinstance(current_m, property) and self._infra_method is current_m.fget:
-                factory = f"{cls.__module__}.{cls.__qualname__ }.{name}"
+                factory = f"{cls.__module__}.{cls.__qualname__}.{name}"
         state.factory = factory
         return factory
 
@@ -518,7 +520,9 @@ class InfraMethod(BaseInfraMethod):
                 .default.__pydantic_private__["_infra_method"]
             )
         elif infra_name.startswith("_"):
-            default_imethod = obj.__private_attributes__[infra_name].default.__pydantic_private__["_infra_method"]  # type: ignore
+            default_imethod = obj.__private_attributes__[
+                infra_name
+            ].default.__pydantic_private__["_infra_method"]  # type: ignore
         else:
             raise RuntimeError(f"Could not find infra named {infra_name!r} on {obj!r}")
         if default_imethod is None:
