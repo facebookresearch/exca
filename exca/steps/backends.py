@@ -473,8 +473,6 @@ class Cached(Backend):
 class _SubmititBackend(Backend):
     """Base for submitit backends."""
 
-    # Generic submitit parameters (translated by AutoExecutor to the
-    # cluster's native names, e.g. tasks_per_node -> ntasks_per_node for slurm).
     job_name: str | None = None
     timeout_min: int | None = None
     nodes: int | None = None
