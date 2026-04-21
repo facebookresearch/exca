@@ -495,8 +495,7 @@ class _SubmititBackend(Backend):
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
         wrapper.paths.ensure_folders()  # Create folders before writing job.pkl
         # AutoExecutor(cluster=_CLUSTER) fails fast at construction if the
-        # target cluster is unavailable (e.g. "slurm" on a machine without
-        # srun raises RuntimeError), which is what we want.
+        # target cluster is unavailable (e.g. "slurm" but no `srun`)
         executor = submitit.AutoExecutor(
             folder=wrapper.paths.logs_folder, cluster=self._CLUSTER
         )
