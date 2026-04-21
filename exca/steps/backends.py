@@ -475,26 +475,31 @@ class _SubmititBackend(Backend):
 
     job_name: str | None = None
     timeout_min: int | None = None
-    nodes: int | None = 1
-    tasks_per_node: int | None = 1
+    nodes: int | None = None
+    tasks_per_node: int | None = None
     cpus_per_task: int | None = None
     gpus_per_node: int | None = None
     mem_gb: float | None = None
 
-    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]]
+    # passed as `cluster=` to submitit.AutoExecutor; subclasses pin it.
+    _CLUSTER: tp.ClassVar[str | None] = None
+
+    def _submitit_params(self) -> dict[str, tp.Any]:
+        """Build the kwargs dict forwarded to ``AutoExecutor.update_parameters``."""
+        fields = set(type(self).model_fields) - set(Backend.model_fields)
+        params = {k: getattr(self, k) for k in fields if getattr(self, k) is not None}
+        if "job_name" in params:
+            params["name"] = params.pop("job_name")
+        return params
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
         wrapper.paths.ensure_folders()  # Create folders before writing job.pkl
-        executor = self._EXECUTOR_CLS(folder=wrapper.paths.logs_folder)
-
-        # Get only submitit-specific fields (exclude Backend fields)
-        submitit_fields = set(type(self).model_fields) - set(Backend.model_fields)
-        params = {
-            k: getattr(self, k) for k in submitit_fields if getattr(self, k) is not None
-        }
-        if "job_name" in params:
-            params["name"] = params.pop("job_name")
-        executor.update_parameters(**params)
+        # AutoExecutor(cluster=_CLUSTER) fails fast at construction if the
+        # target cluster is unavailable (e.g. "slurm" but no `srun`)
+        executor = submitit.AutoExecutor(
+            folder=wrapper.paths.logs_folder, cluster=self._CLUSTER
+        )
+        executor.update_parameters(**self._submitit_params())
 
         with submitit.helpers.clean_env():
             job = executor.submit(wrapper, *args)
@@ -509,29 +514,39 @@ class _SubmititBackend(Backend):
 class LocalProcess(_SubmititBackend):
     """Subprocess execution + caching."""
 
-    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]] = submitit.LocalExecutor
+    _CLUSTER: tp.ClassVar[str | None] = "local"
 
 
 class SubmititDebug(_SubmititBackend):
     """Debug executor (inline but simulates submitit)."""
 
-    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]] = submitit.DebugExecutor
+    _CLUSTER: tp.ClassVar[str | None] = "debug"
 
 
 class Slurm(_SubmititBackend):
-    """Slurm cluster execution + caching."""
+    """Slurm cluster execution + caching. Fails on non-slurm machines."""
 
     constraint: str | None = None
     partition: str | None = None
     account: str | None = None
     qos: str | None = None
-    use_srun: bool = False
     additional_parameters: dict[str, int | str | float | bool] | None = None
+    # important to enable sub-jobs (may need rechecking with latest slurm):
+    use_srun: bool = False
 
-    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]] = submitit.SlurmExecutor
+    _CLUSTER: tp.ClassVar[str | None] = "slurm"
+
+    def _submitit_params(self) -> dict[str, tp.Any]:
+        # submitit's AutoExecutor routes to slurm via "slurm_" prefix
+        params = super()._submitit_params()
+        slurm_only = set(Slurm.model_fields) - set(_SubmititBackend.model_fields)
+        for name in slurm_only:
+            if name in params:
+                params[f"slurm_{name}"] = params.pop(name)
+        return params
 
 
 class Auto(Slurm):
-    """Auto-detect executor (local or Slurm)."""
+    """Auto-detect executor (local or Slurm). Slurm fields only apply on slurm."""
 
-    _EXECUTOR_CLS: tp.ClassVar[type[submitit.Executor]] = submitit.AutoExecutor
+    _CLUSTER: tp.ClassVar[str | None] = None
