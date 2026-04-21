@@ -18,6 +18,30 @@ import exca
 from . import backends, conftest
 from .base import Chain, Step
 
+
+class _FakeJob:
+    """Fake submitit job for capture tests (pickleable, implements .result())."""
+
+    def result(self) -> None:
+        return None
+
+
+class _CapturingAutoExecutor:
+    """Fake AutoExecutor; records (ctor_kwargs, update_parameters_kwargs) pairs."""
+
+    captured: list = []  # reset by each test before monkeypatching
+
+    def __init__(self, folder: tp.Any, cluster: str | None = None, **kw: tp.Any) -> None:
+        self._ctor = {"folder": folder, "cluster": cluster, **kw}
+
+    def update_parameters(self, **kw: tp.Any) -> None:
+        type(self).captured.append((self._ctor, kw))
+
+    def submit(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> _FakeJob:
+        func(*args)
+        return _FakeJob()
+
+
 # =============================================================================
 # Submitit backend execution
 # =============================================================================
@@ -39,6 +63,34 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     job = chain.with_input(1).job()
     assert job is not None
     assert isinstance(job, submitit.Job)
+
+
+def test_slurm_backend_param_forwarding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slurm fields get the slurm_ prefix; generic fields stay generic;
+    unset generics (e.g. ``tasks_per_node``) don't leak through."""
+    _CapturingAutoExecutor.captured = []
+    monkeypatch.setattr(submitit, "AutoExecutor", _CapturingAutoExecutor)
+
+    infra: tp.Any = {
+        "backend": "Slurm",
+        "folder": tmp_path,
+        "partition": "gpu",
+        "qos": "h100",
+        "gpus_per_node": 4,
+    }
+    step = conftest.Add(value=1, infra=infra)
+    assert step.run() == 1
+
+    [(ctor, params)] = _CapturingAutoExecutor.captured
+    assert ctor["cluster"] == "slurm"
+    assert params == {
+        "slurm_partition": "gpu",
+        "slurm_qos": "h100",
+        "slurm_use_srun": False,  # Slurm.use_srun default
+        "gpus_per_node": 4,
+    }
 
 
 def test_backend_error_caching(tmp_path: Path) -> None:
