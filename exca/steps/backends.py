@@ -211,7 +211,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """Compare backends by model fields only, excluding _step to avoid recursion."""
         if not isinstance(other, Backend):
             return NotImplemented
-        if type(self) != type(other):
+        if type(self) is not type(other):
             return False
         # Compare only declared model fields, not private _step
         for field in type(self).model_fields:

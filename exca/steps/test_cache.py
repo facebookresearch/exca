@@ -485,9 +485,9 @@ def test_resolve_step_intermediate_cache(tmp_path: Path) -> None:
     # Verify: only one cache folder for AddWithTransforms (same step_uid regardless of transforms)
     folders = conftest.extract_cache_folders(tmp_path)
     add_folders = [f for f in folders if "AddWithTransforms" in f]
-    assert (
-        len(add_folders) == 1
-    ), f"Expected 1 AddWithTransforms cache folder, got {add_folders}"
+    assert len(add_folders) == 1, (
+        f"Expected 1 AddWithTransforms cache folder, got {add_folders}"
+    )
 
 
 def test_resolve_step_inside_chain_cache(tmp_path: Path) -> None:

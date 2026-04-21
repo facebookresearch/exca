@@ -161,14 +161,12 @@ class NumpyArray(StaticDumperLoader):
 
 
 class NumpyMemmapArray(NumpyArray):
-
     @classmethod
     def static_load(cls, filepath: Path) -> np.ndarray:
         return np.load(filepath, mmap_mode="r")  # type: ignore
 
 
 class MemmapArrayFile(DumperLoader):
-
     def __init__(self, folder: str | Path = "", max_cache: int | None = None) -> None:
         super().__init__(folder=folder)
         self._cache: dict[str, np.memmap] = {}
@@ -191,7 +189,9 @@ class MemmapArrayFile(DumperLoader):
                 self._f = None
                 self._name = None
 
-    def load(self, filename: str, offset: int, shape: tp.Sequence[int], dtype: str) -> np.ndarray:  # type: ignore
+    def load(  # type: ignore
+        self, filename: str, offset: int, shape: tp.Sequence[int], dtype: str
+    ) -> np.ndarray:
         shape = tuple(shape)
         length = np.prod(shape) * np.dtype(dtype).itemsize
         for _ in range(2):
@@ -228,7 +228,6 @@ class MemmapArrayFile(DumperLoader):
 
 
 class String(DumperLoader):
-
     def __init__(self, folder: str | Path = "") -> None:
         super().__init__(folder=folder)
         self._f: io.BufferedWriter | None = None
@@ -289,7 +288,9 @@ class DataDict(DumperLoader):
                 self._subs.clear()
                 self._exit_stack = None
 
-    def load(self, optimized: dict[str, tp.Any], pickled: dict[str, tp.Any]) -> dict[str, tp.Any]:  # type: ignore
+    def load(  # type: ignore
+        self, optimized: dict[str, tp.Any], pickled: dict[str, tp.Any]
+    ) -> dict[str, tp.Any]:
         output = {}
         for key, info in optimized.items():
             loader = self.CLASSES[info["cls"]](self.folder)
@@ -391,7 +392,6 @@ class MneRawFif(StaticDumperLoader):
 
 
 class MneRawBrainVision(DumperLoader):
-
     # Raw = mne.io.Raw | RawBrainVision
     def dump(self, key: str, value: tp.Any) -> dict[str, tp.Any]:
         # pylint: disable=unused-import

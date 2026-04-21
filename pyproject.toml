@@ -32,15 +32,12 @@ dependencies = [
         "pytest-markdown-docs>=0.5.0",
         "psutil>=6.1.1",
         "pip",
-        # Format
+        # Format + lint
         "tqdm>=4.65.0",
-        "black==24.3.0",
-        "isort==5.12.0",
+        "ruff>=0.15",
         "pre-commit>=3.0.0",
-        # Linters
+        # Type checking
         "mypy>=1.11.0",
-        "pylint>=2.13.9",
-        "flake8",
         # typing stubs
         "pandas-stubs",
         "types-PyYAML",
@@ -55,19 +52,48 @@ dependencies = [
         "myst-parser>=3.0.1",
     ]
 
-[tool.black]
+[tool.ruff]
 line-length = 90
-exclude = '''
-/(
-  | \.git
-  | \.mypy_cache
-)/
-'''
-force-exclude = '''
-/(
-   scratch
-)\
-'''
+exclude = [
+    "scratch",
+    "__editable__",
+    "docs/pythonplusplus",
+    "*.ipynb",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "W",   # pycodestyle warnings
+    "A",   # flake8-builtins (parity: redefined-builtin)
+    "B006",  # mutable default argument (parity: dangerous-default-value)
+    "PIE790",  # unnecessary-placeholder (rough parity: unnecessary-pass)
+]
+ignore = [
+    "E501",  # line too long (formatter handles this)
+    "E712",  # == True comparisons (intentional in pandas boolean filtering)
+    "E722",  # bare except (intentional in defensive data-loading code)
+    "E731",  # lambda assignment (common pattern in tests)
+    "E741",  # ambiguous variable name (l, O — intentional in math code)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["exca"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = [
+    "F401",  # re-exports
+    "E402",  # late imports after version check
+]
+"test_*.py" = ["F811"]   # pytest fixture redefinitions
+"**/tests/**" = ["F811"]  # pytest fixture redefinitions
+"docs*/**/*.py" = [
+    "A001",  # copyright is a standard Sphinx config variable
+    "E402",  # sphinx-gallery import structure
+    "F811",  # sphinx setup function redefinitions
+]
 
 [tool.setuptools.packages.find]
 where = ["."]  # list of folders that contain the packages (["."] by default)
@@ -83,44 +109,6 @@ namespaces = false  # to disable scanning PEP 420 namespaces (true by default)
 [tool.pytest.ini_options]
 norecursedirs = ["docs/internal"]
 addopts = ["--ignore=build", "--ignore=dist"]
-
-[tool.isort]
-profile = "black"
-line_length = 90
-skip_gitignore = true
-
-[tool.pylint]
-  [tool.pylint."MESSAGES CONTROL"]
-  # disabled messages
-  # * no-member has a lot of false positive, mypy does it better
-  disable = """
-      broad-except,
-      fixme,
-      invalid-name,
-      logging-fstring-interpolation,
-      missing-docstring,
-      no-else-return,
-      no-member,
-      protected-access,
-      too-few-public-methods,
-      too-many-locals,
-      too-many-statements,
-      too-many-return-statements,
-      too-many-branches,
-      useless-import-alias,
-      unspecified-encoding,
-      use-dict-literal,
-      useless-import-alias,
-      import-outside-toplevel
-  """
-  [tool.pylint.DESIGN]
-  max-args = 6
-
-  [tool.pylint.FORMAT]
-  max-line-length = "140"
-
-  [tool.pylint.SIMILARITIES]
-  ignore-imports = "yes"
 
 [tool.mypy]
   plugins = ['pydantic.mypy']

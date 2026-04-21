@@ -128,7 +128,9 @@ class TorchTensor:
 
         if kwargs.get("dtype") is None:
             # deprecated: legacy entries saved via torch.save
-            return torch.load(ctx.folder / kwargs["filename"], map_location="cpu", weights_only=True)  # type: ignore
+            return torch.load(
+                ctx.folder / kwargs["filename"], map_location="cpu", weights_only=True
+            )  # type: ignore
         arr = MemmapArray.__load_from_info__(ctx, **kwargs)
         return torch.from_numpy(arr.copy())
 
@@ -156,7 +158,6 @@ class KeyFileHandler:
 
 @DumpContext.register
 class Pickle(KeyFileHandler):
-
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         name = ctx.key_path(".pkl")
@@ -173,7 +174,6 @@ class Pickle(KeyFileHandler):
 
 @DumpContext.register
 class NumpyArray(KeyFileHandler):
-
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         if not isinstance(value, np.ndarray):
@@ -190,7 +190,6 @@ class NumpyArray(KeyFileHandler):
 
 @DumpContext.register
 class PandasDataFrame(KeyFileHandler):
-
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         import pandas as pd
@@ -213,7 +212,6 @@ class PandasDataFrame(KeyFileHandler):
 
 @DumpContext.register
 class ParquetPandasDataFrame(KeyFileHandler):
-
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         import pandas as pd
@@ -234,7 +232,6 @@ class ParquetPandasDataFrame(KeyFileHandler):
 
 @DumpContext.register
 class NibabelNifti(KeyFileHandler):
-
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         import nibabel
@@ -253,7 +250,6 @@ class NibabelNifti(KeyFileHandler):
 
 @DumpContext.register
 class MneRawFif(KeyFileHandler):
-
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         name = ctx.key_path("-raw.fif")

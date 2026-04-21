@@ -161,7 +161,6 @@ def test_discriminated_model_errors() -> None:
 
 def test_discriminated_model_bad_field() -> None:
     with pytest.raises(RuntimeError):
-
         # pylint: disable=unused-variable
         class Hello2(helpers.DiscriminatedModel):
             type: str = "stuff"

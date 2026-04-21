@@ -398,12 +398,12 @@ def test_mode_with_array(tmp_path: Path) -> None:
         assert a1.shape == a2.shape
         with pytest.raises(AssertionError):
             np.testing.assert_array_equal(a1, a2, err_msg="Failed to force recompute")
-    assert all(
-        t.infra._effective_mode == "cached" for t in tasks
-    ), "mode should revert to cached"
-    assert (
-        cfg.infra._effective_mode == "cached"
-    ), "mode of submission task should revert to cached"
+    assert all(t.infra._effective_mode == "cached" for t in tasks), (
+        "mode should revert to cached"
+    )
+    assert cfg.infra._effective_mode == "cached", (
+        "mode of submission task should revert to cached"
+    )
 
 
 def test_extra_forbid(tmp_path: Path) -> None:
