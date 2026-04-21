@@ -16,11 +16,10 @@ from pathlib import Path
 
 import pydantic
 
-# pylint: disable=unused-import
-from . import (
-    logconf,  # noqa
-    utils,
-)
+# side-effect import: configures the package logger
+import exca.logconf  # noqa: F401
+
+from . import utils
 from .confdict import ConfDict as ConfDict
 from .workdir import WorkDir
 
@@ -514,17 +513,12 @@ class InfraMethod(BaseInfraMethod):
             raise TypeError("infra can only be added to pydantic.BaseModel")
         # get default
         if infra_name in type(obj).model_fields:
-            default_imethod = (
-                type(obj)
-                .model_fields[infra_name]
-                .default.__pydantic_private__["_infra_method"]
-            )
+            default = type(obj).model_fields[infra_name].default
         elif infra_name.startswith("_"):
-            default_imethod = obj.__private_attributes__[
-                infra_name
-            ].default.__pydantic_private__["_infra_method"]  # type: ignore
+            default = obj.__private_attributes__[infra_name].default  # type: ignore
         else:
             raise RuntimeError(f"Could not find infra named {infra_name!r} on {obj!r}")
+        default_imethod = default.__pydantic_private__["_infra_method"]
         if default_imethod is None:
             msg = "Overriding infra in child class was not applied to a method"
             raise RuntimeError(msg)

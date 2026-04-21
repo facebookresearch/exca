@@ -21,9 +21,9 @@ def test_package_version() -> None:
 
 def test_logging() -> None:
     # check that logconf is imported for side effects (logger configuration)
+    line = "import exca.logconf"
     fp = Path(__file__).with_name("base.py")
-    text = fp.read_text()
-    assert "logconf" in text, "base.py must import logconf to configure logging"
+    assert line in fp.read_text(), "base.py must import logconf to configure logging"
 
 
 def test_slurm_in_doc() -> None:
