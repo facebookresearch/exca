@@ -83,6 +83,9 @@ class SubmititMixin(pydantic.BaseModel):
         for jobs triggering more jobs.
     slurm_additional_parameters: optional dict
         additional parameters for slurm that are not first class parameters of this config
+    slurm_setup: optional list of str
+        shell commands to run in the sbatch script before srun (e.g. ``["module load cuda"]``).
+        Maps to submitit's ``setup`` parameter.
     conda_env: optional str/path
         path or name of a conda environment to use in the job. Note that as submitit uses a pickle
         that needs to be loaded in the job with the new conda env, the pickle needs to be
@@ -113,6 +116,7 @@ class SubmititMixin(pydantic.BaseModel):
     slurm_qos: str | None = None
     slurm_use_srun: bool = False
     slurm_additional_parameters: dict[str, int | str | float | bool] | None = None
+    slurm_setup: list[str] | None = None
     # other
     conda_env: Path | str | None = None  # conda env name or path
     workdir: None | WorkDir = None
