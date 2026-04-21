@@ -483,7 +483,7 @@ class _SubmititBackend(Backend):
     gpus_per_node: int | None = None
     mem_gb: float | None = None
 
-    # Cluster forced on AutoExecutor; None = auto-detect.
+    # passed as `cluster=` to submitit.AutoExecutor; subclasses pin it.
     _CLUSTER: tp.ClassVar[str | None] = None
 
     def _submitit_params(self) -> dict[str, tp.Any]:
