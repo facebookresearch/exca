@@ -471,7 +471,7 @@ class Cached(Backend):
 
 
 class _SubmititBackend(Backend):
-    """Base for submitit backends. Unset fields are not forwarded to submitit."""
+    """Base for submitit backends."""
 
     # Generic submitit parameters (translated by AutoExecutor to the
     # cluster's native names, e.g. tasks_per_node -> ntasks_per_node for slurm).
