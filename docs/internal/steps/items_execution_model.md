@@ -859,13 +859,19 @@ them is a bug.
    `list(step.run(Items([value])))[0]` must produce the same result and
    use the same cache entry. There is one execution engine, not two.
 
-5. **Lazy iteration**: `Items.__iter__` is lazy. Large datasets must not
-   be materialized upfront. `step.run(Items(...))` returns before any
-   `_run` executes.
+5. **No upfront materialization**: large datasets must not be
+   materialized upfront. `step.run(Items(...))` may trigger caching
+   (and therefore computation, as MapInfra does), but must not require
+   holding all results in memory at once.
 
 6. **Force mode correctness**: `mode="force"` must clear the cache and
    recompute. It must propagate to downstream steps in a chain (their
    inputs changed). It must cancel running jobs if applicable.
+
+7. **Configurable, not runtime**: execution parameters (mode, folder,
+   backend, etc.) must live on the model/config, not be passed as
+   `run()` arguments. This follows from Pydantic-based reproducibility
+   — the config fully determines behavior.
 
 ---
 
@@ -890,8 +896,9 @@ matures.
    pipeline is built directly on the original step instances. This means
    a step that mutates itself during `_run` will produce a different
    cache key on the next run (the mutation is visible). Previously the
-   deep copy masked this. This is correct behavior: self-mutation
-   changes the step's identity.
+   deep copy prevented this. The correct behavior is to be decided — the
+   previous deep-copy approach was thread-safe, but may not be worth
+   the complexity.
 
 3. **`Backend.run` accepts lazy args**: the `args` parameter is now
    `tuple | Callable`. A callable is only invoked on cache miss. This
