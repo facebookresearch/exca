@@ -77,6 +77,15 @@ def test_from_step_structure() -> None:
     assert node_b._step is step_b and node_b._upstream is node_a
 
 
+def test_items_repr() -> None:
+    """Items repr shows root vs pipeline node with step type and depth."""
+    root = Items([1, 2])
+    assert repr(root) == "Items(root)"
+    step = conftest.Mult(coeff=2.0)
+    node = Items._from_step(step, root)
+    assert repr(node) == "Items(step=Mult, depth=1)"
+
+
 # =============================================================================
 # _prepare_item: the One Rule + NoValue handling
 # =============================================================================
@@ -181,6 +190,22 @@ def test_items_custom_uid(tmp_path: Path) -> None:
     step = FixedUidStep(uid="same-for-all", infra=infra)
     results = list(step.run(Items(["a", "b"])))
     assert results == ["a", "a"], "second item hits first item's cache (same uid)"
+
+
+def test_items_custom_uid_no_downstream_infra() -> None:
+    """Custom item_uid works when the step itself has infra (no downstream lazy uid propagation)."""
+    infra: tp.Any = {"backend": "Cached", "folder": None}
+    step = FixedUidStep(uid="x")
+    results = list(step.run(Items(["a", "b"])))
+    assert results == ["a", "b"], "no infra, uid override is fine"
+
+
+def test_iter_uids_fails_on_item_uid_override(tmp_path: Path) -> None:
+    """_iter_uids raises when an intermediate step overrides item_uid and a downstream step has infra."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=[FixedUidStep(uid="x"), conftest.Mult(coeff=2.0, infra=infra)])
+    with pytest.raises(NotImplementedError, match="item_uid.*overridden"):
+        list(chain.run(Items([1.0, 2.0])))
 
 
 def test_items_error_note() -> None:

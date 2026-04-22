@@ -108,16 +108,14 @@ class StepPaths:
         self.cache_folder.mkdir(parents=True, exist_ok=True)
         self.job_folder.mkdir(parents=True, exist_ok=True)
 
-    def clear_cache(self) -> None:
-        """Clear cache and job folder for this item."""
-        # Delete result from CacheDict
+    def clear_item(self) -> None:
+        """Clear cache entry and job folder for this single item."""
         if self.cache_folder.exists():
             cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
                 folder=self.cache_folder
             )
             if self.item_uid in cd:
                 del cd[self.item_uid]
-        # Delete job folder (includes job.pkl and error.pkl)
         if self.job_folder.exists():
             shutil.rmtree(self.job_folder)
 
@@ -380,13 +378,13 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         if self.mode == "force" and status is not None:
             self._ram_cache = NoValue()
-            self.paths.clear_cache()
+            self.paths.clear_item()
         elif self.mode == "retry" and status == "error":
             logger.warning(
                 "Retrying failed step: %s[%s]", self.paths.step_uid, self.paths.item_uid
             )
             self._ram_cache = NoValue()
-            self.paths.clear_cache()
+            self.paths.clear_item()
 
         # Check job recovery (for submitit backends)
         job = self.job()

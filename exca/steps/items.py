@@ -91,15 +91,24 @@ class Items:
         from the incoming uid.  No ``_run`` is executed.  The yielded
         value is the *upstream input* (unchanged), not the step's output.
 
-        Limitation: if a step overrides ``item_uid()`` to depend on the
-        computed value (not just the incoming uid), the uid returned here
-        may be wrong.  That case is deferred.
+        Raises ``NotImplementedError`` if any step in the chain overrides
+        ``item_uid()`` — the uid would depend on the transformed value,
+        which is not available without running ``_run``.
         """
         if self._step is None:
             assert self._values is not None
             yield from ((v, None) for v in self._values)
         else:
             assert self._upstream is not None
+            from .base import Step
+
+            if type(self._step).item_uid is not Step.item_uid:
+                raise NotImplementedError(
+                    f"{type(self._step).__name__}.item_uid() is overridden. "
+                    f"Uid-only propagation (used when a downstream step has "
+                    f"infra) requires running upstream to get the transformed "
+                    f"value. This is not yet supported."
+                )
             for value, incoming_uid in self._upstream._iter_uids():
                 uid, _ = self._step._prepare_item(value, incoming_uid)
                 yield value, uid
@@ -107,6 +116,12 @@ class Items:
     def __iter__(self) -> tp.Iterator[tp.Any]:
         for value, _uid in self._iter_with_uids():
             yield value
+
+    def __repr__(self) -> str:
+        if self._step is None:
+            return "Items(root)"
+        depth = len(self._aligned_steps())
+        return f"Items(step={type(self._step).__name__}, depth={depth})"
 
     # =====================================================================
     # Query API — cache checks without executing
@@ -116,6 +131,8 @@ class Items:
         """Compute StepPaths for cache queries on the last step with infra.
 
         Returns None when the last step has no infra or no folder.
+        Reuses ``_iter_uids`` / ``_prepare_item`` so uid resolution is
+        not duplicated from the execution path.
         """
         from . import backends
         from .base import _compute_step_uid
@@ -126,20 +143,18 @@ class Items:
         if infra.folder is None:
             return None
         step_uid = _compute_step_uid(self._aligned_steps())
-        node = self
-        while node._upstream is not None:
-            node = node._upstream
-        assert node._values is not None
-        values = list(node._values)
-        if len(values) != 1:
+        uids = list(self._iter_uids())
+        if len(uids) != 1:
             raise RuntimeError("Cache queries require exactly one item")
-        value = values[0]
-        if isinstance(value, backends.NoValue):
-            item_uid = backends._NOINPUT_UID
-        else:
-            import exca
+        _, item_uid = uids[0]
+        if item_uid is None:
+            root_val = uids[0][0]
+            if isinstance(root_val, backends.NoValue):
+                item_uid = backends._NOINPUT_UID
+            else:
+                import exca
 
-            item_uid = exca.ConfDict(value=value).to_uid()
+                item_uid = exca.ConfDict(value=root_val).to_uid()
         return backends.StepPaths(
             base_folder=infra.folder, step_uid=step_uid, item_uid=item_uid
         )

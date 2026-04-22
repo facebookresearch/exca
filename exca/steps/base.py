@@ -521,24 +521,19 @@ class Chain(Step):
             chain.infra.cache_type = last_step.infra.cache_type
         return chain
 
-    def _init(self, parent_folder: Path | None = None) -> None:
-        """Set up _previous links and propagate folder."""
-        previous: Step | None = self._previous
-        # Use own folder if set, otherwise use parent's folder
-        folder = self.infra.folder if self.infra and self.infra.folder else parent_folder
+    def _init(self) -> None:
+        """Wire ``_previous`` links for legacy ``_chain_hash`` / ``Backend.paths``.
 
+        Folder propagation is handled by ``_propagate_folder`` (called in
+        ``model_post_init``).  ``with_input`` constructs a new Chain,
+        which triggers ``model_post_init`` → ``_propagate_folder`` before
+        ``_init`` runs, so folder state is already correct here.
+        """
+        previous: Step | None = self._previous
         for step in self._step_sequence():
-            # First step gets Input(NoValue()) if no previous, marking it as configured
             step._previous = previous if previous is not None else Input(value=NoValue())
-            # Only propagate folder to steps that have infra but no folder set
-            if folder and step.infra is not None:
-                if step.infra.folder is None:
-                    step.infra = step.infra.model_copy(update={"folder": folder})
-            if step.infra is not None:
-                step.infra._step = step
             if isinstance(step, Chain):
-                # Pass folder to nested chain for further propagation
-                step._init(parent_folder=folder)
+                step._init()
             previous = step
 
     def _process_items(self, items: Items) -> Items:

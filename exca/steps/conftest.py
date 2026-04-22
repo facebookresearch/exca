@@ -76,7 +76,7 @@ class RandomAppend(base.Step):
 
     seed: int | None = None
 
-    def _run(self, value: str = "") -> float:
+    def _run(self, value: str = "") -> str:
         new = random.Random(self.seed).choice(string.ascii_letters + string.digits)
         return value + new
 
