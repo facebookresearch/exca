@@ -229,9 +229,9 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     assert isinstance(inner, Chain)
     inner_step = inner._step_sequence()[0]  # Add
     assert inner_step.infra is not None
-    assert (
-        inner_step.infra.folder == tmp_path
-    ), "folder should propagate to nested chain steps"
+    assert inner_step.infra.folder == tmp_path, (
+        "folder should propagate to nested chain steps"
+    )
 
 
 def test_run_mutation_changes_cache_key(tmp_path: Path) -> None:

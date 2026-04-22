@@ -36,7 +36,6 @@ class SubInfra(Base):
 
 
 class SubFunc(Base):
-
     def func(self) -> int:
         return 3 * super().func()
 
@@ -101,7 +100,7 @@ def test_subclass_infra_func(tmp_path: Path) -> None:
 
 
 def test_subclass_infra2_func(tmp_path: Path) -> None:
-    whatever = SubInfra2Func(param=13, tag="hello", infra={"folder": tmp_path}, infra2={"folder": tmp_path})  # type: ignore
+    whatever = SubInfra2Func(param=13, tag="hello", infra={"folder": tmp_path}, infra2={"folder": tmp_path})  # type: ignore  # fmt: skip
     assert whatever.func() == 78
     names = sorted(fp.name for fp in tmp_path.iterdir())
     assert tuple("SubInfra2Func.func" in n for n in names) == (False, True), names
@@ -197,7 +196,6 @@ def test_exclude_func_errors() -> None:
         _ = cfg.infra.config()
 
     with pytest.raises(TypeError):
-
         # pylint: disable=unused-variable
         class MyCfg4(MyCfg):
             infra: TaskInfra = TaskInfra(gpus_per_node=12)
