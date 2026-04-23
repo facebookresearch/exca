@@ -207,7 +207,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     _ram_cache: tp.Any = pydantic.PrivateAttr(default_factory=NoValue)
     _paths: StepPaths | None = pydantic.PrivateAttr(default=None)
     _checked_configs: bool = pydantic.PrivateAttr(default=False)
-    _cache_type_warned: bool = pydantic.PrivateAttr(default=False)
 
     def __eq__(self, other: tp.Any) -> bool:
         """Compare backends by model fields only, excluding _step to avoid recursion."""
@@ -310,21 +309,19 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _effective_cache_type(self) -> str | None:
         """Cache format to use for this Backend.
 
-        Precedence: the deprecated user-set ``self.cache_type`` (warned once
-        per instance), else the Step subclass's ``_CACHE_TYPE`` ClassVar
-        (cascaded to the last step for Chains).
+        The Step subclass's ``_CACHE_TYPE`` ClassVar is the source of truth
+        (cascaded to the last step for Chains). Setting ``infra.cache_type``
+        is deprecated: a matching value is accepted silently for back-compat
+        with older neuralset, a mismatch raises to prevent silent corruption.
         """
-        if self.cache_type is not None:
-            if not self._cache_type_warned:
-                warnings.warn(
-                    "Backend.cache_type is deprecated; declare _CACHE_TYPE "
-                    "ClassVar on the Step subclass instead.",
-                    DeprecationWarning,
-                    stacklevel=3,
-                )
-                self._cache_type_warned = True
-            return self.cache_type
-        return self._step._resolve_cache_type() if self._step is not None else None
+        declared = self._step._resolve_cache_type() if self._step is not None else None
+        if self.cache_type is None or self.cache_type == declared:
+            return declared
+        raise RuntimeError(
+            f"Backend.cache_type={self.cache_type!r} does not match the Step's "
+            f"declared cache type ({declared!r}); declare _CACHE_TYPE ClassVar "
+            "on the Step subclass instead of setting infra.cache_type."
+        )
 
     def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":
         """Get CacheDict for this step."""

@@ -293,7 +293,14 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _resolve_cache_type(self) -> str | None:
         """Declared cache format; Chain walks to the last step."""
-        return self._CACHE_TYPE
+        # `_DEFAULT_CACHE_TYPE` is a back-compat alias for older neuralset
+        # versions that still spell the ClassVar that way; remove once
+        # neuralset migrates.
+        return (
+            self._CACHE_TYPE
+            if self._CACHE_TYPE is not None
+            else getattr(self, "_DEFAULT_CACHE_TYPE", None)
+        )
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
         if "has_resolve" not in self._step_flags:
@@ -398,18 +405,11 @@ class Chain(Step):
 
     def _resolve_cache_type(self) -> str | None:
         # Chain shares a cache entry with its last step, so they must agree
-        # on the format. Delegate to last.infra._effective_cache_type() when
-        # present so the deprecation warning fires even on chain-cache-hit
-        # paths that never invoke the last step's backend directly.
+        # on the format.
         if self._CACHE_TYPE is not None:
             return self._CACHE_TYPE
         seq = self._step_sequence()
-        if not seq:
-            return None
-        last = seq[-1]
-        if last.infra is not None:
-            return last.infra._effective_cache_type()
-        return last._resolve_cache_type()
+        return seq[-1]._resolve_cache_type() if seq else None
 
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
         """Create copy with optional Input prepended."""
