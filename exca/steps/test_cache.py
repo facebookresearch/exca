@@ -144,7 +144,7 @@ def test_mode_readonly(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("chain", [True, False])
 def test_mode_force(tmp_path: Path, chain: bool) -> None:
-    """Force recomputes once, then uses cache."""
+    """Force always recomputes; set mode back to cached explicitly."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     if chain:
         seq = [conftest.RandomGenerator(), conftest.Mult(coeff=10)]
@@ -157,7 +157,8 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
     out2 = step.run()  # forces recompute
     assert out1 != out2
 
-    out3 = step.run()  # uses cache (mode reset to "cached")
+    step.infra.mode = "cached"  # type: ignore
+    out3 = step.run()  # now uses cache
     assert out2 == out3
 
 
@@ -181,8 +182,9 @@ def test_force_propagates_downstream(tmp_path: Path) -> None:
     out2 = chain2.run()
     assert out2 != out1  # add recomputed due to force propagation
 
-    # After force, subsequent calls use cache (mode resets)
-    out3 = chain2.run()
+    # Fresh copy (all cached) reads the same cached result
+    chain3 = chain.model_copy(deep=True)
+    out3 = chain3.run()
     assert out2 == out3
 
 
@@ -217,20 +219,20 @@ def test_force_nested_chains(tmp_path: Path) -> None:
     out1 = outer.run()
 
     # force on gen propagates through inner chain
-    outer._step_sequence()[0].infra.mode = "force"  # type: ignore
-    out2 = outer.run()
+    outer2 = outer.model_copy(deep=True)
+    outer2._step_sequence()[0].infra.mode = "force"  # type: ignore
+    out2 = outer2.run()
     assert out1 != out2  # inner's add_random recomputed
 
-    # Subsequent call uses cache (mode reset)
-    out3 = outer.run()
+    # Fresh copy (all cached) reads the same cached result
+    outer3 = outer.model_copy(deep=True)
+    out3 = outer3.run()
     assert out2 == out3
 
     # force on inner chain also propagates to downstream
-    outer2 = outer.model_copy(deep=True)
-    outer2._step_sequence()[2].infra.mode = "force"  # type: ignore
-    # infra mode in first step should have been reverted to cached
-    assert outer._step_sequence()[0].infra.mode == "cached"  # type: ignore
-    out4 = outer2.run()
+    outer4 = outer.model_copy(deep=True)
+    outer4._step_sequence()[2].infra.mode = "force"  # type: ignore
+    out4 = outer4.run()
     assert out4 != out3  # downstream recomputed
 
 

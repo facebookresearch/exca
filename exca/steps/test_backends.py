@@ -169,10 +169,6 @@ def test_force_with_taskinfra(tmp_path: Path) -> None:
     out2 = xp.run()
     # Should get different result (forced recompute)
     assert out1 != out2
-    # Third call should use cache (mode was reset after run)
-    xp.infra.clear_job()
-    out3 = xp.run()
-    assert out2 == out3
 
 
 def test_paths_property_requires_initialization(tmp_path: Path) -> None:
@@ -213,13 +209,16 @@ def test_config_files_and_consistency(tmp_path: Path) -> None:
     assert (step_folder / "full-uid.yaml").read_text("utf8") == expected_uid
     assert (step_folder / "config.yaml").exists()
 
-    # Inconsistent uid.yaml raises error
-    (step_folder / "uid.yaml").write_text("- coeff: 999.0\n  type: Mult\n")
+    # Inconsistent uid.yaml raises error (clear first, then corrupt, then run)
     step.with_input(10.0).clear_cache()
+    step_folder.mkdir(parents=True, exist_ok=True)
+    (step_folder / "uid.yaml").write_text("- coeff: 999.0\n  type: Mult\n")
     with pytest.raises(RuntimeError, match="Inconsistent uid config"):
         step.run(10.0)
 
     # Corrupted config is deleted and recreated
+    step.with_input(10.0).clear_cache()
+    step_folder.mkdir(parents=True, exist_ok=True)
     (step_folder / "uid.yaml").write_text("invalid: yaml: {{{{")
     assert step.run(10.0) == 30.0
     assert (step_folder / "uid.yaml").read_text("utf8") == expected_uid

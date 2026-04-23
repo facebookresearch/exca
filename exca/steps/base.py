@@ -14,6 +14,7 @@ Backends holds a reference to its owning Step for cache key computation.
 from __future__ import annotations
 
 import collections
+import functools
 import inspect
 import logging
 import typing as tp
@@ -27,6 +28,7 @@ from exca import utils
 
 from . import backends
 from .backends import NoValue
+from .items import Items
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,16 @@ def _resolve_all(steps: tp.Iterable["Step"]) -> list["Step"]:
         else:
             resolved.append(built)
     return resolved
+
+
+def _compute_step_uid(aligned_steps: list["Step"]) -> str:
+    """Compute step_uid from a flat list of steps.
+
+    Same hash as ``_chain_hash`` but derived from the Items chain
+    instead of walking ``_previous``.
+    """
+    opts = {"exclude_defaults": True, "uid": True}
+    return "/".join(exca.ConfDict.from_model(s, **opts).to_uid() for s in aligned_steps)
 
 
 def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
@@ -220,47 +232,135 @@ class Step(exca.helpers.DiscriminatedModel):
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
 
+    # =========================================================================
+    # Item identity and Items dispatch
+    # =========================================================================
+
+    def item_uid(self, value: tp.Any) -> str | None:
+        """Uid policy for the value entering this step.
+
+        Return ``None`` to leave the uid unchanged (preserve incoming).
+        Return a non-empty string to set or reset the uid.
+        """
+        return None
+
+    def _process_items(self, items: Items) -> Items:
+        """Wrap upstream Items with this step's cache-or-compute logic."""
+        resolved = self._resolve_step()
+        if resolved is not self:
+            if self.infra is not None and self.infra.mode == "force":
+                _set_mode_recursive([resolved], "force")
+            return resolved._process_items(items)
+        return Items._from_step(self, items)
+
+    def _prepare_item(
+        self, value: tp.Any, incoming_uid: str | None
+    ) -> tuple[str, tuple[tp.Any, ...]]:
+        """Turn an upstream (value, uid) pair into (cache_uid, args).
+
+        Uid resolution (the "One Rule"):
+        1. If ``self.item_uid(value)`` returns a non-empty string, use it.
+        2. Else if *incoming_uid* exists, preserve it.
+        3. Else fall back to ``ConfDict(value=value).to_uid()``.
+        """
+        if isinstance(value, NoValue):
+            return incoming_uid or backends._NOINPUT_UID, ()
+        uid = self.item_uid(value)
+        if uid is not None:
+            if not uid:
+                raise ValueError("item_uid() must return a non-empty string or None")
+            return uid, (value,)
+        if incoming_uid is not None:
+            return incoming_uid, (value,)
+        return exca.ConfDict(value=value).to_uid(), (value,)
+
+    def _upstream_args(
+        self,
+        upstream: Items,
+        root_val: tp.Any,
+        incoming_uid: str | None,
+    ) -> tuple[tp.Any, ...]:
+        """Lazy thunk for ``_iter_items``: only called on cache miss."""
+        value, _ = upstream._resolve_value(root_val)
+        return self._prepare_item(value, incoming_uid)[1]
+
+    def _iter_items(self, upstream: Items) -> tp.Iterator[tuple[tp.Any, str | None]]:
+        """Process upstream items: uid resolution, cache, _run.
+
+        Called by Items._iter_with_uids when this step's Items node is
+        iterated.  For steps without infra the loop stays lazy (per-item).
+        For steps with infra, uids are propagated eagerly (no upstream
+        _run); values are wrapped in lazy thunks that rebuild a
+        single-item pipeline on cache miss.
+        """
+        if self.infra is None:
+            for value, incoming_uid in upstream._iter_with_uids():
+                uid, args = self._prepare_item(value, incoming_uid)
+                try:
+                    yield self._run(*args), uid
+                except Exception as e:
+                    e.add_note(f"  -> in {self!r}")
+                    raise
+            return
+
+        aligned = upstream._aligned_steps() + self._aligned_step()
+        step_uid = _compute_step_uid(aligned)
+
+        lazy_items = [
+            (
+                self._prepare_item(root_val, uid)[0],
+                functools.partial(self._upstream_args, upstream, root_val, uid),
+            )
+            for root_val, uid in upstream._iter_uids()
+        ]
+
+        self.infra._checked_configs = False
+        try:
+            yield from self.infra.run_items(
+                self._run, lazy_items, step_uid=step_uid, aligned_steps=aligned
+            )
+        except Exception as e:
+            e.add_note(f"  -> in {self!r}")
+            raise
+
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
         """Create copy with Input as _previous (Input holds value or NoValue)."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
         step = self.model_copy(deep=True)
         step._previous = Input(value=value)
-        # Re-attach infra to new step
         if step.infra is not None:
             step.infra._step = step
+            step.infra._paths = None
         return step
 
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
-        """Execute with caching and backend handling."""
+        """Execute with caching and backend handling.
+
+        Scalar values are wrapped in ``Items([value])`` and go through
+        ``_process_items`` — one code path for scalar and batch.
+        """
         built = self._resolve_step()
         if built is not self:
             return built.run(value)
 
-        step = self.with_input(value) if self._previous is None else self
-        prev = step._previous
+        batch = isinstance(value, Items)
+        # deprecated: honor value stored by with_input()
+        if (
+            not batch
+            and isinstance(value, NoValue)
+            and self._previous is not None
+            and isinstance(self._previous, Input)
+        ):
+            value = self._previous.value
 
-        # prev is always Input after with_input()
-        if not isinstance(prev, Input):
-            raise RuntimeError("Step not properly configured")
+        items = value if batch else Items([value])
+        result_items = self._process_items(items)
 
-        args: tp.Any = () if isinstance(prev.value, NoValue) else (prev.value,)
-        try:
-            if step.infra is None:
-                result = step._run(*args)
-            else:
-                result = step.infra.run(step._run, *args)
-        except Exception as e:
-            e.add_note(f"  -> in {step!r}")
-            raise
+        if batch:
+            return result_items
 
-        # Sync state back to original step's infra (with_input creates a copy)
-        if step is not self and self.infra is not None:
-            self.infra._ram_cache = step.infra._ram_cache  # type: ignore[union-attr]
-            if self.infra.mode == "force":
-                object.__setattr__(self.infra, "mode", "cached")
-
-        return result
+        return next(iter(result_items))
 
     def forward(self, value: tp.Any = NoValue()) -> tp.Any:  # deprecated: use run()
         warnings.warn(
@@ -355,6 +455,19 @@ class Chain(Step):
         super().model_post_init(__context)
         if not self.steps:
             raise ValueError("steps cannot be empty")
+        self._propagate_folder()
+
+    def _propagate_folder(self, parent_folder: Path | None = None) -> None:
+        """Propagate folder from chain (or parent) to children that need it."""
+        folder = self.infra.folder if self.infra and self.infra.folder else parent_folder
+        if folder is None:
+            return
+        for step in self._step_sequence():
+            if step.infra is not None and step.infra.folder is None:
+                step.infra = step.infra.model_copy(update={"folder": folder})
+                step.infra._step = step
+            if isinstance(step, Chain):
+                step._propagate_folder(parent_folder=folder)
 
     def _step_sequence(self) -> tuple[Step, ...]:
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
@@ -389,15 +502,18 @@ class Chain(Step):
         return steps[0]._is_generator() if steps else True
 
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
-        """Create copy with optional Input prepended."""
+        """Create copy with Input(value) as _previous.
+
+        Chain flattens/resolves child steps and rebuilds. The value goes
+        into _previous so that _chain_hash and cache paths are consistent
+        between run() and has_cache().
+        """
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
         expanded = _resolve_all(self._step_sequence())
         steps: list[tp.Any] = [s.model_dump() for s in expanded]
-        if not isinstance(value, NoValue):
-            steps = [Input(value=value)] + steps
         chain = type(self)(steps=steps, infra=self.infra)
-        chain._previous = Input(value=NoValue())  # Mark chain as configured
+        chain._previous = Input(value=value)
         chain._init()
         # Sync cache_type: chain and last step share cache entry, must use same format
         last_step = chain._step_sequence()[-1]
@@ -405,100 +521,57 @@ class Chain(Step):
             chain.infra.cache_type = last_step.infra.cache_type
         return chain
 
-    def _init(self, parent_folder: Path | None = None) -> None:
-        """Set up _previous links and propagate folder."""
-        previous: Step | None = self._previous
-        # Use own folder if set, otherwise use parent's folder
-        folder = self.infra.folder if self.infra and self.infra.folder else parent_folder
+    def _init(self) -> None:
+        """Wire ``_previous`` links for legacy ``_chain_hash`` / ``Backend.paths``.
 
+        Folder propagation is handled by ``_propagate_folder`` (called in
+        ``model_post_init``).  ``with_input`` constructs a new Chain,
+        which triggers ``model_post_init`` → ``_propagate_folder`` before
+        ``_init`` runs, so folder state is already correct here.
+        """
+        previous: Step | None = self._previous
         for step in self._step_sequence():
-            # First step gets Input(NoValue()) if no previous, marking it as configured
             step._previous = previous if previous is not None else Input(value=NoValue())
-            # Only propagate folder to steps that have infra but no folder set
-            if folder and step.infra is not None:
-                if step.infra.folder is None:
-                    step.infra = step.infra.model_copy(update={"folder": folder})
-            if step.infra is not None:
-                step.infra._step = step
             if isinstance(step, Chain):
-                # Pass folder to nested chain for further propagation
-                step._init(parent_folder=folder)
+                step._init()
             previous = step
 
-    def _run(self, value: tp.Any = NoValue()) -> tp.Any:
-        """Execute steps, using intermediate caches."""
+    def _process_items(self, items: Items) -> Items:
+        """Lazy forward composition: each child wraps the Items pipeline.
+
+        Force propagation is applied eagerly (before building the lazy
+        pipeline) so that modes are correct when the pipeline is consumed.
+        """
         steps = self._step_sequence()
 
-        # Propagate force to downstream steps
-        force_active = False
-        for step in steps:
-            if step.infra is not None and step.infra.mode == "force":
-                force_active = True
-                if isinstance(step, Chain):
-                    _set_mode_recursive(step._step_sequence(), "force")
-            elif force_active:
-                _set_mode_recursive([step], "force")
-
-        # Find latest cached result to skip already-computed steps
-        start_idx = 0
-        args: tp.Any = () if isinstance(value, NoValue) else (value,)
-        for k, step in enumerate(reversed(steps)):
-            if step.infra is None:
-                continue
-            if step.infra.mode == "force":
-                continue
-            if step.infra.has_cache():
-                args = (step.infra.cached_result(),)
-                start_idx = len(steps) - k
-                break
-
-        # Run remaining steps
-        total = len(steps)
-        for i, step in enumerate(steps[start_idx:], start=start_idx + 1):
-            step_name = type(step).__name__
-            logger.debug("Running step %d/%d: %s", i, total, step_name)
-            try:
-                if step.infra is not None:
-                    args = (step.infra.run(step._run, *args),)
-                else:
-                    args = (step._run(*args),)
-            except Exception as e:
-                e.add_note(f"  -> while running step {i}/{total}: {step_name}")
-                raise
-            logger.debug("Completed step %d/%d: %s", i, total, step_name)
-
-        return args[0]
-
-    def run(self, value: tp.Any = NoValue()) -> tp.Any:
-        chain = self.with_input(value) if self._previous is None else self
-
-        # Track force steps to reset after run
-        force_steps = [
-            s
-            for s in self._step_sequence() + (self,)
-            if s.infra is not None and s.infra.mode == "force"
-        ]
-
-        # Propagate force to all internal steps recursively
-        if chain.infra is not None and chain.infra.mode == "force":
-            _set_mode_recursive(chain._step_sequence(), "force")
-
-        if chain.infra is None:
-            result = chain._run()
+        chain_force = self.infra is not None and self.infra.mode == "force"
+        if chain_force:
+            _set_mode_recursive(steps, "force")
         else:
-            if force_steps:
-                chain.infra.clear_cache()
-            # Note: if the last step also has infra, it shares the same cache entry
-            # (same step_uid from _aligned_step flattening, same item_uid from original
-            # input). The last step writes first, chain finds cache hit - no duplication.
-            result = chain.infra.run(chain._run)
+            force_active = False
+            for step in steps:
+                if step.infra is not None and step.infra.mode == "force":
+                    force_active = True
+                    if isinstance(step, Chain):
+                        _set_mode_recursive(step._step_sequence(), "force")
+                elif force_active:
+                    _set_mode_recursive([step], "force")
+            if force_active and self.infra is not None:
+                object.__setattr__(self.infra, "mode", "force")
 
-        # Reset force on original steps after successful run
-        # (object.__setattr__ bypasses frozen model validation for TaskInfra)
-        for step in force_steps:
-            object.__setattr__(step.infra, "mode", "cached")
+        if self.infra is not None:
+            return Items._from_step(self, items)
 
-        return result
+        for step in steps:
+            items = step._process_items(items)
+        return items
+
+    def _run(self, value: tp.Any = NoValue()) -> tp.Any:
+        """Build lazy pipeline from children and consume one result."""
+        items = Items([value])
+        for step in self._step_sequence():
+            items = step._process_items(items)
+        return next(iter(items))
 
     def forward(self, value: tp.Any = NoValue()) -> tp.Any:  # deprecated: use run()
         warnings.warn(

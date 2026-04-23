@@ -11,6 +11,7 @@ Test guidelines live in .cursor/rules/testing.mdc (general) and
 """
 
 import random
+import string
 from pathlib import Path
 
 from . import base
@@ -68,6 +69,16 @@ class Add(base.Step):
         if self.randomize:
             return value + random.random()
         return value + self.value
+
+
+class RandomAppend(base.Step):
+    """Appends a random character to the input."""
+
+    seed: int | None = None
+
+    def _run(self, value: str = "") -> str:
+        new = random.Random(self.seed).choice(string.ascii_letters + string.digits)
+        return value + new
 
 
 # =============================================================================

@@ -931,3 +931,20 @@ This provides:
 
 **Remaining question for `map()`/`Items`:**
 - Should work without infra? Yes: sequential processing, no caching (matches `run()` behavior)
+
+---
+
+## Consistency Note
+
+This report is exploratory/history. The current design source of truth is
+[`map_design.md`](map_design.md).
+
+Some earlier passages in this report reflect options that were still being
+explored. The current discussion/design direction is:
+- batch dispatch happens separately from the scalar `run(value)` path
+- `Items` is a lazy batch carrier, not just a raw iterator/list wrapper
+- caching remains strictly per-item
+- `_run_batch_items()` should keep an iterator/streaming contract
+- the chain's final cache is the cache of the final step
+- `item_uid` definition and downstream reset/re-keying likely deserve a
+  dedicated proposal of their own

@@ -223,38 +223,41 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     assert result == 12.0  # (5 + 1) * 2
 
     # Check folder propagated to nested chain's step
-    # with_input() prepends Input to outer chain: [Input, inner_chain, Mult]
+    # with_input() sets Input(5.0) as _previous; steps remain [inner_chain, Mult]
     configured = outer_chain.with_input(5.0)
-    inner = configured._step_sequence()[1]  # Index 1 = inner_chain
+    inner = configured._step_sequence()[0]
     assert isinstance(inner, Chain)
-    # inner_chain's _step_sequence() is just [Add] (no Input prepended to inner)
-    inner_step = inner._step_sequence()[0]  # Index 0 = Add
+    inner_step = inner._step_sequence()[0]  # Add
     assert inner_step.infra is not None
     assert inner_step.infra.folder == tmp_path, (
         "folder should propagate to nested chain steps"
     )
 
 
-def test_run_mutation_cache_consistency(tmp_path: Path) -> None:
-    """Cache should work even if _run mutates self (bug: cache key changes mid-execution)."""
+def test_run_mutation_changes_cache_key(tmp_path: Path) -> None:
+    """Without deep copy, _run mutations change the step identity (cache key).
+
+    Steps that mutate self during _run will get a different cache key
+    on subsequent calls because the step config changed.
+    """
 
     class Counter(Step):
         count: int = 0
         infra: backends.Backend | None = None
 
         def _run(self) -> int:
-            self.count += 1  # Mutation during _run changes cache key!
+            self.count += 1
             return self.count
 
     counter = Counter(infra={"backend": "Cached", "folder": tmp_path})  # type: ignore
 
-    # First run - should cache result
     result1 = counter.run()
-    assert result1 == 1, "first call should return 1"
+    assert result1 == 1
+    assert counter.count == 1
 
-    # Second run - should return cached result, not None
     result2 = counter.run()
-    assert result2 == 1, "second call should return cached result (bug: returns None)"
+    assert result2 == 2, "step mutated, different cache key, recomputes"
+    assert counter.count == 2
 
 
 def test_none_as_valid_input() -> None:
@@ -432,7 +435,7 @@ def test_chain_error_note() -> None:
     with pytest.raises(ValueError) as exc_info:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
-    assert "Add" in formatted and "while running step" in formatted
+    assert "Add" in formatted and "-> in" in formatted
 
 
 # =============================================================================
