@@ -400,8 +400,6 @@ class Chain(Step):
         expanded = _resolve_all(self._step_sequence())
         steps: list[tp.Any] = [s.model_dump() for s in expanded]
         chain = type(self)(steps=steps, infra=self.infra)
-        # _previous is the sole source of truth for input identity — matches Step
-        # so (step_uid, item_uid) discriminates distinct inputs on chain-level cache.
         chain._previous = Input(value=value)
         chain._init()
         # Sync cache_type: chain and last step share cache entry, must use same format
