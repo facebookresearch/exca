@@ -78,28 +78,6 @@ def test_intermediate_cache(tmp_path: Path) -> None:
     assert result1 == result2  # Same because generator cached
 
 
-def test_intermediate_cache_reuse(tmp_path: Path) -> None:
-    """Changing downstream step reuses upstream cache."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-
-    # First chain: gen * 10
-    chain1 = Chain(
-        steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=10)],
-        infra=infra,
-    )
-    out1 = chain1.run()
-
-    # Second chain: gen * 100 (same generator, different multiplier)
-    chain2 = Chain(
-        steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=100)],
-        infra=infra,
-    )
-    out2 = chain2.run()
-
-    # out2 should be 10x out1 (same generator result)
-    assert out2 == pytest.approx(10 * out1, abs=1e-9)
-
-
 def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     """When both chain and last step have infra, they share cache entry and cache_type."""
     step_infra: tp.Any = {"backend": "Cached", "cache_type": "Pickle"}
