@@ -61,11 +61,18 @@ def test_downstream_cache_hit_skips_upstream_run(
         {"backend": "Cached", "cache_type": "Pickle"},
     ],
 )
-def test_cache_key_deterministic(tmp_path: Path, infra_override: dict) -> None:
+@pytest.mark.parametrize("as_chain", [False, True])
+def test_cache_key_deterministic(
+    tmp_path: Path, infra_override: dict, as_chain: bool
+) -> None:
     # Golden strings pin format + purity: any drift (id/clock/hash leak) or
     # infra field leaking into the uid flips the bytes. Diff = cache invalidation.
+    # Also: chain wrapper changes nothing.
     infra: tp.Any = {"folder": tmp_path, **infra_override}
-    step = conftest.Mult(coeff=3.0, infra=infra).with_input(5.0)
+    step: tp.Any = conftest.Mult(coeff=3.0, infra=infra)
+    if as_chain:
+        step = Chain(steps=[conftest.Mult(coeff=3.0)], infra=infra)
+    step = step.with_input(5.0)
     assert step.infra is not None
     assert step.infra.paths.step_uid == "coeff=3,type=Mult-4c6b8f5f"
     assert step.infra.paths.item_uid == "value=5-39801320"

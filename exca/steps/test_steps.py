@@ -105,7 +105,6 @@ def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
     ]
     chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}], **infra)  # type: ignore
 
-    # Hash computation (Input step excluded - Input._aligned_step returns empty list)
     expected_hash = (
         "type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     )
@@ -223,12 +222,10 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     assert result == 12.0  # (5 + 1) * 2
 
     # Check folder propagated to nested chain's step
-    # with_input() prepends Input to outer chain: [Input, inner_chain, Mult]
     configured = outer_chain.with_input(5.0)
-    inner = configured._step_sequence()[1]  # Index 1 = inner_chain
+    inner = configured._step_sequence()[0]
     assert isinstance(inner, Chain)
-    # inner_chain's _step_sequence() is just [Add] (no Input prepended to inner)
-    inner_step = inner._step_sequence()[0]  # Index 0 = Add
+    inner_step = inner._step_sequence()[0]
     assert inner_step.infra is not None
     assert inner_step.infra.folder == tmp_path, (
         "folder should propagate to nested chain steps"
