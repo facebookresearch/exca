@@ -101,21 +101,51 @@ def test_intermediate_cache_reuse(tmp_path: Path) -> None:
 
 
 def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
-    """When both chain and last step have infra, they share cache entry and cache_type."""
-    step_infra: tp.Any = {"backend": "Cached", "cache_type": "Pickle"}
+    """When both chain and last step have infra, they share cache folder and cache_type."""
+
+    class PickleMult(conftest.Mult):
+        _CACHE_TYPE = "Pickle"
+
+    step_infra: tp.Any = {"backend": "Cached"}
     chain = Chain(
-        steps=[conftest.Add(value=1), conftest.Mult(coeff=2, infra=step_infra)],
+        steps=[conftest.Add(value=1), PickleMult(coeff=2, infra=step_infra)],
         infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
     )
     assert chain.run() == 2.0  # (0 + 1) * 2
 
-    # Both share cache folder and cache_type is propagated from last step
+    # Chain and last step share the cache folder; effective cache_type resolves
+    # to the last step's _CACHE_TYPE declaration (cascaded via _resolve_cache_type).
     configured = chain.with_input()
     last_step = configured._step_sequence()[-1]
     assert configured.infra is not None
     assert last_step.infra is not None
     assert configured.infra.paths.step_folder == last_step.infra.paths.step_folder
-    assert configured.infra.cache_type == "Pickle"
+    assert configured.infra._effective_cache_type() == "Pickle"
+    assert last_step.infra._effective_cache_type() == "Pickle"
+
+
+def test_backend_cache_type_deprecated(tmp_path: Path) -> None:
+    """Setting cache_type on infra is deprecated and warns on use."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "cache_type": "Pickle"}
+    step = conftest.RandomGenerator(infra=infra)
+    with pytest.warns(DeprecationWarning, match="Backend.cache_type is deprecated"):
+        step.run()
+
+
+def test_chain_cache_type_deprecation_not_bypassed(tmp_path: Path) -> None:
+    """Chain cascade to last step's deprecated cache_type still triggers the warning.
+
+    Without delegation through ``last.infra._effective_cache_type()``, the
+    Chain's backend would silently read the value on a fresh-process
+    cache-hit path without warning.
+    """
+    step_infra: tp.Any = {"backend": "Cached", "cache_type": "Pickle"}
+    chain = Chain(
+        steps=[conftest.Add(value=1), conftest.Mult(coeff=2, infra=step_infra)],
+        infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
+    )
+    with pytest.warns(DeprecationWarning, match="Backend.cache_type is deprecated"):
+        chain.run()
 
 
 # =============================================================================

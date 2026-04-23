@@ -150,6 +150,10 @@ class Step(exca.helpers.DiscriminatedModel):
     _previous: Step | None = None
     _step_flags: tp.ClassVar[frozenset[str]] = frozenset()
     _exca_chain_class: tp.ClassVar[type["Step"] | None] = None
+    # Override in subclass to declare the cache serialization format. Read by
+    # Backend._effective_cache_type() when the deprecated `infra.cache_type`
+    # knob is unset.
+    _CACHE_TYPE: tp.ClassVar[str | None] = None
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
@@ -287,6 +291,10 @@ class Step(exca.helpers.DiscriminatedModel):
         opts = {"exclude_defaults": True, "uid": True}
         return "/".join(exca.ConfDict.from_model(s, **opts).to_uid() for s in steps)
 
+    def _resolve_cache_type(self) -> str | None:
+        """Declared cache format; Chain walks to the last step."""
+        return self._CACHE_TYPE
+
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
         if "has_resolve" not in self._step_flags:
             return None
@@ -388,6 +396,21 @@ class Chain(Step):
         steps = self._step_sequence()
         return steps[0]._is_generator() if steps else True
 
+    def _resolve_cache_type(self) -> str | None:
+        # Chain shares a cache entry with its last step, so they must agree
+        # on the format. Delegate to last.infra._effective_cache_type() when
+        # present so the deprecation warning fires even on chain-cache-hit
+        # paths that never invoke the last step's backend directly.
+        if self._CACHE_TYPE is not None:
+            return self._CACHE_TYPE
+        seq = self._step_sequence()
+        if not seq:
+            return None
+        last = seq[-1]
+        if last.infra is not None:
+            return last.infra._effective_cache_type()
+        return last._resolve_cache_type()
+
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
         """Create copy with optional Input prepended."""
         if self._previous is not None:
@@ -399,10 +422,6 @@ class Chain(Step):
         chain = type(self)(steps=steps, infra=self.infra)
         chain._previous = Input(value=NoValue())  # Mark chain as configured
         chain._init()
-        # Sync cache_type: chain and last step share cache entry, must use same format
-        last_step = chain._step_sequence()[-1]
-        if chain.infra and last_step.infra and last_step.infra.cache_type:
-            chain.infra.cache_type = last_step.infra.cache_type
         return chain
 
     def _init(self, parent_folder: Path | None = None) -> None:

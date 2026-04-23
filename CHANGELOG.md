@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- `exca/steps`: `Step` cache serialization is now declared via `_CACHE_TYPE` ClassVar on the subclass; `Backend.cache_type` is deprecated.
+
 ## 0.5.20
 
 ### Changed

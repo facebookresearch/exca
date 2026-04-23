@@ -185,6 +185,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return ["."]  # force ignored in uid
 
     folder: Path | None = None
+    # deprecated: declare `_CACHE_TYPE` on the Step subclass instead.
     cache_type: str | None = None
     mode: ModeType = "cached"
     keep_in_ram: bool = False
@@ -206,6 +207,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     _ram_cache: tp.Any = pydantic.PrivateAttr(default_factory=NoValue)
     _paths: StepPaths | None = pydantic.PrivateAttr(default=None)
     _checked_configs: bool = pydantic.PrivateAttr(default=False)
+    _cache_type_warned: bool = pydantic.PrivateAttr(default=False)
 
     def __eq__(self, other: tp.Any) -> bool:
         """Compare backends by model fields only, excluding _step to avoid recursion."""
@@ -305,10 +307,29 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Cache operations
     # =========================================================================
 
+    def _effective_cache_type(self) -> str | None:
+        """Cache format to use for this Backend.
+
+        Precedence: the deprecated user-set ``self.cache_type`` (warned once
+        per instance), else the Step subclass's ``_CACHE_TYPE`` ClassVar
+        (cascaded to the last step for Chains).
+        """
+        if self.cache_type is not None:
+            if not self._cache_type_warned:
+                warnings.warn(
+                    "Backend.cache_type is deprecated; declare _CACHE_TYPE "
+                    "ClassVar on the Step subclass instead.",
+                    DeprecationWarning,
+                    stacklevel=3,
+                )
+                self._cache_type_warned = True
+            return self.cache_type
+        return self._step._resolve_cache_type() if self._step is not None else None
+
     def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":
         """Get CacheDict for this step."""
         return exca.cachedict.CacheDict(
-            folder=self.paths.cache_folder, cache_type=self.cache_type
+            folder=self.paths.cache_folder, cache_type=self._effective_cache_type()
         )
 
     def has_cache(self) -> bool:
@@ -434,7 +455,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 registry = inflight.InflightRegistry(self.paths.cache_folder)
             with inflight.inflight_session(registry, [item_uid]) as claimed:
                 if claimed and self._cache_status() is None:
-                    wrapper = _CachingCall(func, self.paths, self.cache_type)
+                    wrapper = _CachingCall(func, self.paths, self._effective_cache_type())
                     job = self._submit(wrapper, *args)
                     if registry is not None:
                         if isinstance(job, submitit.SlurmJob):
