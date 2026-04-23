@@ -294,11 +294,9 @@ def test_multiple_inputs_cache_separately(tmp_path: Path, wrap_in_chain: bool) -
     """Different inputs cache separately via item_uid; regression holds for Chain too."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     # Add with randomize=True: returns input + random (or just random if no input)
-    step: tp.Any
+    step: Step = conftest.Add(randomize=True, infra=infra)
     if wrap_in_chain:
-        step = Chain(steps=[conftest.Add(randomize=True)], infra=infra)
-    else:
-        step = conftest.Add(randomize=True, infra=infra)
+        step = Chain(steps=[step], infra=infra)
 
     outs: dict[float | None, float] = {}
     outs[None] = step.run()  # Generator mode (no input)
