@@ -85,30 +85,38 @@ class Items:
             yield from self._step._iter_items(self._upstream)
 
     def _iter_uids(self) -> tp.Iterator[tuple[tp.Any, str | None]]:
-        """Propagate (input_value, uid) through the chain without running _run.
+        """Propagate (root_value, uid) through the chain.
 
-        Each step's ``_prepare_item`` is called to derive the output uid
-        from the incoming uid.  No ``_run`` is executed.  The yielded
-        value is the *upstream input* (unchanged), not the step's output.
-
-        Raises ``NotImplementedError`` if any step in the chain overrides
-        ``item_uid()`` — the uid would depend on the transformed value,
-        which is not available without running ``_run``.
+        The yielded value is always the pipeline's root input (so that
+        downstream cache-miss thunks can rebuild the single-item
+        pipeline).  When no step in the chain overrides ``item_uid``,
+        no ``_run`` executes and uids propagate purely from the incoming
+        uid.  When a step overrides ``item_uid``, upstream is run
+        eagerly through that step so the override sees the transformed
+        value; subsequent downstream cache hits still avoid rerunning
+        because upstream results are cached by their own backends.
         """
         if self._step is None:
             assert self._values is not None
             yield from ((v, None) for v in self._values)
-        else:
-            assert self._upstream is not None
-            from .base import Step
+            return
+        assert self._upstream is not None
+        from .base import Step
 
-            if type(self._step).item_uid is not Step.item_uid:
-                raise NotImplementedError(
-                    f"{type(self._step).__name__}.item_uid() is overridden. "
-                    f"Uid-only propagation (used when a downstream step has "
-                    f"infra) requires running upstream to get the transformed "
-                    f"value. This is not yet supported."
-                )
+        if type(self._step).item_uid is not Step.item_uid:
+            # Override depends on the value entering this step — run
+            # upstream to get it, but still yield root values for the
+            # downstream thunk's _resolve_value rebuild.
+            root_node = self
+            while root_node._upstream is not None:
+                root_node = root_node._upstream
+            assert root_node._values is not None
+            for root_val, (value, incoming_uid) in zip(
+                root_node._values, self._upstream._iter_with_uids(), strict=True
+            ):
+                uid, _ = self._step._prepare_item(value, incoming_uid)
+                yield root_val, uid
+        else:
             for value, incoming_uid in self._upstream._iter_uids():
                 uid, _ = self._step._prepare_item(value, incoming_uid)
                 yield value, uid

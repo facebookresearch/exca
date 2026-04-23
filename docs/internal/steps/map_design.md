@@ -24,7 +24,7 @@ without loading everything into memory.
 
 MapInfra (`exca/map.py`) already solves this for the old decorator-based
 API. The goal is to bring equivalent functionality into the steps framework
-with its per-step infrastructure model.
+with its per-step infrastructure model. Both approaches will coexist at least for a time as they serve different purpose (soft decorator tool Vs harder framework) and have different level of maturity (decorator approach used extensively and at scale, Step still a work in progress).
 
 ### Requirements
 

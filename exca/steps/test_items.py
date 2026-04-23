@@ -192,20 +192,25 @@ def test_items_custom_uid(tmp_path: Path) -> None:
     assert results == ["a", "a"], "second item hits first item's cache (same uid)"
 
 
-def test_items_custom_uid_no_downstream_infra() -> None:
-    """Custom item_uid works when the step itself has infra (no downstream lazy uid propagation)."""
-    infra: tp.Any = {"backend": "Cached", "folder": None}
+def test_items_custom_uid_no_infra() -> None:
+    """item_uid override with no infra anywhere: values pass through untouched."""
     step = FixedUidStep(uid="x")
     results = list(step.run(Items(["a", "b"])))
-    assert results == ["a", "b"], "no infra, uid override is fine"
+    assert results == ["a", "b"]
 
 
-def test_iter_uids_fails_on_item_uid_override(tmp_path: Path) -> None:
-    """_iter_uids raises when an intermediate step overrides item_uid and a downstream step has infra."""
+def test_iter_uids_propagates_override_through_chain(tmp_path: Path) -> None:
+    """Override upstream of a cached step runs upstream eagerly for correct uids.
+
+    FixedUidStep collapses all inputs to uid "x" and passes the value
+    through.  Mult has infra and caches under the incoming uid, so both
+    items share one cache entry — the second result comes from the
+    first item's cache.
+    """
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(steps=[FixedUidStep(uid="x"), conftest.Mult(coeff=2.0, infra=infra)])
-    with pytest.raises(NotImplementedError, match="item_uid.*overridden"):
-        list(chain.run(Items([1.0, 2.0])))
+    results = list(chain.run(Items([1.0, 2.0])))
+    assert results[0] == results[1], "shared uid 'x' -> shared cache entry"
 
 
 def test_items_error_note() -> None:

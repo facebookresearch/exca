@@ -38,7 +38,7 @@ class Tracked(Step):
     def _run(self, value: float) -> float:
         if self.marker:
             p = Path(self.marker)
-            count = int(p.read_text()) if p.exists() else 0
+            count = int(p.read_text("utf8")) if p.exists() else 0
             p.write_text(str(count + 1))
         return value * self.coeff
 
@@ -56,7 +56,7 @@ class FailAfterN(Step):
     def _run(self, value: float) -> float:
         if self.counter:
             p = Path(self.counter)
-            n = int(p.read_text()) if p.exists() else 0
+            n = int(p.read_text("utf8")) if p.exists() else 0
             p.write_text(str(n + 1))
             if n + 1 >= self.fail_at:
                 raise ValueError(f"deliberate failure at call {n + 1}")
@@ -84,7 +84,7 @@ class ResetByValue(Step):
 
 
 def _marker_count(path: Path) -> int:
-    return int(path.read_text()) if path.exists() else 0
+    return int(path.read_text("utf8")) if path.exists() else 0
 
 
 # =============================================================================
@@ -114,9 +114,9 @@ def test_chain_backward_walk(tmp_path: Path) -> None:
     (tmp_path / "step1.txt").write_text("0")
     second = list(chain.run(Items([5.0, 10.0])))
     assert second == [30.0, 60.0]
-    assert (
-        _marker_count(tmp_path / "step1.txt") == 0
-    ), "upstream without infra should not execute when downstream is cached"
+    assert _marker_count(tmp_path / "step1.txt") == 0, (
+        "upstream without infra should not execute when downstream is cached"
+    )
 
 
 def test_chain_intermediate_caching_batch(tmp_path: Path) -> None:
@@ -157,9 +157,9 @@ def test_uid_propagation_collapses_cache(tmp_path: Path) -> None:
         ]
     )
     results = list(chain.run(Items([1.0, 2.0, 3.0])))
-    assert (
-        results[0] == results[1] == results[2]
-    ), "all items share cache because step1's uid 'same' propagates to step2"
+    assert results[0] == results[1] == results[2], (
+        "all items share cache because step1's uid 'same' propagates to step2"
+    )
 
 
 def test_uid_reset_mid_chain(tmp_path: Path) -> None:
@@ -194,9 +194,9 @@ def test_partial_results_cached_on_error(tmp_path: Path) -> None:
 
     (tmp_path / "counter.txt").write_text("0")
     assert list(step.run(Items([10.0, 20.0]))) == [10.0, 20.0]
-    assert (
-        _marker_count(tmp_path / "counter.txt") == 0
-    ), "items before error should be cached"
+    assert _marker_count(tmp_path / "counter.txt") == 0, (
+        "items before error should be cached"
+    )
 
 
 def test_force_child_in_batch_chain(tmp_path: Path) -> None:
