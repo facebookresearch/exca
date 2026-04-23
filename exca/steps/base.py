@@ -221,7 +221,7 @@ class Step(exca.helpers.DiscriminatedModel):
         return "has_generator" in self._step_flags
 
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
-        """Create copy with Input as _previous (Input holds value or NoValue)."""
+        """Return a copy bound to ``value`` as its input. Raises if already bound."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
         step = self.model_copy(deep=True)
@@ -394,7 +394,7 @@ class Chain(Step):
         return steps[0]._is_generator() if steps else True
 
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
-        """Create copy with value carried on ``_previous`` (uniform with Step.with_input)."""
+        """Return a copy bound to ``value`` as its input. Raises if already bound."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
         expanded = _resolve_all(self._step_sequence())

@@ -213,9 +213,7 @@ class Chain(Step):
         ...
     
     def with_input(self, value: Any = NoValue()) -> Chain:
-        """Create copy with ``_previous = Input(value)`` (same as Step).
-        Resolves compound steps (_resolve_step) before setup.
-        """
+        """Create a copy with input configured."""
         ...
     
     def clear_cache(self, recursive: bool = True) -> None:
