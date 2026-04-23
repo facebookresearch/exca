@@ -873,6 +873,12 @@ them is a bug.
    `run()` arguments. This follows from Pydantic-based reproducibility
    — the config fully determines behavior.
 
+8. **Batchable computation**: a step must be able to express "process
+   these N items together" when batched execution is meaningfully
+   cheaper than N independent calls (GPU inference, vectorized
+   kernels, shared I/O). The default is per-item `_run`; steps may
+   override a batch hook.
+
 ---
 
 ## Behavioral changes from previous implementation
