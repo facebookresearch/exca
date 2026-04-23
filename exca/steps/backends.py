@@ -307,20 +307,17 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # =========================================================================
 
     def _effective_cache_type(self) -> str | None:
-        """Cache format to use for this Backend.
+        """Cache format: the Step's ``_CACHE_TYPE`` (cascaded for Chains).
 
-        The Step subclass's ``_CACHE_TYPE`` ClassVar is the source of truth
-        (cascaded to the last step for Chains). Setting ``infra.cache_type``
-        is deprecated: a matching value is accepted silently for back-compat
-        with older neuralset, a mismatch raises to prevent silent corruption.
+        Setting ``infra.cache_type`` is deprecated; a matching value is
+        accepted silently, a mismatch raises.
         """
         declared = self._step._resolve_cache_type() if self._step is not None else None
         if self.cache_type is None or self.cache_type == declared:
             return declared
         raise RuntimeError(
-            f"Backend.cache_type={self.cache_type!r} does not match the Step's "
-            f"declared cache type ({declared!r}); declare _CACHE_TYPE ClassVar "
-            "on the Step subclass instead of setting infra.cache_type."
+            f"infra.cache_type={self.cache_type!r} does not match the Step's "
+            f"declared _CACHE_TYPE ({declared!r}); use only _CACHE_TYPE."
         )
 
     def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":

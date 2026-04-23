@@ -113,8 +113,7 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     )
     assert chain.run() == 2.0  # (0 + 1) * 2
 
-    # Chain and last step share the cache folder; effective cache_type resolves
-    # to the last step's _CACHE_TYPE declaration (cascaded via _resolve_cache_type).
+    # Chain shares cache folder with last step; cache_type cascades from _CACHE_TYPE.
     configured = chain.with_input()
     last_step = configured._step_sequence()[-1]
     assert configured.infra is not None
@@ -128,11 +127,9 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
 def test_backend_cache_type_vs_classvar(
     tmp_path: Path, classvar_name: str | None
 ) -> None:
-    """Setting infra.cache_type is silent on match, raises on mismatch.
+    """infra.cache_type is silent on match, raises on mismatch.
 
-    `_DEFAULT_CACHE_TYPE` is the legacy alias kept for back-compat with
-    older neuralset versions that both declare it and write the value to
-    infra.cache_type from their own model_post_init.
+    ``_DEFAULT_CACHE_TYPE`` is the legacy alias for older neuralset.
     """
     attrs = {classvar_name: "Pickle"} if classvar_name else {}
     cls = type("Gen", (conftest.RandomGenerator,), attrs)

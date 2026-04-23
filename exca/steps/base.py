@@ -150,9 +150,7 @@ class Step(exca.helpers.DiscriminatedModel):
     _previous: Step | None = None
     _step_flags: tp.ClassVar[frozenset[str]] = frozenset()
     _exca_chain_class: tp.ClassVar[type["Step"] | None] = None
-    # Override in subclass to declare the cache serialization format. Read by
-    # Backend._effective_cache_type() when the deprecated `infra.cache_type`
-    # knob is unset.
+    # Cache serialization format; read by Backend._effective_cache_type().
     _CACHE_TYPE: tp.ClassVar[str | None] = None
 
     @classmethod
@@ -293,14 +291,10 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _resolve_cache_type(self) -> str | None:
         """Declared cache format; Chain walks to the last step."""
-        # `_DEFAULT_CACHE_TYPE` is a back-compat alias for older neuralset
-        # versions that still spell the ClassVar that way; remove once
-        # neuralset migrates.
-        return (
-            self._CACHE_TYPE
-            if self._CACHE_TYPE is not None
-            else getattr(self, "_DEFAULT_CACHE_TYPE", None)
-        )
+        # `_DEFAULT_CACHE_TYPE` is a back-compat alias; drop once neuralset migrates.
+        if self._CACHE_TYPE is not None:
+            return self._CACHE_TYPE
+        return getattr(self, "_DEFAULT_CACHE_TYPE", None)
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
         if "has_resolve" not in self._step_flags:
@@ -404,8 +398,7 @@ class Chain(Step):
         return steps[0]._is_generator() if steps else True
 
     def _resolve_cache_type(self) -> str | None:
-        # Chain shares a cache entry with its last step, so they must agree
-        # on the format.
+        # Chain shares a cache entry with last step, so formats must agree.
         if self._CACHE_TYPE is not None:
             return self._CACHE_TYPE
         seq = self._step_sequence()
