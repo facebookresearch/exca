@@ -389,15 +389,15 @@ class Chain(Step):
         return steps[0]._is_generator() if steps else True
 
     def with_input(self, value: tp.Any = NoValue()) -> tp.Self:
-        """Create copy with optional Input prepended."""
+        """Create copy with value carried on ``_previous`` (uniform with Step.with_input)."""
         if self._previous is not None:
             raise RuntimeError("Already has a previous step")
         expanded = _resolve_all(self._step_sequence())
         steps: list[tp.Any] = [s.model_dump() for s in expanded]
-        if not isinstance(value, NoValue):
-            steps = [Input(value=value)] + steps
         chain = type(self)(steps=steps, infra=self.infra)
-        chain._previous = Input(value=NoValue())  # Mark chain as configured
+        # _previous is the sole source of truth for input identity — matches Step
+        # so (step_uid, item_uid) discriminates distinct inputs on chain-level cache.
+        chain._previous = Input(value=value)
         chain._init()
         # Sync cache_type: chain and last step share cache entry, must use same format
         last_step = chain._step_sequence()[-1]
@@ -471,6 +471,11 @@ class Chain(Step):
 
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
         chain = self.with_input(value) if self._previous is None else self
+        prev = chain._previous
+        # with_input() always sets _previous to an Input; guard the invariant.
+        if not isinstance(prev, Input):
+            raise RuntimeError("Chain not properly configured")
+        args: tp.Any = () if isinstance(prev.value, NoValue) else (prev.value,)
 
         # Track force steps to reset after run
         force_steps = [
@@ -484,14 +489,14 @@ class Chain(Step):
             _set_mode_recursive(chain._step_sequence(), "force")
 
         if chain.infra is None:
-            result = chain._run()
+            result = chain._run(*args)
         else:
             if force_steps:
                 chain.infra.clear_cache()
             # Note: if the last step also has infra, it shares the same cache entry
             # (same step_uid from _aligned_step flattening, same item_uid from original
             # input). The last step writes first, chain finds cache hit - no duplication.
-            result = chain.infra.run(chain._run)
+            result = chain.infra.run(chain._run, *args)
 
         # Reset force on original steps after successful run
         # (object.__setattr__ bypasses frozen model validation for TaskInfra)
@@ -521,13 +526,7 @@ class Chain(Step):
         exporter = utils.ConfigExporter(
             uid=True, exclude_defaults=True, ignore_first_override=True
         )
-        cfg = {"steps": exporter.apply(chain)["steps"]}
-        if cfg["steps"]:
-            key = chain._step_sequence()[0]._exca_discriminator_key
-            if cfg["steps"][0][key] == "Input":
-                cfg["input"] = cfg["steps"][0]["value"]
-                cfg["steps"] = cfg["steps"][1:]
-        return cfg
+        return {"steps": exporter.apply(chain)["steps"]}
 
     def clear_cache(self, recursive: bool = True) -> None:
         """Clear cache, optionally including sub-steps."""

@@ -336,6 +336,13 @@ def test_multiple_inputs_cache_separately(tmp_path: Path) -> None:
     assert folders[0].startswith("type=Add,randomize=True-")
 
 
+def test_chain_with_top_infra_caches_per_input(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=[conftest.Mult(coeff=3.0)], infra=infra)
+    assert chain.run(5.0) == 15.0
+    assert chain.run(10.0) == 30.0
+
+
 # =============================================================================
 # Nested chains
 # =============================================================================
