@@ -6,8 +6,7 @@
 
 """Spec tests for hard requirements of Step API.
 
-One test per invariant, kept minimal. Behavioural coverage lives in
-``test_cache.py`` / ``test_steps.py``.
+One test per invariant, kept minimal.
 """
 
 import inspect
