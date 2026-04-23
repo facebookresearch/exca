@@ -105,7 +105,6 @@ def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
     ]
     chain = Chain(steps=[steps[1], {"type": "Chain", "steps": steps}], **infra)  # type: ignore
 
-    # Hash computation (Input step excluded - Input._aligned_step returns empty list)
     expected_hash = (
         "type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     )

@@ -231,6 +231,17 @@ class Step(exca.helpers.DiscriminatedModel):
             step.infra._step = step
         return step
 
+    def _input_args(self) -> tuple[tp.Any, ...]:
+        """Unpack ``self._previous`` as ``*args`` for ``_run``/infra.
+
+        Called after ``with_input()`` has set ``_previous`` to an ``Input``.
+        Returns ``()`` when no input value is configured, else ``(value,)``.
+        """
+        prev = self._previous
+        if not isinstance(prev, Input):
+            raise RuntimeError(f"{type(self).__name__} not properly configured")
+        return () if isinstance(prev.value, NoValue) else (prev.value,)
+
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
         """Execute with caching and backend handling."""
         built = self._resolve_step()
@@ -238,13 +249,7 @@ class Step(exca.helpers.DiscriminatedModel):
             return built.run(value)
 
         step = self.with_input(value) if self._previous is None else self
-        prev = step._previous
-
-        # prev is always Input after with_input()
-        if not isinstance(prev, Input):
-            raise RuntimeError("Step not properly configured")
-
-        args: tp.Any = () if isinstance(prev.value, NoValue) else (prev.value,)
+        args = step._input_args()
         try:
             if step.infra is None:
                 result = step._run(*args)
@@ -425,7 +430,7 @@ class Chain(Step):
                 step._init(parent_folder=folder)
             previous = step
 
-    def _run(self, value: tp.Any = NoValue()) -> tp.Any:
+    def _run(self, *args: tp.Any) -> tp.Any:
         """Execute steps, using intermediate caches."""
         steps = self._step_sequence()
 
@@ -441,7 +446,6 @@ class Chain(Step):
 
         # Find latest cached result to skip already-computed steps
         start_idx = 0
-        args: tp.Any = () if isinstance(value, NoValue) else (value,)
         for k, step in enumerate(reversed(steps)):
             if step.infra is None:
                 continue
@@ -471,11 +475,7 @@ class Chain(Step):
 
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
         chain = self.with_input(value) if self._previous is None else self
-        prev = chain._previous
-        # with_input() always sets _previous to an Input; guard the invariant.
-        if not isinstance(prev, Input):
-            raise RuntimeError("Chain not properly configured")
-        args: tp.Any = () if isinstance(prev.value, NoValue) else (prev.value,)
+        args = chain._input_args()
 
         # Track force steps to reset after run
         force_steps = [

@@ -311,36 +311,33 @@ def test_cache_folder_structure(tmp_path: Path) -> None:
     assert conftest.extract_cache_folders(tmp_path) == expected
 
 
-def test_multiple_inputs_cache_separately(tmp_path: Path) -> None:
-    """Different inputs cache separately via item_uid keys in CacheDict."""
+@pytest.mark.parametrize("wrap_in_chain", [False, True])
+def test_multiple_inputs_cache_separately(tmp_path: Path, wrap_in_chain: bool) -> None:
+    """Different inputs cache separately via item_uid; regression holds for Chain too."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     # Add with randomize=True: returns input + random (or just random if no input)
-    step = conftest.Add(randomize=True, infra=infra)
+    step: tp.Any
+    if wrap_in_chain:
+        step = Chain(steps=[conftest.Add(randomize=True)], infra=infra)
+    else:
+        step = conftest.Add(randomize=True, infra=infra)
 
-    # Call with different inputs - each should cache separately
     outs: dict[float | None, float] = {}
     outs[None] = step.run()  # Generator mode (no input)
     outs[1.0] = step.run(1.0)  # Transformer mode with input=1
     outs[2.0] = step.run(2.0)  # Transformer mode with input=2
-    # All should be different (random component)
+    # All distinct (random component differs per call on miss)
     assert len(set(outs.values())) == 3
 
-    # Second calls should return cached values (same as first calls)
+    # Re-running hits cache — identity per input, no collision across inputs
     assert step.run() == outs[None]
     assert step.run(1.0) == outs[1.0]
     assert step.run(2.0) == outs[2.0]
 
-    # Only one folder (same step_uid), but 3 different item_uid keys in CacheDict
+    # Single folder (same step_uid), 3 distinct item_uid keys in CacheDict
     folders = conftest.extract_cache_folders(tmp_path)
     assert len(folders) == 1
     assert folders[0].startswith("type=Add,randomize=True-")
-
-
-def test_chain_with_top_infra_caches_per_input(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(steps=[conftest.Mult(coeff=3.0)], infra=infra)
-    assert chain.run(5.0) == 15.0
-    assert chain.run(10.0) == 30.0
 
 
 # =============================================================================
