@@ -82,7 +82,7 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     """When both chain and last step have infra, they share cache folder and cache_type."""
 
     class PickleMult(conftest.Mult):
-        _CACHE_TYPE = "Pickle"
+        CACHE_TYPE = "Pickle"
 
     step_infra: tp.Any = {"backend": "Cached"}
     chain = Chain(
@@ -91,7 +91,7 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     )
     assert chain.run() == 2.0  # (0 + 1) * 2
 
-    # Chain shares cache folder with last step; cache_type cascades from _CACHE_TYPE.
+    # Chain shares cache folder with last step; cache_type cascades from CACHE_TYPE.
     configured = chain.with_input()
     last_step = configured._step_sequence()[-1]
     assert configured.infra is not None
@@ -101,7 +101,7 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     assert last_step.infra._effective_cache_type() == "Pickle"
 
 
-@pytest.mark.parametrize("classvar_name", [None, "_CACHE_TYPE", "_DEFAULT_CACHE_TYPE"])
+@pytest.mark.parametrize("classvar_name", [None, "CACHE_TYPE", "_DEFAULT_CACHE_TYPE"])
 def test_backend_cache_type_vs_classvar(
     tmp_path: Path, classvar_name: str | None
 ) -> None:
