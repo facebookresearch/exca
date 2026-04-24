@@ -473,6 +473,29 @@ def test_validation_error_no_note_when_clean() -> None:
     assert not getattr(exc_info.value, "__notes__", [])
 
 
+@pytest.mark.parametrize(
+    "extras, hint, expected",
+    [
+        ({"coef": 3.0}, False, "steps.0.coef"),  # plain typo → no hint
+        ({"new_param": 1.0}, True, "_MultSub"),  # matches subclass → hint fires
+    ],
+)
+def test_forgot_discriminator_hint_matches_subclass_fields(
+    extras: dict[str, tp.Any], hint: bool, expected: str
+) -> None:
+    """Hint fires only when extras plausibly belong to a subclass."""
+
+    class _MultSub(conftest.Mult):
+        new_param: float = 0.0
+
+    steps: tp.Any = [{"type": "Mult", **extras}]
+    with pytest.raises(pydantic.ValidationError) as exc_info:
+        Chain(steps=steps)
+    note = "\n".join(getattr(exc_info.value, "__notes__", []))
+    assert expected in note
+    assert ("forgotten to specify" in note) is hint
+
+
 # =============================================================================
 # Chain indexing and slicing
 # =============================================================================
