@@ -185,7 +185,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return ["."]  # force ignored in uid
 
     folder: Path | None = None
-    # deprecated: declare `_CACHE_TYPE` on the Step subclass instead.
+    # deprecated: declare `CACHE_TYPE` on the Step subclass instead.
     cache_type: str | None = None
     mode: ModeType = "cached"
     keep_in_ram: bool = False
@@ -307,7 +307,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # =========================================================================
 
     def _effective_cache_type(self) -> str | None:
-        """Cache format: the Step's ``_CACHE_TYPE`` (cascaded for Chains).
+        """Cache format: the Step's ``CACHE_TYPE`` (cascaded for Chains).
 
         Setting ``infra.cache_type`` is deprecated; a matching value is
         accepted silently, a mismatch raises.
@@ -317,7 +317,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             return declared
         raise RuntimeError(
             f"infra.cache_type={self.cache_type!r} does not match the Step's "
-            f"declared _CACHE_TYPE ({declared!r}); use only _CACHE_TYPE."
+            f"declared CACHE_TYPE ({declared!r}); use only CACHE_TYPE."
         )
 
     def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":
