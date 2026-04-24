@@ -516,9 +516,11 @@ class DiscriminatedModel(pydantic.BaseModel):
                     return sub_cls(**value)  # type: ignore
                 # sub_cls is cls: fall through to handler below
             else:
+                # Only suggest "forgot discriminator" if extras match some subclass's
+                # fields; otherwise it's a plain typo and the hint misleads.
+                extras = set(value) - set(cls.model_fields)
                 subclasses = _get_subclasses(cls=cls)
-                extra_keys = set(value.keys()) - set(cls.model_fields.keys())
-                if subclasses and extra_keys:
+                if extras and any(extras <= set(s.model_fields) for s in subclasses):
                     options = [x.__name__ for x in subclasses + [cls]]
         try:
             return handler(value)  # type: ignore
