@@ -79,21 +79,45 @@ def test_intermediate_cache(tmp_path: Path) -> None:
 
 
 def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
-    """When both chain and last step have infra, they share cache entry and cache_type."""
-    step_infra: tp.Any = {"backend": "Cached", "cache_type": "Pickle"}
+    """When both chain and last step have infra, they share cache folder and cache_type."""
+
+    class PickleMult(conftest.Mult):
+        _CACHE_TYPE = "Pickle"
+
+    step_infra: tp.Any = {"backend": "Cached"}
     chain = Chain(
-        steps=[conftest.Add(value=1), conftest.Mult(coeff=2, infra=step_infra)],
+        steps=[conftest.Add(value=1), PickleMult(coeff=2, infra=step_infra)],
         infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
     )
     assert chain.run() == 2.0  # (0 + 1) * 2
 
-    # Both share cache folder and cache_type is propagated from last step
+    # Chain shares cache folder with last step; cache_type cascades from _CACHE_TYPE.
     configured = chain.with_input()
     last_step = configured._step_sequence()[-1]
     assert configured.infra is not None
     assert last_step.infra is not None
     assert configured.infra.paths.step_folder == last_step.infra.paths.step_folder
-    assert configured.infra.cache_type == "Pickle"
+    assert configured.infra._effective_cache_type() == "Pickle"
+    assert last_step.infra._effective_cache_type() == "Pickle"
+
+
+@pytest.mark.parametrize("classvar_name", [None, "_CACHE_TYPE", "_DEFAULT_CACHE_TYPE"])
+def test_backend_cache_type_vs_classvar(
+    tmp_path: Path, classvar_name: str | None
+) -> None:
+    """infra.cache_type is silent on match, raises on mismatch.
+
+    ``_DEFAULT_CACHE_TYPE`` is the legacy alias for older neuralset.
+    """
+    attrs = {classvar_name: "Pickle"} if classvar_name else {}
+    cls = type("Gen", (conftest.RandomGenerator,), attrs)
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "cache_type": "Pickle"}
+    step = cls(infra=infra)
+    if classvar_name is None:
+        with pytest.raises(RuntimeError, match="does not match"):
+            step.run()
+    else:
+        step.run()  # silent match
 
 
 # =============================================================================

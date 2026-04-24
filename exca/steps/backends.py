@@ -185,6 +185,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return ["."]  # force ignored in uid
 
     folder: Path | None = None
+    # deprecated: declare `_CACHE_TYPE` on the Step subclass instead.
     cache_type: str | None = None
     mode: ModeType = "cached"
     keep_in_ram: bool = False
@@ -305,10 +306,24 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Cache operations
     # =========================================================================
 
+    def _effective_cache_type(self) -> str | None:
+        """Cache format: the Step's ``_CACHE_TYPE`` (cascaded for Chains).
+
+        Setting ``infra.cache_type`` is deprecated; a matching value is
+        accepted silently, a mismatch raises.
+        """
+        declared = self._step._resolve_cache_type() if self._step is not None else None
+        if self.cache_type is None or self.cache_type == declared:
+            return declared
+        raise RuntimeError(
+            f"infra.cache_type={self.cache_type!r} does not match the Step's "
+            f"declared _CACHE_TYPE ({declared!r}); use only _CACHE_TYPE."
+        )
+
     def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":
         """Get CacheDict for this step."""
         return exca.cachedict.CacheDict(
-            folder=self.paths.cache_folder, cache_type=self.cache_type
+            folder=self.paths.cache_folder, cache_type=self._effective_cache_type()
         )
 
     def has_cache(self) -> bool:
@@ -434,7 +449,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 registry = inflight.InflightRegistry(self.paths.cache_folder)
             with inflight.inflight_session(registry, [item_uid]) as claimed:
                 if claimed and self._cache_status() is None:
-                    wrapper = _CachingCall(func, self.paths, self.cache_type)
+                    wrapper = _CachingCall(func, self.paths, self._effective_cache_type())
                     job = self._submit(wrapper, *args)
                     if registry is not None:
                         if isinstance(job, submitit.SlurmJob):

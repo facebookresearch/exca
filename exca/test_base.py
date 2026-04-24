@@ -6,6 +6,7 @@
 
 import collections
 import subprocess
+import sys
 import tempfile
 import typing as tp
 from pathlib import Path
@@ -589,7 +590,7 @@ def test_defined_in_main() -> None:
         cwd = Path(exca.__file__).parents[1]
     path = Path(__file__).with_suffix("").relative_to(cwd)
     cmd = str(path).replace("/", ".")
-    subprocess.check_call(f"python -m {cmd}".split(), shell=False, cwd=cwd)
+    subprocess.check_call([sys.executable, "-m", cmd], shell=False, cwd=cwd)
 
 
 if __name__ == "__main__":
