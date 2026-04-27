@@ -126,7 +126,6 @@ class StepPaths:
 
     def clear_cache(self) -> None:
         """Clear cache and job folder for this item."""
-        # Delete result from CacheDict
         if self.cache_folder.exists():
             cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
                 folder=self.cache_folder
@@ -135,7 +134,6 @@ class StepPaths:
                 del cd[self.item_uid]
             with errors.ErrorRegistry(self.cache_folder) as reg:
                 reg.clear([self.item_uid])
-        # Delete job folder (includes job.pkl and error.pkl)
         if self.job_folder.exists():
             shutil.rmtree(self.job_folder)
 
@@ -158,7 +156,7 @@ class _CachingCall:
         self.cache_type = cache_type
 
     def __call__(self, *args: tp.Any) -> None:
-        self.paths.ensure_folders()  # Create folders before writing
+        self.paths.ensure_folders()
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=self.paths.cache_folder, cache_type=self.cache_type
         )
@@ -173,7 +171,7 @@ class _CachingCall:
             with errors.ErrorRegistry(self.paths.cache_folder) as reg:
                 reg.record({self.paths.item_uid: str(rel)})
             raise
-        if self.paths.item_uid not in cd:  # Only write if not already cached
+        if self.paths.item_uid not in cd:
             with cd.write():
                 cd[self.paths.item_uid] = result
 

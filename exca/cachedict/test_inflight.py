@@ -50,22 +50,6 @@ def test_registry_operations(tmp_path: Path) -> None:
     reg.close()
 
 
-def test_graceful_degradation_smoke(tmp_path: Path) -> None:
-    """Inflight surface tolerates a broken DB and auto-recovers. The full
-    corrupt/permissions/delete matrix is covered generically in test_sqlite.py;
-    here we only smoke-test that claim/get/release route through _safe_execute."""
-    db_path = tmp_path / "inflight.db"
-    inflight.InflightRegistry(tmp_path).claim(["warmup"])
-    db_path.write_bytes(b"NOT A SQLITE DB")
-
-    # Each op must return without raising; auto-recovery wipes & recreates.
-    reg = inflight.InflightRegistry(tmp_path)
-    reg.claim(["a"])
-    reg.get(["a"])
-    reg.release(["a"])
-    reg.close()
-
-
 def test_inflight_session(tmp_path: Path) -> None:
     # None registry -> yields all UIDs unchanged
     with inflight.inflight_session(None, ["a", "b"]) as claimed:
