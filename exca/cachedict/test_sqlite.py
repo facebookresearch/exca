@@ -4,10 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for the shared SqliteRegistry plumbing (lazy connect, retries,
-graceful degradation, chunking). Driven through a minimal dummy
-subclass so the assertions don't depend on inflight or error semantics.
-Per-subclass behaviour stays in test_inflight.py / steps/test_errors.py."""
+"""SqliteRegistry plumbing tests, driven via a minimal dummy subclass
+so assertions don't depend on inflight / error semantics."""
 
 import logging
 import sqlite3
