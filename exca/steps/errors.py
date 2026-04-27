@@ -1,0 +1,139 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+
+"""Advisory SQLite registry of failed cache items.
+
+Indexes which uids errored at compute time and where to find the rich
+``error.pkl`` (traceback + exception) on disk. The table is just an
+index — the pickle is the source of truth for exception data.
+
+Powers the ``cached`` / ``force`` / ``retry`` / ``read-only`` modes
+uniformly across TaskInfra and items v3 — see ``step-error-spec.md``.
+
+Connection plumbing (lazy connect, retries, graceful degradation)
+lives in :mod:`exca.cachedict.sqlite`. Errors are append-only
+summaries, so the API stays much smaller than InflightRegistry — no
+claim / release / liveness machinery.
+"""
+
+import logging
+import sqlite3
+import typing as tp
+
+from exca.cachedict import sqlite
+
+logger = logging.getLogger(__name__)
+
+_SCHEMA = """\
+CREATE TABLE IF NOT EXISTS errors (
+    item_uid   TEXT PRIMARY KEY,
+    error_pkl  TEXT NOT NULL
+);
+"""
+
+
+class ErrorRegistry(sqlite.SqliteRegistry):
+    """Advisory SQLite registry of failed cache items.
+
+    All public methods gracefully degrade: if the DB is corrupt or
+    inaccessible, they log a warning and behave as if the registry
+    is empty. Callers (orchestrator + cut-runner) never need to
+    handle SQLite exceptions.
+
+    The ``error_pkl`` column stores a path relative to a caller-chosen
+    base (by convention ``step_folder``); the registry treats it as
+    an opaque string. Resolving it to an absolute path is the
+    caller's responsibility — keeps the registry decoupled from
+    folder layout.
+
+    Parameters
+    ----------
+    folder:
+        Folder hosting the DB; ``<folder>/errors.db`` is created on
+        first access. Sibling of ``inflight.db`` (matches the
+        ``InflightRegistry`` location convention).
+    permissions:
+        File permissions applied to the DB after creation
+        (mirrors CacheDict / InflightRegistry). ``None`` to skip.
+    """
+
+    _DB_NAME: tp.ClassVar[str] = "errors.db"
+    _SCHEMA: tp.ClassVar[str] = _SCHEMA
+    _LABEL: tp.ClassVar[str] = "Error"
+
+    def record(self, errors: tp.Mapping[str, str]) -> None:
+        """Insert or replace error rows. Maps ``item_uid -> error_pkl``
+        (path string, by convention relative to ``step_folder``)."""
+        if not errors:
+            return
+
+        items = list(errors.items())
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.executemany(
+                "INSERT OR REPLACE INTO errors (item_uid, error_pkl) VALUES (?, ?)",
+                items,
+            )
+
+        self._safe_execute("record", None, _do)
+        logger.debug("Recorded %d error(s)", len(items))
+
+    def get(self, item_uids: list[str] | None = None) -> dict[str, str]:
+        """Return ``{item_uid: error_pkl}`` for errored uids.
+
+        With *item_uids* ``None``, returns all rows. Empty list →
+        empty dict (no DB roundtrip).
+        """
+
+        def _do(conn: sqlite3.Connection) -> dict[str, str]:
+            query = "SELECT item_uid, error_pkl FROM errors"
+            if item_uids is None:
+                rows = conn.execute(query).fetchall()
+            elif not item_uids:
+                return {}
+            else:
+                rows = []
+                # Chunk to avoid huge IN (?, ?, …) clauses that hit
+                # SQLite's placeholder limit or waste parser time.
+                for i in range(0, len(item_uids), sqlite.QUERY_BATCH_SIZE):
+                    batch = item_uids[i : i + sqlite.QUERY_BATCH_SIZE]
+                    placeholders = ",".join("?" for _ in batch)
+                    sql = f"{query} WHERE item_uid IN ({placeholders})"
+                    rows.extend(conn.execute(sql, batch).fetchall())
+            return dict(rows)
+
+        return self._safe_execute("query", {}, _do)
+
+    def clear(self, item_uids: list[str]) -> None:
+        """Remove rows for the given uids (delete-before-recompute).
+
+        Used both by the orchestrator before dispatching the
+        recompute set, and by ``Step.clear_cache(uid)``.
+        """
+        if not item_uids:
+            return
+
+        def _do(conn: sqlite3.Connection) -> None:
+            # Explicit transaction: one fsync instead of one per row
+            # (matters when the recompute set is large).
+            conn.execute("BEGIN")
+            conn.executemany(
+                "DELETE FROM errors WHERE item_uid = ?",
+                [(uid,) for uid in item_uids],
+            )
+            conn.execute("COMMIT")
+
+        self._safe_execute("clear", None, _do)
+        logger.debug("Cleared %d error row(s)", len(item_uids))
+
+    def clear_all(self) -> None:
+        """Drop all error rows (whole-step ``clear_cache``)."""
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.execute("DELETE FROM errors")
+
+        self._safe_execute("clear_all", None, _do)
+        logger.debug("Cleared all error rows")

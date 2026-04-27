@@ -28,6 +28,8 @@ import exca
 from exca import utils
 from exca.cachedict import inflight
 
+from . import errors
+
 if tp.TYPE_CHECKING:
     from .base import Step
 
@@ -57,7 +59,9 @@ class StepPaths:
         └── {step_uid}/                    # Step folder (nested for chains)
             ├── cache/                     # CacheDict folder for results
             │   ├── *.jsonl                # CacheDict index (item_uid -> result)
-            │   └── *.npy|*.pkl|etc...     # Optional numpy arrays
+            │   ├── *.npy|*.pkl|etc...     # Optional numpy arrays
+            │   ├── inflight.db            # advisory inflight registry
+            │   └── errors.db              # error registry (see step-error-spec.md)
             ├── jobs/
             │   └── {item_uid}/            # Per-input job folder
             │       ├── job.pkl            # Submitit job metadata
@@ -131,6 +135,11 @@ class StepPaths:
             )
             if self.item_uid in cd:
                 del cd[self.item_uid]
+            # Drop any error-registry row for this uid so retry mode
+            # is monotonic on disk (no orphaned "errored" rows after
+            # the recompute set is cleared).
+            with errors.ErrorRegistry(self.cache_folder) as reg:
+                reg.clear([self.item_uid])
         # Delete job folder (includes job.pkl and error.pkl)
         if self.job_folder.exists():
             shutil.rmtree(self.job_folder)
@@ -165,6 +174,13 @@ class _CachingCall:
             if not self.paths.error_pkl.exists():
                 with self.paths.error_pkl.open("wb") as f:
                     pickle.dump(e, f)
+            # Record in the error registry alongside the pickle. The
+            # registry is the index ("which uids errored?"); the pickle
+            # holds the rich exc/traceback. The reader migration to
+            # query the registry lands separately (see step-error-spec).
+            rel = self.paths.error_pkl.relative_to(self.paths.step_folder)
+            with errors.ErrorRegistry(self.paths.cache_folder) as reg:
+                reg.record({self.paths.item_uid: str(rel)})
             raise
         if self.paths.item_uid not in cd:  # Only write if not already cached
             with cd.write():
@@ -351,6 +367,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _cache_status(self) -> CacheStatus:
         """Check cache status without loading value."""
+        # Pickle-existence is the truth; the registry is a parallel write.
         if self.paths.error_pkl.exists():
             return "error"
         if not self.paths.cache_folder.exists():
@@ -408,6 +425,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
             return self._load_cache()  # Raises if error
 
+        # TODO: clear_cache() and the job-recovery block below run outside
+        # the inflight session, so a force/retry caller can unlink a pickle
+        # another process is still loading.
         if self.mode == "force" and status is not None:
             self.clear_cache()
         elif self.mode == "retry" and status == "error":

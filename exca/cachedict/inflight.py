@@ -11,6 +11,10 @@ concurrent processes to avoid duplicate submissions. The registry
 is advisory — CacheDict remains the source of truth. If the DB is
 corrupt or inaccessible, all methods degrade gracefully (log a
 warning and behave as if the registry is empty).
+
+Connection plumbing (lazy connect, retries, graceful degradation)
+lives in :mod:`exca.cachedict.sqlite`; this module adds claim /
+release / wait machinery and submitit-aware liveness on top.
 """
 
 import contextlib
@@ -23,9 +27,10 @@ import shutil
 import sqlite3
 import time
 import typing as tp
-from pathlib import Path
 
 import submitit
+
+from . import sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +43,6 @@ CREATE TABLE IF NOT EXISTS inflight (
     claimed_at  REAL NOT NULL
 );
 """
-
-T = tp.TypeVar("T")
-_QUERY_BATCH_SIZE = 500
 
 
 # -- Helpers ------------------------------------------------------------------
@@ -88,7 +90,7 @@ class WorkerInfo:
     def __post_init__(self) -> None:
         # Pre-register with submitit's shared SlurmInfoWatcher so that
         # batch sacct calls cover all workers created in the same
-        # get_inflight() result set (one sacct call instead of N).
+        # get() result set (one sacct call instead of N).
         job: tp.Any = None
         if self.job_id is not None and self.job_folder is not None and _has_sacct():
             try:
@@ -148,125 +150,18 @@ class WorkerInfo:
 # -- Registry -----------------------------------------------------------------
 
 
-class InflightRegistry:
+class InflightRegistry(sqlite.SqliteRegistry):
     """Advisory SQLite registry of in-flight cache items.
 
     All public methods gracefully degrade: if the DB is corrupt or
     inaccessible, they log a warning and behave as if the registry
-    is empty.
-
-    Parameters
-    ----------
-    cache_folder:
-        Path to the cache folder. The DB is stored as
-        ``<cache_folder>/inflight.db``.
-    permissions:
-        File permissions applied to the DB file after creation
-        (mirrors CacheDict's permission handling). ``None`` to skip.
+    is empty. The DB is stored as ``<folder>/inflight.db`` (folder is
+    typically the cache folder; see :class:`SqliteRegistry`).
     """
 
-    def __init__(self, cache_folder: Path | str, permissions: int | None = 0o777) -> None:
-        self.db_path = Path(cache_folder) / "inflight.db"
-        self.permissions = permissions
-        self._conn: sqlite3.Connection | None = None
-
-    # -- Connection management ------------------------------------------------
-
-    def _connect(self) -> sqlite3.Connection:
-        """Lazy-open the DB connection, creating the table if needed."""
-        if self._conn is not None:
-            if not self.db_path.exists():
-                logger.warning(
-                    "Inflight DB deleted externally, reconnecting: %s", self.db_path
-                )
-                self._close_conn()
-            else:
-                return self._conn
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        # Autocommit (isolation_level=None): most methods rely on implicit
-        # per-statement transactions; claim() uses explicit BEGIN IMMEDIATE
-        # / COMMIT to serialize concurrent claims.
-        conn = sqlite3.connect(
-            str(self.db_path),
-            timeout=20,
-            isolation_level=None,
-        )
-        conn.execute("PRAGMA journal_mode=DELETE")
-        conn.execute(_SCHEMA)
-        if self.permissions is not None:
-            try:
-                self.db_path.chmod(self.permissions)
-            except Exception:
-                msg = "Failed to set permissions on %s"
-                logger.warning(msg, self.db_path, exc_info=True)
-        self._conn = conn
-        return conn
-
-    def _safe_connect(self) -> sqlite3.Connection | None:
-        """Connect with graceful fallback — returns None on failure."""
-        try:
-            return self._connect()
-        except Exception:
-            msg = "Inflight registry unavailable at %s, proceeding without coordination"
-            logger.warning(msg, self.db_path, exc_info=True)
-            self._try_reset()
-            return None
-
-    def _try_reset(self) -> None:
-        """Close connection and delete corrupt DB so next access recreates it."""
-        self._close_conn()
-        try:
-            self.db_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    def _close_conn(self) -> None:
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
-
-    def close(self) -> None:
-        """Close the DB connection."""
-        self._close_conn()
-
-    def _safe_execute(
-        self, op_name: str, fallback: T, fn: tp.Callable[[sqlite3.Connection], T]
-    ) -> T:
-        """Run *fn* against the DB connection with graceful degradation.
-
-        Transient lock errors (``sqlite3.OperationalError`` with "locked"
-        or "busy") are retried with random backoff. Other errors trigger
-        graceful degradation (log + return fallback).
-        """
-        conn = self._safe_connect()
-        if conn is None:
-            return fallback
-        for attempt in range(3):
-            try:
-                return fn(conn)
-            except sqlite3.OperationalError as e:
-                if "locked" not in str(e) and "busy" not in str(e):
-                    break
-                # Rollback any aborted transaction before retrying.
-                try:
-                    conn.execute("ROLLBACK")
-                except Exception:
-                    pass
-                if attempt < 2:
-                    delay = random.uniform(0, attempt + 1)
-                    msg = "Inflight registry %s: lock contention, retry %d in %.1fs"
-                    logger.debug(msg, op_name, attempt + 1, delay)
-                    time.sleep(delay)
-                    continue
-                break
-            except Exception:
-                break
-        logger.warning("Inflight registry %s failed", op_name, exc_info=True)
-        self._try_reset()
-        return fallback
+    _DB_NAME: tp.ClassVar[str] = "inflight.db"
+    _SCHEMA: tp.ClassVar[str] = _SCHEMA
+    _LABEL: tp.ClassVar[str] = "Inflight"
 
     # -- Core operations ------------------------------------------------------
 
@@ -294,7 +189,7 @@ class InflightRegistry:
 
         # Phase 1: liveness checks outside the transaction (can be slow
         # for Slurm sacct calls — must not hold the DB write lock).
-        existing = self.get_inflight(item_uids)
+        existing = self.get(item_uids)
         alive_cache: dict[WorkerInfo, bool] = {}
         for info in existing.values():
             if info.pid != pid and info not in alive_cache:
@@ -383,7 +278,7 @@ class InflightRegistry:
         self._safe_execute("release", None, _do)
         logger.debug("Released %d items", len(item_uids))
 
-    def get_inflight(self, item_uids: list[str] | None = None) -> dict[str, WorkerInfo]:
+    def get(self, item_uids: list[str] | None = None) -> dict[str, WorkerInfo]:
         """Return claimed items with their worker info."""
 
         def _do(conn: sqlite3.Connection) -> dict[str, WorkerInfo]:
@@ -396,8 +291,8 @@ class InflightRegistry:
                 rows = []
                 # Chunk to avoid huge IN (?, ?, …) clauses that hit
                 # SQLite's placeholder limit or waste parser time.
-                for i in range(0, len(item_uids), _QUERY_BATCH_SIZE):
-                    batch = item_uids[i : i + _QUERY_BATCH_SIZE]
+                for i in range(0, len(item_uids), sqlite.QUERY_BATCH_SIZE):
+                    batch = item_uids[i : i + sqlite.QUERY_BATCH_SIZE]
                     placeholders = ",".join("?" for _ in batch)
                     sql = f"{query} WHERE item_uid IN ({placeholders})"
                     rows.extend(conn.execute(sql, batch).fetchall())
@@ -427,7 +322,7 @@ class InflightRegistry:
         reclaimed: list[str] = []
         my_pid = os.getpid()
 
-        inflight = self.get_inflight(list(remaining))
+        inflight = self.get(list(remaining))
         if inflight:
             # Jitter to de-synchronize callers that start simultaneously
             # (e.g. Slurm array jobs), reducing claim contention.
@@ -450,7 +345,7 @@ class InflightRegistry:
         interval = 0.5
         next_log = time.time() + 3600.0
         while remaining:
-            inflight = self.get_inflight(list(remaining))
+            inflight = self.get(list(remaining))
             alive_cache: dict[WorkerInfo, bool] = {}
             still_waiting: set[str] = set()
             dead_uids: list[str] = []
@@ -527,7 +422,7 @@ def inflight_session(
     # the finally block only releases items this session actually inserted
     # (not items inherited from an outer / re-entrant session).
     pre_owned: set[str] = {
-        uid for uid, info in registry.get_inflight(item_uids).items() if info.pid == pid
+        uid for uid, info in registry.get(item_uids).items() if info.pid == pid
     }
     # Retry loop: wait for inflight items, then claim. claim() uses
     # all-or-nothing semantics (ROLLBACK if any item is held by a live
