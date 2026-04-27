@@ -7,9 +7,7 @@ How a step's results, errors, and in-flight state are stored and how
 
 ```
 {base_folder}/{step_uid}/
-├── cache/
-│   ├── *.jsonl              # CacheDict index
-│   ├── *.npy|*.pkl|...      # value payloads
+├── cache/                   # CacheDict folder + advisory DBs
 │   ├── inflight.db          # claim/release registry
 │   └── errors.db            # uid -> relative path to error.pkl
 ├── jobs/{item_uid}/
@@ -18,10 +16,11 @@ How a step's results, errors, and in-flight state are stored and how
 └── logs/{job_id}/           # submitit stdout/stderr
 ```
 
-CacheDict holds successful values; `error.pkl` holds the failed
-exception (with `__notes__`). The two SQLite registries are
-**advisory** indices over what's already on disk — corruption or loss
-degrades to "no coordination" / "no fast lookup", never wrong results.
+CacheDict holds successful values (its own internal layout); `error.pkl`
+holds the failed exception (with `__notes__`). The two SQLite registries
+are **advisory** indices over what's already on disk — corruption or
+loss degrades to "no coordination" / "no fast lookup", never wrong
+results.
 
 ## Cache modes (`Backend.mode`)
 

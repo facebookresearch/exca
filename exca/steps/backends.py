@@ -57,11 +57,9 @@ class StepPaths:
 
         {base_folder}/
         └── {step_uid}/                    # Step folder (nested for chains)
-            ├── cache/                     # CacheDict folder for results
-            │   ├── *.jsonl                # CacheDict index (item_uid -> result)
-            │   ├── *.npy|*.pkl|etc...     # Optional numpy arrays
+            ├── cache/                     # CacheDict folder + advisory DBs
             │   ├── inflight.db            # advisory inflight registry
-            │   └── errors.db              # error registry (see step-error-spec.md)
+            │   └── errors.db              # error registry
             ├── jobs/
             │   └── {item_uid}/            # Per-input job folder
             │       ├── job.pkl            # Submitit job metadata
@@ -69,8 +67,8 @@ class StepPaths:
             └── logs/
                 └── {job_id}/              # Submitit log files
 
-    - step_uid: Computed from _chain_hash(), gives nested structure for chains
-    - item_uid: Computed from input value, or "__exca_no_input__" for generators
+    step_uid is from Step._chain_hash() (nested for chains); item_uid is
+    from the input value (or "__exca_no_input__" for generators).
     """
 
     base_folder: Path
@@ -135,9 +133,6 @@ class StepPaths:
             )
             if self.item_uid in cd:
                 del cd[self.item_uid]
-            # Drop any error-registry row for this uid so retry mode
-            # is monotonic on disk (no orphaned "errored" rows after
-            # the recompute set is cleared).
             with errors.ErrorRegistry(self.cache_folder) as reg:
                 reg.clear([self.item_uid])
         # Delete job folder (includes job.pkl and error.pkl)
@@ -174,10 +169,6 @@ class _CachingCall:
             if not self.paths.error_pkl.exists():
                 with self.paths.error_pkl.open("wb") as f:
                     pickle.dump(e, f)
-            # Record in the error registry alongside the pickle. The
-            # registry is the index ("which uids errored?"); the pickle
-            # holds the rich exc/traceback. The reader migration to
-            # query the registry lands separately (see step-error-spec).
             rel = self.paths.error_pkl.relative_to(self.paths.step_folder)
             with errors.ErrorRegistry(self.paths.cache_folder) as reg:
                 reg.record({self.paths.item_uid: str(rel)})
