@@ -11,10 +11,6 @@ concurrent processes to avoid duplicate submissions. The registry
 is advisory — CacheDict remains the source of truth. If the DB is
 corrupt or inaccessible, all methods degrade gracefully (log a
 warning and behave as if the registry is empty).
-
-Connection plumbing (lazy connect, retries, graceful degradation)
-lives in :mod:`exca.cachedict.sqlite`; this module adds claim /
-release / wait machinery and submitit-aware liveness on top.
 """
 
 import contextlib
@@ -151,13 +147,8 @@ class WorkerInfo:
 
 
 class InflightRegistry(sqlite.SqliteRegistry):
-    """Advisory SQLite registry of in-flight cache items.
-
-    All public methods gracefully degrade: if the DB is corrupt or
-    inaccessible, they log a warning and behave as if the registry
-    is empty. The DB is stored as ``<folder>/inflight.db`` (folder is
-    typically the cache folder; see :class:`SqliteRegistry`).
-    """
+    """Registry of in-flight cache items, with claim/release/wait
+    machinery and submitit-aware liveness on top of the base."""
 
     _DB_NAME: tp.ClassVar[str] = "inflight.db"
     _SCHEMA: tp.ClassVar[str] = _SCHEMA

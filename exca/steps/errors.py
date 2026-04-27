@@ -9,14 +9,6 @@
 Indexes which uids errored at compute time and where to find the rich
 ``error.pkl`` (traceback + exception) on disk. The table is just an
 index — the pickle is the source of truth for exception data.
-
-Powers the ``cached`` / ``force`` / ``retry`` / ``read-only`` modes
-uniformly across TaskInfra and items v3 — see ``step-error-spec.md``.
-
-Connection plumbing (lazy connect, retries, graceful degradation)
-lives in :mod:`exca.cachedict.sqlite`. Errors are append-only
-summaries, so the API stays much smaller than InflightRegistry — no
-claim / release / liveness machinery.
 """
 
 import logging
@@ -36,28 +28,12 @@ CREATE TABLE IF NOT EXISTS errors (
 
 
 class ErrorRegistry(sqlite.SqliteRegistry):
-    """Advisory SQLite registry of failed cache items.
-
-    All public methods gracefully degrade: if the DB is corrupt or
-    inaccessible, they log a warning and behave as if the registry
-    is empty. Callers (orchestrator + cut-runner) never need to
-    handle SQLite exceptions.
+    """Index of failed cache items.
 
     The ``error_pkl`` column stores a path relative to a caller-chosen
     base (by convention ``step_folder``); the registry treats it as
-    an opaque string. Resolving it to an absolute path is the
-    caller's responsibility — keeps the registry decoupled from
-    folder layout.
-
-    Parameters
-    ----------
-    folder:
-        Folder hosting the DB; ``<folder>/errors.db`` is created on
-        first access. Sibling of ``inflight.db`` (matches the
-        ``InflightRegistry`` location convention).
-    permissions:
-        File permissions applied to the DB after creation
-        (mirrors CacheDict / InflightRegistry). ``None`` to skip.
+    an opaque string. Resolving it to an absolute path is the caller's
+    responsibility.
     """
 
     _DB_NAME: tp.ClassVar[str] = "errors.db"

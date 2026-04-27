@@ -14,7 +14,7 @@ import pytest
 
 import exca.cachedict
 
-from . import backends, conftest
+from . import backends, conftest, errors
 from .base import Chain, Step
 
 # =============================================================================
@@ -268,23 +268,32 @@ def test_force_deeply_nested(tmp_path: Path) -> None:
 
 
 def test_mode_retry(tmp_path: Path) -> None:
-    """Retry mode clears cached errors."""
+    """Retry mode clears cached errors; the error registry tracks them."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    paths = backends.StepPaths.from_step(
+        tmp_path, conftest.Add(value=1, error=True, infra=infra), 5.0
+    )
 
-    # First: error
+    # First: error → registry records the failing uid + error.pkl path
     step = conftest.Add(value=1, error=True, infra=infra)
     with pytest.raises(ValueError):
         step.run(5.0)
+    with errors.ErrorRegistry(paths.cache_folder) as reg:
+        rows = reg.get(None)
+    assert list(rows) == [paths.item_uid]
+    assert (paths.step_folder / rows[paths.item_uid]).is_file()
 
     # Second: still error (cached)
     step = conftest.Add(value=1, error=False, infra=infra)
     with pytest.raises(ValueError):
         step.run(5.0)
 
-    # Third: retry clears error cache
+    # Third: retry clears cache + registry row
     infra["mode"] = "retry"
     step = conftest.Add(value=1, error=False, infra=infra)
     assert step.run(5.0) == 6.0  # 5 + 1
+    with errors.ErrorRegistry(paths.cache_folder) as reg:
+        assert reg.get([paths.item_uid]) == {}
 
 
 # =============================================================================

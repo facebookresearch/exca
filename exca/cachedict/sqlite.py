@@ -4,15 +4,10 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Shared base for advisory SQLite registries living in a folder.
-
-Two such registries exist today: ``InflightRegistry`` (which uids are
-being processed, see :mod:`exca.cachedict.inflight`) and
-``ErrorRegistry`` (which uids errored, see :mod:`exca.steps.errors`).
-Both share lazy-connection management, busy-timeout retries with
-backoff, and graceful degradation on corruption (warn + reset, behave
-as empty). The discipline lives here; each subclass adds its own SQL
-operations on top.
+"""Shared base for advisory SQLite registries living in a folder:
+lazy-connection management, busy-timeout retries with backoff, and
+graceful degradation on corruption (warn + reset, behave as empty).
+Subclasses add their own SQL operations on top.
 """
 
 import logging
