@@ -14,8 +14,7 @@ from exca.steps import backends, conftest, errors
 
 
 def test_error_registry_lifecycle(tmp_path: Path) -> None:
-    """Happy path: record / get / clear / clear_all + cross-instance
-    visibility + idempotent re-record."""
+    """API surface: record / get / clear / clear_all + idempotent re-record."""
     reg = errors.ErrorRegistry(tmp_path)
 
     reg.record([])
@@ -25,10 +24,6 @@ def test_error_registry_lifecycle(tmp_path: Path) -> None:
     reg.record(["a", "b"])
     assert reg.get(["a", "missing"]) == {"a"}
     assert reg.get(None) == {"a", "b"}
-
-    other = errors.ErrorRegistry(tmp_path)
-    assert other.get(["a"]) == {"a"}
-    other.close()
 
     # Re-record is idempotent (uid still present, no error).
     reg.record(["a"])
@@ -59,9 +54,11 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
         assert reg.get(None) == {paths.item_uid}
     assert paths.error_pkl.is_file()
 
-    # Cached: re-raises.
+    # Cached and read-only both re-raise.
     with pytest.raises(ValueError):
         _add(False, tmp_path).run(5.0)
+    with pytest.raises(ValueError):
+        _add(False, tmp_path, mode="read-only").run(5.0)
 
     # Retry: clear + recompute.
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0

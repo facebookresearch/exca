@@ -35,7 +35,8 @@ degrades to "no coordination" / "no fast lookup", never wrong results.
 
 `_CachingCall` wraps the user function:
 
-- **Success**: `cd[item_uid] = result`.
+- **Success**: `cd[item_uid] = result` (no-op if another worker already
+  wrote it — handles inflight reclaim).
 - **Failure**: write `error.pkl` (overwriting any prior pickle for the
   same uid), then `INSERT OR IGNORE` the uid into `errors.db`, then re-raise.
 
@@ -50,8 +51,9 @@ traps subsequent runs — they recompute. `mode="read-only"` cannot
 recompute, so a registry blackout there surfaces as `RuntimeError`
 ("no cache") rather than a stale exception.
 
-`StepPaths.clear_cache(uid)` does `cd.pop(uid)` + `errors_db.clear([uid])`
-+ `rmtree(jobs/<uid>)` — the three move together.
+`StepPaths.clear_cache()` does `rmtree(jobs/<uid>)` + `errors_db.clear([uid])`
++ `del cd[uid]` (in that order, so a partial mid-clear failure leaves at
+most a self-healing orphan, never a phantom cached error).
 
 ## Concurrency
 

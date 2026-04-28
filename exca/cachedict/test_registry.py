@@ -52,7 +52,7 @@ def test_chunked_query(tmp_path: Path) -> None:
     """Querying past QUERY_BATCH_SIZE chunks correctly."""
     reg = errors.ErrorRegistry(tmp_path)
     n = registry.QUERY_BATCH_SIZE * 2 + 17
-    reg.record(f"k_{i}" for i in range(n))
+    reg.record([f"k_{i}" for i in range(n)])
     keys = [f"k_{i}" for i in range(n)] + [f"missing_{i}" for i in range(50)]
     assert len(reg.get(keys)) == n
     reg.close()

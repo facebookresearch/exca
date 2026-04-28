@@ -254,14 +254,17 @@ class InflightRegistry(registry.AdvisoryRegistry):
     def get(self, item_uids: list[str] | None = None) -> dict[str, WorkerInfo]:
         """Return claimed items with their worker info."""
 
+        cols = ["item_uid", "pid", "job_id", "job_folder", "claimed_at"]
+
         def _do(conn: sqlite3.Connection) -> dict[str, WorkerInfo]:
-            query = "SELECT item_uid, pid, job_id, job_folder, claimed_at FROM inflight"
             if item_uids is None:
-                rows = conn.execute(query).fetchall()
+                rows = conn.execute(f"SELECT {', '.join(cols)} FROM inflight").fetchall()
             elif not item_uids:
                 return {}
             else:
-                rows = registry.select_in_chunks(conn, query, "item_uid", item_uids)
+                rows = registry.select_in_chunks(
+                    conn, "inflight", cols, "item_uid", item_uids
+                )
             return dict(WorkerInfo._from_row(r) for r in rows)
 
         return self._safe_execute("query", {}, _do)
@@ -411,3 +414,16 @@ def inflight_session(
         to_release = [uid for uid in claimed if uid not in pre_owned]
         reg.release(to_release)
         reg.close()
+
+
+def record_worker_info(
+    reg: InflightRegistry, item_uids: list[str], job: submitit.Job[tp.Any]
+) -> None:
+    """Stamp a submitit *job*'s worker info on *item_uids*. Slurm jobs get
+    job_id + folder; other backends get the local sentinel."""
+    if isinstance(job, submitit.SlurmJob):
+        reg.update_worker_info(
+            item_uids, job_id=str(job.job_id), job_folder=str(job.paths.folder)
+        )
+    else:
+        reg.update_worker_info(item_uids, job_id=_LOCAL_JOB_ID)

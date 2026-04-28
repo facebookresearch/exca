@@ -31,29 +31,35 @@ class ErrorRegistry(registry.AdvisoryRegistry):
     _SCHEMA: tp.ClassVar[str] = _SCHEMA
     _LABEL: tp.ClassVar[str] = "Error"
 
-    def record(self, item_uids: tp.Iterable[str]) -> None:
+    def record(self, item_uids: list[str]) -> None:
         """Mark the given uids as errored (idempotent)."""
-        rows = [(uid,) for uid in item_uids]
-        if not rows:
+        if not item_uids:
             return
 
         def _do(conn: sqlite3.Connection) -> None:
-            conn.executemany("INSERT OR IGNORE INTO errors (item_uid) VALUES (?)", rows)
+            conn.executemany(
+                "INSERT OR IGNORE INTO errors (item_uid) VALUES (?)",
+                [(uid,) for uid in item_uids],
+            )
 
         self._safe_execute("record", None, _do)
-        logger.debug("Recorded %d error(s)", len(rows))
+        logger.debug("Recorded %d error(s)", len(item_uids))
 
     def get(self, item_uids: list[str] | None = None) -> set[str]:
         """Return the subset of *item_uids* that errored (all rows if None)."""
 
         def _do(conn: sqlite3.Connection) -> set[str]:
-            base = "SELECT item_uid FROM errors"
             if item_uids is None:
-                return {r[0] for r in conn.execute(base).fetchall()}
+                return {
+                    r[0] for r in conn.execute("SELECT item_uid FROM errors").fetchall()
+                }
             if not item_uids:
                 return set()
             return {
-                r[0] for r in registry.select_in_chunks(conn, base, "item_uid", item_uids)
+                r[0]
+                for r in registry.select_in_chunks(
+                    conn, "errors", ["item_uid"], "item_uid", item_uids
+                )
             }
 
         return self._safe_execute("query", set(), _do)

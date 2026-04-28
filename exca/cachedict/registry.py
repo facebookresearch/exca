@@ -25,15 +25,21 @@ _CORRUPTION_HINTS = ("malformed", "not a database")
 
 
 def select_in_chunks(
-    conn: sqlite3.Connection, query: str, column: str, values: list[str]
+    conn: sqlite3.Connection,
+    table: str,
+    columns: tp.Sequence[str],
+    where_column: str,
+    values: list[str],
 ) -> list[tp.Any]:
-    """Run ``{query} WHERE {column} IN (...)`` over *values* in batches,
-    returning flattened rows. Avoids SQLite's placeholder limit."""
+    """``SELECT columns FROM table WHERE where_column IN (values)`` in
+    batches (avoids SQLite's placeholder limit)."""
+    cols = ", ".join(columns)
     out: list[tp.Any] = []
     for i in range(0, len(values), QUERY_BATCH_SIZE):
         batch = values[i : i + QUERY_BATCH_SIZE]
         ph = ",".join("?" for _ in batch)
-        out.extend(conn.execute(f"{query} WHERE {column} IN ({ph})", batch).fetchall())
+        sql = f"SELECT {cols} FROM {table} WHERE {where_column} IN ({ph})"
+        out.extend(conn.execute(sql, batch).fetchall())
     return out
 
 
@@ -100,8 +106,23 @@ class AdvisoryRegistry:
         return conn
 
     def _safe_connect(self) -> sqlite3.Connection | None:
+        """Open guarded by the same corruption gate as :meth:`_safe_execute`."""
         try:
             return self._connect()
+        except sqlite3.DatabaseError as e:
+            # DatabaseError (parent of OperationalError) covers SQLITE_NOTADB
+            # raised by executescript on a corrupt header.
+            corrupt = any(h in str(e).lower() for h in _CORRUPTION_HINTS)
+            logger.warning(
+                "%s registry unavailable at %s, treating as empty%s",
+                self._LABEL,
+                self.db_path,
+                " (resetting corrupt DB)" if corrupt else "",
+                exc_info=True,
+            )
+            if corrupt:
+                self._try_reset()
+            return None
         except Exception:
             logger.warning(
                 "%s registry unavailable at %s, treating as empty",
@@ -109,7 +130,6 @@ class AdvisoryRegistry:
                 self.db_path,
                 exc_info=True,
             )
-            self._try_reset()
             return None
 
     def _try_reset(self) -> None:

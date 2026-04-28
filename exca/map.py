@@ -17,7 +17,6 @@ from pathlib import Path
 
 import numpy as np
 import pydantic
-import submitit
 
 from . import base, slurm
 from .cachedict import CacheDict, inflight
@@ -398,17 +397,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                             jobs.append(j)
                     if registry is not None:
                         for chunk, j in zip(uid_item_chunks, jobs):
-                            uids = [uid for uid, _ in chunk]
-                            if isinstance(j, submitit.SlurmJob):
-                                registry.update_worker_info(
-                                    uids,
-                                    job_id=str(j.job_id),
-                                    job_folder=str(j.paths.folder),
-                                )
-                            else:
-                                registry.update_worker_info(
-                                    uids, job_id=inflight._LOCAL_JOB_ID
-                                )
+                            inflight.record_worker_info(
+                                registry, [uid for uid, _ in chunk], j
+                            )
                     # pylint: disable=expression-not-assigned
                     uid = self.uid()
                     msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"

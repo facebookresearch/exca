@@ -101,29 +101,21 @@ class StepPaths:
         guarded reads."""
         return self.job_folder / "error.pkl"
 
-    def _loadable_error_pkl(self) -> Path | None:
-        """Path to the cached error.pkl iff registry row + pickle are both
-        present, else None. Either alone (orphan) self-heals via recompute."""
-        if not self.error_pkl.exists() or not self.cache_folder.exists():
-            return None
-        with errors.ErrorRegistry(self.cache_folder) as reg:
-            if self.item_uid not in reg.get([self.item_uid]):
-                return None
-        return self.error_pkl
-
     def has_cached_error(self) -> bool:
-        """True iff a cached error is loadable (registry row + pickle)."""
-        return self._loadable_error_pkl() is not None
+        """True iff registry row + error.pkl both present (orphans recompute)."""
+        if not self.error_pkl.exists() or not self.cache_folder.exists():
+            return False
+        with errors.ErrorRegistry(self.cache_folder) as reg:
+            return self.item_uid in reg.get([self.item_uid])
 
     def load_cached_error(self) -> BaseException | None:
         """Load and decorate the cached error, or None if none."""
-        pkl = self._loadable_error_pkl()
-        if pkl is None:
+        if not self.has_cached_error():
             return None
-        with pkl.open("rb") as f:
+        with self.error_pkl.open("rb") as f:
             err: BaseException = pickle.load(f)
         err.add_note(
-            f"  -> in {pkl.parent}\n"
+            f"  -> in {self.error_pkl.parent}\n"
             f"     reraising from cache, use mode='retry' to recompute"
         )
         return err
@@ -140,16 +132,19 @@ class StepPaths:
 
     def clear_cache(self) -> None:
         """Clear cache and job folder for this item."""
+        # Order matters: drop error indicators (job folder + registry row)
+        # before the success entry, so a partial mid-clear failure leaves
+        # at most a self-healing orphan, never a phantom cached error.
+        if self.job_folder.exists():
+            shutil.rmtree(self.job_folder)
         if self.cache_folder.exists():
+            with errors.ErrorRegistry(self.cache_folder) as reg:
+                reg.clear([self.item_uid])
             cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
                 folder=self.cache_folder
             )
             if self.item_uid in cd:
                 del cd[self.item_uid]
-            with errors.ErrorRegistry(self.cache_folder) as reg:
-                reg.clear([self.item_uid])
-        if self.job_folder.exists():
-            shutil.rmtree(self.job_folder)
 
 
 ModeType = tp.Literal["cached", "force", "read-only", "retry"]
@@ -367,9 +362,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return None
 
     def _cache_status(self) -> CacheStatus:
-        """Check cache status without loading value. CacheDict success wins
-        over a possibly-orphan error.pkl (cheaper check, and a success is
-        the most recent event for the uid)."""
+        """Check cache status without loading value. CacheDict-first: a
+        success is the most recent event, and skips the SQLite registry."""
         if not self.paths.cache_folder.exists():
             return None
         if self.paths.item_uid in self._cache_dict():
@@ -417,9 +411,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     f"No cache in read-only mode: {self.paths.step_uid}[{self.paths.item_uid}]"
                 )
             return self._load_cache()  # Raises if error
-        if status is not None and self.mode not in ("force", "retry"):
+        # `retry` only retries errors → success short-circuits like `cached`.
+        if status == "success" and self.mode != "force":
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
-            return self._load_cache()  # Raises if error
+            return self._load_cache()
+        if status == "error" and self.mode == "cached":
+            return self._load_cache()  # Raises
 
         # Race: clear_cache and the job-recovery block below run outside
         # the inflight session — see "Known limitations" in caching.md.
@@ -467,16 +464,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     wrapper = _CachingCall(func, self.paths, self._effective_cache_type())
                     job = self._submit(wrapper, *args)
                     if registry is not None:
-                        if isinstance(job, submitit.SlurmJob):
-                            registry.update_worker_info(
-                                [item_uid],
-                                job_id=str(job.job_id),
-                                job_folder=str(job.paths.folder),
-                            )
-                        else:
-                            registry.update_worker_info(
-                                [item_uid], job_id=inflight._LOCAL_JOB_ID
-                            )
+                        inflight.record_worker_info(registry, [item_uid], job)
                     job.result()
             return self._load_cache()
 
