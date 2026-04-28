@@ -92,8 +92,7 @@ def test_workdir_clean_repo(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
     wd = workdir.WorkDir(folder=tmp_path, log_commit=True, copied=[Path(__file__).parent])
     assert len(caplog.records) == 1
     assert "Current git hash" in caplog.records[0].message
-    # WorkDir keys _commits by the source repo's top-level dir name —
-    # which varies across worktrees (e.g. "exca", "exca-main", ...).
+    # _commits keyed by source repo's top-level dir name
     repo = Path(__file__).parents[1].name
     assert repo in wd._commits
     with wd.activate():

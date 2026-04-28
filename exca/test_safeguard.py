@@ -35,7 +35,6 @@ def test_slurm_in_doc() -> None:
 
 def test_read_text_encoding() -> None:
     root = Path(__file__).parents[1]
-    # repo top-level (varies in worktrees), but the exca package sits inside
     assert (root / "exca" / "__init__.py").exists()
     # list of files to check
     output = subprocess.check_output(["find", root, "-name", "*.py"], shell=False)
