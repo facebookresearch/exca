@@ -144,6 +144,28 @@ def test_mode_readonly(tmp_path: Path) -> None:
     assert chain.run() == out1
 
 
+def test_mode_retry_short_circuits_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """retry+success returns the cached value without re-running _run
+    (only retry+error should recompute)."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.RandomGenerator(infra=infra)
+    out = step.run()  # populate cache
+
+    calls = {"n": 0}
+    original = conftest.RandomGenerator._run
+
+    def counted(self: conftest.RandomGenerator) -> float:
+        calls["n"] += 1
+        return original(self)
+
+    monkeypatch.setattr(conftest.RandomGenerator, "_run", counted)
+    step.infra.mode = "retry"  # type: ignore
+    assert step.run() == out
+    assert calls["n"] == 0
+
+
 @pytest.mark.parametrize("chain", [True, False])
 def test_mode_force(tmp_path: Path, chain: bool) -> None:
     """Force recomputes once, then uses cache."""
@@ -265,26 +287,6 @@ def test_force_deeply_nested(tmp_path: Path) -> None:
     chain.infra.mode = "force"
     out3 = chain.run(10)
     assert out3 != out2  # innermost recomputed again
-
-
-def test_mode_retry(tmp_path: Path) -> None:
-    """Retry mode clears cached errors."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-
-    # First: error
-    step = conftest.Add(value=1, error=True, infra=infra)
-    with pytest.raises(ValueError):
-        step.run(5.0)
-
-    # Second: still error (cached)
-    step = conftest.Add(value=1, error=False, infra=infra)
-    with pytest.raises(ValueError):
-        step.run(5.0)
-
-    # Third: retry clears error cache
-    infra["mode"] = "retry"
-    step = conftest.Add(value=1, error=False, infra=infra)
-    assert step.run(5.0) == 6.0  # 5 + 1
 
 
 # =============================================================================

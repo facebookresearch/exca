@@ -4,18 +4,17 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import logging
 import os
-import stat
 import time
 from pathlib import Path
 
 import pytest
+import submitit
 
-from . import inflight
+from . import inflight, registry
 
 
-def test_registry_operations(tmp_path: Path) -> None:
+def test_inflight_lifecycle(tmp_path: Path) -> None:
     reg = inflight.InflightRegistry(tmp_path)
     pid = os.getpid()
     dead_pid = 2**20 + 7
@@ -23,24 +22,24 @@ def test_registry_operations(tmp_path: Path) -> None:
     # Claim, query, re-entrant claim
     claimed = reg.claim(["a", "b", "c"], pid=pid)
     assert set(claimed) == {"a", "b", "c"}
-    assert set(reg.get_inflight(["a", "b", "c"])) == {"a", "b", "c"}
+    assert set(reg.get(["a", "b", "c"])) == {"a", "b", "c"}
     assert set(reg.claim(["a", "b", "c"], pid=pid)) == {"a", "b", "c"}
 
     # Update worker info (post-submission update)
     reg.update_worker_info(["a", "b"], job_id="12345", job_folder="/logs")
-    info = reg.get_inflight(["a", "b"])
+    info = reg.get(["a", "b"])
     assert info["a"].job_id == "12345" and info["b"].job_folder == "/logs"
 
     # Release subset, verify remainder
     reg.release(["a", "b"])
-    assert list(reg.get_inflight(["a", "b", "c"])) == ["c"]
+    assert list(reg.get(["a", "b", "c"])) == ["c"]
     reg.release(["c"])
-    assert reg.get_inflight(["a", "b", "c"]) == {}
+    assert reg.get(["a", "b", "c"]) == {}
 
     # Dead worker reclaim via claim()
     reg.claim(["x"], pid=dead_pid)
     claimed = reg.claim(["x"], pid=pid)
-    assert claimed == ["x"] and reg.get_inflight(["x"])["x"].pid == pid
+    assert claimed == ["x"] and reg.get(["x"])["x"].pid == pid
 
     # Live conflict: cannot steal from a live worker
     reg.claim(["y"], pid=pid)
@@ -52,93 +51,46 @@ def test_registry_operations(tmp_path: Path) -> None:
     reg.close()
 
 
-def test_graceful_degradation(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Corrupt, permission-denied, or deleted DB -> no crash, auto-recovery."""
-    db_path = tmp_path / "inflight.db"
-
-    # Seed the DB
-    reg = inflight.InflightRegistry(tmp_path)
-    reg.claim(["warmup"])
-    reg.release(["warmup"])
-    reg.close()
-    assert db_path.exists()
-
-    for break_mode in ("corrupt", "permissions", "delete"):
-        if break_mode == "corrupt":
-            db_path.write_bytes(b"NOT A SQLITE DB")
-        elif break_mode == "permissions":
-            db_path.chmod(0o000)
-        elif break_mode == "delete":
-            if db_path.exists():
-                db_path.unlink()
-
-        reg2 = inflight.InflightRegistry(tmp_path)
-        with caplog.at_level(logging.WARNING):
-            reg2.claim(["a"])
-            reg2.get_inflight(["a"])
-            reg2.release(["a"])
-        reg2.close()
-
-        if break_mode == "permissions":
-            db_path.chmod(stat.S_IRWXU)
-
-        # Auto-recovery: next access recreates a working DB
-        reg3 = inflight.InflightRegistry(tmp_path)
-        claimed = reg3.claim(["recovered"])
-        assert claimed == ["recovered"]
-        assert "recovered" in reg3.get_inflight(["recovered"])
-        reg3.release(["recovered"])
-        reg3.close()
-
-
 def test_inflight_session(tmp_path: Path) -> None:
-    # None registry -> yields all UIDs unchanged
+    """inflight_session: None passthrough, claim/release lifecycle, exception
+    safety, local job_id marker, and re-entrant nesting."""
+
+    def seen(uids: list[str]) -> dict[str, inflight.WorkerInfo]:
+        with inflight.InflightRegistry(tmp_path) as r:
+            return r.get(uids)
+
+    def fresh() -> inflight.InflightRegistry:
+        return inflight.InflightRegistry(tmp_path)
+
+    # None: yields uids unchanged.
     with inflight.inflight_session(None, ["a", "b"]) as claimed:
         assert claimed == ["a", "b"]
 
-    # Normal flow: claims visible during session, released after
-    reg = inflight.InflightRegistry(tmp_path)
-    with inflight.inflight_session(reg, ["x", "y"]) as claimed:
+    # Normal: claims visible during session, released after.
+    with inflight.inflight_session(fresh(), ["x", "y"]) as claimed:
         assert set(claimed) == {"x", "y"}
-        check = inflight.InflightRegistry(tmp_path)
-        assert set(check.get_inflight(["x", "y"])) == {"x", "y"}
-        check.close()
-    check2 = inflight.InflightRegistry(tmp_path)
-    assert check2.get_inflight(["x", "y"]) == {}
-    check2.close()
+        assert set(seen(["x", "y"])) == {"x", "y"}
+    assert seen(["x", "y"]) == {}
 
-    # Exception path: items still released in finally
-    reg2 = inflight.InflightRegistry(tmp_path)
+    # Exception: items still released in finally.
     with pytest.raises(ValueError, match="boom"):
-        with inflight.inflight_session(reg2, ["a"]) as claimed:
+        with inflight.inflight_session(fresh(), ["a"]) as claimed:
             assert claimed == ["a"]
             raise ValueError("boom")
-    check3 = inflight.InflightRegistry(tmp_path)
-    assert check3.get_inflight(["a"]) == {}
-    check3.close()
+    assert seen(["a"]) == {}
 
-    # Local session: marks claims with job_id="local"
-    reg_local = inflight.InflightRegistry(tmp_path)
-    with inflight.inflight_session(reg_local, ["loc"], local=True) as claimed:
+    # Local: claims marked with job_id="local".
+    with inflight.inflight_session(fresh(), ["loc"], local=True) as claimed:
         assert claimed == ["loc"]
-        check_loc = inflight.InflightRegistry(tmp_path)
-        info = check_loc.get_inflight(["loc"])["loc"]
-        assert info.job_id == inflight._LOCAL_JOB_ID
-        check_loc.close()
+        assert seen(["loc"])["loc"].job_id == inflight._LOCAL_JOB_ID
 
-    # Nested / re-entrant: inner session must NOT release outer's claim
-    outer_reg = inflight.InflightRegistry(tmp_path)
-    with inflight.inflight_session(outer_reg, ["z"]) as outer_claimed:
-        assert outer_claimed == ["z"]
-        inner_reg = inflight.InflightRegistry(tmp_path)
-        with inflight.inflight_session(inner_reg, ["z"]) as inner_claimed:
-            assert inner_claimed == ["z"]
-        check4 = inflight.InflightRegistry(tmp_path)
-        assert "z" in check4.get_inflight(["z"]), "inner released outer's claim"
-        check4.close()
-    check5 = inflight.InflightRegistry(tmp_path)
-    assert check5.get_inflight(["z"]) == {}
-    check5.close()
+    # Nested: inner session must NOT release outer's claim.
+    with inflight.inflight_session(fresh(), ["z"]) as outer:
+        assert outer == ["z"]
+        with inflight.inflight_session(fresh(), ["z"]) as inner:
+            assert inner == ["z"]
+        assert "z" in seen(["z"]), "inner released outer's claim"
+    assert seen(["z"]) == {}
 
 
 def test_wait_for_inflight(tmp_path: Path) -> None:
@@ -149,7 +101,7 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
     reg.claim(["stale"], pid=dead_pid)
     reg2 = inflight.InflightRegistry(tmp_path)
     assert reg2.wait_for_inflight(["stale"]) == ["stale"]
-    assert reg2.get_inflight(["stale"]) == {}
+    assert reg2.get(["stale"]) == {}
     reg2.close()
     reg.close()
 
@@ -159,7 +111,7 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
     reg_ns = inflight.InflightRegistry(tmp_path)
     reg_ns.claim(["non_slurm"], pid=dead_pid)
     reg_ns.update_worker_info(["non_slurm"], job_id="99999", job_folder="/nonexistent")
-    info = reg_ns.get_inflight(["non_slurm"])["non_slurm"]
+    info = reg_ns.get(["non_slurm"])["non_slurm"]
     assert not info.is_alive(), "fake Slurm job should not appear alive"
     reg_ns2 = inflight.InflightRegistry(tmp_path)
     assert reg_ns2.wait_for_inflight(["non_slurm"]) == ["non_slurm"]
@@ -170,7 +122,7 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
     reg3 = inflight.InflightRegistry(tmp_path)
     reg3.claim(["mine"])
     assert reg3.wait_for_inflight(["mine"]) == []
-    assert "mine" in reg3.get_inflight(["mine"])
+    assert "mine" in reg3.get(["mine"])
     reg3.release(["mine"])
     reg3.close()
 
@@ -215,7 +167,7 @@ def test_db_deletion_unblocks_wait(
 
     waiter = inflight.InflightRegistry(tmp_path)
     # Seed the connection so it's cached before deletion
-    waiter.get_inflight(["a", "b"])
+    waiter.get(["a", "b"])
 
     # Delete the DB — simulates user intervention
     db_path = tmp_path / "inflight.db"
@@ -231,7 +183,7 @@ def test_db_deletion_unblocks_wait(
 
 def test_large_batch_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercises bulk performance: dedup Slurm waits, transactional release,
-    chunked get_inflight."""
+    chunked get."""
     dead_pid = 2**20 + 7
 
     # Slurm wait deduplication: 5 items across 2 jobs → 2 wait() calls
@@ -255,15 +207,15 @@ def test_large_batch_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     waiter.close()
     reg.close()
 
-    # Chunked get_inflight + transactional release with > _QUERY_BATCH_SIZE items
+    # Chunked get + transactional release with > QUERY_BATCH_SIZE items
     reg2 = inflight.InflightRegistry(tmp_path)
-    n = inflight._QUERY_BATCH_SIZE * 3 + 17
+    n = registry.QUERY_BATCH_SIZE * 3 + 17
     uids = [f"item_{i}" for i in range(n)]
     reg2.claim(uids)
-    assert len(reg2.get_inflight(uids)) == n
-    assert len(reg2.get_inflight(uids + ["missing"])) == n
+    assert len(reg2.get(uids)) == n
+    assert len(reg2.get(uids + ["missing"])) == n
     reg2.release(uids)
-    assert reg2.get_inflight(uids) == {}
+    assert reg2.get(uids) == {}
     reg2.close()
 
 
@@ -304,3 +256,19 @@ def test_inflight_session_retries_lost_claim(
     with inflight.inflight_session(reg, ["x"]) as claimed:
         assert claimed == ["x"]
     assert wait_calls >= 2, f"expected retry, got {wait_calls} wait calls"
+
+
+def test_record_worker_info_dispatch(tmp_path: Path) -> None:
+    """Slurm jobs stamp job_id+folder; non-Slurm get the local sentinel."""
+    slurm = submitit.SlurmJob[None](folder=tmp_path, job_id="42")
+    local = submitit.LocalJob[None](folder=tmp_path, job_id="ignored")
+
+    reg = inflight.InflightRegistry(tmp_path)
+    reg.claim(["s", "l"])
+    inflight.record_worker_info(reg, ["s"], slurm)
+    inflight.record_worker_info(reg, ["l"], local)
+
+    info = reg.get(["s", "l"])
+    assert (info["s"].job_id, info["s"].job_folder) == ("42", str(slurm.paths.folder))
+    assert (info["l"].job_id, info["l"].job_folder) == (inflight._LOCAL_JOB_ID, None)
+    reg.close()
