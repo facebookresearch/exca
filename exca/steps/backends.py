@@ -58,14 +58,17 @@ class StepPaths:
         {base_folder}/
         └── {step_uid}/                    # Step folder (nested for chains)
             ├── cache/                     # CacheDict folder + advisory DBs
+            │   ├── *.jsonl                # CacheDict index (item_uid -> entry)
+            │   ├── *.pkl|*.npy|...        # CacheDict value payloads
             │   ├── inflight.db            # advisory inflight registry
-            │   └── errors.db              # error registry
+            │   └── errors.db              # advisory error registry
             ├── jobs/
-            │   └── {item_uid}/            # Per-input job folder
-            │       ├── job.pkl            # Submitit job metadata
-            │       └── error.pkl          # Pickled exception (if failed)
+            │   └── {item_uid}/            # one folder per cached job
+            │       ├── job.pkl            # submitit handle (recovery)
+            │       └── error.pkl          # pickled exception (on failure)
             └── logs/
-                └── {job_id}/              # Submitit log files
+                └── {job_id}/              # submitit-owned (stdout/stderr,
+                                           # <job_id>_0_result.pkl, etc.)
 
     step_uid is from Step._chain_hash() (nested for chains); item_uid is
     from the input value (or "__exca_no_input__" for generators).
@@ -111,8 +114,19 @@ class StepPaths:
 
     @property
     def error_pkl(self) -> Path:
-        """Path to error.pkl for this item (if job failed)."""
+        """Canonical write location for an error pickle (use
+        :meth:`cached_error_pkl` for reads)."""
         return self.job_folder / "error.pkl"
+
+    def cached_error_pkl(self) -> Path | None:
+        """Pickle path iff a cached error is loadable (registry agrees and
+        pickle exists), else None — see ``caching.md``."""
+        with errors.ErrorRegistry(self.cache_folder) as reg:
+            rows = reg.get([self.item_uid])
+        if not rows:
+            return None
+        pkl = self.step_folder / rows[self.item_uid]
+        return pkl if pkl.exists() else None
 
     @property
     def logs_folder(self) -> str:
@@ -356,11 +370,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _cache_status(self) -> CacheStatus:
         """Check cache status without loading value."""
-        # Pickle-existence is the truth; the registry is a parallel write.
-        if self.paths.error_pkl.exists():
-            return "error"
         if not self.paths.cache_folder.exists():
             return None
+        if self.paths.cached_error_pkl() is not None:
+            return "error"
         if self.paths.item_uid in self._cache_dict():
             return "success"
         return None
@@ -370,12 +383,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
             return self._ram_cache
 
-        # Check for error in job folder
-        if self.paths.error_pkl.exists():
-            with self.paths.error_pkl.open("rb") as f:
+        pkl = self.paths.cached_error_pkl()
+        if pkl is not None:
+            with pkl.open("rb") as f:
                 err = pickle.load(f)
             err.add_note(
-                f"  -> in {self.paths.error_pkl.parent}\n"
+                f"  -> in {pkl.parent}\n"
                 f"     reraising from cache, use mode='retry' to recompute"
             )
             raise err

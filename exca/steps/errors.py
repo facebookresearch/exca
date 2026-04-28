@@ -4,18 +4,15 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Advisory SQLite registry of failed cache items.
-
-Indexes which uids errored at compute time and where to find the rich
-``error.pkl`` (traceback + exception) on disk. The table is just an
-index — the pickle is the source of truth for exception data.
-"""
+"""Advisory SQLite registry of failed cache items: which uids errored
+and where their ``error.pkl`` lives (relpath). Both the row and the
+pickle are required to count as a cached error."""
 
 import logging
 import sqlite3
 import typing as tp
 
-from exca.cachedict import sqlite
+from exca.cachedict import registry
 
 logger = logging.getLogger(__name__)
 
@@ -27,22 +24,16 @@ CREATE TABLE IF NOT EXISTS errors (
 """
 
 
-class ErrorRegistry(sqlite.SqliteRegistry):
-    """Index of failed cache items.
-
-    The ``error_pkl`` column stores a path relative to a caller-chosen
-    base (by convention ``step_folder``); the registry treats it as
-    an opaque string. Resolving it to an absolute path is the caller's
-    responsibility.
-    """
+class ErrorRegistry(registry.AdvisoryRegistry):
+    """Index of failed cache items. ``error_pkl`` is an opaque path string
+    (by convention relative to ``step_folder``) — callers resolve it."""
 
     _DB_NAME: tp.ClassVar[str] = "errors.db"
     _SCHEMA: tp.ClassVar[str] = _SCHEMA
     _LABEL: tp.ClassVar[str] = "Error"
 
     def record(self, errors: tp.Mapping[str, str]) -> None:
-        """Insert or replace error rows. Maps ``item_uid -> error_pkl``
-        (path string, by convention relative to ``step_folder``)."""
+        """Insert or replace ``{item_uid: error_pkl}`` rows."""
         if not errors:
             return
 
@@ -74,8 +65,8 @@ class ErrorRegistry(sqlite.SqliteRegistry):
                 rows = []
                 # Chunk to avoid huge IN (?, ?, …) clauses that hit
                 # SQLite's placeholder limit or waste parser time.
-                for i in range(0, len(item_uids), sqlite.QUERY_BATCH_SIZE):
-                    batch = item_uids[i : i + sqlite.QUERY_BATCH_SIZE]
+                for i in range(0, len(item_uids), registry.QUERY_BATCH_SIZE):
+                    batch = item_uids[i : i + registry.QUERY_BATCH_SIZE]
                     placeholders = ",".join("?" for _ in batch)
                     sql = f"{query} WHERE item_uid IN ({placeholders})"
                     rows.extend(conn.execute(sql, batch).fetchall())
@@ -84,11 +75,7 @@ class ErrorRegistry(sqlite.SqliteRegistry):
         return self._safe_execute("query", {}, _do)
 
     def clear(self, item_uids: list[str]) -> None:
-        """Remove rows for the given uids (delete-before-recompute).
-
-        Used both by the orchestrator before dispatching the
-        recompute set, and by ``Step.clear_cache(uid)``.
-        """
+        """Remove rows for the given uids."""
         if not item_uids:
             return
 

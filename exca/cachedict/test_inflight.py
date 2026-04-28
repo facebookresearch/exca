@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from . import inflight, sqlite
+from . import inflight, registry
 
 
 def test_registry_operations(tmp_path: Path) -> None:
@@ -216,7 +216,7 @@ def test_large_batch_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
     # Chunked get + transactional release with > QUERY_BATCH_SIZE items
     reg2 = inflight.InflightRegistry(tmp_path)
-    n = sqlite.QUERY_BATCH_SIZE * 3 + 17
+    n = registry.QUERY_BATCH_SIZE * 3 + 17
     uids = [f"item_{i}" for i in range(n)]
     reg2.claim(uids)
     assert len(reg2.get(uids)) == n

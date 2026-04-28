@@ -8,19 +8,21 @@ How a step's results, errors, and in-flight state are stored and how
 ```
 {base_folder}/{step_uid}/
 ├── cache/                   # CacheDict folder + advisory DBs
+│   ├── *.jsonl              # CacheDict index
+│   ├── *.pkl|*.npy|...      # CacheDict value payloads
 │   ├── inflight.db          # claim/release registry
 │   └── errors.db            # uid -> relative path to error.pkl
-├── jobs/{item_uid}/
-│   ├── job.pkl              # submitit Job handle (recovery)
-│   └── error.pkl            # pickled exception (set on failure)
-└── logs/{job_id}/           # submitit stdout/stderr
+├── jobs/{item_uid}/         # one folder per cached job
+│   ├── job.pkl              # submitit handle (recovery)
+│   └── error.pkl            # pickled exception (on failure)
+└── logs/{job_id}/           # submitit-owned: stdout/stderr,
+                             # <job_id>_0_result.pkl, etc.
 ```
 
-CacheDict holds successful values (its own internal layout); `error.pkl`
-holds the failed exception (with `__notes__`). The two SQLite registries
-are **advisory** indices over what's already on disk — corruption or
-loss degrades to "no coordination" / "no fast lookup", never wrong
-results.
+CacheDict holds successful values; `error.pkl` holds the failed
+exception (with `__notes__`). The two registries are **advisory**
+indices over what's already on disk — corruption or loss degrades to
+"no coordination" / "no fast lookup", never wrong results.
 
 ## Cache modes (`Backend.mode`)
 
@@ -35,12 +37,13 @@ results.
 
 - **Success**: `cd[item_uid] = result`.
 - **Failure**: write `error.pkl`, then insert `(uid, error_pkl_relpath)`
-  into `errors.db`, then re-raise. A crash between the two leaves the
-  pickle as the truth.
+  into `errors.db`, then re-raise.
 
-`_cache_status` checks `error_pkl.exists()` then `uid in cd` — pickle
-existence is authoritative; `errors.db` is currently a parallel write
-(reader migration tracked in `items-spec.md` §7).
+`_cache_status` reads the registry (truth flag) gated by
+`error_pkl.exists()` (sanity check). A crash between the pickle and
+the registry insert leaves an orphan pickle the reader ignores → the
+next run recomputes (transient failures self-heal; mode `retry` only
+needed for genuinely cached errors).
 
 `StepPaths.clear_cache(uid)` does `cd.pop(uid)` + `errors_db.clear([uid])`
 + `rmtree(jobs/<uid>)` — the three move together.
@@ -53,7 +56,7 @@ returns the subset this caller now owns; non-claimers wait via
 `wait_for_inflight` (polls the DB; reclaims dead PIDs); the session
 releases on exit.
 
-Both registries inherit from `SqliteRegistry` (`exca/cachedict/sqlite.py`)
+Both registries inherit from `AdvisoryRegistry` (`exca/cachedict/registry.py`)
 which provides `journal_mode=DELETE` (avoids WAL — WAL actively breaks
 on NFS; lock semantics still make SQLite-over-NFS best-effort), busy-timeout retries,
 and graceful degradation (corruption / permission errors logged, op

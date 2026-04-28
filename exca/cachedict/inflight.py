@@ -26,7 +26,7 @@ import typing as tp
 
 import submitit
 
-from . import sqlite
+from . import registry
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class WorkerInfo:
 # -- Registry -----------------------------------------------------------------
 
 
-class InflightRegistry(sqlite.SqliteRegistry):
+class InflightRegistry(registry.AdvisoryRegistry):
     """Registry of in-flight cache items, with claim/release/wait
     machinery and submitit-aware liveness on top of the base."""
 
@@ -282,8 +282,8 @@ class InflightRegistry(sqlite.SqliteRegistry):
                 rows = []
                 # Chunk to avoid huge IN (?, ?, …) clauses that hit
                 # SQLite's placeholder limit or waste parser time.
-                for i in range(0, len(item_uids), sqlite.QUERY_BATCH_SIZE):
-                    batch = item_uids[i : i + sqlite.QUERY_BATCH_SIZE]
+                for i in range(0, len(item_uids), registry.QUERY_BATCH_SIZE):
+                    batch = item_uids[i : i + registry.QUERY_BATCH_SIZE]
                     placeholders = ",".join("?" for _ in batch)
                     sql = f"{query} WHERE item_uid IN ({placeholders})"
                     rows.extend(conn.execute(sql, batch).fetchall())

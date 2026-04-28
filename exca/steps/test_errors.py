@@ -77,3 +77,23 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     assert step.run(5.0) == 6.0  # 5 + 1
     with errors.ErrorRegistry(paths.cache_folder) as reg:
         assert reg.get([paths.item_uid]) == {}
+
+
+def test_orphan_pickle_self_heals(tmp_path: Path) -> None:
+    """A pickle without a matching registry row (partial-write crash) is
+    treated as no-cache: the next run recomputes instead of being trapped."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+
+    step = conftest.Add(value=1, error=True, infra=infra)
+    paths = backends.StepPaths.from_step(tmp_path, step, 5.0)
+    with pytest.raises(ValueError):
+        step.run(5.0)
+    assert paths.error_pkl.exists()
+
+    # Simulate crash between pickle write and registry insert.
+    with errors.ErrorRegistry(paths.cache_folder) as reg:
+        reg.clear([paths.item_uid])
+
+    # Cached mode: recomputes (would re-raise the cached error otherwise).
+    step = conftest.Add(value=1, error=False, infra=infra)
+    assert step.run(5.0) == 6.0
