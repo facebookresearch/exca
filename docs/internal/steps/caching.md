@@ -39,11 +39,12 @@ indices over what's already on disk — corruption or loss degrades to
 - **Failure**: write `error.pkl`, then insert `(uid, error_pkl_relpath)`
   into `errors.db`, then re-raise.
 
-`_cache_status` reads the registry (truth flag) gated by
-`error_pkl.exists()` (sanity check). A crash between the pickle and
-the registry insert leaves an orphan pickle the reader ignores → the
-next run recomputes (transient failures self-heal; mode `retry` only
-needed for genuinely cached errors).
+`_cache_status` returns `"error"` only when the registry has a row
+**and** the pickle exists (encapsulated in `StepPaths.cached_error_pkl`).
+A crash between the pickle and the registry insert leaves an orphan
+pickle the reader ignores → the next run recomputes (transient
+failures self-heal; `mode="retry"` only needed for genuinely cached
+errors).
 
 `StepPaths.clear_cache(uid)` does `cd.pop(uid)` + `errors_db.clear([uid])`
 + `rmtree(jobs/<uid>)` — the three move together.
