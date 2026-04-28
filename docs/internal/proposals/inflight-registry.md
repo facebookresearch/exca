@@ -157,8 +157,8 @@ class InflightRegistry:
     def update_worker_info(self, item_uids: list[str], *,
                            job_id: str | None = None,
                            job_folder: str | None = None) -> None:
-        """Update job_id/job_folder for already-claimed items. Internal
-        primitive; callers normally use ``record_worker_info`` instead."""
+        """Set ``job_id`` (Slurm id or ``_LOCAL_JOB_ID``) and optional
+        ``job_folder`` on already-claimed rows."""
 
     def release(self, item_uids: list[str]) -> None:
         """Remove items from the registry (done or failed)."""

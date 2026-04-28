@@ -19,9 +19,14 @@ logger = logging.getLogger(__name__)
 T = tp.TypeVar("T")
 QUERY_BATCH_SIZE = 500
 
-# Substrings of sqlite3.OperationalError messages that indicate the DB
-# file is damaged (vs transient lock contention or NFS hiccups).
-_CORRUPTION_HINTS = ("malformed", "not a database")
+# OperationalError substrings that mean the DB is unusable (vs transient
+# lock/I-O hiccups). Triggers a reset; advisory layer can afford to lose rows.
+_CORRUPTION_HINTS = (
+    "malformed",
+    "not a database",
+    "no such table",
+    "no such column",
+)
 
 
 def select_in_chunks(
@@ -169,9 +174,8 @@ class AdvisoryRegistry:
             try:
                 return fn(conn)
             except Exception as e:
-                # Always clear any aborted BEGIN IMMEDIATE so the cached
-                # connection isn't poisoned for subsequent ops (no-op when
-                # there's no open transaction).
+                # Clear any aborted transaction so the cached connection
+                # isn't poisoned for subsequent ops (no-op when none open).
                 try:
                     conn.execute("ROLLBACK")
                 except Exception:

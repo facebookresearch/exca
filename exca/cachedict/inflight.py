@@ -55,8 +55,8 @@ def _has_sacct() -> bool:
     Secondary safety net: on machines without sacct (dev, CI), submitit's
     SlurmJob.done() silently returns False instead of raising, making dead
     jobs appear alive and causing wait_for_inflight to hang. The primary
-    defense is the isinstance(job, SlurmJob) gate in callers that prevents
-    non-Slurm job info from being recorded in the first place.
+    defense is record_worker_info, which stamps non-Slurm jobs with
+    _LOCAL_JOB_ID so is_alive routes them to the PID check.
     """
     return shutil.which("sacct") is not None
 
@@ -227,11 +227,8 @@ class InflightRegistry(registry.AdvisoryRegistry):
         job_id: str | None = None,
         job_folder: str | None = None,
     ) -> None:
-        """Update job_id and job_folder for items already claimed.
-
-        Called after job submission, when the Slurm job ID becomes known.
-        Between claim and update, liveness falls back to PID check.
-        """
+        """Set ``job_id`` (Slurm id or ``_LOCAL_JOB_ID``) and optional
+        ``job_folder`` on already-claimed rows."""
         if not item_uids:
             return
 
@@ -371,9 +368,9 @@ def inflight_session(
     ----------
     local:
         Set to ``True`` when items will be processed locally (no Slurm
-        submission). This marks the claims with ``job_id="local"`` so
-        that ``is_alive`` can distinguish "local work in progress" from
-        "Slurm submission that never completed ``update_worker_info``".
+        submission). Stamps claims with ``_LOCAL_JOB_ID`` so ``is_alive``
+        can distinguish "local work in progress" from "Slurm submission
+        that never completed ``update_worker_info``".
 
     Self-deadlock is prevented internally: ``wait_for_inflight`` skips items
     owned by the current PID, and ``claim`` treats same-PID rows as already

@@ -65,9 +65,11 @@ releases on exit.
 
 Both registries inherit from `AdvisoryRegistry` (`exca/cachedict/registry.py`)
 which provides `journal_mode=DELETE` (avoids WAL — WAL actively breaks
-on NFS; lock semantics still make SQLite-over-NFS best-effort), busy-timeout retries,
-and graceful degradation (corruption / permission errors logged, op
-returns the empty fallback).
+on NFS; lock semantics still make SQLite-over-NFS best-effort), busy-timeout
+retries, and graceful degradation: permission / transient I/O errors are
+logged and the op returns the empty fallback (DB intact); known-corruption
+errors (file malformed, not a database, schema-mismatch on future schema
+bumps) trigger a reset (`unlink` + recreate on next access).
 
 ## Known limitations
 

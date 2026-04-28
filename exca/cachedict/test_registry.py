@@ -143,11 +143,14 @@ def test_concurrent_writers(tmp_path: Path) -> None:
     reg.close()
 
 
-@pytest.mark.parametrize("break_mode", ["corrupt", "permissions", "delete"])
+@pytest.mark.parametrize(
+    "break_mode", ["corrupt", "permissions", "delete", "schema_drift"]
+)
 def test_graceful_degradation(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, break_mode: str
 ) -> None:
-    """Corrupt / permission-denied / deleted DB → no crash, auto-recovery."""
+    """Corrupt / permission-denied / deleted / schema-drift DB → no crash,
+    auto-recovery (`schema_drift` covers a future schema bump on old files)."""
     db_path = tmp_path / "errors.db"
 
     seed = errors.ErrorRegistry(tmp_path)
@@ -159,6 +162,12 @@ def test_graceful_degradation(
         db_path.write_bytes(b"NOT A SQLITE DB")
     elif break_mode == "permissions":
         db_path.chmod(0o000)
+    elif break_mode == "schema_drift":
+        # Plant an `errors` table with the wrong column set so the next
+        # INSERT/SELECT hits "no such column: item_uid".
+        db_path.unlink()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE errors (id INTEGER PRIMARY KEY)")
     else:
         db_path.unlink()
 
