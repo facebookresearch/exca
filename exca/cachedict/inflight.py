@@ -41,9 +41,6 @@ CREATE TABLE IF NOT EXISTS inflight (
 """
 
 
-# -- Helpers ------------------------------------------------------------------
-
-
 @functools.lru_cache(maxsize=1)
 def _has_sacct() -> bool:
     """Check whether sacct is available (cached after first call).
@@ -65,9 +62,6 @@ def _is_pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-
-
-# -- Worker identity ----------------------------------------------------------
 
 
 @dataclasses.dataclass(frozen=True)
@@ -143,9 +137,6 @@ class WorkerInfo:
             logger.debug("Could not wait for Slurm job %s", self.job_id, exc_info=True)
 
 
-# -- Registry -----------------------------------------------------------------
-
-
 class InflightRegistry(registry.AdvisoryRegistry):
     """Registry of in-flight cache items, with claim/release/wait
     machinery and submitit-aware liveness on top of the base."""
@@ -153,8 +144,6 @@ class InflightRegistry(registry.AdvisoryRegistry):
     _DB_NAME: tp.ClassVar[str] = "inflight.db"
     _SCHEMA: tp.ClassVar[str] = _SCHEMA
     _LABEL: tp.ClassVar[str] = "Inflight"
-
-    # -- Core operations ------------------------------------------------------
 
     def claim(
         self,
@@ -257,14 +246,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
             return
 
         def _do(conn: sqlite3.Connection) -> None:
-            # Explicit transaction: one fsync instead of one per row
-            # (critical on NFS with large item counts).
-            conn.execute("BEGIN")
-            conn.executemany(
-                "DELETE FROM inflight WHERE item_uid = ?",
-                [(uid,) for uid in item_uids],
-            )
-            conn.execute("COMMIT")
+            registry.bulk_delete(conn, "inflight", "item_uid", item_uids)
 
         self._safe_execute("release", None, _do)
         logger.debug("Released %d items", len(item_uids))
@@ -279,14 +261,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
             elif not item_uids:
                 return {}
             else:
-                rows = []
-                # Chunk to avoid huge IN (?, ?, …) clauses that hit
-                # SQLite's placeholder limit or waste parser time.
-                for i in range(0, len(item_uids), registry.QUERY_BATCH_SIZE):
-                    batch = item_uids[i : i + registry.QUERY_BATCH_SIZE]
-                    placeholders = ",".join("?" for _ in batch)
-                    sql = f"{query} WHERE item_uid IN ({placeholders})"
-                    rows.extend(conn.execute(sql, batch).fetchall())
+                rows = registry.select_in_chunks(conn, query, "item_uid", item_uids)
             return dict(WorkerInfo._from_row(r) for r in rows)
 
         return self._safe_execute("query", {}, _do)
@@ -372,22 +347,19 @@ class InflightRegistry(registry.AdvisoryRegistry):
         return reclaimed
 
 
-# -- Public context manager ---------------------------------------------------
-
-
 _LOCAL_JOB_ID = "local"
 
 
 @contextlib.contextmanager
 def inflight_session(
-    registry: InflightRegistry | None,
+    reg: InflightRegistry | None,
     item_uids: list[str],
     *,
     local: bool = False,
 ) -> tp.Iterator[list[str]]:
     """Wait for in-flight items, claim available ones, release+close on exit.
 
-    When *registry* is ``None`` (no cache folder), yields all *item_uids*
+    When *reg* is ``None`` (no cache folder), yields all *item_uids*
     unchanged so that callers never need a ``None`` guard.
 
     Parameters
@@ -405,7 +377,7 @@ def inflight_session(
     The registry connection is closed on exit; callers must perform any
     ``update_worker_info`` calls inside the ``with`` block.
     """
-    if registry is None:
+    if reg is None:
         yield list(item_uids)
         return
     pid = os.getpid()
@@ -413,17 +385,17 @@ def inflight_session(
     # the finally block only releases items this session actually inserted
     # (not items inherited from an outer / re-entrant session).
     pre_owned: set[str] = {
-        uid for uid, info in registry.get(item_uids).items() if info.pid == pid
+        uid for uid, info in reg.get(item_uids).items() if info.pid == pid
     }
     # Retry loop: wait for inflight items, then claim. claim() uses
     # all-or-nothing semantics (ROLLBACK if any item is held by a live
     # worker), so no partial claims are ever written — no release needed
     # on retry, and no hold-and-wait deadlock is possible.
     while True:
-        reclaimed = registry.wait_for_inflight(item_uids)
+        reclaimed = reg.wait_for_inflight(item_uids)
         if reclaimed:
             logger.info("Reclaimed %d items from dead workers", len(reclaimed))
-        claimed = registry.claim(item_uids, pid=pid)
+        claimed = reg.claim(item_uids, pid=pid)
         if len(claimed) == len(item_uids):
             break
         # claim() rolled back — some items held by live workers that
@@ -432,10 +404,10 @@ def inflight_session(
         logger.info(msg, len(claimed), len(item_uids))
         time.sleep(random.uniform(0.5, 2.0))
     if local:
-        registry.update_worker_info(claimed, job_id=_LOCAL_JOB_ID)
+        reg.update_worker_info(claimed, job_id=_LOCAL_JOB_ID)
     try:
         yield claimed
     finally:
         to_release = [uid for uid in claimed if uid not in pre_owned]
-        registry.release(to_release)
-        registry.close()
+        reg.release(to_release)
+        reg.close()

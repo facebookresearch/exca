@@ -163,7 +163,7 @@ class InflightRegistry:
     def release(self, item_uids: list[str]) -> None:
         """Remove items from the registry (done or failed)."""
 
-    def get_inflight(self, item_uids: list[str] | None = None) -> dict[str, WorkerInfo]:
+    def get(self, item_uids: list[str] | None = None) -> dict[str, WorkerInfo]:
         """Return claimed items with their worker info."""
 
     def wait_for_inflight(self, item_uids: list[str]) -> list[str]:

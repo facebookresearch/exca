@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import pickle
 import typing as tp
 from pathlib import Path
 
@@ -12,88 +13,91 @@ import pytest
 from exca.steps import backends, conftest, errors
 
 
-def test_registry_operations(tmp_path: Path) -> None:
+def test_error_registry_lifecycle(tmp_path: Path) -> None:
     """Happy path: record / get / clear / clear_all + cross-instance
-    visibility + replace-on-rerecord."""
+    visibility + idempotent re-record."""
     reg = errors.ErrorRegistry(tmp_path)
 
-    # No-op on empty input (no DB roundtrip).
-    reg.record({})
+    reg.record([])
     reg.clear([])
-    assert reg.get([]) == {}
+    assert reg.get([]) == set()
 
-    # Record + query (incl. unknown uid absent, not None).
-    reg.record({"a": "jobs/j1/error.pkl", "b": "jobs/j2/error.pkl"})
-    assert reg.get(["a", "missing"]) == {"a": "jobs/j1/error.pkl"}
-    assert reg.get(None) == {
-        "a": "jobs/j1/error.pkl",
-        "b": "jobs/j2/error.pkl",
-    }
+    reg.record(["a", "b"])
+    assert reg.get(["a", "missing"]) == {"a"}
+    assert reg.get(None) == {"a", "b"}
 
-    # Cross-instance visibility: a fresh instance sees on-disk state.
     other = errors.ErrorRegistry(tmp_path)
-    assert other.get(["a"]) == {"a": "jobs/j1/error.pkl"}
+    assert other.get(["a"]) == {"a"}
     other.close()
 
-    # Replace on re-record (recompute → new exception in same uid).
-    reg.record({"a": "jobs/j3/error.pkl"})
-    assert reg.get(["a"]) == {"a": "jobs/j3/error.pkl"}
+    # Re-record is idempotent (uid still present, no error).
+    reg.record(["a"])
+    assert reg.get(["a"]) == {"a"}
 
-    # Clear subset (delete-before-recompute) and unknown uid.
     reg.clear(["a", "never_recorded"])
-    assert reg.get(["a", "b"]) == {"b": "jobs/j2/error.pkl"}
+    assert reg.get(["a", "b"]) == {"b"}
 
-    # Clear-all empties the table.
     reg.clear_all()
-    assert reg.get(None) == {}
+    assert reg.get(None) == set()
     reg.close()
 
 
+def _add(error: bool, tmp_path: Path, mode: str = "cached") -> tp.Any:
+    """Build a fresh Add(value=1) step rooted at tmp_path."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": mode}
+    return conftest.Add(value=1, error=error, infra=infra)
+
+
 def test_step_error_caching_and_retry(tmp_path: Path) -> None:
-    """End-to-end: a failing Step caches the error (re-raised on
-    subsequent calls) and records it in the registry; retry mode clears
+    """End-to-end: a failing Step caches + re-raises; retry mode clears
     cache + registry row and recomputes."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-
-    # First run errors → writer records in registry + writes pickle.
-    step = conftest.Add(value=1, error=True, infra=infra)
-    paths = backends.StepPaths.from_step(tmp_path, step, 5.0)
+    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
     with pytest.raises(ValueError):
-        step.run(5.0)
+        _add(True, tmp_path).run(5.0)
 
     with errors.ErrorRegistry(paths.cache_folder) as reg:
-        rows = reg.get(None)
-    assert list(rows) == [paths.item_uid]
-    assert (paths.step_folder / rows[paths.item_uid]).is_file()
+        assert reg.get(None) == {paths.item_uid}
+    assert paths.error_pkl.is_file()
 
-    # Second call: cached error is re-raised even with error=False.
-    step = conftest.Add(value=1, error=False, infra=infra)
+    # Cached: re-raises.
     with pytest.raises(ValueError):
-        step.run(5.0)
+        _add(False, tmp_path).run(5.0)
 
-    # Retry mode → paths.clear_cache also drops the registry row.
-    infra["mode"] = "retry"
-    step = conftest.Add(value=1, error=False, infra=infra)
-    assert step.run(5.0) == 6.0  # 5 + 1
+    # Retry: clear + recompute.
+    assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
     with errors.ErrorRegistry(paths.cache_folder) as reg:
-        assert reg.get([paths.item_uid]) == {}
+        assert reg.get([paths.item_uid]) == set()
 
 
-def test_orphan_pickle_self_heals(tmp_path: Path) -> None:
-    """A pickle without a matching registry row (partial-write crash) is
-    treated as no-cache: the next run recomputes instead of being trapped."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-
-    step = conftest.Add(value=1, error=True, infra=infra)
-    paths = backends.StepPaths.from_step(tmp_path, step, 5.0)
+@pytest.mark.parametrize("missing", ["row", "pickle"])
+def test_partial_error_state_self_heals(tmp_path: Path, missing: str) -> None:
+    """Either half of (registry row, error.pkl) missing → recompute. Both
+    are required to count as a cached error, so partial state from a
+    crash or external cleanup never traps subsequent runs."""
+    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
     with pytest.raises(ValueError):
-        step.run(5.0)
-    assert paths.error_pkl.exists()
+        _add(True, tmp_path).run(5.0)
 
-    # Simulate crash between pickle write and registry insert.
-    with errors.ErrorRegistry(paths.cache_folder) as reg:
-        reg.clear([paths.item_uid])
+    if missing == "pickle":
+        paths.error_pkl.unlink()
+    else:
+        with errors.ErrorRegistry(paths.cache_folder) as reg:
+            reg.clear([paths.item_uid])
 
-    # Cached mode: recomputes (would re-raise the cached error otherwise).
-    step = conftest.Add(value=1, error=False, infra=infra)
-    assert step.run(5.0) == 6.0
+    assert _add(False, tmp_path).run(5.0) == 6.0
+
+
+def test_writer_overwrites_stale_pickle(tmp_path: Path) -> None:
+    """An orphan pickle from a crashed prior run must be overwritten by the
+    next failure, else a recompute-then-fail cycle would resurrect the
+    stale exception."""
+    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
+    paths.ensure_folders()
+    with paths.error_pkl.open("wb") as f:
+        pickle.dump(RuntimeError("run-1 stale"), f)
+
+    with pytest.raises(ValueError):
+        _add(True, tmp_path).run(5.0)
+
+    with paths.error_pkl.open("rb") as f:
+        assert isinstance(pickle.load(f), ValueError)

@@ -25,14 +25,14 @@ def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
     db_path = tmp_path / "errors.db"
     assert not db_path.exists()
 
-    reg.record({"a": "p1"})
+    reg.record(["a"])
     assert db_path.is_file()
-    assert reg.get(["a"]) == {"a": "p1"}
+    assert reg.get(["a"]) == {"a"}
 
     db_path.unlink()
-    assert reg.get(["a"]) == {}
-    reg.record({"b": "p2"})
-    assert reg.get(["b"]) == {"b": "p2"}
+    assert reg.get(["a"]) == set()
+    reg.record(["b"])
+    assert reg.get(["b"]) == {"b"}
 
     reg.close()
     reg.close()
@@ -41,10 +41,10 @@ def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
 def test_context_manager(tmp_path: Path) -> None:
     """`with` closes the connection on exit and preserves subclass type."""
     with errors.ErrorRegistry(tmp_path) as reg:
-        reg.record({"a": "p1"})
-        assert reg.get(["a"]) == {"a": "p1"}
+        reg.record(["a"])
+        assert reg.get(["a"]) == {"a"}
     # Re-using after __exit__ silently reconnects (lazy semantics).
-    assert reg.get(["a"]) == {"a": "p1"}
+    assert reg.get(["a"]) == {"a"}
     reg.close()
 
 
@@ -52,7 +52,7 @@ def test_chunked_query(tmp_path: Path) -> None:
     """Querying past QUERY_BATCH_SIZE chunks correctly."""
     reg = errors.ErrorRegistry(tmp_path)
     n = registry.QUERY_BATCH_SIZE * 2 + 17
-    reg.record({f"k_{i}": f"p_{i}" for i in range(n)})
+    reg.record(f"k_{i}" for i in range(n))
     keys = [f"k_{i}" for i in range(n)] + [f"missing_{i}" for i in range(50)]
     assert len(reg.get(keys)) == n
     reg.close()
@@ -64,7 +64,7 @@ def test_retry_loop_recovers_from_transient_lock(
     """A single 'database is locked' is retried; the second attempt lands."""
     monkeypatch.setattr("time.sleep", lambda *_: None)
     reg = errors.ErrorRegistry(tmp_path)
-    reg.record({"warmup": "p"})
+    reg.record(["warmup"])
 
     attempts = {"n": 0}
 
@@ -72,11 +72,11 @@ def test_retry_loop_recovers_from_transient_lock(
         attempts["n"] += 1
         if attempts["n"] == 1:
             raise sqlite3.OperationalError("database is locked")
-        conn.execute("INSERT INTO errors VALUES ('a', 'p1')")
+        conn.execute("INSERT INTO errors VALUES ('a')")
 
     reg._safe_execute("flaky", None, flaky)
     assert attempts["n"] == 2  # retry actually ran
-    assert reg.get(["a"]) == {"a": "p1"}
+    assert reg.get(["a"]) == {"a"}
     reg.close()
 
 
@@ -87,7 +87,7 @@ def test_lock_exhaustion_preserves_db(
     other workers may still need its rows)."""
     monkeypatch.setattr("time.sleep", lambda *_: None)
     reg = errors.ErrorRegistry(tmp_path)
-    reg.record({"warmup": "p"})  # ensure DB exists with real data
+    reg.record(["warmup"])
     db_path = tmp_path / "errors.db"
 
     def always_locked(conn: sqlite3.Connection) -> None:
@@ -95,7 +95,27 @@ def test_lock_exhaustion_preserves_db(
 
     assert reg._safe_execute("always_locked", None, always_locked) is None
     assert db_path.exists()
-    assert reg.get(["warmup"]) == {"warmup": "p"}
+    assert reg.get(["warmup"]) == {"warmup"}
+    reg.close()
+
+
+def test_non_corruption_errors_preserve_db(tmp_path: Path) -> None:
+    """A programming bug or transient I/O error inside fn must not wipe the
+    DB — only known-corruption strings trigger _try_reset."""
+    reg = errors.ErrorRegistry(tmp_path)
+    reg.record(["seed"])
+    db_path = tmp_path / "errors.db"
+
+    def io_hiccup(conn: sqlite3.Connection) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    def bug(conn: sqlite3.Connection) -> None:
+        raise sqlite3.ProgrammingError("oops, bad SQL")
+
+    assert reg._safe_execute("io", None, io_hiccup) is None
+    assert reg._safe_execute("bug", None, bug) is None
+    assert db_path.exists()
+    assert reg.get(["seed"]) == {"seed"}
     reg.close()
 
 
@@ -108,7 +128,7 @@ def test_concurrent_writers(tmp_path: Path) -> None:
         reg = errors.ErrorRegistry(tmp_path)
         barrier.wait()
         for j in range(per_thread):
-            reg.record({f"w{wid}_{j}": str(j)})
+            reg.record([f"w{wid}_{j}"])
         reg.close()
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
@@ -131,7 +151,7 @@ def test_graceful_degradation(
     db_path = tmp_path / "errors.db"
 
     seed = errors.ErrorRegistry(tmp_path)
-    seed.record({"warmup": "p"})
+    seed.record(["warmup"])
     seed.close()
     assert db_path.exists()
 
@@ -144,7 +164,7 @@ def test_graceful_degradation(
 
     reg = errors.ErrorRegistry(tmp_path)
     with caplog.at_level(logging.WARNING):
-        reg.record({"a": "p1"})
+        reg.record(["a"])
         reg.get(["a"])
     reg.close()
 
@@ -152,14 +172,14 @@ def test_graceful_degradation(
         db_path.chmod(stat.S_IRWXU)
 
     reg2 = errors.ErrorRegistry(tmp_path)
-    reg2.record({"recovered": "p"})
-    assert reg2.get(["recovered"]) == {"recovered": "p"}
+    reg2.record(["recovered"])
+    assert reg2.get(["recovered"]) == {"recovered"}
     reg2.close()
 
 
 def test_permissions_applied(tmp_path: Path) -> None:
     reg = errors.ErrorRegistry(tmp_path, permissions=0o600)
-    reg.record({"a": "p"})
+    reg.record(["a"])
     mode = stat.S_IMODE((tmp_path / "errors.db").stat().st_mode)
     assert mode == 0o600
     reg.close()

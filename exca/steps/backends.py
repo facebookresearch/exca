@@ -49,26 +49,8 @@ _NOINPUT_UID = "__exca_no_input__"
 
 @dataclasses.dataclass
 class StepPaths:
-    """Manages all path computations for a step execution.
-
-    This class encapsulates all folder/file path logic, keeping Backend clean.
-
-    Folder structure::
-
-        {base_folder}/
-        └── {step_uid}/                    # Step folder (nested for chains)
-            ├── cache/                     # CacheDict folder + advisory DBs
-            │   ├── *.jsonl                # CacheDict index (item_uid -> entry)
-            │   ├── *.pkl|*.npy|...        # CacheDict value payloads
-            │   ├── inflight.db            # advisory inflight registry
-            │   └── errors.db              # advisory error registry
-            ├── jobs/
-            │   └── {item_uid}/            # one folder per cached job
-            │       ├── job.pkl            # submitit handle (recovery)
-            │       └── error.pkl          # pickled exception (on failure)
-            └── logs/
-                └── {job_id}/              # submitit-owned (stdout/stderr,
-                                           # <job_id>_0_result.pkl, etc.)
+    """Path layout for a step execution. See ``docs/internal/steps/caching.md``
+    for the on-disk tree.
 
     step_uid is from Step._chain_hash() (nested for chains); item_uid is
     from the input value (or "__exca_no_input__" for generators).
@@ -114,19 +96,37 @@ class StepPaths:
 
     @property
     def error_pkl(self) -> Path:
-        """Canonical write location for an error pickle (use
-        :meth:`cached_error_pkl` for reads)."""
+        """Raw on-disk path to the error pickle. Callers should use
+        :meth:`has_cached_error` / :meth:`load_cached_error` for
+        guarded reads."""
         return self.job_folder / "error.pkl"
 
-    def cached_error_pkl(self) -> Path | None:
-        """Pickle path iff a cached error is loadable (registry agrees and
-        pickle exists), else None — see ``caching.md``."""
-        with errors.ErrorRegistry(self.cache_folder) as reg:
-            rows = reg.get([self.item_uid])
-        if not rows:
+    def _loadable_error_pkl(self) -> Path | None:
+        """Path to the cached error.pkl iff registry row + pickle are both
+        present, else None. Either alone (orphan) self-heals via recompute."""
+        if not self.error_pkl.exists() or not self.cache_folder.exists():
             return None
-        pkl = self.step_folder / rows[self.item_uid]
-        return pkl if pkl.exists() else None
+        with errors.ErrorRegistry(self.cache_folder) as reg:
+            if self.item_uid not in reg.get([self.item_uid]):
+                return None
+        return self.error_pkl
+
+    def has_cached_error(self) -> bool:
+        """True iff a cached error is loadable (registry row + pickle)."""
+        return self._loadable_error_pkl() is not None
+
+    def load_cached_error(self) -> BaseException | None:
+        """Load and decorate the cached error, or None if none."""
+        pkl = self._loadable_error_pkl()
+        if pkl is None:
+            return None
+        with pkl.open("rb") as f:
+            err: BaseException = pickle.load(f)
+        err.add_note(
+            f"  -> in {pkl.parent}\n"
+            f"     reraising from cache, use mode='retry' to recompute"
+        )
+        return err
 
     @property
     def logs_folder(self) -> str:
@@ -178,12 +178,10 @@ class _CachingCall:
             result = self.func(*args)
         except Exception as e:
             e.add_note(f"  -> cached as {self.paths.step_uid}[{self.paths.item_uid}]")
-            if not self.paths.error_pkl.exists():
-                with self.paths.error_pkl.open("wb") as f:
-                    pickle.dump(e, f)
-            rel = self.paths.error_pkl.relative_to(self.paths.step_folder)
+            with self.paths.error_pkl.open("wb") as f:
+                pickle.dump(e, f)
             with errors.ErrorRegistry(self.paths.cache_folder) as reg:
-                reg.record({self.paths.item_uid: str(rel)})
+                reg.record([self.paths.item_uid])
             raise
         if self.paths.item_uid not in cd:
             with cd.write():
@@ -369,13 +367,15 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return None
 
     def _cache_status(self) -> CacheStatus:
-        """Check cache status without loading value."""
+        """Check cache status without loading value. CacheDict success wins
+        over a possibly-orphan error.pkl (cheaper check, and a success is
+        the most recent event for the uid)."""
         if not self.paths.cache_folder.exists():
             return None
-        if self.paths.cached_error_pkl() is not None:
-            return "error"
         if self.paths.item_uid in self._cache_dict():
             return "success"
+        if self.paths.has_cached_error():
+            return "error"
         return None
 
     def _load_cache(self) -> tp.Any:
@@ -383,22 +383,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
             return self._ram_cache
 
-        pkl = self.paths.cached_error_pkl()
-        if pkl is not None:
-            with pkl.open("rb") as f:
-                err = pickle.load(f)
-            err.add_note(
-                f"  -> in {pkl.parent}\n"
-                f"     reraising from cache, use mode='retry' to recompute"
-            )
-            raise err
-
         cd = self._cache_dict()
         if self.paths.item_uid in cd:
             result = cd[self.paths.item_uid]
             if self.keep_in_ram:
                 self._ram_cache = result
             return result
+
+        err = self.paths.load_cached_error()
+        if err is not None:
+            raise err
         return None
 
     # =========================================================================
@@ -427,9 +421,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
             return self._load_cache()  # Raises if error
 
-        # TODO: clear_cache() and the job-recovery block below run outside
-        # the inflight session, so a force/retry caller can unlink a pickle
-        # another process is still loading.
+        # Race: clear_cache and the job-recovery block below run outside
+        # the inflight session — see "Known limitations" in caching.md.
         if self.mode == "force" and status is not None:
             self.clear_cache()
         elif self.mode == "retry" and status == "error":

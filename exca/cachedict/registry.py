@@ -19,6 +19,33 @@ logger = logging.getLogger(__name__)
 T = tp.TypeVar("T")
 QUERY_BATCH_SIZE = 500
 
+# Substrings of sqlite3.OperationalError messages that indicate the DB
+# file is damaged (vs transient lock contention or NFS hiccups).
+_CORRUPTION_HINTS = ("malformed", "not a database")
+
+
+def select_in_chunks(
+    conn: sqlite3.Connection, query: str, column: str, values: list[str]
+) -> list[tp.Any]:
+    """Run ``{query} WHERE {column} IN (...)`` over *values* in batches,
+    returning flattened rows. Avoids SQLite's placeholder limit."""
+    out: list[tp.Any] = []
+    for i in range(0, len(values), QUERY_BATCH_SIZE):
+        batch = values[i : i + QUERY_BATCH_SIZE]
+        ph = ",".join("?" for _ in batch)
+        out.extend(conn.execute(f"{query} WHERE {column} IN ({ph})", batch).fetchall())
+    return out
+
+
+def bulk_delete(
+    conn: sqlite3.Connection, table: str, column: str, values: list[str]
+) -> None:
+    """Delete rows from *table* where *column* matches *values*, in one
+    transaction (single fsync — matters for large recompute sets / NFS)."""
+    conn.execute("BEGIN")
+    conn.executemany(f"DELETE FROM {table} WHERE {column} = ?", [(v,) for v in values])
+    conn.execute("COMMIT")
+
 
 class AdvisoryRegistry:
     """Advisory SQLite-backed registry inside a folder.
@@ -37,8 +64,6 @@ class AdvisoryRegistry:
         self.db_path = Path(folder) / self._DB_NAME
         self.permissions = permissions
         self._conn: sqlite3.Connection | None = None
-
-    # -- Connection management ------------------------------------------------
 
     def _connect(self) -> sqlite3.Connection:
         """Lazy-open the DB connection, creating the table if needed."""
@@ -75,7 +100,6 @@ class AdvisoryRegistry:
         return conn
 
     def _safe_connect(self) -> sqlite3.Connection | None:
-        """Connect with graceful fallback — returns None on failure."""
         try:
             return self._connect()
         except Exception:
@@ -97,7 +121,7 @@ class AdvisoryRegistry:
             pass
 
     def close(self) -> None:
-        """Close the DB connection (idempotent; safe to call multiple times)."""
+        """Close the DB connection (idempotent)."""
         if self._conn is not None:
             try:
                 self._conn.close()
@@ -111,14 +135,13 @@ class AdvisoryRegistry:
     def __exit__(self, *exc: tp.Any) -> None:
         self.close()
 
-    # -- Execution wrapper ----------------------------------------------------
-
     def _safe_execute(
         self, op_name: str, fallback: T, fn: tp.Callable[[sqlite3.Connection], T]
     ) -> T:
         """Run *fn* with graceful degradation: lock contention retries up
-        to 3x then returns *fallback* (DB intact); any other error triggers
-        a reset (suspected corruption) and returns *fallback*."""
+        to 3x then returns *fallback* (DB intact); known corruption resets
+        the DB; everything else (transient I/O, programming bugs) returns
+        *fallback* without touching the DB."""
         conn = self._safe_connect()
         if conn is None:
             return fallback
@@ -126,7 +149,8 @@ class AdvisoryRegistry:
             try:
                 return fn(conn)
             except sqlite3.OperationalError as e:
-                if "locked" in str(e) or "busy" in str(e):
+                msg = str(e).lower()
+                if "locked" in msg or "busy" in msg:
                     # Rollback any aborted BEGIN IMMEDIATE; no-op otherwise.
                     try:
                         conn.execute("ROLLBACK")
@@ -149,9 +173,22 @@ class AdvisoryRegistry:
                         op_name,
                     )
                     return fallback
-                break
+                if any(h in msg for h in _CORRUPTION_HINTS):
+                    break
+                logger.warning("%s registry %s: %s", self._LABEL, op_name, e)
+                return fallback
             except Exception:
-                break
-        logger.warning("%s registry %s failed", self._LABEL, op_name, exc_info=True)
+                logger.warning(
+                    "%s registry %s failed",
+                    self._LABEL,
+                    op_name,
+                    exc_info=True,
+                )
+                return fallback
+        logger.warning(
+            "%s registry %s: corruption detected, resetting",
+            self._LABEL,
+            op_name,
+        )
         self._try_reset()
         return fallback

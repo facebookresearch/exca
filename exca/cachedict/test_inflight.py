@@ -13,7 +13,7 @@ import pytest
 from . import inflight, registry
 
 
-def test_registry_operations(tmp_path: Path) -> None:
+def test_inflight_lifecycle(tmp_path: Path) -> None:
     reg = inflight.InflightRegistry(tmp_path)
     pid = os.getpid()
     dead_pid = 2**20 + 7
@@ -51,53 +51,45 @@ def test_registry_operations(tmp_path: Path) -> None:
 
 
 def test_inflight_session(tmp_path: Path) -> None:
-    # None registry -> yields all UIDs unchanged
+    """inflight_session: None passthrough, claim/release lifecycle, exception
+    safety, local job_id marker, and re-entrant nesting."""
+
+    def seen(uids: list[str]) -> dict[str, inflight.WorkerInfo]:
+        with inflight.InflightRegistry(tmp_path) as r:
+            return r.get(uids)
+
+    def fresh() -> inflight.InflightRegistry:
+        return inflight.InflightRegistry(tmp_path)
+
+    # None: yields uids unchanged.
     with inflight.inflight_session(None, ["a", "b"]) as claimed:
         assert claimed == ["a", "b"]
 
-    # Normal flow: claims visible during session, released after
-    reg = inflight.InflightRegistry(tmp_path)
-    with inflight.inflight_session(reg, ["x", "y"]) as claimed:
+    # Normal: claims visible during session, released after.
+    with inflight.inflight_session(fresh(), ["x", "y"]) as claimed:
         assert set(claimed) == {"x", "y"}
-        check = inflight.InflightRegistry(tmp_path)
-        assert set(check.get(["x", "y"])) == {"x", "y"}
-        check.close()
-    check2 = inflight.InflightRegistry(tmp_path)
-    assert check2.get(["x", "y"]) == {}
-    check2.close()
+        assert set(seen(["x", "y"])) == {"x", "y"}
+    assert seen(["x", "y"]) == {}
 
-    # Exception path: items still released in finally
-    reg2 = inflight.InflightRegistry(tmp_path)
+    # Exception: items still released in finally.
     with pytest.raises(ValueError, match="boom"):
-        with inflight.inflight_session(reg2, ["a"]) as claimed:
+        with inflight.inflight_session(fresh(), ["a"]) as claimed:
             assert claimed == ["a"]
             raise ValueError("boom")
-    check3 = inflight.InflightRegistry(tmp_path)
-    assert check3.get(["a"]) == {}
-    check3.close()
+    assert seen(["a"]) == {}
 
-    # Local session: marks claims with job_id="local"
-    reg_local = inflight.InflightRegistry(tmp_path)
-    with inflight.inflight_session(reg_local, ["loc"], local=True) as claimed:
+    # Local: claims marked with job_id="local".
+    with inflight.inflight_session(fresh(), ["loc"], local=True) as claimed:
         assert claimed == ["loc"]
-        check_loc = inflight.InflightRegistry(tmp_path)
-        info = check_loc.get(["loc"])["loc"]
-        assert info.job_id == inflight._LOCAL_JOB_ID
-        check_loc.close()
+        assert seen(["loc"])["loc"].job_id == inflight._LOCAL_JOB_ID
 
-    # Nested / re-entrant: inner session must NOT release outer's claim
-    outer_reg = inflight.InflightRegistry(tmp_path)
-    with inflight.inflight_session(outer_reg, ["z"]) as outer_claimed:
-        assert outer_claimed == ["z"]
-        inner_reg = inflight.InflightRegistry(tmp_path)
-        with inflight.inflight_session(inner_reg, ["z"]) as inner_claimed:
-            assert inner_claimed == ["z"]
-        check4 = inflight.InflightRegistry(tmp_path)
-        assert "z" in check4.get(["z"]), "inner released outer's claim"
-        check4.close()
-    check5 = inflight.InflightRegistry(tmp_path)
-    assert check5.get(["z"]) == {}
-    check5.close()
+    # Nested: inner session must NOT release outer's claim.
+    with inflight.inflight_session(fresh(), ["z"]) as outer:
+        assert outer == ["z"]
+        with inflight.inflight_session(fresh(), ["z"]) as inner:
+            assert inner == ["z"]
+        assert "z" in seen(["z"]), "inner released outer's claim"
+    assert seen(["z"]) == {}
 
 
 def test_wait_for_inflight(tmp_path: Path) -> None:
