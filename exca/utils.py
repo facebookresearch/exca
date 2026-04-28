@@ -563,7 +563,7 @@ class ShortItemUid:
 
     def __call__(self, item: tp.Any) -> str:
         uid = self.item_uid(item)
-        if len(uid) < self.max_length:
+        if len(uid) <= self.max_length:  # idempotent
             return uid
         cut = (self.max_length - 13 - len(str(len(uid)))) // 2
         sub = f"{uid[:cut]}..{len(uid) - 2 * cut}..{uid[-cut:]}"
