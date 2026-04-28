@@ -35,13 +35,14 @@ def test_slurm_in_doc() -> None:
 
 def test_read_text_encoding() -> None:
     root = Path(__file__).parents[1]
-    assert root.name == "exca"
+    # repo top-level (varies in worktrees), but the exca package sits inside
+    assert (root / "exca" / "__init__.py").exists()
     # list of files to check
     output = subprocess.check_output(["find", root, "-name", "*.py"], shell=False)
     tocheck = [Path(p) for p in output.decode().splitlines()]
     # add missing licenses if none already exists
     found = []
-    skip = ("/lib/", "/build/", "docs/conf.py", "test_safeguard.py")
+    skip = ("/lib/", "/build/", ".venv/", "docs/conf.py", "test_safeguard.py")
     for fp in tocheck:
         if any(x in str(fp.relative_to(root)) for x in skip):
             continue
@@ -60,7 +61,7 @@ def test_header() -> None:
     header = "\n".join(itertools.takewhile(lambda line: line.startswith("#"), lines))
     assert len(header.splitlines()) == 5, f"Identified header:\n{header}"
     root = Path(__file__).parents[1]
-    assert root.name == "exca"
+    assert (root / "exca" / "__init__.py").exists()
     # list of files to check
     tocheck = []
     output = subprocess.check_output(["find", root, "-name", "*.py"], shell=False)
@@ -68,7 +69,7 @@ def test_header() -> None:
     # add missing licenses if none already exists
     missing = []
     AUTOADD = True
-    skip = ("/lib/", "/build/", "docs/conf.py")
+    skip = ("/lib/", "/build/", ".venv/", "docs/conf.py")
     for fp in tocheck:
         if any(x in str(fp.relative_to(root)) for x in skip):
             continue

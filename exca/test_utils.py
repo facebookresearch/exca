@@ -17,7 +17,7 @@ import exca
 
 from . import utils
 from .confdict import ConfDict
-from .utils import to_dict
+from .utils import ShortItemUid, to_dict
 
 
 class BaseModel(pydantic.BaseModel):
@@ -574,3 +574,12 @@ def test_confdict_override_yaml() -> None:
             return ConfDict({"nested": {"value": self.x}})
 
     assert "hello" in utils.ConfigDump(model=M(x="hello"))._to_yaml("uid")
+
+
+@pytest.mark.parametrize("length", [10, 256, 257, 500, 999, 1000, 5000])
+def test_short_item_uid_idempotent(length: int) -> None:
+    # output is always <= max_length, so feeding it back must be a no-op;
+    # used to fail at exactly max_length (strict < instead of <=)
+    short = ShortItemUid(str, 256)
+    once = short("a" * length)
+    assert short(once) == once

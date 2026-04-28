@@ -92,7 +92,9 @@ def test_workdir_clean_repo(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
     wd = workdir.WorkDir(folder=tmp_path, log_commit=True, copied=[Path(__file__).parent])
     assert len(caplog.records) == 1
     assert "Current git hash" in caplog.records[0].message
-    repo = "exca" if "exca" in MapInfra.__module__ else "brainai"
+    # WorkDir keys _commits by the source repo's top-level dir name —
+    # which varies across worktrees (e.g. "exca", "exca-main", ...).
+    repo = Path(__file__).parents[1].name
     assert repo in wd._commits
     with wd.activate():
         assert Path("git-hashes.log").read_text("utf8").startswith(repo)
