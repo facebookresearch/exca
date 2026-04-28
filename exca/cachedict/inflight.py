@@ -380,7 +380,7 @@ def inflight_session(
     ours.
 
     The registry connection is closed on exit; callers must perform any
-    ``update_worker_info`` calls inside the ``with`` block.
+    ``record_worker_info`` calls inside the ``with`` block.
     """
     if reg is None:
         yield list(item_uids)
