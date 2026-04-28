@@ -74,12 +74,3 @@ class ErrorRegistry(registry.AdvisoryRegistry):
 
         self._safe_execute("clear", None, _do)
         logger.debug("Cleared %d error row(s)", len(item_uids))
-
-    def clear_all(self) -> None:
-        """Drop all rows."""
-
-        def _do(conn: sqlite3.Connection) -> None:
-            conn.execute("DELETE FROM errors")
-
-        self._safe_execute("clear_all", None, _do)
-        logger.debug("Cleared all error rows")

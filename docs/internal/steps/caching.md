@@ -28,7 +28,7 @@ degrades to "no coordination" / "no fast lookup", never wrong results.
 
 - `cached` (default): return cached value/error if any, else compute.
 - `force`: clear cache and recompute.
-- `retry`: recompute on cached error, otherwise return cached value.
+- `retry`: like `cached`, but recompute on cached error.
 - `read-only`: return cached value/error if any, else raise.
 
 ## Writer / reader / cleaner
@@ -75,9 +75,12 @@ returns the empty fallback).
 `Backend.run` execute **outside** the inflight session, so a `force` /
 `retry` caller can unlink a pickle another worker is still loading.
 The error-pickle write itself is also non-atomic (`open("wb")` +
-`pickle.dump`), so a concurrent reader can observe a truncated file
-in the same window. Items-v3 will close both races by moving the
-mutators inside the inflight session.
+`pickle.dump`), so a concurrent reader can observe a truncated file in
+the same window. `mode='force'` under contention can also silently
+return a competitor's just-finished value (initial `clear_cache` skips
+when `status is None`; post-wait re-check sees the fresh success). The
+step-items refactor will close all three by moving the mutators inside
+the inflight session.
 
 ## Submitit interaction
 

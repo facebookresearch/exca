@@ -359,10 +359,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 raise RuntimeError(f"Executor is None for {self.cluster!r}")
             # avoid processing same files at same time if several jobs overlap
             np.random.shuffle(missing)
-            registry = self._inflight_registry()
-            with inflight.inflight_session(
-                registry, [k for k, _ in missing]
-            ) as claimed_uids:
+            reg = self._inflight_registry()
+            with inflight.inflight_session(reg, [k for k, _ in missing]) as claimed_uids:
                 claimed_set = set(claimed_uids)
                 # Re-check cache after wait: other workers may have completed
                 # items while we were blocked in inflight_session.
@@ -395,11 +393,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                                 use_cache_dict=True,
                             )
                             jobs.append(j)
-                    if registry is not None:
+                    if reg is not None:
                         for chunk, j in zip(uid_item_chunks, jobs):
-                            inflight.record_worker_info(
-                                registry, [uid for uid, _ in chunk], j
-                            )
+                            inflight.record_worker_info(reg, [uid for uid, _ in chunk], j)
                     # pylint: disable=expression-not-assigned
                     uid = self.uid()
                     msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"

@@ -30,6 +30,10 @@ from . import registry
 
 logger = logging.getLogger(__name__)
 
+# Sentinel `job_id` for non-Slurm submitit backends — distinguishes
+# in-progress local work from a not-yet-stamped Slurm claim (job_id IS NULL).
+_LOCAL_JOB_ID = "local"
+
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS inflight (
     item_uid    TEXT PRIMARY KEY,
@@ -39,6 +43,9 @@ CREATE TABLE IF NOT EXISTS inflight (
     claimed_at  REAL NOT NULL
 );
 """
+
+# Column order matches `WorkerInfo._from_row` and the INSERT statement.
+_COLUMNS = ["item_uid", "pid", "job_id", "job_folder", "claimed_at"]
 
 
 @functools.lru_cache(maxsize=1)
@@ -105,11 +112,12 @@ class WorkerInfo:
         Parameters
         ----------
         no_job_timeout:
-            When no Slurm job info is associated with the claim, the
-            only liveness signal is the PID. If ``claimed_at`` is older
-            than this many seconds and no ``job_id`` was ever set, the
-            worker is presumed dead (the claim → update_worker_info
-            window is normally seconds, not minutes).
+            Applies only while ``job_id IS NULL`` (between ``claim`` and
+            ``update_worker_info``). PID is the only liveness signal in
+            that window; if ``claimed_at`` is older than this many
+            seconds, the worker is presumed dead (the window is normally
+            seconds, not minutes). ``_LOCAL_JOB_ID`` and Slurm ``job_id``
+            both bypass the timeout — they have stronger liveness signals.
         """
         job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
         if job is not None:
@@ -182,12 +190,9 @@ class InflightRegistry(registry.AdvisoryRegistry):
         def _do(conn: sqlite3.Connection) -> list[str]:
             now = time.time()
             conn.execute("BEGIN IMMEDIATE")
-            placeholders = ",".join("?" for _ in item_uids)
-            rows = conn.execute(
-                f"SELECT item_uid, pid, job_id, job_folder, claimed_at FROM inflight "
-                f"WHERE item_uid IN ({placeholders})",
-                item_uids,
-            ).fetchall()
+            rows = registry.select_in_chunks(
+                conn, "inflight", _COLUMNS, "item_uid", item_uids
+            )
             fresh = dict(WorkerInfo._from_row(r) for r in rows)
             pre_owned: list[str] = []
             to_insert: list[str] = []
@@ -254,16 +259,16 @@ class InflightRegistry(registry.AdvisoryRegistry):
     def get(self, item_uids: list[str] | None = None) -> dict[str, WorkerInfo]:
         """Return claimed items with their worker info."""
 
-        cols = ["item_uid", "pid", "job_id", "job_folder", "claimed_at"]
-
         def _do(conn: sqlite3.Connection) -> dict[str, WorkerInfo]:
             if item_uids is None:
-                rows = conn.execute(f"SELECT {', '.join(cols)} FROM inflight").fetchall()
+                rows = conn.execute(
+                    f"SELECT {', '.join(_COLUMNS)} FROM inflight"
+                ).fetchall()
             elif not item_uids:
                 return {}
             else:
                 rows = registry.select_in_chunks(
-                    conn, "inflight", cols, "item_uid", item_uids
+                    conn, "inflight", _COLUMNS, "item_uid", item_uids
                 )
             return dict(WorkerInfo._from_row(r) for r in rows)
 
@@ -348,9 +353,6 @@ class InflightRegistry(registry.AdvisoryRegistry):
                 interval = min(interval * 2, 30.0)
 
         return reclaimed
-
-
-_LOCAL_JOB_ID = "local"
 
 
 @contextlib.contextmanager

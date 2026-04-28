@@ -72,13 +72,13 @@ Frozen so it can be used as a dict key for grouping liveness checks in `claim()`
 
 Two strategies based on what's available:
 
-- **Slurm** (`job_id IS NOT NULL`): reconstruct `submitit.SlurmJob(job_id=job_id,
-  folder=job_folder)`, call `.done()`. submitit handles `sacct` throttling internally.
-  Only recorded for actual Slurm jobs — `DebugExecutor` and `LocalExecutor` jobs
-  are excluded to prevent incorrect Slurm liveness checks on non-Slurm jobs.
-- **Local / pools** (`job_id IS NULL`): `os.kill(pid, 0)` — signal 0 checks process
-  existence without killing it. Works for submitit `LocalExecutor` (subprocess),
-  `ProcessPoolExecutor`, and `ThreadPoolExecutor` (all same-host, PID = parent process).
+- **Slurm** (`job_id` is a real Slurm id): reconstruct
+  `submitit.SlurmJob(job_id=job_id, folder=job_folder)`, call `.done()`. submitit
+  handles `sacct` throttling internally.
+- **Local / pools** (`job_id == _LOCAL_JOB_ID`, or `NULL` briefly between claim
+  and `record_worker_info`): `os.kill(pid, 0)`. Works for `LocalExecutor`,
+  `DebugExecutor`, `ProcessPoolExecutor`, `ThreadPoolExecutor` (all same-host).
+  The `no_job_timeout` fallback applies only while `job_id IS NULL`.
 
 ## Core Flow
 
@@ -157,8 +157,8 @@ class InflightRegistry:
     def update_worker_info(self, item_uids: list[str], *,
                            job_id: str | None = None,
                            job_folder: str | None = None) -> None:
-        """Update job_id/job_folder for already-claimed items.
-        Called after submission, when the Slurm job ID is known."""
+        """Update job_id/job_folder for already-claimed items. Internal
+        primitive; callers normally use ``record_worker_info`` instead."""
 
     def release(self, item_uids: list[str]) -> None:
         """Remove items from the registry (done or failed)."""
@@ -171,6 +171,15 @@ class InflightRegistry:
         Reclaims items from dead workers and returns their uids."""
 
     def close(self) -> None: ...
+
+
+def record_worker_info(
+    reg: InflightRegistry, item_uids: list[str], job: submitit.Job,
+) -> None:
+    """Stamp a submitit *job*'s worker info on *item_uids*. Slurm jobs
+    get job_id + folder; other backends get the local sentinel
+    (``_LOCAL_JOB_ID``) so liveness can distinguish them from the
+    pre-update_worker_info window where ``job_id IS NULL``."""
 ```
 
 ### inflight_session() context manager
@@ -178,13 +187,18 @@ class InflightRegistry:
 ```python
 @contextlib.contextmanager
 def inflight_session(
-    registry: InflightRegistry | None,
+    reg: InflightRegistry | None,
     item_uids: list[str],
+    *,
+    local: bool = False,
 ) -> tp.Iterator[list[str]]:
     """Wait → claim → yield claimed → release + close.
-    When registry is None, yields all item_uids (no-op).
+    When reg is None, yields all item_uids (no-op).
+    With local=True, marks claims with _LOCAL_JOB_ID so wait_for_inflight
+    can tell "local work in progress" from "Slurm submission whose
+    update_worker_info hasn't landed yet".
     The registry connection is closed on exit; callers must call
-    update_worker_info() inside the with block."""
+    record_worker_info() inside the with block."""
 ```
 
 ## Integration Points
@@ -194,8 +208,8 @@ def inflight_session(
 - `_method_override()`: wraps the submit+wait block in `inflight_session`.
 - After the session wait, re-checks `cache_dict` to skip items completed by others
   during the wait (avoids needless re-submission).
-- After `executor.submit()`: `registry.update_worker_info()` per chunk, but only
-  for actual Slurm jobs (`isinstance(j, submitit.SlurmJob)`).
+- After `executor.submit()`: `inflight.record_worker_info(reg, uids, j)` per chunk
+  (Slurm jobs get job_id + folder; other backends get `_LOCAL_JOB_ID`).
 - Release happens in `inflight_session`'s finally block.
 
 ### MapInfra (pool path: threadpool / processpool)
@@ -206,9 +220,10 @@ def inflight_session(
 ### Steps Backend
 
 - `Backend.run()`: wraps compute in `inflight_session` with single-item granularity.
-- Registry is only created for non-inline backends (`type(self) is not Cached`).
-- After `_submit()`: `registry.update_worker_info()` for Slurm jobs only
-  (`isinstance(job, submitit.SlurmJob)`).
+- Registry is only created for backends with `_REQUIRES_INFLIGHT = True`
+  (defaults to True; `Cached` overrides to False — inline work needs no claim).
+- After `_submit()`: `inflight.record_worker_info(reg, [uid], job)` (handles
+  Slurm vs non-Slurm internally).
 
 ## All-or-Nothing Claim
 

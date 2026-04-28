@@ -196,6 +196,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _exclude_from_cls_uid(cls) -> list[str]:
         return ["."]  # force ignored in uid
 
+    # Read by `run` dispatch. False on inline backends (no concurrent
+    # worker can observe or claim a same-process call).
+    _REQUIRES_INFLIGHT: tp.ClassVar[bool] = True
+
     folder: Path | None = None
     # deprecated: declare `CACHE_TYPE` on the Step subclass instead.
     cache_type: str | None = None
@@ -411,7 +415,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     f"No cache in read-only mode: {self.paths.step_uid}[{self.paths.item_uid}]"
                 )
             return self._load_cache()  # Raises if error
-        # `retry` only retries errors → success short-circuits like `cached`.
         if status == "success" and self.mode != "force":
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
             return self._load_cache()
@@ -456,15 +459,15 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         if job is None:
             item_uid = self.paths.item_uid
-            registry: inflight.InflightRegistry | None = None
-            if type(self) is not Cached:
-                registry = inflight.InflightRegistry(self.paths.cache_folder)
-            with inflight.inflight_session(registry, [item_uid]) as claimed:
+            reg: inflight.InflightRegistry | None = None
+            if self._REQUIRES_INFLIGHT:
+                reg = inflight.InflightRegistry(self.paths.cache_folder)
+            with inflight.inflight_session(reg, [item_uid]) as claimed:
                 if claimed and self._cache_status() is None:
                     wrapper = _CachingCall(func, self.paths, self._effective_cache_type())
                     job = self._submit(wrapper, *args)
-                    if registry is not None:
-                        inflight.record_worker_info(registry, [item_uid], job)
+                    if reg is not None:
+                        inflight.record_worker_info(reg, [item_uid], job)
                     job.result()
             return self._load_cache()
 
@@ -486,6 +489,8 @@ class _InlineJob:
 
 class Cached(Backend):
     """Inline execution + caching."""
+
+    _REQUIRES_INFLIGHT: tp.ClassVar[bool] = False
 
 
 class _SubmititBackend(Backend):

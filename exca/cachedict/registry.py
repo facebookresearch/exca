@@ -168,36 +168,38 @@ class AdvisoryRegistry:
         for attempt in range(3):
             try:
                 return fn(conn)
-            except sqlite3.OperationalError as e:
-                msg = str(e).lower()
-                if "locked" in msg or "busy" in msg:
-                    # Rollback any aborted BEGIN IMMEDIATE; no-op otherwise.
-                    try:
-                        conn.execute("ROLLBACK")
-                    except Exception:
-                        pass
-                    if attempt < 2:
-                        delay = random.uniform(0, attempt + 1)
-                        logger.debug(
-                            "%s registry %s: lock contention, retry %d in %.1fs",
+            except Exception as e:
+                # Always clear any aborted BEGIN IMMEDIATE so the cached
+                # connection isn't poisoned for subsequent ops (no-op when
+                # there's no open transaction).
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                if isinstance(e, sqlite3.OperationalError):
+                    msg = str(e).lower()
+                    if "locked" in msg or "busy" in msg:
+                        if attempt < 2:
+                            delay = random.uniform(0, attempt + 1)
+                            logger.debug(
+                                "%s registry %s: lock contention, retry %d in %.1fs",
+                                self._LABEL,
+                                op_name,
+                                attempt + 1,
+                                delay,
+                            )
+                            time.sleep(delay)
+                            continue
+                        logger.warning(
+                            "%s registry %s: lock contention exhausted, skipping",
                             self._LABEL,
                             op_name,
-                            attempt + 1,
-                            delay,
                         )
-                        time.sleep(delay)
-                        continue
-                    logger.warning(
-                        "%s registry %s: lock contention exhausted, skipping",
-                        self._LABEL,
-                        op_name,
-                    )
+                        return fallback
+                    if any(h in msg for h in _CORRUPTION_HINTS):
+                        break
+                    logger.warning("%s registry %s: %s", self._LABEL, op_name, e)
                     return fallback
-                if any(h in msg for h in _CORRUPTION_HINTS):
-                    break
-                logger.warning("%s registry %s: %s", self._LABEL, op_name, e)
-                return fallback
-            except Exception:
                 logger.warning(
                     "%s registry %s failed",
                     self._LABEL,

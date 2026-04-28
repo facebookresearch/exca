@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import pytest
+import submitit
 
 from . import inflight, registry
 
@@ -255,3 +256,19 @@ def test_inflight_session_retries_lost_claim(
     with inflight.inflight_session(reg, ["x"]) as claimed:
         assert claimed == ["x"]
     assert wait_calls >= 2, f"expected retry, got {wait_calls} wait calls"
+
+
+def test_record_worker_info_dispatch(tmp_path: Path) -> None:
+    """Slurm jobs stamp job_id+folder; non-Slurm get the local sentinel."""
+    slurm = submitit.SlurmJob[None](folder=tmp_path, job_id="42")
+    local = submitit.LocalJob[None](folder=tmp_path, job_id="ignored")
+
+    reg = inflight.InflightRegistry(tmp_path)
+    reg.claim(["s", "l"])
+    inflight.record_worker_info(reg, ["s"], slurm)
+    inflight.record_worker_info(reg, ["l"], local)
+
+    info = reg.get(["s", "l"])
+    assert (info["s"].job_id, info["s"].job_folder) == ("42", str(slurm.paths.folder))
+    assert (info["l"].job_id, info["l"].job_folder) == (inflight._LOCAL_JOB_ID, None)
+    reg.close()

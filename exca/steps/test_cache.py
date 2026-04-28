@@ -144,6 +144,28 @@ def test_mode_readonly(tmp_path: Path) -> None:
     assert chain.run() == out1
 
 
+def test_mode_retry_short_circuits_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """retry+success returns the cached value without re-running _run
+    (only retry+error should recompute)."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.RandomGenerator(infra=infra)
+    out = step.run()  # populate cache
+
+    calls = {"n": 0}
+    original = conftest.RandomGenerator._run
+
+    def counted(self: conftest.RandomGenerator) -> float:
+        calls["n"] += 1
+        return original(self)
+
+    monkeypatch.setattr(conftest.RandomGenerator, "_run", counted)
+    step.infra.mode = "retry"  # type: ignore
+    assert step.run() == out
+    assert calls["n"] == 0
+
+
 @pytest.mark.parametrize("chain", [True, False])
 def test_mode_force(tmp_path: Path, chain: bool) -> None:
     """Force recomputes once, then uses cache."""
