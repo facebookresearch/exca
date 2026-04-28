@@ -20,9 +20,9 @@ How a step's results, errors, and in-flight state are stored and how
 ```
 
 CacheDict holds successful values; `error.pkl` holds the failed
-exception (with `__notes__`). The two registries are **advisory**
-indices over what's already on disk — corruption or loss degrades to
-"no coordination" / "no fast lookup", never wrong results.
+exception (with `__notes__`). `inflight.db` and `errors.db` are
+**advisory** indices over what's already on disk — corruption or loss
+degrades to "no coordination" / "no fast lookup", never wrong results.
 
 ## Cache modes (`Backend.mode`)
 
