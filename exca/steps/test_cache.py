@@ -396,27 +396,22 @@ def test_keep_in_ram(tmp_path: Path) -> None:
 
 
 def test_cd_shared_via_registry(tmp_path: Path) -> None:
-    """Backends sharing a `(folder, keep_in_ram, cache_type)` see the
-    same CacheDict via `_CD_REGISTRY` — across `with_input`, deepcopy,
-    and a freshly-constructed peer. Same-process unpickle also lands on
-    the shared handle (the registry is process-local; cross-process RAM
-    isolation is enforced by `CacheDict.__reduce__`)."""
+    """Backends with matching `(folder, keep_in_ram, cache_type)` share
+    one CacheDict via `_CD_REGISTRY`; a differing key does not."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
     step = conftest.Add(value=10, randomize=True, infra=infra)
     step.run()
-    assert step.infra is not None
-    cd = step.infra._cache_dict()
-
-    assert copy.deepcopy(step).infra._cache_dict() is cd  # type: ignore[union-attr]
-    inner = step.with_input()
-    assert inner.infra is not None and inner.infra._cache_dict() is cd
-    peer = conftest.Add(value=10, randomize=True, infra=infra).with_input()
-    assert peer.infra is not None and peer.infra._cache_dict() is cd
-    revived = pickle.loads(pickle.dumps(step))
-    assert revived.infra is not None and revived.infra._cache_dict() is cd
-
-    # key tuple contract: differing keep_in_ram or cache_type → different handles
-    no_ram = conftest.Add(value=10, randomize=True, infra={**infra, "keep_in_ram": False})
+    cd = step.infra._cache_dict()  # type: ignore[union-attr]
+    peers = [
+        copy.deepcopy(step),
+        step.with_input(),
+        conftest.Add(value=10, randomize=True, infra=infra).with_input(),
+        pickle.loads(pickle.dumps(step)),
+    ]
+    for p in peers:
+        assert p.infra._cache_dict() is cd  # type: ignore[union-attr]
+    no_ram_infra: tp.Any = {**infra, "keep_in_ram": False}
+    no_ram = conftest.Add(value=10, randomize=True, infra=no_ram_infra)
     assert no_ram.with_input().infra._cache_dict() is not cd  # type: ignore[union-attr]
 
 
