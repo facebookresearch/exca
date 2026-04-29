@@ -222,6 +222,24 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     assert len(cache) == 3
 
 
+def test_pickle_is_view_only(tmp_path: Path) -> None:
+    """CacheDict pickles as a view: same folder, no RAM payload. Disk
+    contents are visible via the unpickled view (re-read from JSONL)."""
+    import pickle
+
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=True)
+    with cache.write():
+        cache["k"] = 7
+    _ = cache["k"]  # populate _ram_data so the strip is observable
+    assert cache._ram_data
+    revived = pickle.loads(pickle.dumps(cache))
+    assert revived.folder == tmp_path
+    assert not revived._ram_data  # RAM not carried
+    assert revived["k"] == 7  # reads from disk
+    with revived.write():
+        revived["k2"] = 9  # writes work (fresh _local)
+
+
 def test_2_caches(tmp_path: Path) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)

@@ -6,6 +6,8 @@
 
 """Tests for caching behavior (modes, cache paths, intermediate caches)."""
 
+import copy
+import pickle
 import shutil
 import typing as tp
 from pathlib import Path
@@ -391,6 +393,31 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     step.infra.mode = "force"
     out3 = step.run()
     assert out3 != out2
+
+
+def test_cd_shared_via_registry(tmp_path: Path) -> None:
+    """Backends sharing a `(folder, keep_in_ram, cache_type)` see the
+    same CacheDict via `_CD_REGISTRY` — across `with_input`, deepcopy,
+    and a freshly-constructed peer. Same-process unpickle also lands on
+    the shared handle (the registry is process-local; cross-process RAM
+    isolation is enforced by `CacheDict.__reduce__`)."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
+    step = conftest.Add(value=10, randomize=True, infra=infra)
+    step.run()
+    assert step.infra is not None
+    cd = step.infra._cache_dict()
+
+    assert copy.deepcopy(step).infra._cache_dict() is cd  # type: ignore[union-attr]
+    inner = step.with_input()
+    assert inner.infra is not None and inner.infra._cache_dict() is cd
+    peer = conftest.Add(value=10, randomize=True, infra=infra).with_input()
+    assert peer.infra is not None and peer.infra._cache_dict() is cd
+    revived = pickle.loads(pickle.dumps(step))
+    assert revived.infra is not None and revived.infra._cache_dict() is cd
+
+    # key tuple contract: differing keep_in_ram or cache_type → different handles
+    no_ram = conftest.Add(value=10, randomize=True, infra={**infra, "keep_in_ram": False})
+    assert no_ram.with_input().infra._cache_dict() is not cd  # type: ignore[union-attr]
 
 
 # =============================================================================

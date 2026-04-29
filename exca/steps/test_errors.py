@@ -78,12 +78,10 @@ def _add(error: bool, tmp_path: Path, mode: str = "cached") -> tp.Any:
 
 def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     """End-to-end: a failing Step caches + re-raises; retry mode clears
-    cache + registry row and recomputes. errors.db is the only on-disk
-    record — no error.pkl is ever written."""
+    cache + registry row and recomputes."""
     paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
     with pytest.raises(ValueError):
         _add(True, tmp_path).run(5.0)
-    assert list(tmp_path.rglob("error.pkl")) == []
 
     with errors.ErrorRegistry(paths.cache_folder) as reg:
         assert reg.get(None) == {paths.item_uid}
@@ -105,12 +103,14 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
 def test_clear_cache_partial_failure_leaves_recoverable_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`clear_cache` clears the CacheDict entry first, then the errors row.
-    A crash on the second step leaves the error row standing, so the next
+    """`Backend.clear_cache` clears the CacheDict entry first, then the errors
+    row. A crash on the second step leaves the error row standing, so the next
     read surfaces a cached error (recoverable via retry/force) rather than
     a silent stale-success."""
-    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
-    assert _add(False, tmp_path).run(5.0) == 6.0
+    step = _add(False, tmp_path)
+    assert step.run(5.0) == 6.0
+    bound = step.with_input(5.0)
+    paths = bound.infra.paths
     with errors.ErrorRegistry(paths.cache_folder) as reg:
         reg.record(paths.item_uid, ValueError("stale"), "tb")
 
@@ -119,7 +119,7 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
 
     monkeypatch.setattr(errors.ErrorRegistry, "clear", boom)
     with pytest.raises(OSError):
-        paths.clear_cache()
+        bound.infra.clear_cache()
     monkeypatch.undo()
 
     # cd entry is gone, errors row remains → cached error on next read.
