@@ -63,6 +63,16 @@ def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
             _set_mode_recursive(step._step_sequence(), mode)
 
 
+def _dispatch(step: "Step", args: tuple[tp.Any, ...]) -> tp.Any:
+    """Dispatch ``step._run`` through ``step.infra.run`` when present.
+
+    Used by ``Step.run``, ``Chain._run`` (per-child), and ``Chain.run``.
+    """
+    if step.infra is None:
+        return step._run(*args)
+    return step.infra.run(step._run, *args)
+
+
 @pydantic.model_validator(mode="before")
 def _infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
     """Convert backend instances to dicts to prevent sharing."""
@@ -253,10 +263,7 @@ class Step(exca.helpers.DiscriminatedModel):
         step = self.with_input(value) if self._previous is None else self
         args = step._input_args()
         try:
-            if step.infra is None:
-                result = step._run(*args)
-            else:
-                result = step.infra.run(step._run, *args)
+            result = _dispatch(step, args)
         except Exception as e:
             e.add_note(f"  -> in {step!r}")
             raise
@@ -472,10 +479,7 @@ class Chain(Step):
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i, total, step_name)
             try:
-                if step.infra is not None:
-                    args = (step.infra.run(step._run, *args),)
-                else:
-                    args = (step._run(*args),)
+                args = (_dispatch(step, args),)
             except Exception as e:
                 e.add_note(f"  -> while running step {i}/{total}: {step_name}")
                 raise
