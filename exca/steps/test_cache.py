@@ -43,9 +43,10 @@ def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
     result1 = step.run(*args)
     assert step.with_input(*args).has_cache()
 
-    # Same result from cache
+    # Same result from cache (both via run() and via cached_result())
     result2 = step.run(*args)
     assert result1 == result2
+    assert step.with_input(*args).infra.cached_result() == result1  # type: ignore[union-attr]
 
     # Clear and recompute gives different result
     step.with_input(*args).clear_cache()

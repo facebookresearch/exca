@@ -54,6 +54,17 @@ def _resolve_all(steps: tp.Iterable["Step"]) -> list["Step"]:
     return resolved
 
 
+def _flatten_levels(steps: tp.Sequence["Step"]) -> list["Step"]:
+    """Chains without infra dissolve into children; chains with infra stay as one level."""
+    out: list[Step] = []
+    for s in steps:
+        if isinstance(s, Chain) and s.infra is None:
+            out.extend(_flatten_levels(s._step_sequence()))
+        else:
+            out.append(s)
+    return out
+
+
 def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
     """Recursively set mode on steps and all nested chain steps."""
     for step in steps:
@@ -61,6 +72,16 @@ def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
             object.__setattr__(step.infra, "mode", mode)
         if isinstance(step, Chain):
             _set_mode_recursive(step._step_sequence(), mode)
+
+
+def _dispatch(step: "Step", args: tuple[tp.Any, ...]) -> tp.Any:
+    """Dispatch ``step._run`` through ``step.infra.run`` when present.
+
+    Used by ``Step.run`` and ``Chain._run`` (per-child).
+    """
+    if step.infra is None:
+        return step._run(*args)
+    return step.infra.run(step._run, *args)
 
 
 @pydantic.model_validator(mode="before")
@@ -253,10 +274,7 @@ class Step(exca.helpers.DiscriminatedModel):
         step = self.with_input(value) if self._previous is None else self
         args = step._input_args()
         try:
-            if step.infra is None:
-                result = step._run(*args)
-            else:
-                result = step.infra.run(step._run, *args)
+            result = _dispatch(step, args)
         except Exception as e:
             e.add_note(f"  -> in {step!r}")
             raise
@@ -369,6 +387,18 @@ class Chain(Step):
         super().model_post_init(__context)
         if not self.steps:
             raise ValueError("steps cannot be empty")
+        # Off-process dispatch needs a cached upstream — see error below.
+        levels = _flatten_levels(self._step_sequence())
+        for prev, nxt in zip(levels, levels[1:]):
+            if nxt.infra is None or not nxt.infra._is_off_process:
+                continue
+            if prev.infra is None:
+                raise ValueError(
+                    f"{type(nxt).__name__} dispatches off-process via "
+                    f"{type(nxt.infra).__name__} but its upstream {prev!r} "
+                    f"has no cache. Set its infra = Cached(folder=...) to "
+                    f"avoid pickling values through submitit."
+                )
 
     def _step_sequence(self) -> tuple[Step, ...]:
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
@@ -472,10 +502,7 @@ class Chain(Step):
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i, total, step_name)
             try:
-                if step.infra is not None:
-                    args = (step.infra.run(step._run, *args),)
-                else:
-                    args = (step._run(*args),)
+                args = (_dispatch(step, args),)
             except Exception as e:
                 e.add_note(f"  -> while running step {i}/{total}: {step_name}")
                 raise

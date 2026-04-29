@@ -200,6 +200,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # worker can observe or claim a same-process call).
     _REQUIRES_INFLIGHT: tp.ClassVar[bool] = True
 
+    # Read by `Chain.model_post_init` to require a cached upstream when True.
+    _is_off_process: tp.ClassVar[bool] = False
+
     folder: Path | None = None
     # deprecated: declare `CACHE_TYPE` on the Step subclass instead.
     cache_type: str | None = None
@@ -496,6 +499,9 @@ class Cached(Backend):
 class _SubmititBackend(Backend):
     """Base for submitit backends."""
 
+    # Submitit cloud-pickles inputs to a worker (`SubmititDebug` overrides: inline).
+    _is_off_process: tp.ClassVar[bool] = True
+
     job_name: str | None = None
     timeout_min: int | None = None
     nodes: int | None = None
@@ -544,6 +550,7 @@ class SubmititDebug(_SubmititBackend):
     """Debug executor (inline but simulates submitit)."""
 
     _CLUSTER: tp.ClassVar[str | None] = "debug"
+    _is_off_process: tp.ClassVar[bool] = False
 
 
 class Slurm(_SubmititBackend):
