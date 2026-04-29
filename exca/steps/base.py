@@ -566,8 +566,8 @@ class Chain(Step):
     def clear_cache(self, recursive: bool = True) -> None:
         """Clear cache, optionally including sub-steps."""
         if recursive:
-            # `with_input` wires sub-step `_previous` so `paths` resolves;
-            # the registry shares the CacheDict handle, no rewire needed.
+            # `with_input` only wires sub-step `_previous` so `paths` resolves;
+            # the CacheDict is shared via `_CD_REGISTRY`, no handle rewire.
             bound = self.with_input() if self._previous is None else self
             for sub in bound._step_sequence():
                 sub.clear_cache()

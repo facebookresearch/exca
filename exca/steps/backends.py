@@ -376,14 +376,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return self._cache_status().load()
 
     def clear_cache(self) -> None:
-        """Delete cached result (disk + RAM) and any errored row.
-
-        Order matters: drop the success entry first, then the error row.
-        A partial mid-clear failure (CacheDict gone, errors row still
-        there) surfaces as a recoverable cached error rather than a silent
-        stale-success — fail closed, not open."""
+        """Delete cached result (disk + RAM) and any errored row."""
         uid = self.paths.item_uid
-        cd = self._cache_dict()  # registry-shared handle
+        cd = self._cache_dict()
+        # Order: success entry first, then error row. A partial mid-clear
+        # (success gone, error still there) surfaces as a recoverable cached
+        # error rather than a silent stale-success — fail closed, not open.
         if uid in cd:
             del cd[uid]
         if self.paths.cache_folder.exists():
@@ -401,10 +399,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return None
 
     def _cache_status(self) -> _CacheStatus:
-        """Look up cache state. CacheDict-first (a success is the most
-        recent event for the uid); if absent, the exception (if any) is
-        fetched from `errors.db` in the same call so the error path is a
-        single SELECT."""
+        """Cache state. CacheDict first (success is the most recent event);
+        on miss, any error is fetched from `errors.db` in the same call —
+        single SELECT on the error path."""
         if not self.paths.cache_folder.exists():
             return _CacheStatus(None, self)
         if self.paths.item_uid in self._cache_dict():

@@ -4,17 +4,9 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Advisory SQLite registry of failed cache items: stores the pickled
-exception (BLOB) and formatted traceback (TEXT) for each errored uid.
-
-The BLOB carries the live exception (with ``__notes__`` set by the
-writer); reading is a single ``pickle.loads`` whenever it succeeds. The
-TEXT is a degraded fallback: writer substitutes
-``pickle.dumps(RuntimeError(text))`` if the live exception isn't
-picklable (e.g. locally-defined class), and the reader does the same if
-``pickle.loads`` fails in this process (e.g. exception class missing
-cross-venv).
-"""
+"""Advisory SQLite registry of failed cache items: pickled exception
+(BLOB) + formatted traceback (TEXT) per errored uid. See
+``docs/internal/steps/caching.md`` for the BLOB/TEXT contract."""
 
 import logging
 import pickle
@@ -45,8 +37,7 @@ class ErrorRegistry(registry.AdvisoryRegistry):
         self, item_uid: str, exception: BaseException, traceback_text: str
     ) -> None:
         """Store ``(exception, traceback_text)`` for *item_uid*, replacing
-        any prior row. Single-uid signature: writers know exactly which
-        item failed, while readers / cleaners (``get`` / ``clear``) batch."""
+        any prior row. Per-uid; ``get`` / ``clear`` batch."""
         try:
             blob = pickle.dumps(exception)
         except Exception:
