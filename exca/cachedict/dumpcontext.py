@@ -114,13 +114,10 @@ class DumpContext:
     DATA_DIR = "data"
     INFO_SUFFIX = "-info.jsonl"
 
-    def __init__(
-        self, folder: str | Path, *, key: str = "", permissions: int | None = None
-    ) -> None:
+    def __init__(self, folder: str | Path, *, key: str = "") -> None:
         self.folder = Path(folder)
         self.key = key
         self.level: int = -1
-        self.permissions = permissions
         self.options = DumpOptions()
         # write state
         self._thread_id = threading.get_native_id()
@@ -200,15 +197,6 @@ class DumpContext:
         return self
 
     def __exit__(self, *exc: tp.Any) -> None:
-        if self.permissions is not None:
-            for fp in self._created_files:
-                try:
-                    fp.chmod(self.permissions)
-                    if fp.is_dir():
-                        for child in fp.rglob("*"):
-                            child.chmod(self.permissions)
-                except Exception:
-                    logger.warning("Failed to set permissions on %s", fp, exc_info=True)
         if self._stack is None:
             raise RuntimeError("DumpContext.__exit__ called without __enter__")
         try:
@@ -218,7 +206,8 @@ class DumpContext:
             self._created_files.clear()
 
     def _ensure_parent(self, path: Path) -> None:
-        """Create parent directories and track them for permission setting."""
+        """Create the parent directory and track it so :meth:`key_path` can
+        detect same-context filename collisions via ``_created_files``."""
         parent = path.parent
         if parent != self.folder and not parent.exists():
             parent.mkdir(parents=True, exist_ok=True)

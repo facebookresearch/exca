@@ -20,7 +20,7 @@ import pydantic
 import submitit
 from submitit.core import utils as submitit_utils
 
-from . import base
+from . import base, utils
 from .workdir import WorkDir
 
 submitit.Job._results_timeout_s = 4  # avoid too long a wait
@@ -237,6 +237,9 @@ class SubmititMixin(pydantic.BaseModel):
                     submitit_utils.cloudpickle_dump = base_dump
 
     def _run_method(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
+        # Worker entry for TaskInfra: re-apply umask after exca import in case
+        # unrelated code reset it between import and dispatch.
+        utils.apply_default_umask()
         if not isinstance(self, base.BaseInfra):
             raise RuntimeError("This can only run on BaseInfra subclasses")
         if self.workdir is not None:

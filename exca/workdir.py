@@ -18,6 +18,8 @@ from pathlib import Path
 import pydantic
 import yaml as _yaml
 
+from . import utils
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,6 +152,8 @@ class WorkDir(pydantic.BaseModel):
                 else:
                     out.parent.mkdir(exist_ok=True, parents=True)
                     shutil.copyfile(path, out, follow_symlinks=True)
+                # copytree/copyfile preserve source mode regardless of umask
+                utils.fix_permissions(out, recursive=True)
                 logger.info("Copied %s to %s", path, out)
         if self._commits:
             string: str = _yaml.safe_dump(self._commits)

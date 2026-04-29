@@ -581,3 +581,164 @@ def test_short_item_uid_idempotent(length: int) -> None:
     short = ShortItemUid(str, 256)
     once = short("a" * length)
     assert short(once) == once
+
+
+# -----------------------------------------------------------------------------
+# umask helpers
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("0", 0),
+        ("002", 0o002),
+        ("022", 0o022),
+        ("0o022", 0o022),
+        ("0O022", 0o022),
+        ("22", 0o022),
+        ("777", 0o777),
+    ],
+)
+def test_read_umask_env(monkeypatch: pytest.MonkeyPatch, raw: str, expected: int) -> None:
+    monkeypatch.setenv("EXCA_UMASK", raw)
+    assert utils._read_umask_env() == expected
+
+
+def test_read_umask_env_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EXCA_UMASK", raising=False)
+    assert utils._read_umask_env() is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",  # empty string
+        "abc",  # not numeric
+        "0o9",  # invalid octal digit
+        "0o",  # prefix only
+        "9",  # invalid octal digit
+        "0xff",  # hex
+        "-1",  # negative (out of range)
+        "1000",  # 0o1000 = 512, above 0o777
+    ],
+)
+def test_read_umask_env_invalid(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setenv("EXCA_UMASK", raw)
+    with pytest.raises(ValueError, match="EXCA_UMASK"):
+        utils._read_umask_env()
+
+
+def test_apply_default_umask_noop_when_unset(umask_guard: None) -> None:
+    """When _DEFAULT_UMASK is None, apply_default_umask must not touch os.umask."""
+    utils.set_default_umask(None)
+    before = os.umask(0o123)
+    os.umask(before)
+    utils.apply_default_umask()
+    assert os.umask(0) == before
+    os.umask(before)
+
+
+def test_fix_permissions_noop_when_unset(tmp_path: Path, umask_guard: None) -> None:
+    """fix_permissions is a no-op when EXCA_UMASK was not set."""
+    utils.set_default_umask(None)
+    fp = tmp_path / "f.txt"
+    fp.write_text("x")
+    fp.chmod(0o600)
+    utils.fix_permissions(fp)
+    assert oct(fp.stat().st_mode)[-3:] == "600"
+
+
+def test_fix_permissions_warns_on_missing(
+    tmp_path: Path, umask_guard: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A missing path is a programming error: log a warning, don't raise."""
+    utils.set_default_umask(0o022)
+    with caplog.at_level("WARNING", logger="exca.utils"):
+        utils.fix_permissions(tmp_path / "does-not-exist")
+    assert any("Failed to widen permissions" in r.message for r in caplog.records)
+
+
+def test_fix_permissions_recursive(tmp_path: Path, umask_guard: None) -> None:
+    """Recursive widen distinguishes dir mode (0o755) from file mode (0o644)."""
+    utils.set_default_umask(0o022)
+    sub = tmp_path / "sub" / "deep"
+    sub.mkdir(parents=True)
+    fp = sub / "f.txt"
+    fp.write_text("x")
+    # simulate a teammate's restrictive pre-existing tree
+    fp.chmod(0o600)
+    sub.chmod(0o700)
+    (tmp_path / "sub").chmod(0o700)
+    utils.fix_permissions(tmp_path / "sub", recursive=True)
+    assert oct((tmp_path / "sub").stat().st_mode)[-3:] == "755"
+    assert oct(sub.stat().st_mode)[-3:] == "755"
+    assert oct(fp.stat().st_mode)[-3:] == "644"
+
+
+def test_fix_permissions_up_to(tmp_path: Path, umask_guard: None) -> None:
+    """Widen leaf and every ancestor up to (not including) root."""
+    utils.set_default_umask(0o022)
+    leaf = tmp_path / "logs" / "alice" / "%j"
+    leaf.mkdir(parents=True)
+    # restrict every dir between tmp_path and leaf, plus tmp_path itself
+    for d in (tmp_path / "logs", tmp_path / "logs" / "alice", leaf):
+        d.chmod(0o700)
+    tmp_path.chmod(0o700)
+    utils.fix_permissions_up_to(leaf, tmp_path)
+    assert oct(leaf.stat().st_mode)[-3:] == "755"
+    assert oct((tmp_path / "logs" / "alice").stat().st_mode)[-3:] == "755"
+    assert oct((tmp_path / "logs").stat().st_mode)[-3:] == "755"
+    # root itself is the boundary — must NOT be widened
+    assert oct(tmp_path.stat().st_mode)[-3:] == "700"
+
+
+def test_fix_permissions_up_to_bails_when_not_under_root(
+    tmp_path: Path, umask_guard: None
+) -> None:
+    """If leaf is not under root, no walk happens (no filesystem-root climb)."""
+    utils.set_default_umask(0o022)
+    other = tmp_path / "other"
+    other.mkdir()
+    other.chmod(0o700)
+    utils.fix_permissions_up_to(other, tmp_path / "missing")
+    assert oct(other.stat().st_mode)[-3:] == "700"
+
+
+def test_fix_permissions_up_to_leaf_equals_root(
+    tmp_path: Path, umask_guard: None
+) -> None:
+    """When leaf == root the walk is empty: nothing widened, including root."""
+    utils.set_default_umask(0o022)
+    tmp_path.chmod(0o700)
+    utils.fix_permissions_up_to(tmp_path, tmp_path)
+    assert oct(tmp_path.stat().st_mode)[-3:] == "700"
+
+
+def test_fix_permissions_up_to_noop_when_unset(tmp_path: Path, umask_guard: None) -> None:
+    """When EXCA_UMASK was not set, the helper is a pure no-op."""
+    utils.set_default_umask(None)
+    leaf = tmp_path / "a" / "b"
+    leaf.mkdir(parents=True)
+    for d in (tmp_path / "a", leaf):
+        d.chmod(0o700)
+    utils.fix_permissions_up_to(leaf, tmp_path)
+    assert oct((tmp_path / "a").stat().st_mode)[-3:] == "700"
+    assert oct(leaf.stat().st_mode)[-3:] == "700"
+
+
+def test_fix_permissions_up_to_normalizes_relative(
+    tmp_path: Path, umask_guard: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Relative leaf/root must be normalised — submitit absolute-resolves
+    its folder, so the chain check would otherwise silently bail."""
+    utils.set_default_umask(0o022)
+    monkeypatch.chdir(tmp_path)
+    leaf = Path("logs") / "deep"
+    leaf.mkdir(parents=True)
+    (tmp_path / "logs").chmod(0o700)
+    leaf.chmod(0o700)
+    # leaf is relative, root is absolute (the TaskInfra failure shape)
+    utils.fix_permissions_up_to(leaf, tmp_path)
+    assert oct((tmp_path / "logs").stat().st_mode)[-3:] == "755"
+    assert oct((tmp_path / "logs" / "deep").stat().st_mode)[-3:] == "755"

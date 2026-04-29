@@ -32,6 +32,117 @@ logger = logging.getLogger(__name__)
 DISCRIMINATOR_FIELD = "#infra#pydantic#discriminator"
 T = tp.TypeVar("T", bound=pydantic.BaseModel)
 
+# -----------------------------------------------------------------------------
+# Permissions / umask
+#
+# exca uses a process-wide umask (configured via the EXCA_UMASK env var) to
+# control file modes for cached artefacts. Helpers below install/re-apply the
+# default and widen pre-existing folders that umask cannot reach.
+#
+# Default is unset: the process inherits its shell umask and fix_permissions is
+# a no-op. Set EXCA_UMASK (e.g. "0o002") to opt into shared-cache modes.
+# -----------------------------------------------------------------------------
+
+# read by apply_default_umask / fix_permissions; written only by set_default_umask
+_DEFAULT_UMASK: int | None = None
+
+
+def _read_umask_env() -> int | None:
+    """Parse ``EXCA_UMASK`` as an octal mask, matching the ``umask`` shell
+    command convention. Accepts ``"022"``, ``"0o022"``, ``"22"`` (all 0o022).
+    Returns None only when ``EXCA_UMASK`` is not set in the environment
+    (caller inherits shell umask). Empty string, non-octal input, and
+    out-of-range values (must be in ``0..0o777``) are rejected loudly —
+    typically a missed quote or shell-script accident."""
+    raw = os.environ.get("EXCA_UMASK")
+    if raw is None:
+        return None
+    s = raw.removeprefix("0o").removeprefix("0O")
+    msg = f"EXCA_UMASK={raw!r} must be an octal mask in 0..0o777 (e.g. '0o022', '022', or '22')"
+    try:
+        val = int(s, 8)
+    except ValueError as e:
+        raise ValueError(msg) from e
+    if not 0 <= val <= 0o777:
+        raise ValueError(msg)
+    return val
+
+
+def set_default_umask(value: int | None) -> None:
+    """Install *value* as the process umask, and cache it for later
+    re-application via :func:`apply_default_umask`. Pass ``None`` to
+    leave the shell umask alone."""
+    global _DEFAULT_UMASK
+    _DEFAULT_UMASK = value
+    if value is not None:
+        os.umask(value)
+
+
+def apply_default_umask() -> None:
+    """Re-install the cached umask. Called at worker entry points so a
+    fresh process re-applies after exca's import-time install (in case
+    unrelated code reset the umask between import and dispatch)."""
+    if _DEFAULT_UMASK is not None:
+        os.umask(_DEFAULT_UMASK)
+
+
+def fix_permissions(path: Path | str, recursive: bool = False) -> None:
+    """Widen *path* to the mode the configured umask permits.
+
+    No-op when ``EXCA_UMASK`` is unset (user opted out of exca managing
+    modes). Use only where umask cannot reach: pre-existing folders,
+    mode-preserving copies (e.g. ``shutil.copytree``). Caller is
+    responsible for *path* existing — missing-path failures are logged
+    as warnings (likely a programming error: caller skipped a mkdir or
+    reordered calls).
+
+    Reads the cached ``_DEFAULT_UMASK`` directly rather than peeking via
+    ``os.umask(0)`` to avoid a process-global race in threaded code.
+    """
+    if _DEFAULT_UMASK is None:
+        return
+    dir_mode = 0o777 & ~_DEFAULT_UMASK
+    file_mode = 0o666 & ~_DEFAULT_UMASK
+    p = Path(path)
+    try:
+        p.chmod(dir_mode if p.is_dir() else file_mode)
+    except Exception:
+        logger.warning("Failed to widen permissions on %s", p, exc_info=True)
+        return
+    if recursive and p.is_dir():
+        for child in p.rglob("*"):
+            try:
+                child.chmod(dir_mode if child.is_dir() else file_mode)
+            except Exception:
+                logger.debug("Failed to widen %s", child, exc_info=True)
+
+
+def fix_permissions_up_to(leaf: Path | str, root: Path | str) -> None:
+    """Widen *leaf* and every ancestor up to (but not including) *root*.
+
+    Used to widen log/cache parent chains created via ``mkdir(parents=True)``,
+    where intermediate dirs may pre-exist with stricter perms from a
+    teammate's earlier run. No-op when ``EXCA_UMASK`` is unset, or when
+    *leaf* is not under *root*. Both arguments are normalised to absolute
+    paths so callers can pass user-provided relative roots safely.
+    """
+    if _DEFAULT_UMASK is None:
+        return
+    # submitit resolves executor.folder to absolute via expanduser/absolute;
+    # mirror that here so a relative self.folder doesn't silently bypass.
+    leaf_p = Path(leaf).expanduser().absolute()
+    root_p = Path(root).expanduser().absolute()
+    if leaf_p != root_p and root_p not in leaf_p.parents:
+        return
+    p = leaf_p
+    while p != root_p:
+        fix_permissions(p)
+        p = p.parent
+
+
+# install at module import: covers controller-side writes
+set_default_umask(_read_umask_env())
+
 
 def _get_uid_info(
     model: pydantic.BaseModel, ignore_discriminator: bool = False

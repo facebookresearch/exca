@@ -14,7 +14,7 @@ import numpy as np
 import pydantic
 import pytest
 
-from . import helpers
+from . import helpers, utils
 from .map import MapInfra, to_chunks
 
 PACKAGE = MapInfra.__module__.split(".", maxsplit=1)[0]
@@ -157,15 +157,15 @@ def test_find_slurm_job(tmp_path: Path) -> None:
     assert job.uid_config == {"param1": 13}
 
 
-def test_map_infra_perm(tmp_path: Path) -> None:
-    whatever = Whatever(infra={"folder": tmp_path, "permissions": 0o777})  # type: ignore
+def test_map_infra_perm(tmp_path: Path, umask_guard: None) -> None:
+    utils.set_default_umask(0)  # widens new+pre-existing folders to 0o777
+    whatever = Whatever(infra={"folder": tmp_path})  # type: ignore
     xpfold = whatever.infra.uid_folder()
     assert xpfold is not None
     xpfold.mkdir(parents=True)
-    before = xpfold.stat().st_mode
+    xpfold.chmod(0o700)  # simulate a teammate's restrictive pre-existing folder
     _ = list(whatever.process([1, 2, 2, 3]))
-    after = xpfold.stat().st_mode
-    assert after > before
+    assert oct(xpfold.stat().st_mode)[-3:] == "777"
 
 
 def test_map_infra_debug(tmp_path: Path) -> None:
