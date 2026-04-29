@@ -11,18 +11,16 @@ How a step's results, errors, and in-flight state are stored and how
 │   ├── *.jsonl              # CacheDict index
 │   ├── *.pkl|*.npy|...      # CacheDict value payloads
 │   ├── inflight.db          # claim/release registry
-│   └── errors.db            # presence registry of errored uids
-├── jobs/{item_uid}/         # one folder per cached job
-│   ├── job.pkl              # submitit handle (recovery)
-│   └── error.pkl            # pickled exception (on failure)
+│   └── errors.db            # cached exception per errored uid
+├── jobs/{item_uid}/         # submitit backends only
+│   └── job.pkl              # pickled submitit Job (see "Submitit interaction")
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```
 
-CacheDict holds successful values; `error.pkl` holds the failed
-exception (with `__notes__`). `inflight.db` and `errors.db` are
-**advisory** indices over what's already on disk — corruption or loss
-degrades to "no coordination" / "no fast lookup", never wrong results.
+CacheDict holds successful values; `errors.db` holds the failed
+exception (BLOB + traceback TEXT) per uid. `inflight.db` is **advisory**;
+its loss degrades to "no coordination", never to wrong results.
 
 ## Cache modes (`Backend.mode`)
 
@@ -37,23 +35,23 @@ degrades to "no coordination" / "no fast lookup", never wrong results.
 
 - **Success**: `cd[item_uid] = result` (no-op if another worker already
   wrote it — handles inflight reclaim).
-- **Failure**: write `error.pkl` (overwriting any prior pickle for the
-  same uid), then `INSERT OR IGNORE` the uid into `errors.db`, then re-raise.
+- **Failure**: `INSERT OR REPLACE INTO errors (item_uid, exception, traceback)`
+  with the pickled exception and formatted traceback, then re-raise.
 
 `_cache_status` checks CacheDict first (cheaper, and a success is the
-most recent event for the uid), then consults the error registry.
-Returning `"error"` requires **both** a registry row and the pickle on
-disk (encapsulated in `StepPaths.has_cached_error` / `load_cached_error`):
-either alone is treated as no cache and self-heals via recompute. So a
-crash between the pickle write and the registry insert (or external
-cleanup of one half, or a registry blackout from corruption) never
-traps subsequent runs — they recompute. `mode="read-only"` cannot
-recompute, so a registry blackout there surfaces as `RuntimeError`
-("no cache") rather than a stale exception.
+most recent event for the uid), then `paths.has_cached_error` (a single
+SELECT against `errors.db`). The BLOB carries the live exception (with
+`__notes__` set by the writer at failure time); on re-raise the reader
+unpickles and appends the retry hint. The TEXT traceback is a degraded
+fallback: writer / reader substitute `RuntimeError(text)` if the
+exception isn't picklable / loadable in this process (e.g. locally
+defined class, missing class cross-venv).
 
-`StepPaths.clear_cache()` does `rmtree(jobs/<uid>)` + `errors_db.clear([uid])`
-+ `del cd[uid]` (in that order, so a partial mid-clear failure leaves at
-most a self-healing orphan, never a phantom cached error).
+`StepPaths.clear_cache()` deletes the CacheDict entry first, then the
+`errors.db` row, then `rmtree(jobs/<uid>)`. Order matters: a partial
+mid-clear failure (CacheDict gone, errors row still there) surfaces as
+a recoverable cached error rather than a silent stale-success — fail
+closed, not open.
 
 ## Concurrency
 
@@ -63,6 +61,14 @@ returns the subset this caller now owns; non-claimers wait via
 `wait_for_inflight` (polls the DB; reclaims dead PIDs); the session
 releases on exit.
 
+`Backend.run` runs **all mutators inside the inflight session** —
+`clear_cache`, job recovery, and `_submit` — so concurrent `force` /
+`retry` callers serialise on the claim. The pre-lock cache check is a
+fast path only; it's re-checked under the lock before deciding to
+clear or re-submit. `force` always calls `clear_cache` under the lock,
+even on an empty cache, so a competitor that populated mid-wait doesn't
+hand its value back to the forcer.
+
 Both registries inherit from `AdvisoryRegistry` (`exca/cachedict/registry.py`)
 which provides `journal_mode=DELETE` (avoids WAL — WAL actively breaks
 on NFS; lock semantics still make SQLite-over-NFS best-effort), busy-timeout
@@ -71,25 +77,12 @@ logged and the op returns the empty fallback (DB intact); known-corruption
 errors (file malformed, not a database, schema-mismatch on future schema
 bumps) trigger a reset (`unlink` + recreate on next access).
 
-## Known limitations
-
-`StepPaths.clear_cache` and the post-status job-recovery block in
-`Backend.run` execute **outside** the inflight session, so a `force` /
-`retry` caller can unlink a pickle another worker is still loading.
-The error-pickle write itself is also non-atomic (`open("wb")` +
-`pickle.dump`), so a concurrent reader can observe a truncated file in
-the same window. `mode='force'` under contention can also silently
-return a competitor's just-finished value (initial `clear_cache` skips
-when `status is None`; post-wait re-check sees the fresh success). The
-step-items refactor will close all three by moving the mutators inside
-the inflight session.
-
 ## Submitit interaction
 
 Submitit writes its own pickles under `logs/<job_id>/`
 (`<job_id>_0_result.pkl` = `("success", value)` or `("error",
 traceback_string)`). These are submitit-owned and not read by exca after
-the job completes — exca reads from CacheDict (success) or `error.pkl`
+the job completes — exca reads from CacheDict (success) or `errors.db`
 (failure). `job.pkl` is exca's persistent handle so `Backend.job()` can
 reattach across driver restarts and `force` / `retry` can detect a
 running prior job.

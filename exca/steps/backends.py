@@ -17,6 +17,7 @@ import dataclasses
 import logging
 import pickle
 import shutil
+import traceback
 import typing as tp
 import warnings
 from pathlib import Path
@@ -94,30 +95,24 @@ class StepPaths:
         """Path to job.pkl for this item."""
         return self.job_folder / "job.pkl"
 
-    @property
-    def error_pkl(self) -> Path:
-        """Raw on-disk path to the error pickle. Callers should use
-        :meth:`has_cached_error` / :meth:`load_cached_error` for
-        guarded reads."""
-        return self.job_folder / "error.pkl"
-
     def has_cached_error(self) -> bool:
-        """True iff registry row + error.pkl both present (orphans recompute)."""
-        if not self.error_pkl.exists() or not self.cache_folder.exists():
+        """True iff a row exists in errors.db for this uid."""
+        if not self.cache_folder.exists():
             return False
         with errors.ErrorRegistry(self.cache_folder) as reg:
             return self.item_uid in reg.get([self.item_uid])
 
     def load_cached_error(self) -> BaseException | None:
-        """Load and decorate the cached error, or None if none."""
-        if not self.has_cached_error():
+        """Load the cached error, or None. The writer already attached a
+        ``-> cached as <step>[<uid>]`` note in the BLOB; on re-raise we
+        only append the retry hint."""
+        if not self.cache_folder.exists():
             return None
-        with self.error_pkl.open("rb") as f:
-            err: BaseException = pickle.load(f)
-        err.add_note(
-            f"  -> in {self.error_pkl.parent}\n"
-            f"     reraising from cache, use mode='retry' to recompute"
-        )
+        with errors.ErrorRegistry(self.cache_folder) as reg:
+            err = reg.load(self.item_uid)
+        if err is None:
+            return None
+        err.add_note("     reraising from cache; use mode='retry' to recompute")
         return err
 
     @property
@@ -132,19 +127,20 @@ class StepPaths:
 
     def clear_cache(self) -> None:
         """Clear cache and job folder for this item."""
-        # Order matters: drop error indicators (job folder + registry row)
-        # before the success entry, so a partial mid-clear failure leaves
-        # at most a self-healing orphan, never a phantom cached error.
-        if self.job_folder.exists():
-            shutil.rmtree(self.job_folder)
+        # Order matters: drop the success entry first, then the error row.
+        # A partial mid-clear failure (CacheDict gone, errors row still
+        # there) surfaces as a recoverable cached error rather than a
+        # silent stale-success — fail closed, not open.
         if self.cache_folder.exists():
-            with errors.ErrorRegistry(self.cache_folder) as reg:
-                reg.clear([self.item_uid])
             cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
                 folder=self.cache_folder
             )
             if self.item_uid in cd:
                 del cd[self.item_uid]
+            with errors.ErrorRegistry(self.cache_folder) as reg:
+                reg.clear([self.item_uid])
+        if self.job_folder.exists():
+            shutil.rmtree(self.job_folder)
 
 
 ModeType = tp.Literal["cached", "force", "read-only", "retry"]
@@ -173,10 +169,9 @@ class _CachingCall:
             result = self.func(*args)
         except Exception as e:
             e.add_note(f"  -> cached as {self.paths.step_uid}[{self.paths.item_uid}]")
-            with self.paths.error_pkl.open("wb") as f:
-                pickle.dump(e, f)
+            tb = "".join(traceback.format_exception(e))
             with errors.ErrorRegistry(self.paths.cache_folder) as reg:
-                reg.record([self.paths.item_uid])
+                reg.record(self.paths.item_uid, e, tb)
             raise
         if self.paths.item_uid not in cd:
             with cd.write():
@@ -396,85 +391,110 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             raise err
         return None
 
+    def _resolve_cache(self) -> tuple[CacheStatus, tp.Any]:
+        """Single-pass: status + payload (value on success, exception on
+        error, ``None`` if absent). Used by `run` to collapse the previous
+        ``status check`` + ``load`` pair into one errors.db trip on the
+        error path."""
+        if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
+            return "success", self._ram_cache
+        if not self.paths.cache_folder.exists():
+            return None, None
+        cd = self._cache_dict()
+        if self.paths.item_uid in cd:
+            result = cd[self.paths.item_uid]
+            if self.keep_in_ram:
+                self._ram_cache = result
+            return "success", result
+        err = self.paths.load_cached_error()
+        if err is not None:
+            return "error", err
+        return None, None
+
     # =========================================================================
     # Execution
     # =========================================================================
 
     def run(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> tp.Any:
         """Execute function with caching based on mode."""
-        # Check config consistency before running
         self._check_configs(write=True)
 
-        # Check RAM cache first (survives disk deletion)
         if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
             if self.mode != "force":
                 return self._ram_cache
 
-        status = self._cache_status()
-
+        # Pre-lock fast path: no mutators, just reads. Re-checked under
+        # the lock below for read-only / cached / non-force success.
+        status, payload = self._resolve_cache()
         if self.mode == "read-only":
             if status is None:
                 raise RuntimeError(
                     f"No cache in read-only mode: {self.paths.step_uid}[{self.paths.item_uid}]"
                 )
-            return self._load_cache()  # Raises if error
+            if status == "error":
+                raise payload
+            return payload
         if status == "success" and self.mode != "force":
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
-            return self._load_cache()
+            return payload
         if status == "error" and self.mode == "cached":
-            return self._load_cache()  # Raises
+            raise payload
 
-        # Race: clear_cache and the job-recovery block below run outside
-        # the inflight session — see "Known limitations" in caching.md.
-        if self.mode == "force" and status is not None:
-            self.clear_cache()
-        elif self.mode == "retry" and status == "error":
-            logger.warning(
-                "Retrying failed step: %s[%s]", self.paths.step_uid, self.paths.item_uid
-            )
-            self.clear_cache()
+        # All mutators (clear_cache, job-recovery, submit) run under the
+        # inflight session so concurrent force / retry callers serialise.
+        item_uid = self.paths.item_uid
+        reg: inflight.InflightRegistry | None = None
+        if self._REQUIRES_INFLIGHT:
+            reg = inflight.InflightRegistry(self.paths.cache_folder)
+        with inflight.inflight_session(reg, [item_uid]):
+            # Re-check under the lock — a competitor may have populated
+            # the cache while we waited.
+            status, payload = self._resolve_cache()
+            if status == "success" and self.mode != "force":
+                return payload
+            if status == "error" and self.mode == "cached":
+                raise payload
 
-        # Check job recovery (for submitit backends)
-        job = self.job()
-        if job is not None:
             if self.mode == "force":
-                if not job.done():
-                    try:
-                        job.cancel()
-                        msg = "Cancelled running job for force mode: %s"
-                        logger.warning(msg, self.paths.job_pkl)
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to cancel job %s: %s", self.paths.job_pkl, e
-                        )
-                job = None
-                self.paths.job_pkl.unlink()
-            # Retry mode: clear failed jobs only
-            elif self.mode == "retry" and job.done():
-                try:
-                    job.result()  # Check if it failed
-                except Exception:
-                    logger.warning("Retrying failed job: %s", self.paths.job_pkl)
+                self.clear_cache()
+            elif self.mode == "retry" and status == "error":
+                logger.warning(
+                    "Retrying failed step: %s[%s]",
+                    self.paths.step_uid,
+                    self.paths.item_uid,
+                )
+                self.clear_cache()
+
+            job = self.job()
+            if job is not None:
+                if self.mode == "force":
+                    if not job.done():
+                        try:
+                            job.cancel()
+                            msg = "Cancelled running job for force mode: %s"
+                            logger.warning(msg, self.paths.job_pkl)
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to cancel job %s: %s", self.paths.job_pkl, e
+                            )
                     job = None
                     self.paths.job_pkl.unlink()
-            else:
-                logger.debug("Recovering job: %s", self.paths.job_pkl)
+                elif self.mode == "retry" and job.done():
+                    try:
+                        job.result()
+                    except Exception:
+                        logger.warning("Retrying failed job: %s", self.paths.job_pkl)
+                        job = None
+                        self.paths.job_pkl.unlink()
+                else:
+                    logger.debug("Recovering job: %s", self.paths.job_pkl)
 
-        if job is None:
-            item_uid = self.paths.item_uid
-            reg: inflight.InflightRegistry | None = None
-            if self._REQUIRES_INFLIGHT:
-                reg = inflight.InflightRegistry(self.paths.cache_folder)
-            with inflight.inflight_session(reg, [item_uid]) as claimed:
-                if claimed and self._cache_status() is None:
-                    wrapper = _CachingCall(func, self.paths, self._effective_cache_type())
-                    job = self._submit(wrapper, *args)
-                    if reg is not None:
-                        inflight.record_worker_info(reg, [item_uid], job)
-                    job.result()
-            return self._load_cache()
-
-        job.result()
+            if job is None:
+                wrapper = _CachingCall(func, self.paths, self._effective_cache_type())
+                job = self._submit(wrapper, *args)
+                if reg is not None:
+                    inflight.record_worker_info(reg, [item_uid], job)
+            job.result()
         return self._load_cache()
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
