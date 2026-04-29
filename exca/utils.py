@@ -95,10 +95,9 @@ def fix_permissions(path: Path | str, recursive: bool = False) -> None:
     responsible for *path* existing — missing-path failures are logged
     as warnings (likely a programming error: caller skipped a mkdir or
     reordered calls).
-
-    Reads the cached ``_DEFAULT_UMASK`` directly rather than peeking via
-    ``os.umask(0)`` to avoid a process-global race in threaded code.
     """
+    # read the cached value rather than os.umask(0)+restore: the peek
+    # races against threadpool workers writing through CacheDict
     if _DEFAULT_UMASK is None:
         return
     dir_mode = 0o777 & ~_DEFAULT_UMASK
