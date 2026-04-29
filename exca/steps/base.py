@@ -54,6 +54,17 @@ def _resolve_all(steps: tp.Iterable["Step"]) -> list["Step"]:
     return resolved
 
 
+def _flatten_levels(steps: tp.Sequence["Step"]) -> list["Step"]:
+    """Chains without infra dissolve into children; chains with infra stay as one level."""
+    out: list[Step] = []
+    for s in steps:
+        if isinstance(s, Chain) and s.infra is None:
+            out.extend(_flatten_levels(s._step_sequence()))
+        else:
+            out.append(s)
+    return out
+
+
 def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
     """Recursively set mode on steps and all nested chain steps."""
     for step in steps:
@@ -369,6 +380,20 @@ class Chain(Step):
         super().model_post_init(__context)
         if not self.steps:
             raise ValueError("steps cannot be empty")
+        # Off-process dispatch needs a cached upstream — see error below.
+        levels = _flatten_levels(self._step_sequence())
+        for i, (prev, nxt) in enumerate(zip(levels, levels[1:]), start=1):
+            nxt_infra = nxt.infra
+            if nxt_infra is None or not nxt_infra._is_off_process:
+                continue
+            if prev.infra is None:
+                raise ValueError(
+                    f"step {i + 1} ({type(nxt).__name__}) dispatches "
+                    f"off-process via {type(nxt_infra).__name__} but step "
+                    f"{i} ({type(prev).__name__}) has no cache. Set step "
+                    f"{i}'s infra = Cached(folder=...) to avoid pickling "
+                    f"upstream values through submitit."
+                )
 
     def _step_sequence(self) -> tuple[Step, ...]:
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)

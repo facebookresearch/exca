@@ -129,6 +129,61 @@ def test_force_recomputes_and_propagates(
 
 
 # -----------------------------------------------------------------------------
+# Chain config-time validation
+# "Off-process dispatch (e.g. Slurm) requires a cached upstream — pickling
+#  large upstream values through submitit defeats caching."
+# -----------------------------------------------------------------------------
+
+
+def _step(tmp_path: Path, coeff: float, backend: str | None) -> conftest.Mult:
+    infra: tp.Any = (
+        {"backend": backend, "folder": tmp_path} if backend is not None else None
+    )
+    return conftest.Mult(coeff=coeff, infra=infra)
+
+
+@pytest.mark.parametrize(
+    "upstream,downstream,raises",
+    [
+        # Truth table over each Backend subclass at the downstream slot
+        # (locks `_is_off_process` per type, not just Slurm).
+        (None, "Slurm", True),
+        (None, "LocalProcess", True),  # also pickles via submitit
+        (None, "SubmititDebug", False),  # debug runs inline
+        (None, "Cached", False),  # inline downstream
+        # Cached upstream satisfies the constraint
+        ("Cached", "Slurm", False),
+        # Off-process upstream has its own per-step CacheDict
+        ("Slurm", "Slurm", False),
+    ],
+)
+def test_chain_rejects_off_process_with_uncached_upstream(
+    tmp_path: Path, upstream: str | None, downstream: str, raises: bool
+) -> None:
+    args: tp.Any = [_step(tmp_path, 2.0, upstream), _step(tmp_path, 3.0, downstream)]
+    if raises:
+        with pytest.raises(ValueError, match="off-process"):
+            Chain(steps=args)
+    else:
+        Chain(steps=args)
+
+
+def test_chain_off_process_validation_walks_nested_chains(tmp_path: Path) -> None:
+    # Inner-without-infra dissolves into outer (last inner step is the upstream
+    # checked); inner-with-infra stays as one level whose cache satisfies it.
+    cached: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    inner_uncached = Chain(steps=[_step(tmp_path, 2.0, None), _step(tmp_path, 3.0, None)])
+    inner_cached = Chain(
+        steps=[_step(tmp_path, 2.0, None), _step(tmp_path, 3.0, None)], infra=cached
+    )
+    slurm = _step(tmp_path, 5.0, "Slurm")
+
+    with pytest.raises(ValueError, match="off-process"):
+        Chain(steps=[inner_uncached, slurm])
+    Chain(steps=[inner_cached, slurm])
+
+
+# -----------------------------------------------------------------------------
 # Configurable, not runtime
 # "Execution parameters (mode, folder, backend) live on the model/config,
 #  not as run() arguments."
