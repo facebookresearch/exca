@@ -382,17 +382,15 @@ class Chain(Step):
             raise ValueError("steps cannot be empty")
         # Off-process dispatch needs a cached upstream — see error below.
         levels = _flatten_levels(self._step_sequence())
-        for i, (prev, nxt) in enumerate(zip(levels, levels[1:]), start=1):
-            nxt_infra = nxt.infra
-            if nxt_infra is None or not nxt_infra._is_off_process:
+        for prev, nxt in zip(levels, levels[1:]):
+            if nxt.infra is None or not nxt.infra._is_off_process:
                 continue
             if prev.infra is None:
                 raise ValueError(
-                    f"step {i + 1} ({type(nxt).__name__}) dispatches "
-                    f"off-process via {type(nxt_infra).__name__} but step "
-                    f"{i} ({type(prev).__name__}) has no cache. Set step "
-                    f"{i}'s infra = Cached(folder=...) to avoid pickling "
-                    f"upstream values through submitit."
+                    f"{type(nxt).__name__} dispatches off-process via "
+                    f"{type(nxt.infra).__name__} but its upstream {prev!r} "
+                    f"has no cache. Set its infra = Cached(folder=...) to "
+                    f"avoid pickling values through submitit."
                 )
 
     def _step_sequence(self) -> tuple[Step, ...]:
