@@ -41,14 +41,12 @@ class ErrorRegistry(registry.AdvisoryRegistry):
     _SCHEMA: tp.ClassVar[str] = _SCHEMA
     _LABEL: tp.ClassVar[str] = "Error"
 
-    # NOTE: `record` takes a single uid; `get` / `clear` take lists. The
-    # writer always knows exactly which uid failed, while readers and
-    # cleaners batch lookups across many uids.
     def record(
         self, item_uid: str, exception: BaseException, traceback_text: str
     ) -> None:
         """Store ``(exception, traceback_text)`` for *item_uid*, replacing
-        any prior row."""
+        any prior row. Single-uid signature: writers know exactly which
+        item failed, while readers / cleaners (``get`` / ``clear``) batch."""
         try:
             blob = pickle.dumps(exception)
         except Exception:
@@ -125,3 +123,16 @@ class ErrorRegistry(registry.AdvisoryRegistry):
 
         self._safe_execute("clear", None, _do)
         logger.debug("Cleared %d error row(s)", len(item_uids))
+
+    def _plant(self, item_uids: list[str]) -> None:
+        """Test-only bulk presence-insert (empty BLOB + traceback); safe
+        because plumbing tests only ``get`` planted rows, never ``load``."""
+
+        def _do(conn: sqlite3.Connection) -> None:
+            conn.executemany(
+                "INSERT OR IGNORE INTO errors (item_uid, exception, traceback) "
+                "VALUES (?, ?, ?)",
+                [(u, b"", "") for u in item_uids],
+            )
+
+        self._safe_execute("plant", None, _do)

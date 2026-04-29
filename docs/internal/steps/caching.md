@@ -39,19 +39,39 @@ its loss degrades to "no coordination", never to wrong results.
   with the pickled exception and formatted traceback, then re-raise.
 
 `_cache_status` checks CacheDict first (cheaper, and a success is the
-most recent event for the uid), then `paths.has_cached_error` (a single
-SELECT against `errors.db`). The BLOB carries the live exception (with
+most recent event for the uid), then loads any cached exception in one
+SELECT against `errors.db`. The BLOB carries the live exception (with
 `__notes__` set by the writer at failure time); on re-raise the reader
-unpickles and appends the retry hint. The TEXT traceback is a degraded
-fallback: writer / reader substitute `RuntimeError(text)` if the
-exception isn't picklable / loadable in this process (e.g. locally
-defined class, missing class cross-venv).
+appends the retry hint. The TEXT traceback is a degraded fallback:
+writer / reader substitute `RuntimeError(text)` if the exception isn't
+picklable / loadable in this process (e.g. locally defined class,
+missing class cross-venv).
 
-`StepPaths.clear_cache()` deletes the CacheDict entry first, then the
+`Backend.clear_cache()` deletes the CacheDict entry first, then the
 `errors.db` row, then `rmtree(jobs/<uid>)`. Order matters: a partial
 mid-clear failure (CacheDict gone, errors row still there) surfaces as
 a recoverable cached error rather than a silent stale-success — fail
 closed, not open.
+
+## RAM caching and the shared CacheDict
+
+`Backend._cache_dict()` looks up the CacheDict in a process-level
+`WeakValueDictionary` keyed on `(folder, keep_in_ram, cache_type)` and
+holds a strong ref on `Backend._cd`. All Backends sharing that key —
+`with_input` copies, deepcopies, freshly constructed peers — see the
+same handle, so RAM hits and `clear_cache` mutations propagate without
+explicit rewires. RAM lifetime is per-Backend-set: when the last
+Backend with a given key is GC'd, the entry vanishes and the next
+Backend starts a fresh `_ram_data`.
+
+With `keep_in_ram=True`, CacheDict's `_ram_data` doubles as the RAM
+cache; `Backend.run` short-circuits via `_cd.get_in_ram(uid)` before any
+disk read, so a previously-loaded value survives an external rmtree.
+Cross-process workers get a fresh view via `CacheDict.__reduce__` (same
+folder, empty `_ram_data`); RAM is intentionally not shipped. Writes
+from `_CachingCall` use a separate (non-registry) CacheDict; the
+registry-shared handle picks them up via the folder-mtime invalidation
+in `_read_info_files`.
 
 ## Concurrency
 

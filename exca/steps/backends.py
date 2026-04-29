@@ -20,6 +20,7 @@ import shutil
 import traceback
 import typing as tp
 import warnings
+import weakref
 from pathlib import Path
 
 import pydantic
@@ -39,6 +40,18 @@ logger = logging.getLogger(__name__)
 
 class NoValue:
     """Sentinel for unset/missing value (e.g., generator has no input)."""
+
+
+_MISSING = object()  # private sentinel for RAM lookup miss vs. None payload
+
+# Process-level dedup of CacheDicts. Backends sharing the same on-disk
+# folder + RAM/cache_type config get the same handle, so RAM hits and
+# `clear_cache` mutations propagate across `with_input` copies without
+# per-instance wiring. Weak values: entries vanish when no Backend holds them.
+# TODO: revisit when step-items reshapes Step lifecycle.
+_CD_REGISTRY: weakref.WeakValueDictionary[
+    tuple[str, bool, str | None], exca.cachedict.CacheDict[tp.Any]
+] = weakref.WeakValueDictionary()
 
 
 # =============================================================================
@@ -103,9 +116,8 @@ class StepPaths:
             return self.item_uid in reg.get([self.item_uid])
 
     def load_cached_error(self) -> BaseException | None:
-        """Load the cached error, or None. The writer already attached a
-        ``-> cached as <step>[<uid>]`` note in the BLOB; on re-raise we
-        only append the retry hint."""
+        """Return the cached exception (or ``None``). Appends a retry hint
+        to the writer's pre-attached ``-> cached as ...`` note."""
         if not self.cache_folder.exists():
             return None
         with errors.ErrorRegistry(self.cache_folder) as reg:
@@ -125,26 +137,28 @@ class StepPaths:
         self.cache_folder.mkdir(parents=True, exist_ok=True)
         self.job_folder.mkdir(parents=True, exist_ok=True)
 
-    def clear_cache(self) -> None:
-        """Clear cache and job folder for this item."""
-        # Order matters: drop the success entry first, then the error row.
-        # A partial mid-clear failure (CacheDict gone, errors row still
-        # there) surfaces as a recoverable cached error rather than a
-        # silent stale-success — fail closed, not open.
-        if self.cache_folder.exists():
-            cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-                folder=self.cache_folder
-            )
-            if self.item_uid in cd:
-                del cd[self.item_uid]
-            with errors.ErrorRegistry(self.cache_folder) as reg:
-                reg.clear([self.item_uid])
-        if self.job_folder.exists():
-            shutil.rmtree(self.job_folder)
-
 
 ModeType = tp.Literal["cached", "force", "read-only", "retry"]
-CacheStatus = tp.Literal["success", "error", None]
+
+
+@dataclasses.dataclass
+class _CacheStatus:
+    """Outcome of a cache lookup. ``load()`` returns the value (success),
+    raises the cached exception (error), or returns ``None`` (absent).
+    The exception is loaded by ``_cache_status`` so the error path is a
+    single SELECT — ``load`` just re-raises."""
+
+    kind: tp.Literal["success", "error", None]
+    _backend: "Backend"
+    _err: BaseException | None = None
+
+    def load(self) -> tp.Any:
+        if self.kind == "success":
+            b = self._backend
+            return b._cache_dict()[b.paths.item_uid]
+        if self.kind == "error" and self._err is not None:
+            raise self._err
+        return None
 
 
 class _CachingCall:
@@ -218,7 +232,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return v
 
     _step: "Step" | None = None
-    _ram_cache: tp.Any = pydantic.PrivateAttr(default_factory=NoValue)
+    # Strong-ref cache for the registry-shared CacheDict (see `_cache_dict`).
+    _cd: "exca.cachedict.CacheDict[tp.Any] | None" = pydantic.PrivateAttr(default=None)
     _paths: StepPaths | None = pydantic.PrivateAttr(default=None)
     _checked_configs: bool = pydantic.PrivateAttr(default=False)
 
@@ -335,25 +350,47 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         )
 
     def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":
-        """Get CacheDict for this step."""
-        return exca.cachedict.CacheDict(
-            folder=self.paths.cache_folder, cache_type=self._effective_cache_type()
-        )
+        """CacheDict for this step, sourced from `_CD_REGISTRY` so siblings
+        sharing the same `(folder, keep_in_ram, cache_type)` see the same
+        handle (and `_ram_data`). The lookup happens every call: deepcopy /
+        unpickle would otherwise drop to a fresh view via `CacheDict.__reduce__`."""
+        ct = self._effective_cache_type()
+        key = (str(self.paths.cache_folder), self.keep_in_ram, ct)
+        cd = _CD_REGISTRY.get(key)
+        if cd is None:
+            cd = exca.cachedict.CacheDict(
+                folder=self.paths.cache_folder,
+                cache_type=ct,
+                keep_in_ram=self.keep_in_ram,
+            )
+            _CD_REGISTRY[key] = cd
+        self._cd = cd  # strong ref so the WeakValueDictionary entry survives
+        return cd
 
     def has_cache(self) -> bool:
         """Check if result is cached."""
-        return self._cache_status() is not None
+        return self._cache_status().kind is not None
 
     def cached_result(self) -> tp.Any:
-        """Load cached result (raises if cached error)."""
-        if self._cache_status() is None:
-            return None
-        return self._load_cache()
+        """Load cached result (raises if cached error, None if absent)."""
+        return self._cache_status().load()
 
     def clear_cache(self) -> None:
-        """Delete cached result (both disk and RAM)."""
-        self._ram_cache = NoValue()
-        self.paths.clear_cache()
+        """Delete cached result (disk + RAM) and any errored row.
+
+        Order matters: drop the success entry first, then the error row.
+        A partial mid-clear failure (CacheDict gone, errors row still
+        there) surfaces as a recoverable cached error rather than a silent
+        stale-success — fail closed, not open."""
+        uid = self.paths.item_uid
+        cd = self._cache_dict()  # registry-shared handle
+        if uid in cd:
+            del cd[uid]
+        if self.paths.cache_folder.exists():
+            with errors.ErrorRegistry(self.paths.cache_folder) as reg:
+                reg.clear([uid])
+        if self.paths.job_folder.exists():
+            shutil.rmtree(self.paths.job_folder)
 
     def job(self) -> submitit.Job[tp.Any] | None:
         """Get submitit job for this step, or None."""
@@ -363,53 +400,19 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 return pickle.load(f)  # type: ignore
         return None
 
-    def _cache_status(self) -> CacheStatus:
-        """Check cache status without loading value. CacheDict-first: a
-        success is the most recent event, and skips the SQLite registry."""
+    def _cache_status(self) -> _CacheStatus:
+        """Look up cache state. CacheDict-first (a success is the most
+        recent event for the uid); if absent, the exception (if any) is
+        fetched from `errors.db` in the same call so the error path is a
+        single SELECT."""
         if not self.paths.cache_folder.exists():
-            return None
+            return _CacheStatus(None, self)
         if self.paths.item_uid in self._cache_dict():
-            return "success"
-        if self.paths.has_cached_error():
-            return "error"
-        return None
-
-    def _load_cache(self) -> tp.Any:
-        """Load cached result, or raise cached error."""
-        if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
-            return self._ram_cache
-
-        cd = self._cache_dict()
-        if self.paths.item_uid in cd:
-            result = cd[self.paths.item_uid]
-            if self.keep_in_ram:
-                self._ram_cache = result
-            return result
-
+            return _CacheStatus("success", self)
         err = self.paths.load_cached_error()
         if err is not None:
-            raise err
-        return None
-
-    def _resolve_cache(self) -> tuple[CacheStatus, tp.Any]:
-        """Single-pass: status + payload (value on success, exception on
-        error, ``None`` if absent). Used by `run` to collapse the previous
-        ``status check`` + ``load`` pair into one errors.db trip on the
-        error path."""
-        if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
-            return "success", self._ram_cache
-        if not self.paths.cache_folder.exists():
-            return None, None
-        cd = self._cache_dict()
-        if self.paths.item_uid in cd:
-            result = cd[self.paths.item_uid]
-            if self.keep_in_ram:
-                self._ram_cache = result
-            return "success", result
-        err = self.paths.load_cached_error()
-        if err is not None:
-            return "error", err
-        return None, None
+            return _CacheStatus("error", self, _err=err)
+        return _CacheStatus(None, self)
 
     # =========================================================================
     # Execution
@@ -419,26 +422,27 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """Execute function with caching based on mode."""
         self._check_configs(write=True)
 
-        if self.keep_in_ram and not isinstance(self._ram_cache, NoValue):
-            if self.mode != "force":
-                return self._ram_cache
+        # RAM fast path: keeps a hit alive after external rmtree of
+        # cache_folder (`_cache_status` is disk-only by design).
+        if self.keep_in_ram and self.mode != "force":
+            cached = self._cache_dict().get_in_ram(self.paths.item_uid, _MISSING)
+            if cached is not _MISSING:
+                return cached
 
         # Pre-lock fast path: no mutators, just reads. Re-checked under
-        # the lock below for read-only / cached / non-force success.
-        status, payload = self._resolve_cache()
+        # the lock below before any mutation (read-only returns here).
+        cache = self._cache_status()
         if self.mode == "read-only":
-            if status is None:
+            if cache.kind is None:
                 raise RuntimeError(
                     f"No cache in read-only mode: {self.paths.step_uid}[{self.paths.item_uid}]"
                 )
-            if status == "error":
-                raise payload
-            return payload
-        if status == "success" and self.mode != "force":
+            return cache.load()
+        if cache.kind == "success" and self.mode != "force":
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
-            return payload
-        if status == "error" and self.mode == "cached":
-            raise payload
+            return cache.load()
+        if cache.kind == "error" and self.mode == "cached":
+            return cache.load()  # raises
 
         # All mutators (clear_cache, job-recovery, submit) run under the
         # inflight session so concurrent force / retry callers serialise.
@@ -449,15 +453,15 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         with inflight.inflight_session(reg, [item_uid]):
             # Re-check under the lock — a competitor may have populated
             # the cache while we waited.
-            status, payload = self._resolve_cache()
-            if status == "success" and self.mode != "force":
-                return payload
-            if status == "error" and self.mode == "cached":
-                raise payload
+            cache = self._cache_status()
+            if cache.kind == "success" and self.mode != "force":
+                return cache.load()
+            if cache.kind == "error" and self.mode == "cached":
+                return cache.load()  # raises
 
             if self.mode == "force":
                 self.clear_cache()
-            elif self.mode == "retry" and status == "error":
+            elif self.mode == "retry" and cache.kind == "error":
                 logger.warning(
                     "Retrying failed step: %s[%s]",
                     self.paths.step_uid,
@@ -495,7 +499,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 if reg is not None:
                     inflight.record_worker_info(reg, [item_uid], job)
             job.result()
-        return self._load_cache()
+        return self._cache_status().load()
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
         """Submit wrapper for execution. Default: inline execution."""

@@ -279,11 +279,9 @@ class Step(exca.helpers.DiscriminatedModel):
             e.add_note(f"  -> in {step!r}")
             raise
 
-        # Sync state back to original step's infra (with_input creates a copy)
-        if step is not self and self.infra is not None:
-            self.infra._ram_cache = step.infra._ram_cache  # type: ignore[union-attr]
-            if self.infra.mode == "force":
-                object.__setattr__(self.infra, "mode", "cached")
+        # Reset force after a successful run.
+        if step is not self and self.infra is not None and self.infra.mode == "force":
+            object.__setattr__(self.infra, "mode", "cached")
 
         return result
 
@@ -568,9 +566,11 @@ class Chain(Step):
     def clear_cache(self, recursive: bool = True) -> None:
         """Clear cache, optionally including sub-steps."""
         if recursive:
-            chain = self.with_input() if self._previous is None else self
-            for step in chain._step_sequence():
-                step.clear_cache()
+            # `with_input` wires sub-step `_previous` so `paths` resolves;
+            # the registry shares the CacheDict handle, no rewire needed.
+            bound = self.with_input() if self._previous is None else self
+            for sub in bound._step_sequence():
+                sub.clear_cache()
         if self.infra:
             self.infra.clear_cache()
 
