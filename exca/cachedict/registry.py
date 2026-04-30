@@ -82,10 +82,9 @@ class AdvisoryRegistry:
         Parameters
         ----------
         create:
-            ``False`` (default): a missing DB returns ``None`` so the caller
-            falls back to "empty registry" semantics — no folder side effects
-            on read paths or idempotent no-op writes (delete/update of
-            absent rows). Writers that materialise rows pass ``True``.
+            If ``False`` (default), a missing DB returns ``None`` (read /
+            no-op-write paths leave the folder untouched). Writers that
+            materialise rows pass ``True``.
         """
         if self._conn is not None:
             if self.db_path.exists():

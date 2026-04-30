@@ -240,47 +240,25 @@ def test_pickle_is_view_only(tmp_path: Path) -> None:
 
 
 def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
-    """JsonlReader must invalidate cached `_last` / `_meta` if the file
-    is replaced (different inode) or truncated below `_last`."""
-    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path)
-    with cache.write():
-        cache["a"] = 1
-    [info_path] = list(tmp_path.glob("*-info.jsonl"))
-    reader = cd.JsonlReader(info_path)
+    """JsonlReader resets cached `_last` / `_meta` on inode change
+    (rmtree + recreate) and on shrink below `_last` (truncate-in-place)."""
+    fp = tmp_path / "x-info.jsonl"
+    fp.write_bytes(b'{"#key": "a", "#type": "Pickle"}\n')
+    reader = cd.JsonlReader(fp)
     assert "a" in reader.read()
-    last_after_first = reader._last
-    inode_after_first = reader._inode
-    assert last_after_first > 0 and inode_after_first is not None
+    inode_a = reader._inode
 
-    # Replace the file: delete + recreate via a fresh CacheDict write
-    info_path.unlink()
-    cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path)
-    with cache2.write():
-        cache2["b"] = 2
-    [info_path2] = list(tmp_path.glob("*-info.jsonl"))
-    reader2 = cd.JsonlReader(info_path2)
-    reader2._last = last_after_first  # simulate a stale view
-    reader2._meta = {"_new_format": True}
-    reader2._inode = inode_after_first - 1  # fake stale inode
-    out = reader2.read()
-    assert "b" in out  # reader reset and saw the new content
+    fp.unlink()
+    fp.write_bytes(b'{"#key": "bb", "#type": "Pickle"}\n')  # longer: lets "c" shrink
+    assert "bb" in reader.read() and reader._inode != inode_a
 
-    # Truncate-in-place (same inode, size shrinks below `_last`): the
-    # reader must reset, otherwise it would skip past the new content.
-    # Hand-craft to keep the inode stable (cache.write would replace).
-    reader3 = cd.JsonlReader(info_path2)
-    assert "b" in reader3.read()
-    last_before = reader3._last
-    inode_before = reader3._inode
-    assert last_before > 0 and inode_before is not None
-    new_line = b'{"#key": "c", "#type": "Pickle"}\n'
-    with info_path2.open("r+b") as f:
+    inode_b = reader._inode
+    with fp.open("r+b") as f:
         f.truncate(0)
-        f.seek(0)
-        f.write(new_line)
-    assert reader3._fp.stat().st_ino == inode_before  # truncate kept inode
-    out3 = reader3.read()
-    assert "c" in out3  # reset on truncate, saw new content
+        f.write(b'{"#key": "c", "#type": "Pickle"}\n')
+    assert fp.stat().st_ino == inode_b  # truncate kept inode
+    assert fp.stat().st_size < reader._last  # so size < _last forces reset
+    assert "c" in reader.read()
 
 
 def test_2_caches(tmp_path: Path) -> None:

@@ -4,11 +4,10 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""
-Backend classes with integrated caching.
+"""Backend classes with integrated caching.
 
-Backend holds a reference to its owning Step, so it can compute cache keys
-and provide cache operations (has_cache, clear_cache, job, etc.).
+Backend holds a reference to its owning Step so it can compute cache keys
+and route ``clear_cache`` / ``job`` / ``run`` for that step's items.
 """
 
 from __future__ import annotations
@@ -42,10 +41,10 @@ class NoValue:
     """Sentinel for unset/missing value (e.g., generator has no input)."""
 
 
-# Process-level dedup of CacheDicts. Backends sharing the same on-disk
-# folder + RAM/cache_type config get the same handle, so RAM hits and
-# `clear_cache` mutations propagate across `with_input`
-# Goes away with `with_input` deep-copy removal
+# Process-level dedup of CacheDicts so deepcopied / `with_input` Backends
+# sharing the same `(folder, keep_in_ram, cache_type)` get the same handle,
+# letting RAM hits and `clear_cache` mutations propagate across copies.
+# Removed when `with_input` no longer deepcopies.
 _CD_REGISTRY: weakref.WeakValueDictionary[
     tuple[str, bool, str | None], exca.cachedict.CacheDict[tp.Any]
 ] = weakref.WeakValueDictionary()
@@ -121,9 +120,8 @@ ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 
 @dataclasses.dataclass
 class _CacheStatus:
-    """Outcome of a cache lookup. Built via ``lookup``, which inspects
-    CacheDict + ``errors.db`` once and pre-loads any cached exception
-    so downstream ``load`` stays single-SELECT."""
+    """Outcome of a cache lookup. ``lookup`` builds it; pre-loads any
+    cached exception so ``load`` doesn't re-query."""
 
     outcome: tp.Literal["success", "error", None]
     _cd: exca.cachedict.CacheDict[tp.Any]
@@ -198,12 +196,11 @@ class _CachingCall:
 
 
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
-    """
-    Base class for execution backends with integrated caching.
+    """Base class for execution backends with integrated caching.
 
-    Backend holds a reference to its owning Step (_step), allowing it to:
-    - Compute cache keys via _step._chain_hash()
-    - Provide cache operations: has_cache(), clear_cache(), job(), etc.
+    Holds a reference to the owning Step (``_step``) to compute cache
+    keys via ``_step._chain_hash()`` and route ``clear_cache`` / ``job``
+    / ``run`` for the step's items.
     """
 
     @classmethod
@@ -355,9 +352,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         )
 
     def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":
-        """Registry-deduped CacheDict for this step. Queried every call so
-        that deepcopy / unpickle pick the live view back up via the registry
-        (the deepcopied / unpickled `_cd` is a fresh view per `__reduce__`)."""
+        """Registry-deduped CacheDict for this step. Re-queried each call
+        because `__reduce__` makes deepcopy / unpickle yield a fresh view
+        rather than the live handle."""
         ct = self._effective_cache_type()
         key = (str(self.paths.cache_folder), self.keep_in_ram, ct)
         # get / setdefault are non-atomic across threads — single-threaded

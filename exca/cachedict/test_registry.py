@@ -22,37 +22,27 @@ from exca.steps import errors
 
 
 def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
-    """DB is created on first op, not at construction; close() is safe to
-    call twice; reconnect detects external deletion mid-session."""
     reg = errors.ErrorRegistry(tmp_path)
     db_path = tmp_path / "errors.db"
+    assert not db_path.exists(), "construction must not materialise the DB"
+
+    # Reads and no-op clears on a never-existed DB stay side-effect free.
+    assert reg.get(["x"]) == set() and reg.load("x") is None
+    reg.clear(["x"])
     assert not db_path.exists()
 
     reg._plant(["a"])
-    assert db_path.is_file()
+    assert db_path.is_file(), "first write materialises the DB"
     assert reg.get(["a"]) == {"a"}
 
+    # External deletion mid-session: next op silently reconnects.
     db_path.unlink()
     assert reg.get(["a"]) == set()
     reg._plant(["b"])
     assert reg.get(["b"]) == {"b"}
 
     reg.close()
-    reg.close()
-
-
-def test_read_paths_dont_create_db(tmp_path: Path) -> None:
-    """Lookups and no-op clears on a never-existed DB must leave the folder
-    untouched (writers explicitly opt in via ``create=True``)."""
-    folder = tmp_path / "fresh"
-    folder.mkdir()
-    reg = errors.ErrorRegistry(folder)
-    db_path = folder / "errors.db"
-
-    assert reg.get(["x"]) == set()
-    assert reg.load("x") is None
-    reg.clear(["x"])
-    assert not db_path.exists()
+    reg.close()  # idempotent
 
 
 def test_context_manager(tmp_path: Path) -> None:
