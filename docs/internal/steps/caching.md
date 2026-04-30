@@ -63,12 +63,13 @@ explicit rewires. The entry dies with its last Backend; the next caller
 starts with empty RAM.
 
 With `keep_in_ram=True`, `__contains__` and `__getitem__` consult
-`_ram_data` before disk, so repeat reads don't re-decode. Lookup
-short-circuits on `folder.exists()=False`, so an external rmtree
-invalidates RAM too. Cross-process workers get a fresh view via
-`CacheDict.__reduce__`. `_CachingCall` writes via its own (non-registry)
-CacheDict; the shared handle picks the new index up via folder-mtime
-invalidation in `_read_info_files`.
+`_ram_data` before disk, so repeat reads don't re-decode. RAM is wiped
+in lockstep with disk by `Backend.clear_cache` (and by `force`, which
+calls it); external rmtrees that don't go through Backend leave stale
+RAM. Cross-process workers get a fresh view via `CacheDict.__reduce__`.
+`_CachingCall` writes via its own (non-registry) CacheDict; the shared
+handle picks the new index up via folder-mtime invalidation in
+`_read_info_files`.
 
 ## Concurrency
 

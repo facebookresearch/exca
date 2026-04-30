@@ -55,7 +55,7 @@ class ErrorRegistry(registry.AdvisoryRegistry):
                 (item_uid, blob, traceback_text),
             )
 
-        self._safe_execute("record", None, _do)
+        self._safe_execute("record", None, _do, create=True)
         logger.debug("Recorded error for %s", item_uid)
 
     def get(self, item_uids: list[str] | None = None) -> set[str]:
@@ -115,8 +115,9 @@ class ErrorRegistry(registry.AdvisoryRegistry):
         logger.debug("Cleared %d error row(s)", len(item_uids))
 
     def _plant(self, item_uids: list[str]) -> None:
-        """Test-only bulk presence-insert (empty BLOB + traceback); safe
-        because plumbing tests only ``get`` planted rows, never ``load``."""
+        """Test-only bulk presence-insert (empty BLOB + traceback)"""
+        # safe because plumbing tests only ``get`` planted rows, never ``load``.
+        # Keep it here, simplicity beats purity.
 
         def _do(conn: sqlite3.Connection) -> None:
             conn.executemany(
@@ -125,4 +126,4 @@ class ErrorRegistry(registry.AdvisoryRegistry):
                 [(u, b"", "") for u in item_uids],
             )
 
-        self._safe_execute("plant", None, _do)
+        self._safe_execute("plant", None, _do, create=True)

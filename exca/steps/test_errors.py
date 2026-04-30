@@ -134,8 +134,6 @@ def test_cached_as_note_survives_pickle(tmp_path: Path) -> None:
         _add(True, tmp_path).run(5.0)
     notes = getattr(exc_info.value, "__notes__", [])
     assert any("cached as" in n for n in notes)
-    # Re-raised from cache: the writer-side note is preserved + a
-    # reader-side note is appended.
     with pytest.raises(ValueError) as exc_info:
         _add(False, tmp_path).run(5.0)
     notes = getattr(exc_info.value, "__notes__", [])

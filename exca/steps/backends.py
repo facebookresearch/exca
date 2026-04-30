@@ -44,8 +44,8 @@ class NoValue:
 
 # Process-level dedup of CacheDicts. Backends sharing the same on-disk
 # folder + RAM/cache_type config get the same handle, so RAM hits and
-# `clear_cache` mutations propagate across `with_input` copies without
-# per-instance wiring. Weak values: entries vanish when no Backend holds them.
+# `clear_cache` mutations propagate across `with_input`
+# Goes away with `with_input` deep-copy removal
 _CD_REGISTRY: weakref.WeakValueDictionary[
     tuple[str, bool, str | None], exca.cachedict.CacheDict[tp.Any]
 ] = weakref.WeakValueDictionary()
@@ -123,10 +123,7 @@ ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 class _CacheStatus:
     """Outcome of a cache lookup. Built via ``lookup``, which inspects
     CacheDict + ``errors.db`` once and pre-loads any cached exception
-    so downstream ``load`` stays single-SELECT.
-
-    Pure value object: no mode-aware methods (``Backend.run`` dispatches).
-    """
+    so downstream ``load`` stays single-SELECT."""
 
     outcome: tp.Literal["success", "error", None]
     _cd: exca.cachedict.CacheDict[tp.Any]
@@ -139,8 +136,7 @@ class _CacheStatus:
         cd: exca.cachedict.CacheDict[tp.Any],
         uid: str,
     ) -> "_CacheStatus":
-        """Read CacheDict first (a success is the most recent event);
-        on miss, fetch any error row and pre-load the exception."""
+        """Read CacheDict first — a success is the most recent event."""
         folder = cd.folder
         if folder is None or not folder.exists():
             return cls(None, cd, uid)
@@ -359,11 +355,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         )
 
     def _cache_dict(self) -> "exca.cachedict.CacheDict[tp.Any]":
-        """Registry-deduped CacheDict for this step. Re-queried every call
-        because deepcopy / unpickle drop to a fresh view via `CacheDict.__reduce__`."""
+        """Registry-deduped CacheDict for this step. Queried every call so
+        that deepcopy / unpickle pick the live view back up via the registry
+        (the deepcopied / unpickled `_cd` is a fresh view per `__reduce__`)."""
         ct = self._effective_cache_type()
-        # `permissions` is pinned to the CacheDict default; if Backend ever
-        # exposes it, add it to the key so peers don't collide.
         key = (str(self.paths.cache_folder), self.keep_in_ram, ct)
         # get / setdefault are non-atomic across threads — single-threaded
         # construction is assumed (Pydantic build, deepcopy, unpickle).
@@ -379,12 +374,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._cd = cd  # strong ref so the WeakValueDictionary entry survives
         return cd
 
-    def _lookup(self) -> _CacheStatus:
+    def _cache_status(self) -> _CacheStatus:
         return _CacheStatus.lookup(self._cache_dict(), self.paths.item_uid)
 
     def clear_cache(self) -> None:
-        """Delete cached row, error row, and rmtree job folder; best-effort
-        cancel any running job."""
+        """Drop everything cached for this item (cd row, error row, job folder)."""
         uid = self.paths.item_uid
         cd = self._cache_dict()
         # Cancel before rmtree — once `job.pkl` is gone, the handle is lost.
@@ -430,7 +424,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._check_configs(write=True)
 
         # Pre-lock fast path: cached value / cached error / read-only miss.
-        cache = self._lookup()
+        cache = self._cache_status()
         if cache.outcome == "success" and self.mode != "force":
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
             return cache.load()
@@ -449,7 +443,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             # Re-check under the lock — competitors may have populated.
             # `read-only` already returned/raised pre-lock; only "cached"
             # reaches the error branch here.
-            cache = self._lookup()
+            cache = self._cache_status()
             if cache.outcome == "success" and self.mode != "force":
                 return cache.load()
             if cache.outcome == "error" and self.mode == "cached":
@@ -490,9 +484,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         # Success is sticky: our worker computed `fresh`, so prefer it
         # over a competitor's error row that may have appeared between
-        # submit and re-lookup. If the cache row is the success path,
-        # use it (race-tolerant: handles concurrent rewrites).
-        cache = self._lookup()
+        # submit and re-lookup.
+        cache = self._cache_status()
         if cache.outcome == "success":
             return cache.load()
         return fresh

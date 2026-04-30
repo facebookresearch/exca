@@ -41,6 +41,20 @@ def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
     reg.close()
 
 
+def test_read_paths_dont_create_db(tmp_path: Path) -> None:
+    """Lookups and no-op clears on a never-existed DB must leave the folder
+    untouched (writers explicitly opt in via ``create=True``)."""
+    folder = tmp_path / "fresh"
+    folder.mkdir()
+    reg = errors.ErrorRegistry(folder)
+    db_path = folder / "errors.db"
+
+    assert reg.get(["x"]) == set()
+    assert reg.load("x") is None
+    reg.clear(["x"])
+    assert not db_path.exists()
+
+
 def test_context_manager(tmp_path: Path) -> None:
     """`with` closes the connection on exit and preserves subclass type."""
     with errors.ErrorRegistry(tmp_path) as reg:

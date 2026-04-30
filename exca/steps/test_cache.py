@@ -51,7 +51,7 @@ def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
     assert result1 == result2
     bound = step.with_input(*args)
     assert bound.infra is not None
-    assert bound.infra._lookup().load() == result1
+    assert bound.infra._cache_status().load() == result1
 
     # Clear and recompute gives different result
     step.with_input(*args).clear_cache()
@@ -375,21 +375,19 @@ def test_clear_cache_recursive(tmp_path: Path) -> None:
 
 
 def test_keep_in_ram(tmp_path: Path) -> None:
-    """Backend integration of `keep_in_ram`: clear_cache and force wipe
-    the RAM entry along with the disk row. (Per-CacheDict RAM behavior
-    is covered in `test_cachedict.py`.)"""
+    """Backend integration of `keep_in_ram`: `clear_cache` and `force` wipe
+    the RAM entry along with the disk row. (External rmtree is *not* a
+    documented invalidation path; `_ram_data` shadows missing JSONL.)"""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
     step = conftest.Add(value=10, randomize=True, infra=infra)
 
     out1 = step.run()
     assert step.has_cache()
 
-    # clear_cache() clears both disk and RAM
     step.infra.clear_cache()  # type: ignore[union-attr]
     out2 = step.run()
     assert out2 != out1
 
-    # Force mode also clears RAM cache
     step.infra.mode = "force"  # type: ignore[union-attr]
     out3 = step.run()
     assert out3 != out2

@@ -233,10 +233,10 @@ def test_pickle_is_view_only(tmp_path: Path) -> None:
     assert cache._ram_data
     revived = pickle.loads(pickle.dumps(cache))
     assert revived.folder == tmp_path
-    assert not revived._ram_data  # RAM not carried
-    assert revived["k"] == 7  # reads from disk
+    assert not revived._ram_data
+    assert revived["k"] == 7
     with revived.write():
-        revived["k2"] = 9  # writes work (fresh _local)
+        revived["k2"] = 9
 
 
 def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
