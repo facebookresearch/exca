@@ -240,6 +240,35 @@ def test_pickle_is_view_only(tmp_path: Path) -> None:
         revived["k2"] = 9  # writes work (fresh _local)
 
 
+def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
+    """JsonlReader must invalidate cached `_last` / `_meta` if the file
+    is replaced (different inode) or truncated below `_last`. Without
+    this, a registry-shared CacheDict surviving an external rmtree
+    + recompute would never re-read the new content."""
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path)
+    with cache.write():
+        cache["a"] = 1
+    [info_path] = list(tmp_path.glob("*-info.jsonl"))
+    reader = cd.JsonlReader(info_path)
+    assert "a" in reader.read()
+    last_after_first = reader._last
+    inode_after_first = reader._inode
+    assert last_after_first > 0 and inode_after_first is not None
+
+    # Replace the file: delete + recreate via a fresh CacheDict write
+    info_path.unlink()
+    cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path)
+    with cache2.write():
+        cache2["b"] = 2
+    [info_path2] = list(tmp_path.glob("*-info.jsonl"))
+    reader2 = cd.JsonlReader(info_path2)
+    reader2._last = last_after_first  # simulate a stale view
+    reader2._meta = {"_new_format": True}
+    reader2._inode = inode_after_first - 1  # fake stale inode
+    out = reader2.read()
+    assert "b" in out  # reader reset and saw the new content
+
+
 def test_2_caches(tmp_path: Path) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)

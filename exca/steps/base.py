@@ -279,7 +279,7 @@ class Step(exca.helpers.DiscriminatedModel):
             e.add_note(f"  -> in {step!r}")
             raise
 
-        # Reset force after a successful run.
+        # Reset force after a successful run (only when `with_input` made a copy).
         if step is not self and self.infra is not None and self.infra.mode == "force":
             object.__setattr__(self.infra, "mode", "cached")
 
@@ -566,8 +566,7 @@ class Chain(Step):
     def clear_cache(self, recursive: bool = True) -> None:
         """Clear cache, optionally including sub-steps."""
         if recursive:
-            # `with_input` only wires sub-step `_previous` so `paths` resolves;
-            # the CacheDict is shared via `_CD_REGISTRY`, no handle rewire.
+            # `with_input` only wires sub-step `_previous` so `paths` resolves.
             bound = self.with_input() if self._previous is None else self
             for sub in bound._step_sequence():
                 sub.clear_cache()

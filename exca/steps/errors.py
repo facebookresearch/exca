@@ -37,7 +37,7 @@ class ErrorRegistry(registry.AdvisoryRegistry):
         self, item_uid: str, exception: BaseException, traceback_text: str
     ) -> None:
         """Store ``(exception, traceback_text)`` for *item_uid*, replacing
-        any prior row. Per-uid; ``get`` / ``clear`` batch."""
+        any prior row."""
         try:
             blob = pickle.dumps(exception)
         except Exception:
@@ -79,9 +79,8 @@ class ErrorRegistry(registry.AdvisoryRegistry):
         return self._safe_execute("query", set(), _do)
 
     def load(self, item_uid: str) -> BaseException | None:
-        """Return the cached exception for *item_uid* (or ``None``).
-        Falls back to ``RuntimeError(traceback)`` if the pickled BLOB
-        can't be unpickled in this process."""
+        """Return the cached exception (``None`` if absent;
+        ``RuntimeError(traceback)`` if the BLOB can't be unpickled here)."""
 
         def _do(conn: sqlite3.Connection) -> tuple[bytes, str] | None:
             return conn.execute(

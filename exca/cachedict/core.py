@@ -153,9 +153,8 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram = self._keep_in_ram
         return f"{name}({self.folder},{keep_in_ram=})"
 
-    # View, not value: pickle / copy / deepcopy give a fresh view on the
-    # same folder. RAM contents are not carried (would silently ship
-    # potentially-large `_ram_data` cross-process).
+    # View, not value: pickle / deepcopy give a fresh view; `_ram_data`
+    # is dropped (would silently ship potentially-large data cross-process).
     def __reduce__(self) -> tp.Any:
         return (
             self.__class__,
@@ -178,12 +177,6 @@ class CacheDict(tp.Generic[X]):
             return True
         return len(self) > 0  # triggers key check
 
-    def get_in_ram(self, key: str, default: tp.Any = None) -> tp.Any:
-        """RAM-only lookup. Never reads from disk. Returns *default* if
-        the key is not RAM-cached. Survives external rmtree of the
-        folder, unlike ``__contains__`` / ``__getitem__``."""
-        return self._ram_data.get(key, default)
-
     def __len__(self) -> int:
         return len(list(self.keys()))  # inefficient, but correct
 
@@ -195,9 +188,7 @@ class CacheDict(tp.Generic[X]):
         return iter(keys)
 
     def _read_info_files(self, max_workers: int = 4) -> None:
-        """Load current info files. Returns silently if the folder
-        vanished (external rmtree) — disk-needing ops fail later with
-        a clearer error.
+        """Load current info files.
 
         Each writer appends to its own JSONL file, so concurrent writes
         of the same key produce duplicate entries across files.  For
@@ -361,10 +352,9 @@ class CacheDict(tp.Generic[X]):
             os.utime(self.folder)
 
     def __delitem__(self, key: str) -> None:
-        # Disk-backed: KeyError if the key isn't known (in RAM or in the
-        # JSONL index); missing on-disk files are tolerated (handlers use
-        # `missing_ok=True`) so a prior external rmtree doesn't trip a
-        # live RAM entry. RAM-only (no folder): best-effort, never raises.
+        # KeyError if unknown; missing on-disk artifacts are tolerated
+        # so a prior external rmtree doesn't trip a live RAM entry.
+        # RAM-only (no folder): best-effort, never raises.
         if self._dumper is None:
             self._ram_data.pop(key, None)
             return

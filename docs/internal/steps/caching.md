@@ -47,10 +47,10 @@ substitute `RuntimeError(text)` when the exception isn't picklable /
 loadable in this process (locally-defined class, class missing
 cross-venv).
 
-`Backend.clear_cache()` deletes the CacheDict entry first, then the
-`errors.db` row, then `rmtree(jobs/<uid>)`. A partial mid-clear
-(success gone, error row still there) surfaces as a recoverable cached
-error — fail closed, not open.
+`Backend.clear_cache()` cancels any running job for the uid, then
+deletes the CacheDict entry, the `errors.db` row, and `rmtree(jobs/<uid>)`
+in that order. A partial mid-clear (success gone, error row still
+there) surfaces as a recoverable cached error — fail closed, not open.
 
 ## RAM caching and the shared CacheDict
 
@@ -61,12 +61,13 @@ the handle, so RAM hits and `clear_cache` mutations propagate without
 explicit rewires. The entry dies with its last Backend; the next caller
 starts with empty RAM.
 
-With `keep_in_ram=True`, `Backend.run` short-circuits via
-`_cd.get_in_ram(uid)` before any disk read — a previously-loaded value
-survives an external rmtree. Cross-process workers get a fresh view via
-`CacheDict.__reduce__`; RAM is process-local by design. `_CachingCall`
-writes via its own (non-registry) CacheDict; the shared handle picks
-the new index up via folder-mtime invalidation in `_read_info_files`.
+With `keep_in_ram=True`, `Backend.run` short-circuits on the registry-
+shared CacheDict's `_ram_data` before any disk read — a previously-loaded
+value survives an external rmtree. Cross-process workers get a fresh
+view via `CacheDict.__reduce__`; RAM is process-local by design.
+`_CachingCall` writes via its own (non-registry) CacheDict; the shared
+handle picks the new index up via folder-mtime invalidation in
+`_read_info_files`.
 
 ## Concurrency
 
@@ -83,6 +84,12 @@ fast path only; it's re-checked under the lock before deciding to
 clear or re-submit. `force` always calls `clear_cache` under the lock,
 even on an empty cache, so a competitor that populated mid-wait doesn't
 hand its value back to the forcer.
+
+The session locks `inflight.db` only — direct user calls to
+`Backend.clear_cache` outside `Backend.run` race against in-flight
+workers. To absorb such races, `Backend.run` falls back to the worker's
+return value when the post-run cache lookup is empty (also covers
+mtime-miss and writer-skip cases).
 
 Both registries inherit from `AdvisoryRegistry` (`exca/cachedict/registry.py`)
 which provides `journal_mode=DELETE` (avoids WAL — WAL actively breaks

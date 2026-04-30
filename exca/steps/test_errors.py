@@ -123,7 +123,8 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
     monkeypatch.undo()
 
     # cd entry is gone, errors row remains → cached error on next read.
-    assert paths.has_cached_error() is True
+    with errors.ErrorRegistry(paths.cache_folder) as reg:
+        assert paths.item_uid in reg.get([paths.item_uid])
     with pytest.raises(ValueError):
         _add(False, tmp_path).run(5.0)
     # And recovers via retry.
@@ -138,7 +139,8 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     paths.ensure_folders()
     with errors.ErrorRegistry(paths.cache_folder) as reg:
         reg.record(paths.item_uid, RuntimeError("stale"), "tb")
-    assert paths.has_cached_error() is True
+        assert paths.item_uid in reg.get([paths.item_uid])
 
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
-    assert paths.has_cached_error() is False
+    with errors.ErrorRegistry(paths.cache_folder) as reg:
+        assert paths.item_uid not in reg.get([paths.item_uid])

@@ -5,7 +5,9 @@
 # LICENSE file in the root directory of this source tree.
 
 """AdvisoryRegistry plumbing tests, exercised through ErrorRegistry as
-a real consumer (uses its hidden ``_plant`` for bulk presence inserts)."""
+a real consumer. Seeding goes through ``ErrorRegistry._plant`` (cheap
+bulk presence insert) — these tests don't care about pickled-exception
+content; that path is covered in ``test_errors.py``."""
 
 import logging
 import sqlite3
@@ -19,11 +21,6 @@ from exca.cachedict import registry
 from exca.steps import errors
 
 
-def _record_one(reg: errors.ErrorRegistry, uid: str) -> None:
-    """Single-row record via the public API (exercises pickle path)."""
-    reg.record(uid, ValueError(uid), "tb")
-
-
 def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
     """DB is created on first op, not at construction; close() is safe to
     call twice; reconnect detects external deletion mid-session."""
@@ -31,13 +28,13 @@ def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
     db_path = tmp_path / "errors.db"
     assert not db_path.exists()
 
-    _record_one(reg, "a")
+    reg._plant(["a"])
     assert db_path.is_file()
     assert reg.get(["a"]) == {"a"}
 
     db_path.unlink()
     assert reg.get(["a"]) == set()
-    _record_one(reg, "b")
+    reg._plant(["b"])
     assert reg.get(["b"]) == {"b"}
 
     reg.close()
@@ -47,7 +44,7 @@ def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
 def test_context_manager(tmp_path: Path) -> None:
     """`with` closes the connection on exit and preserves subclass type."""
     with errors.ErrorRegistry(tmp_path) as reg:
-        _record_one(reg, "a")
+        reg._plant(["a"])
         assert reg.get(["a"]) == {"a"}
     # Re-using after __exit__ silently reconnects (lazy semantics).
     assert reg.get(["a"]) == {"a"}
@@ -182,7 +179,7 @@ def test_graceful_degradation(
 
     reg = errors.ErrorRegistry(tmp_path)
     with caplog.at_level(logging.WARNING):
-        _record_one(reg, "a")
+        reg._plant(["a"])
         reg.get(["a"])
     reg.close()
 
@@ -190,14 +187,14 @@ def test_graceful_degradation(
         db_path.chmod(stat.S_IRWXU)
 
     reg2 = errors.ErrorRegistry(tmp_path)
-    _record_one(reg2, "recovered")
+    reg2._plant(["recovered"])
     assert reg2.get(["recovered"]) == {"recovered"}
     reg2.close()
 
 
 def test_permissions_applied(tmp_path: Path) -> None:
     reg = errors.ErrorRegistry(tmp_path, permissions=0o600)
-    _record_one(reg, "a")
+    reg._plant(["a"])
     mode = stat.S_IMODE((tmp_path / "errors.db").stat().st_mode)
     assert mode == 0o600
     reg.close()

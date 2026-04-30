@@ -396,6 +396,27 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     assert out3 != out2
 
 
+def test_run_falls_back_when_cache_row_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the cache row is gone after the worker returned (concurrent
+    `clear_cache`, mtime miss, writer skip), `Backend.run` returns the
+    worker's value rather than raising or returning None."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(value=10, infra=infra)
+
+    real = backends._CachingCall.__call__
+
+    def skip_cache_write(self: tp.Any, *args: tp.Any) -> tp.Any:
+        # Compute and return the value, but do not persist it.
+        return self.func(*args)
+
+    monkeypatch.setattr(backends._CachingCall, "__call__", skip_cache_write)
+    assert step.run(5.0) == 15.0  # 5 + 10
+    monkeypatch.setattr(backends._CachingCall, "__call__", real)
+    assert not step.with_input(5.0).infra.has_cache()  # type: ignore[union-attr]
+
+
 def test_cd_shared_via_registry(tmp_path: Path) -> None:
     """Backends with matching `(folder, keep_in_ram, cache_type)` share
     one CacheDict via `_CD_REGISTRY`; a differing key does not."""
