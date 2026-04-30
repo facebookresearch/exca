@@ -129,7 +129,7 @@ addopts = ["--ignore=build", "--ignore=dist"]
 
 [tool.codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file
-skip = '.git,.gitignore,.gitattributes,*.css,*.pkl,*.svg,*.pdf,*.min.*'
+skip = '.git,.git-meta,.gitignore,.gitattributes,*.css,*.pkl,*.svg,*.pdf,*.min.*'
 check-hidden = true
 # ignore-regex = ''
 # expec: variable name (short for "expected") used in tests
