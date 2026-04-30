@@ -191,10 +191,8 @@ class BaseInfra(pydantic.BaseModel):
         return list(set(type(self).model_fields) - {"version"})
 
     def model_post_init(self, log__: tp.Any) -> None:
-        # Required: BaseInfra has private attrs, so pydantic installs
-        # `init_private_attributes` as model_post_init unless we define one.
-        # That bare function does not chain to super, which would break
-        # SubmititMixin's folder/cluster validation in MapInfra/TaskInfra MRO.
+        # required: pydantic's auto-generated init_private_attributes hook
+        # would otherwise replace this and skip SubmititMixin's validators
         super().model_post_init(log__)
 
     def config(self, uid: bool = True, exclude_defaults: bool = False) -> ConfDict:
