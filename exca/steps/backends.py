@@ -380,7 +380,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return cd
 
     def _lookup(self) -> _CacheStatus:
-        """Single-uid lookup shim around ``_CacheStatus.lookup``."""
         return _CacheStatus.lookup(self._cache_dict(), self.paths.item_uid)
 
     def clear_cache(self) -> None:
