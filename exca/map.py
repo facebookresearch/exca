@@ -70,6 +70,22 @@ class CachedMethod:
         return self.infra._method_override(items)
 
 
+def _make_pool_executor(pool: str, max_workers: int) -> futures.Executor:
+    """Falls back to ThreadPoolExecutor (with a warning) if ``pool="processpool"``
+    and ``ProcessPoolExecutor`` cannot be created (eg ``sem_open`` EPERM)."""
+    if pool == "processpool":
+        try:
+            return futures.ProcessPoolExecutor(max_workers=max_workers)
+        except PermissionError as e:
+            logger.warning(
+                "ProcessPoolExecutor unavailable (%s); falling back to "
+                "ThreadPoolExecutor. Set cluster='threadpool' or cluster=None "
+                "to silence this warning.",
+                e,
+            )
+    return futures.ThreadPoolExecutor(max_workers=max_workers)
+
+
 def to_chunks(
     items: list[X], *, max_chunks: int | None, min_items_per_chunk: int = 1
 ) -> tp.Iterator[list[X]]:
@@ -464,17 +480,12 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 elif missing:
                     if pool not in ("processpool", "threadpool"):
                         raise RuntimeError(f"Unexpected pool {pool!r}")
-                    ExecutorCls = (
-                        futures.ThreadPoolExecutor
-                        if pool == "threadpool"
-                        else futures.ProcessPoolExecutor
-                    )
                     jobs: list[futures.Future[tp.Any]] = []
                     cpus = max(1, (os.cpu_count() or 1) - 1)
                     max_workers = min(len(missing), cpus)
                     if self.max_jobs is not None:
                         max_workers = min(max_workers, self.max_jobs)
-                    with ExecutorCls(max_workers=max_workers) as ex:
+                    with _make_pool_executor(pool, max_workers) as ex:
                         mitems = [ki[1] for ki in missing]
                         chunks = to_chunks(mitems, max_chunks=3 * max_workers)
                         for chunk in chunks:
