@@ -527,7 +527,7 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
     _array_executor: submitit.Executor | None = pydantic.PrivateAttr(None)
 
     def _exclude_from_cls_uid(self) -> list[str]:
-        return ["."]  # not taken into accound for uid
+        return ["."]  # not taken into account for uid
 
     # pylint: disable=unused-argument
     def apply(self, method: base.C) -> base.C:
@@ -549,7 +549,7 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
         return property(self._infra_method)  # type: ignore
 
     def submit(self, *args: tp.Any, **kwargs: tp.Any) -> submitit.Job[tp.Any] | LocalJob:
-        """Submit an asynchroneous job. This call is non-blocking and returns a
+        """Submit an asynchronous job. This call is non-blocking and returns a
         :code:`Job` instance that has a :code:`result()` method that awaits
         for the computation to be over.
 

@@ -245,7 +245,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             - :code:`NumpyArray`:  stores numpy arrays as npy files (default for np.ndarray)
             - :code:`NumpyMemmapArray`: similar to NumpyArray but reloads arrays as memmaps
             - :code:`MemmapArrayFile`: stores multiple np.ndarray into a unique memmap file
-              (strongly adviced in case of many arrays)
+              (strongly advised in case of many arrays)
             - :code:`PandasDataFrame`: stores pandas dataframes as csv (default for dataframes)
             - :code:`ParquetPandasDataFrame`: stores pandas dataframes as parquet files
             - :code:`TorchTensor`: stores torch.Tensor as .pt file (default for tensors)
@@ -566,6 +566,6 @@ class MapInfraMethod(base.InfraMethod):
             collections.abc.Sequence,
         ]:
             raise TypeError(
-                "Decorated method single argument should be annnotated as List, Tuple, Sequence or Iterable "
+                "Decorated method single argument should be annotated as List, Tuple, Sequence or Iterable "
                 f"(got {origin} from {param!r})"
             )

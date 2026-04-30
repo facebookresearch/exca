@@ -73,7 +73,7 @@ class WorkDir(pydantic.BaseModel):
         file/folder name pattern than mush be excluded
     log_commit: bool
         if True, raises if current working directory is in a git repository
-        with uncommited changes and logs commit otherwise
+        with uncommitted changes and logs commit otherwise
 
     Notes
     -----
@@ -81,7 +81,7 @@ class WorkDir(pydantic.BaseModel):
       the copied packages should be the one running in the job
       (be careful there can be a few gotchas, eg: for debug cluster or with no cluster,
       the import cannot be not reloaded so the current working directory will be used,
-      but that should not make a difference in theses cases)
+      but that should not make a difference in these cases)
     - The change of working directory (and possibly the copy) only happens when the
       infra is called for submitting the decorated function. Depending on your code,
       this may not be at the very beginning of your execution.
@@ -120,7 +120,7 @@ class WorkDir(pydantic.BaseModel):
                 name = Path(folder.decode("utf8").strip()).name
                 if name in self._commits:
                     continue
-                # check commited
+                # check committed
                 subprocess.check_call(["git", "diff", "--exit-code"], shell=False, cwd=p)
                 # get git hash
                 cmd = ["git", "rev-parse", "--short", "HEAD"]
@@ -218,7 +218,7 @@ class Ignore:
         missing = set(names) - included
         path = Path(path)
         for excluded in missing:
-            # always include subfolders except if explicitely excluded below
+            # always include subfolders except if explicitly excluded below
             if (path / excluded).is_dir():
                 included.add(excluded)
         for exclude in self.excludes:

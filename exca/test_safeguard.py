@@ -51,7 +51,7 @@ def test_read_text_encoding() -> None:
     if found:
         found_str = "\n - ".join(found)
         msg = f"Following files contain read_text() without encoding:\n - {found_str}"
-        # this is dangereous as it will depend on local settings
+        # this is dangerous as it will depend on local settings
         raise AssertionError(msg)
 
 
@@ -86,7 +86,7 @@ def test_header() -> None:
 
 
 if __name__ == "__main__":
-    # run this test independantly to make sure only base exca is loaded
+    # run this test independently to make sure only base exca is loaded
     _: tp.Any = exca.MapInfra()
     _ = exca.TaskInfra()
     modules = ["torch", "mne", "pandas", "nibabel"]  # numpy is loaded
