@@ -331,7 +331,9 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def has_cache(self) -> bool:
         """Check if result is cached."""
-        return self.infra.has_cache() if self.infra else False
+        if self.infra is None:
+            return False
+        return backends._CacheStatus.lookup(self.infra).outcome is not None
 
     def clear_cache(self) -> None:
         """Clear cached result."""
@@ -482,15 +484,14 @@ class Chain(Step):
             elif force_active:
                 _set_mode_recursive([step], "force")
 
-        # Find latest cached result to skip already-computed steps
+        # Find latest cached result to skip already-computed steps.
         start_idx = 0
         for k, step in enumerate(reversed(steps)):
-            if step.infra is None:
+            if step.infra is None or step.infra.mode == "force":
                 continue
-            if step.infra.mode == "force":
-                continue
-            if step.infra.has_cache():
-                args = (step.infra.cached_result(),)
+            cache = backends._CacheStatus.lookup(step.infra)
+            if cache.outcome is not None:
+                args = (cache.load(),)
                 start_idx = len(steps) - k
                 break
 

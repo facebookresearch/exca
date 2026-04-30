@@ -8,7 +8,6 @@
 
 import copy
 import pickle
-import shutil
 import typing as tp
 from pathlib import Path
 
@@ -45,10 +44,11 @@ def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
     result1 = step.run(*args)
     assert step.with_input(*args).has_cache()
 
-    # Same result from cache (both via run() and via cached_result())
+    # Same result from cache (re-running hits the cache).
     result2 = step.run(*args)
     assert result1 == result2
-    assert step.with_input(*args).infra.cached_result() == result1  # type: ignore[union-attr]
+    bound = step.with_input(*args)
+    assert backends._CacheStatus.lookup(bound.infra).load() == result1  # type: ignore[arg-type]
 
     # Clear and recompute gives different result
     step.with_input(*args).clear_cache()
@@ -372,26 +372,22 @@ def test_clear_cache_recursive(tmp_path: Path) -> None:
 
 
 def test_keep_in_ram(tmp_path: Path) -> None:
-    """Test RAM caching: survives disk deletion, cleared by clear_cache and force."""
+    """Backend integration of `keep_in_ram`: clear_cache and force wipe
+    the RAM entry along with the disk row. (Per-CacheDict RAM behavior
+    is covered in `test_cachedict.py`.)"""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
     step = conftest.Add(value=10, randomize=True, infra=infra)
 
     out1 = step.run()
-    assert step.infra is not None
-    assert step.infra.has_cache()
-
-    # RAM cache survives disk deletion
-    shutil.rmtree(step.infra.paths.cache_folder)
-    assert not step.infra.has_cache()
-    assert step.run() == out1
+    assert step.has_cache()
 
     # clear_cache() clears both disk and RAM
-    step.infra.clear_cache()
+    step.infra.clear_cache()  # type: ignore[union-attr]
     out2 = step.run()
     assert out2 != out1
 
     # Force mode also clears RAM cache
-    step.infra.mode = "force"
+    step.infra.mode = "force"  # type: ignore[union-attr]
     out3 = step.run()
     assert out3 != out2
 
@@ -405,16 +401,14 @@ def test_run_falls_back_when_cache_row_absent(
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.Add(value=10, infra=infra)
 
-    real = backends._CachingCall.__call__
-
     def skip_cache_write(self: tp.Any, *args: tp.Any) -> tp.Any:
         # Compute and return the value, but do not persist it.
         return self.func(*args)
 
     monkeypatch.setattr(backends._CachingCall, "__call__", skip_cache_write)
     assert step.run(5.0) == 15.0  # 5 + 10
-    monkeypatch.setattr(backends._CachingCall, "__call__", real)
-    assert not step.with_input(5.0).infra.has_cache()  # type: ignore[union-attr]
+    monkeypatch.undo()
+    assert not step.with_input(5.0).has_cache()
 
 
 def test_cd_shared_via_registry(tmp_path: Path) -> None:

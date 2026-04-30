@@ -268,6 +268,23 @@ def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
     out = reader2.read()
     assert "b" in out  # reader reset and saw the new content
 
+    # Truncate-in-place (same inode, size shrinks below `_last`): the
+    # reader must reset, otherwise it would skip past the new content.
+    # Hand-craft to keep the inode stable (cache.write would replace).
+    reader3 = cd.JsonlReader(info_path2)
+    assert "b" in reader3.read()
+    last_before = reader3._last
+    inode_before = reader3._inode
+    assert last_before > 0 and inode_before is not None
+    new_line = b'{"#key": "c", "#type": "Pickle"}\n'
+    with info_path2.open("r+b") as f:
+        f.truncate(0)
+        f.seek(0)
+        f.write(new_line)
+    assert reader3._fp.stat().st_ino == inode_before  # truncate kept inode
+    out3 = reader3.read()
+    assert "c" in out3  # reset on truncate, saw new content
+
 
 def test_2_caches(tmp_path: Path) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)

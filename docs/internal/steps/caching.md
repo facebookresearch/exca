@@ -19,8 +19,9 @@ How a step's results, errors, and in-flight state are stored and how
 ```
 
 CacheDict holds successful values; `errors.db` holds the failed
-exception (BLOB + traceback TEXT) per uid. `inflight.db` is **advisory**;
-its loss degrades to "no coordination", never to wrong results.
+exception (BLOB + traceback TEXT) per uid. Both DBs are **advisory**:
+corruption / loss degrades to "recompute" / "no coordination", never
+to wrong results.
 
 ## Cache modes (`Backend.mode`)
 

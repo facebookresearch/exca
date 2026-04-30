@@ -112,6 +112,7 @@ class CacheDict(tp.Generic[X]):
       files to avoid interferences.
     - checking repeatedly for content can be slow if unavailable, as
       this will repeatedly reload all jsonl files
+    - ``pickle`` and ``copy.deepcopy`` return a fresh view with empty RAM cache.
     """
 
     def __init__(
@@ -352,16 +353,16 @@ class CacheDict(tp.Generic[X]):
             os.utime(self.folder)
 
     def __delitem__(self, key: str) -> None:
-        # KeyError if unknown; missing on-disk artifacts are tolerated
-        # so a prior external rmtree doesn't trip a live RAM entry.
-        # RAM-only (no folder): best-effort, never raises.
+        # Standard dict contract: raise KeyError if the key is unknown.
+        # On-disk artifacts are tolerated missing (a prior external
+        # rmtree shouldn't trip a live RAM entry).
         if self._dumper is None:
-            self._ram_data.pop(key, None)
+            del self._ram_data[key]
             return
         if key not in self._key_info:
             _ = key in self  # populate _key_info from disk
         self._ram_data.pop(key, None)
-        dinfo = self._key_info.pop(key)
+        dinfo = self._key_info.pop(key)  # raises KeyError if truly unknown
         dinfo.delete_info(ignore_errors=True)
         self._dumper.delete(dinfo.content)
 
