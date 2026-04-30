@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import concurrent.futures
 import logging
 import typing as tp
 from pathlib import Path
@@ -44,6 +45,13 @@ class Whatever(pydantic.BaseModel):
 def test_local_map_infra(
     tmp_path: Path, keep_in_ram: bool, with_folder: bool, cluster: str
 ) -> None:
+    # MapInfra would silently fall back to threadpool here; skip so the
+    # processpool case really exercises processes when available.
+    if cluster == "processpool":
+        try:
+            concurrent.futures.ProcessPoolExecutor(max_workers=1).shutdown()
+        except PermissionError as e:
+            pytest.skip(f"ProcessPoolExecutor unavailable: {e}")
     params: tp.Any = {"keep_in_ram": keep_in_ram, "cluster": cluster}
     if with_folder:
         params["folder"] = tmp_path
