@@ -13,6 +13,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from exca import utils
+
 from .dumpcontext import DumpContext
 
 # =============================================================================
@@ -120,13 +122,16 @@ def test_shared_file_lifecycle(tmp_path: Path) -> None:
     assert (tmp_path / name1).read_bytes() == b"hello"
 
 
-def test_context_permissions(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path, permissions=0o755)
+def test_context_permissions(tmp_path: Path, umask_guard: None) -> None:
+    utils.set_default_umask(0o022)  # dirs get 0o755, files get 0o644
+    ctx = DumpContext(tmp_path)
     with ctx:
         f, name = ctx.shared_file(".data")
         f.write(b"test")
-    mode = oct((tmp_path / name).stat().st_mode)[-3:]
-    assert mode == "755"
+    file_mode = oct((tmp_path / name).stat().st_mode)[-3:]
+    dir_mode = oct((tmp_path / DumpContext.DATA_DIR).stat().st_mode)[-3:]
+    assert file_mode == "644"
+    assert dir_mode == "755"
 
 
 # =============================================================================

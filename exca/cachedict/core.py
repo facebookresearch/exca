@@ -86,10 +86,6 @@ class CacheDict(tp.Generic[X]):
         If `None`, the type will be deduced automatically (Json for JSON-serializable values,
         or a type-specific handler for numpy arrays, tensors, etc.).
         Loading is handled using the cache_type specified in info files.
-    permissions: optional int
-        permissions for generated files
-        use os.chmod / path.chmod compatible numbers, or None to deactivate
-        eg: 0o777 for all rights to all users
 
     Usage
     -----
@@ -119,22 +115,14 @@ class CacheDict(tp.Generic[X]):
         folder: Path | str | None,
         keep_in_ram: bool = False,
         cache_type: None | str = None,
-        permissions: int | None = 0o777,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
-        self.permissions = permissions
         self.cache_type = cache_type
         self._keep_in_ram = keep_in_ram
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
         if self.folder is not None:
             self.folder.mkdir(exist_ok=True)
-            if self.permissions is not None:
-                try:
-                    self.folder.chmod(self.permissions)
-                except Exception as e:
-                    msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
-                    logger.warning(msg)
         # file cache access and RAM cache
         self._ram_data: dict[str, X] = {}
         self._key_info: dict[str, DumpInfo] = {}
@@ -145,7 +133,7 @@ class CacheDict(tp.Generic[X]):
         # DumpContext for this folder (load/delete; writes use per-thread _write_ctx)
         self._dumper: DumpContext | None = None
         if self.folder is not None:
-            self._dumper = DumpContext(self.folder, permissions=self.permissions)
+            self._dumper = DumpContext(self.folder)
         self._local = threading.local()  # per-thread write context, see _write_ctx
 
     def __repr__(self) -> str:
@@ -290,7 +278,7 @@ class CacheDict(tp.Generic[X]):
         if self._write_ctx is not None:
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
-            self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
+            self._write_ctx = DumpContext(self.folder)
         try:
             if self._write_ctx is not None:
                 with self._write_ctx:

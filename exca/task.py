@@ -240,7 +240,10 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         else:
             executor.update_parameters(slurm_array_parallelism=max_workers)
             executor.folder.mkdir(exist_ok=True, parents=True)
-            self._set_permissions(executor.folder)
+            # Widen executor.folder and every shared log-tree ancestor down
+            # to self.folder; the latter is itself widened by uid_folder.
+            assert self.folder is not None  # validated in SubmititMixin.model_post_init
+            utils.fix_permissions_up_to(executor.folder, Path(self.folder))
             name = self.uid().split("/", maxsplit=1)[0]
             # select jobs to run
             statuses: dict[Status, list[TaskInfra]] = collections.defaultdict(list)
@@ -326,8 +329,6 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
         with utils.temporary_save_path(job_path) as tmp:
             with tmp.open("wb") as f:
                 pickle.dump(job, f)
-        self._set_permissions(job_path)
-        # dump config
         self._check_configs(write=True)
         return job
 
@@ -367,6 +368,8 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             job._name = self._factory()  # for better logging message
         else:
             executor.folder.mkdir(exist_ok=True, parents=True)
+            assert self.folder is not None  # validated in SubmititMixin.model_post_init
+            utils.fix_permissions_up_to(executor.folder, Path(self.folder))
             with self._work_env():
                 job = executor.submit(self._run_method)
             logger.info(

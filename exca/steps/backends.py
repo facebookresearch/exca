@@ -129,6 +129,17 @@ class StepPaths:
         """Create necessary directories."""
         self.cache_folder.mkdir(parents=True, exist_ok=True)
         self.job_folder.mkdir(parents=True, exist_ok=True)
+        # Widen shared parents in case a teammate's earlier run created them
+        # with stricter umask (the per-item job_folder leaf is fresh so umask
+        # already covers it).
+        utils.fix_permissions(self.cache_folder)
+        utils.fix_permissions(self.job_folder.parent)
+        # The logs parent is created lazily by submitit at submit time;
+        # widen on subsequent runs only, when a teammate's earlier run
+        # would have left it with stricter perms.
+        logs = self.step_folder / "logs"
+        if logs.exists():
+            utils.fix_permissions(logs)
 
     def clear_cache(self) -> None:
         """Clear cache and job folder for this item."""
@@ -165,6 +176,8 @@ class _CachingCall:
         self.cache_type = cache_type
 
     def __call__(self, *args: tp.Any) -> None:
+        # Worker entry for Steps: re-apply umask before any folder/file write.
+        utils.apply_default_umask()
         self.paths.ensure_folders()
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=self.paths.cache_folder, cache_type=self.cache_type
@@ -315,6 +328,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         step = self._configured_step()
         folder = self.paths.step_folder
         folder.mkdir(exist_ok=True, parents=True)
+        # Widen the user-provided step_folder if pre-existing with stricter perms.
+        # Done here rather than in ensure_folders so the Backend.job() path
+        # (which calls _check_configs without ensure_folders) is also covered.
+        utils.fix_permissions(folder)
 
         # Use the full aligned chain as the config (list of steps)
         # This ensures consistent configs whether written by chain or step

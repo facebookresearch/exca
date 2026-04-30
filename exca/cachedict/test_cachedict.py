@@ -105,8 +105,13 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
 )
 @pytest.mark.parametrize("keep_in_ram", (True, False))
 def test_specialized_dump(
-    tmp_path: Path, data: tp.Any, cache_type: str, keep_in_ram: bool
+    tmp_path: Path,
+    data: tp.Any,
+    cache_type: str,
+    keep_in_ram: bool,
+    umask_guard: None,
 ) -> None:
+    utils.set_default_umask(0)  # writes get 0o777 on dirs, 0o666 on files
     memmap_cache_size = 10
     if cache_type.endswith(":0"):
         cache_type = cache_type[:-2]
@@ -133,12 +138,12 @@ def test_specialized_dump(
         assert files, "Some memmaps should stay open"
     del cache
     gc.collect()
-    # check permissions
-    octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
-    assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
+    # umask 0 ⇒ dirs get 0o777, files get 0o666 (no +x). tmp_path itself was
+    # created by pytest before the umask install, so we don't assert its mode.
     for fp in tmp_path.rglob("*"):
-        octal_permissions = oct(fp.stat().st_mode)[-3:]
-        assert octal_permissions == "777", f"Wrong permissions for {fp}"
+        expected = "777" if fp.is_dir() else "666"
+        actual = oct(fp.stat().st_mode)[-3:]
+        assert actual == expected, f"Wrong permissions for {fp}: {actual}"
     # after del, all files should be closed
     files = proc.open_files()
     assert not files, "No file should remain open after del cache"

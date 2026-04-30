@@ -435,17 +435,6 @@ def test_changing_defaults(tmp_path: Path) -> None:
         _ = whenever.process()
 
 
-def test_permissions(tmp_path: Path) -> None:
-    infra = Whatever(infra1={"permissions": "a+rwx"}).infra1  # type: ignore
-    fp = tmp_path / "test" / "whatever" / "text.txt"
-    fp.parent.mkdir(parents=True)
-    fp.touch()
-    before = fp.stat().st_mode
-    infra._set_permissions(fp)
-    after = fp.stat().st_mode
-    assert after > before
-
-
 class D2(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     uid: tp.Literal["D2"] = "D2"

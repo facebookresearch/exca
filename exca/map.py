@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pydantic
 
-from . import base, slurm
+from . import base, slurm, utils
 from .cachedict import CacheDict, inflight
 from .utils import ShortItemUid
 
@@ -194,10 +194,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             raise RuntimeError(f"Infra was not applied: {self!r}")
         cache_type = imethod.cache_type
         cache_path = self.uid_folder(create=True)
-        if isinstance(self.permissions, str):
-            self._set_permissions(None)
-        if isinstance(self.permissions, str):
-            raise RuntimeError("infra.permissions should have been an integer")
         cd: CacheDict[tp.Any] = CacheDict(
             folder=cache_path,
             keep_in_ram=self.keep_in_ram,
@@ -211,8 +207,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         cache_folder = self.uid_folder()
         if cache_folder is None:
             return None
-        perm = self.permissions if isinstance(self.permissions, int) else None
-        return inflight.InflightRegistry(cache_folder, permissions=perm)
+        return inflight.InflightRegistry(cache_folder)
 
     # pylint: disable=unused-argument
     def apply(
@@ -510,6 +505,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     def _call_and_store(
         self, items: tp.Sequence[tp.Any], use_cache_dict: bool = True
     ) -> dict[str, tp.Any]:
+        # Worker entry for MapInfra: re-apply umask before cache_dict mkdirs the
+        # uid folder. _run_method's own apply_default_umask runs too late here.
+        utils.apply_default_umask()
         d: dict[str, tp.Any] = self.cache_dict if use_cache_dict else {}  # type: ignore
         imethod = self._infra_method
         if imethod is None:

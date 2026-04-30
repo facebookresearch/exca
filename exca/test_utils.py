@@ -581,3 +581,106 @@ def test_short_item_uid_idempotent(length: int) -> None:
     short = ShortItemUid(str, 256)
     once = short("a" * length)
     assert short(once) == once
+
+
+# -----------------------------------------------------------------------------
+# umask helpers
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, None),
+        ("0", 0),
+        ("022", 0o022),
+        ("0o022", 0o022),
+        ("22", 0o022),
+        ("777", 0o777),
+    ],
+)
+def test_read_umask_env(
+    monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: int | None
+) -> None:
+    if raw is None:
+        monkeypatch.delenv("EXCA_UMASK", raising=False)
+    else:
+        monkeypatch.setenv("EXCA_UMASK", raw)
+    assert utils._read_umask_env() == expected
+
+
+@pytest.mark.parametrize("raw", ["", "abc", "0o", "0o9", "-1", "1000"])
+def test_read_umask_env_invalid(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setenv("EXCA_UMASK", raw)
+    with pytest.raises(ValueError, match="EXCA_UMASK"):
+        utils._read_umask_env()
+
+
+def test_helpers_noop_when_unset(tmp_path: Path, umask_guard: None) -> None:
+    """All helpers share the ``_DEFAULT_UMASK is None`` early return."""
+    utils.set_default_umask(None)
+    fp = tmp_path / "f.txt"
+    fp.write_text("x")
+    fp.chmod(0o600)
+    sentinel = 0o123
+    os.umask(sentinel)
+    utils.apply_default_umask()
+    utils.fix_permissions(fp)
+    utils.fix_permissions_up_to(fp, tmp_path)
+    assert os.umask(sentinel) == sentinel
+    assert oct(fp.stat().st_mode)[-3:] == "600"
+
+
+def test_fix_permissions(
+    tmp_path: Path, umask_guard: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Recursive widen splits dir/file modes; missing path warns rather than raises."""
+    utils.set_default_umask(0o022)
+    sub = tmp_path / "sub" / "deep"
+    sub.mkdir(parents=True)
+    fp = sub / "f.txt"
+    fp.write_text("x")
+    for p in (tmp_path / "sub", sub, fp):
+        p.chmod(0o600 if p.is_file() else 0o700)
+    utils.fix_permissions(tmp_path / "sub", recursive=True)
+    for d in (tmp_path / "sub", sub):
+        assert oct(d.stat().st_mode)[-3:] == "755"
+    assert oct(fp.stat().st_mode)[-3:] == "644"
+    with caplog.at_level("WARNING", logger="exca.utils"):
+        utils.fix_permissions(tmp_path / "missing")
+    assert any("Failed to widen" in r.message for r in caplog.records)
+
+
+def test_fix_permissions_up_to(tmp_path: Path, umask_guard: None) -> None:
+    """Widen the chain leaf→root (root excluded); bail when leaf is not under root."""
+    utils.set_default_umask(0o022)
+    leaf = tmp_path / "logs" / "alice" / "%j"
+    leaf.mkdir(parents=True)
+    chain = [tmp_path / "logs", tmp_path / "logs" / "alice", leaf]
+    for d in [*chain, tmp_path]:
+        d.chmod(0o700)
+    utils.fix_permissions_up_to(leaf, tmp_path)
+    for d in chain:
+        assert oct(d.stat().st_mode)[-3:] == "755"
+    assert oct(tmp_path.stat().st_mode)[-3:] == "700"  # root excluded
+    other = tmp_path / "other"
+    other.mkdir()
+    other.chmod(0o700)
+    utils.fix_permissions_up_to(other, tmp_path / "missing")
+    assert oct(other.stat().st_mode)[-3:] == "700"
+
+
+def test_fix_permissions_up_to_normalizes_relative(
+    tmp_path: Path, umask_guard: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Submitit absolute-resolves executor.folder; helper must do the same so a
+    relative ``self.folder`` root doesn't silently bypass the chain check."""
+    utils.set_default_umask(0o022)
+    monkeypatch.chdir(tmp_path)
+    leaf = Path("logs") / "deep"
+    leaf.mkdir(parents=True)
+    for d in (tmp_path / "logs", leaf):
+        d.chmod(0o700)
+    utils.fix_permissions_up_to(leaf, tmp_path)
+    for d in (tmp_path / "logs", tmp_path / "logs" / "deep"):
+        assert oct(d.stat().st_mode)[-3:] == "755"

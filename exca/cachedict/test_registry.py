@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from exca import utils
 from exca.cachedict import registry
 from exca.steps import errors
 
@@ -186,8 +187,10 @@ def test_graceful_degradation(
     reg2.close()
 
 
-def test_permissions_applied(tmp_path: Path) -> None:
-    reg = errors.ErrorRegistry(tmp_path, permissions=0o600)
+def test_permissions_applied(tmp_path: Path, umask_guard: None) -> None:
+    # files get 0o600 on creation: open(0o666) & ~0o066 = 0o600
+    utils.set_default_umask(0o066)
+    reg = errors.ErrorRegistry(tmp_path)
     reg.record(["a"])
     mode = stat.S_IMODE((tmp_path / "errors.db").stat().st_mode)
     assert mode == 0o600
