@@ -45,8 +45,6 @@ def test_unpicklable_exception_falls_back_to_runtime_error(tmp_path: Path) -> No
     """Both writer (un-picklable on dump) and reader (un-importable on load)
     fall back to RuntimeError(traceback)."""
 
-    # Locally-scoped → un-picklable from this position; exercises the
-    # writer-side fallback.
     class _Local(Exception):
         pass
 
@@ -103,10 +101,8 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
 def test_clear_cache_partial_failure_leaves_recoverable_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`Backend.clear_cache` clears the CacheDict entry first, then the errors
-    row. A crash on the second step leaves the error row standing, so the next
-    read surfaces a cached error (recoverable via retry/force) rather than
-    a silent stale-success."""
+    """A crash between cd-delete and errors-clear must leave a cached error,
+    not a stale success."""
     step = _add(False, tmp_path)
     assert step.run(5.0) == 6.0
     bound = step.with_input(5.0)

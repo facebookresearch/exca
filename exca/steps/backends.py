@@ -46,7 +46,6 @@ class NoValue:
 # folder + RAM/cache_type config get the same handle, so RAM hits and
 # `clear_cache` mutations propagate across `with_input` copies without
 # per-instance wiring. Weak values: entries vanish when no Backend holds them.
-# TODO: revisit when step-items reshapes Step lifecycle.
 _CD_REGISTRY: weakref.WeakValueDictionary[
     tuple[str, bool, str | None], exca.cachedict.CacheDict[tp.Any]
 ] = weakref.WeakValueDictionary()
@@ -126,40 +125,46 @@ class _CacheStatus:
     CacheDict + ``errors.db`` once and pre-loads any cached exception
     so downstream ``load`` stays single-SELECT.
 
-    Pure value object: no mode-aware methods (``Backend.run`` does the
-    dispatch). Forward-compatible with ``QueryHandle`` in step-items.
+    Pure value object: no mode-aware methods (``Backend.run`` dispatches).
     """
 
     outcome: tp.Literal["success", "error", None]
-    _backend: "Backend"
+    _cd: exca.cachedict.CacheDict[tp.Any]
+    _uid: str
     _err: BaseException | None = None  # pre-loaded; see `lookup`.
 
     @classmethod
-    def lookup(cls, backend: "Backend") -> "_CacheStatus":
+    def lookup(
+        cls,
+        cd: exca.cachedict.CacheDict[tp.Any],
+        uid: str,
+    ) -> "_CacheStatus":
         """Read CacheDict first (a success is the most recent event);
         on miss, fetch any error row and pre-load the exception."""
-        paths = backend.paths
-        if not paths.cache_folder.exists():
-            return cls(None, backend)
-        if paths.item_uid in backend._cache_dict():
-            return cls("success", backend)
-        with errors.ErrorRegistry(paths.cache_folder) as reg:
-            err = reg.load(paths.item_uid)
+        folder = cd.folder
+        if folder is None or not folder.exists():
+            return cls(None, cd, uid)
+        if uid in cd:
+            return cls("success", cd, uid)
+        with errors.ErrorRegistry(folder) as reg:
+            err = reg.load(uid)
         if err is None:
-            return cls(None, backend)
+            return cls(None, cd, uid)
         # Fresh exception every call — `add_note` mutates, so caching
         # the instance would accumulate duplicate notes across reads.
-        err.add_note("     reraising from cache; use mode='retry' to recompute")
-        return cls("error", backend, _err=err)
+        err.add_note(
+            f"     reraising from cache {folder}[{uid}]; use mode='retry' to recompute"
+        )
+        return cls("error", cd, uid, _err=err)
 
     def load(self) -> tp.Any:
         """Return the cached value, re-raise the cached error, or
         ``None`` if absent."""
         if self.outcome == "success":
-            b = self._backend
-            return b._cache_dict()[b.paths.item_uid]
+            return self._cd[self._uid]
         if self.outcome == "error":
-            assert self._err is not None  # `lookup` always pre-loads.
+            if self._err is None:  # `lookup` always pre-loads on "error".
+                raise RuntimeError(f"_CacheStatus(error) missing _err for {self._uid}")
             raise self._err
         return None
 
@@ -374,14 +379,13 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._cd = cd  # strong ref so the WeakValueDictionary entry survives
         return cd
 
-    def clear_cache(self) -> None:
-        """Delete cached result (disk + RAM) and any errored row, and
-        best-effort cancel any still-running job for this item.
+    def _lookup(self) -> _CacheStatus:
+        """Single-uid lookup shim around ``_CacheStatus.lookup``."""
+        return _CacheStatus.lookup(self._cache_dict(), self.paths.item_uid)
 
-        Cancellation is best-effort: a failure (unpickleable handle,
-        backend gone) is logged and the rest of the clear proceeds —
-        callers depend on disk being wiped, not on the worker stopping.
-        """
+    def clear_cache(self) -> None:
+        """Delete cached row, error row, and rmtree job folder; best-effort
+        cancel any running job."""
         uid = self.paths.item_uid
         cd = self._cache_dict()
         # Cancel before rmtree — once `job.pkl` is gone, the handle is lost.
@@ -393,7 +397,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     job.cancel()
             except Exception as e:
                 # Fail open: disk wipe still happens below.
-                logger.warning("Failed to cancel %s: %s", self.paths.job_pkl, e)
+                logger.warning(
+                    "Failed to cancel %s[%s]: %s",
+                    self.paths.step_uid,
+                    uid,
+                    e,
+                )
         # Order: success first, then error row. A partial mid-clear
         # (success gone, error still there) surfaces as a recoverable
         # cached error rather than a silent stale-success — fail closed.
@@ -422,9 +431,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._check_configs(write=True)
 
         # Pre-lock fast path: cached value / cached error / read-only miss.
-        # RAM hits are served here — `lookup` -> `__contains__` checks
-        # `_ram_data` first, then `cache.load()` reads it from RAM too.
-        cache = _CacheStatus.lookup(self)
+        cache = self._lookup()
         if cache.outcome == "success" and self.mode != "force":
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
             return cache.load()
@@ -441,10 +448,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             reg = inflight.InflightRegistry(self.paths.cache_folder)
         with inflight.inflight_session(reg, [item_uid]):
             # Re-check under the lock — competitors may have populated.
-            cache = _CacheStatus.lookup(self)
+            # `read-only` already returned/raised pre-lock; only "cached"
+            # reaches the error branch here.
+            cache = self._lookup()
             if cache.outcome == "success" and self.mode != "force":
                 return cache.load()
-            if cache.outcome == "error" and self.mode in ("cached", "read-only"):
+            if cache.outcome == "error" and self.mode == "cached":
                 cache.load()  # raises
 
             # force always wipes; retry only on a cached error.
@@ -460,10 +469,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 self.clear_cache()  # cancels any running job
 
             # Recover an in-flight prior job (driver crash, retry of a
-            # done-but-failed job). force / retry-on-error already cleared.
-            # Retry + still-running job: we keep the existing handle —
-            # the prior worker may yet succeed, or fail and re-record;
-            # either way the running job is the latest attempt.
+            # done-but-failed job). force / retry-on-error already cleared;
+            # retry + still-running keeps the existing handle.
             job = self.job()
             if job is not None and self.mode == "retry" and job.done():
                 try:
@@ -486,7 +493,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         # over a competitor's error row that may have appeared between
         # submit and re-lookup. If the cache row is the success path,
         # use it (race-tolerant: handles concurrent rewrites).
-        cache = _CacheStatus.lookup(self)
+        cache = self._lookup()
         if cache.outcome == "success":
             return cache.load()
         return fresh

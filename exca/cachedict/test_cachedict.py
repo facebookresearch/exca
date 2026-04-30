@@ -7,6 +7,7 @@
 import gc
 import logging
 import os
+import pickle
 import typing as tp
 from concurrent import futures
 from pathlib import Path
@@ -225,8 +226,6 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
 def test_pickle_is_view_only(tmp_path: Path) -> None:
     """CacheDict pickles as a view: same folder, no RAM payload. Disk
     contents are visible via the unpickled view (re-read from JSONL)."""
-    import pickle
-
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=True)
     with cache.write():
         cache["k"] = 7
@@ -242,9 +241,7 @@ def test_pickle_is_view_only(tmp_path: Path) -> None:
 
 def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
     """JsonlReader must invalidate cached `_last` / `_meta` if the file
-    is replaced (different inode) or truncated below `_last`. Without
-    this, a registry-shared CacheDict surviving an external rmtree
-    + recompute would never re-read the new content."""
+    is replaced (different inode) or truncated below `_last`."""
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path)
     with cache.write():
         cache["a"] = 1

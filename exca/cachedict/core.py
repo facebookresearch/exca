@@ -128,14 +128,6 @@ class CacheDict(tp.Generic[X]):
         self._keep_in_ram = keep_in_ram
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
-        if self.folder is not None:
-            self.folder.mkdir(exist_ok=True)
-            if self.permissions is not None:
-                try:
-                    self.folder.chmod(self.permissions)
-                except Exception as e:
-                    msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
-                    logger.warning(msg)
         # file cache access and RAM cache
         self._ram_data: dict[str, X] = {}
         self._key_info: dict[str, DumpInfo] = {}
@@ -162,16 +154,30 @@ class CacheDict(tp.Generic[X]):
             (self.folder, self._keep_in_ram, self.cache_type, self.permissions),
         )
 
+    def _ensure_folder(self) -> None:
+        """Create folder + apply permissions on demand. Called at first write
+        so lookups on never-written caches stay side-effect free."""
+        if self.folder is None or self.folder.exists():
+            return
+        self.folder.mkdir(parents=True, exist_ok=True)
+        if self.permissions is not None:
+            try:
+                self.folder.chmod(self.permissions)
+            except Exception as e:
+                msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
+                logger.warning(msg)
+
     def clear(self) -> None:
         self._ram_data.clear()
         self._key_info.clear()
-        if self.folder is not None:
-            # let's remove content but not the folder to keep same permissions
-            for sub in self.folder.iterdir():
-                if sub.is_dir():
-                    shutil.rmtree(sub)
-                else:
-                    sub.unlink()
+        if self.folder is None or not self.folder.exists():
+            return
+        # let's remove content but not the folder to keep same permissions
+        for sub in self.folder.iterdir():
+            if sub.is_dir():
+                shutil.rmtree(sub)
+            else:
+                sub.unlink()
 
     def __bool__(self) -> bool:
         if self._ram_data or self._key_info:
@@ -299,6 +305,7 @@ class CacheDict(tp.Generic[X]):
         if self._write_ctx is not None:
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
+            self._ensure_folder()
             self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
         try:
             if self._write_ctx is not None:
@@ -362,7 +369,7 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = key in self  # populate _key_info from disk
         self._ram_data.pop(key, None)
-        dinfo = self._key_info.pop(key)  # raises KeyError if truly unknown
+        dinfo = self._key_info.pop(key)
         dinfo.delete_info(ignore_errors=True)
         self._dumper.delete(dinfo.content)
 

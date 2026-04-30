@@ -39,9 +39,9 @@ to wrong results.
 - **Failure**: `INSERT OR REPLACE INTO errors (item_uid, exception, traceback)`
   with the pickled exception and formatted traceback, then re-raise.
 
-`_cache_status` checks CacheDict first (success is the most recent
-event for the uid), then loads any cached exception in one SELECT
-against `errors.db`. The BLOB carries the live exception (with
+`_CacheStatus.lookup(cd, uid)` checks CacheDict first (success is the
+most recent event for the uid), then loads any cached exception in one
+SELECT against `errors.db`. The BLOB carries the live exception (with
 `__notes__` set by the writer); on re-raise the reader appends the
 retry hint. The TEXT traceback is a degraded fallback: writer / reader
 substitute `RuntimeError(text)` when the exception isn't picklable /
@@ -62,13 +62,13 @@ the handle, so RAM hits and `clear_cache` mutations propagate without
 explicit rewires. The entry dies with its last Backend; the next caller
 starts with empty RAM.
 
-With `keep_in_ram=True`, `Backend.run` short-circuits on the registry-
-shared CacheDict's `_ram_data` before any disk read — a previously-loaded
-value survives an external rmtree. Cross-process workers get a fresh
-view via `CacheDict.__reduce__`; RAM is process-local by design.
-`_CachingCall` writes via its own (non-registry) CacheDict; the shared
-handle picks the new index up via folder-mtime invalidation in
-`_read_info_files`.
+With `keep_in_ram=True`, `__contains__` and `__getitem__` consult
+`_ram_data` before disk, so repeat reads don't re-decode. Lookup
+short-circuits on `folder.exists()=False`, so an external rmtree
+invalidates RAM too. Cross-process workers get a fresh view via
+`CacheDict.__reduce__`. `_CachingCall` writes via its own (non-registry)
+CacheDict; the shared handle picks the new index up via folder-mtime
+invalidation in `_read_info_files`.
 
 ## Concurrency
 
