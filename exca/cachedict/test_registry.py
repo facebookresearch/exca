@@ -43,7 +43,7 @@ def test_context_manager(tmp_path: Path) -> None:
     with errors.ErrorRegistry(tmp_path) as reg:
         reg.record(["a"])
         assert reg.get(["a"]) == {"a"}
-    # Re-using after __exit__ silently reconnects (lazy semantics).
+    # Reusing after __exit__ silently reconnects (lazy semantics).
     assert reg.get(["a"]) == {"a"}
     reg.close()
 

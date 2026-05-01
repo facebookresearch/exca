@@ -45,7 +45,7 @@ Pydantic hierarchical configuration and discriminated unions allows for modulari
 
 `TaskInfra` must be applied to a method with no parameter (except `self`). It links 1 computation to 1 job and therefore provides easy tools for accessing the job stdout/stderr/status etc.
 
-`MapInfra` on the other hand must be applied to a method with 1 parameter (in addition to `self`) which must be a `m`-sized iterator/sequence of items. It requires stating how to provide a unique uid for each item (throught the `item_uid` function, and it maps `m` computation (1 for each item) to `n <= m` jobs, packing several computations together. Because of this non-bijective mapping, there is no support for checking jobs stderr/stdout/status.
+`MapInfra` on the other hand must be applied to a method with 1 parameter (in addition to `self`) which must be a `m`-sized iterator/sequence of items. It requires stating how to provide a unique uid for each item (through the `item_uid` function, and it maps `m` computation (1 for each item) to `n <= m` jobs, packing several computations together. Because of this non-bijective mapping, there is no support for checking jobs stderr/stdout/status.
 
 
 ## uid computation
@@ -54,7 +54,7 @@ A unique id, the `uid`, is computed for each pydantic model/each config based on
 - which are non-defaults
 - which are not excluded through the `_exclude_from_cls_uid` class attribute list/tuple 
   (or class method returning a list/tuple). This allows removing parameters which do not impact 
-  the result (eg: number of workers, device, ect...). 
+  the result (eg: number of workers, device, etc...). 
 
 *Note*: `infra` objects have all their parameters excluded except `version` as the parameters affects how the computation
 is performed but not the result
@@ -65,7 +65,7 @@ to post-process the cached computation). This is done by specifying `exclude_fro
 `infra.apply` method. This cache uid is used as storage folder name for the cache.
 Exclusion can be specified as a list/tuple of field, or as a method, or as the name of a method 
 (with format `method:<method_name>`). Notice that when subclassing, if you specified the exclusion
-as a function, the original function will be used (not the new function if it was overriden), 
+as a function, the original function will be used (not the new function if it was overridden), 
 if you want to use the new one, then you should specify the method through its name.
 
 See more in the [example](howto-efficient-caching) from the how-to guide.

@@ -79,7 +79,7 @@ class SubmititMixin(pydantic.BaseModel):
     slurm_partition: optional str
         partition for the slurm job
     slurm_use_srun: bool
-        use srun in the sbatch file. This is the default in submitit, but not adviced
+        use srun in the sbatch file. This is the default in submitit, but not advised
         for jobs triggering more jobs.
     slurm_additional_parameters: optional dict
         additional parameters for slurm that are not first class parameters of this config

@@ -322,7 +322,7 @@ class CacheDict(tp.Generic[X]):
         if self._folder_modified <= 0:
             _ = self.keys()
         if key in self._ram_data or key in self._key_info:
-            raise ValueError(f"Overwritting a key is currently not implemented ({key=})")
+            raise ValueError(f"Overwriting a key is currently not implemented ({key=})")
         if self._keep_in_ram and self.folder is None:
             self._ram_data[key] = value
         if self.folder is not None:

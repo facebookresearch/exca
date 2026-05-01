@@ -64,14 +64,14 @@ class ChainMixin:
     ...
 
 class NeuralChain(ChainMixin, NeuralStep):
-    steps: list[NeuralStep] | ...  # must re-declare (mixin can't own the field)
+    steps: list[NeuralStep] | ...  # must redeclare (mixin can't own the field)
 ```
 
 **Pros**: no diamond, no `# type: ignore`, more extensible (any class can mix
 in chain behavior).
 
 **Cons**: bigger refactor (~200 lines moved), breaks `isinstance(x, Chain)` for
-downstream chains, requires re-declaring `steps` on every chain subclass, and
+downstream chains, requires redeclaring `steps` on every chain subclass, and
 downstream code must migrate.
 
 **Decision**: `_exca_chain_class` is non-breaking and solves the immediate

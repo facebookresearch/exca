@@ -92,7 +92,7 @@ class ConfDict(dict[str, tp.Any]):
 
     Example
     -------
-    :code:`ConDict({"training.optim.lr": 0.01}) == {"training": {"optim": {"lr": 0.01}}}`
+    :code:`ConfDict({"training.optim.lr": 0.01}) == {"training": {"optim": {"lr": 0.01}}}`
 
     Note
     ----
@@ -234,7 +234,7 @@ class ConfDict(dict[str, tp.Any]):
 
     def to_yaml(self, filepath: Path | str | None = None) -> str:
         """Exports the ConfDict to yaml string
-        and optionnaly to a file if a filepath is provided
+        and optionally to a file if a filepath is provided
         """
         out: str = _yaml.safe_dump(_to_simplified_dict(self), sort_keys=True)
         if filepath is not None:
