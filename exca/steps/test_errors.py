@@ -4,34 +4,67 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import pickle
+import sqlite3
 import typing as tp
 from pathlib import Path
 
 import pytest
 
-import exca.cachedict
 from exca.steps import backends, conftest, errors
 
 
 def test_error_registry_lifecycle(tmp_path: Path) -> None:
-    """API surface: record / get / clear + idempotent re-record."""
+    """API surface: record / get / load / clear + REPLACE on re-record."""
     reg = errors.ErrorRegistry(tmp_path)
 
-    reg.record([])
     reg.clear([])
     assert reg.get([]) == set()
+    assert reg.load("absent") is None
 
-    reg.record(["a", "b"])
+    e1 = ValueError("boom")
+    reg.record("a", e1, "tb1")
+    reg.record("b", RuntimeError("kaboom"), "tb2")
+
     assert reg.get(["a", "missing"]) == {"a"}
     assert reg.get(None) == {"a", "b"}
 
-    # Re-record is idempotent (uid still present, no error).
-    reg.record(["a"])
-    assert reg.get(["a"]) == {"a"}
+    loaded = reg.load("a")
+    assert isinstance(loaded, ValueError) and str(loaded) == "boom"
+
+    # Re-record overwrites (INSERT OR REPLACE).
+    reg.record("a", KeyError("new"), "tb3")
+    loaded = reg.load("a")
+    assert isinstance(loaded, KeyError)
 
     reg.clear(["a", "never_recorded"])
     assert reg.get(["a", "b"]) == {"b"}
+    reg.close()
+
+
+def test_unpicklable_exception_falls_back_to_runtime_error(tmp_path: Path) -> None:
+    """Both writer (un-picklable on dump) and reader (un-importable on load)
+    fall back to RuntimeError(traceback)."""
+
+    class _Local(Exception):
+        pass
+
+    reg = errors.ErrorRegistry(tmp_path)
+    reg.record("u", _Local("x"), "WRITER_TB")
+    err = reg.load("u")
+    assert isinstance(err, RuntimeError) and str(err) == "WRITER_TB"
+
+    # Reader-side: inject a row with a malformed BLOB that pickle.loads
+    # rejects → load() must surface RuntimeError(traceback) regardless.
+    def _inject(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "INSERT OR REPLACE INTO errors (item_uid, exception, traceback) "
+            "VALUES (?, ?, ?)",
+            ("bad_blob", b"not a valid pickle", "READER_TB"),
+        )
+
+    reg._safe_execute("inject", None, _inject)
+    err = reg.load("bad_blob")
+    assert isinstance(err, RuntimeError) and str(err) == "READER_TB"
     reg.close()
 
 
@@ -50,7 +83,8 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
 
     with errors.ErrorRegistry(paths.cache_folder) as reg:
         assert reg.get(None) == {paths.item_uid}
-    assert paths.error_pkl.is_file()
+        loaded = reg.load(paths.item_uid)
+    assert isinstance(loaded, ValueError)
 
     # Cached and read-only both re-raise.
     with pytest.raises(ValueError):
@@ -64,62 +98,59 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
         assert reg.get([paths.item_uid]) == set()
 
 
-@pytest.mark.parametrize("missing", ["row", "pickle"])
-def test_partial_error_state_self_heals(tmp_path: Path, missing: str) -> None:
-    """Either half of (registry row, error.pkl) missing → recompute. Both
-    are required to count as a cached error, so partial state from a
-    crash or external cleanup never traps subsequent runs."""
-    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
-    with pytest.raises(ValueError):
-        _add(True, tmp_path).run(5.0)
-
-    if missing == "pickle":
-        paths.error_pkl.unlink()
-    else:
-        with errors.ErrorRegistry(paths.cache_folder) as reg:
-            reg.clear([paths.item_uid])
-
-    assert _add(False, tmp_path).run(5.0) == 6.0
-
-
-def test_writer_overwrites_stale_pickle(tmp_path: Path) -> None:
-    """An orphan pickle from a crashed prior run must be overwritten by the
-    next failure, else a recompute-then-fail cycle would resurrect the
-    stale exception."""
-    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
-    paths.ensure_folders()
-    with paths.error_pkl.open("wb") as f:
-        pickle.dump(RuntimeError("run-1 stale"), f)
-
-    with pytest.raises(ValueError):
-        _add(True, tmp_path).run(5.0)
-
-    with paths.error_pkl.open("rb") as f:
-        assert isinstance(pickle.load(f), ValueError)
-
-
-def test_clear_cache_partial_failure_leaves_no_phantom_error(
+def test_clear_cache_partial_failure_leaves_recoverable_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A crash on the last `clear_cache` step (CacheDict delete) must
-    not leave a phantom cached error: error indicators are wiped first,
-    so the surviving CacheDict entry still resolves as `success`."""
-    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
-    assert _add(False, tmp_path).run(5.0) == 6.0
-    paths.job_folder.mkdir(parents=True, exist_ok=True)
-    with paths.error_pkl.open("wb") as f:
-        pickle.dump(ValueError("stale"), f)
+    """A crash between cd-delete and errors-clear must leave a cached error,
+    not a stale success."""
+    step = _add(False, tmp_path)
+    assert step.run(5.0) == 6.0
+    bound = step.with_input(5.0)
+    paths = bound.infra.paths
     with errors.ErrorRegistry(paths.cache_folder) as reg:
-        reg.record([paths.item_uid])
+        reg.record(paths.item_uid, ValueError("stale"), "tb")
 
-    def boom(self: tp.Any, key: tp.Any) -> None:
-        raise OSError("simulated FS failure")
+    def boom(self: tp.Any, item_uids: list[str]) -> None:
+        raise OSError("simulated DB failure")
 
-    monkeypatch.setattr(exca.cachedict.CacheDict, "__delitem__", boom)
+    monkeypatch.setattr(errors.ErrorRegistry, "clear", boom)
     with pytest.raises(OSError):
-        paths.clear_cache()
+        bound.infra.clear_cache()
     monkeypatch.undo()
 
-    assert not paths.job_folder.exists()
-    assert paths.has_cached_error() is False
-    assert _add(False, tmp_path).run(5.0) == 6.0
+    # cd entry is gone, errors row remains → cached error on next read.
+    with errors.ErrorRegistry(paths.cache_folder) as reg:
+        assert paths.item_uid in reg.get([paths.item_uid])
+    with pytest.raises(ValueError):
+        _add(False, tmp_path).run(5.0)
+    # And recovers via retry.
+    assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
+
+
+def test_cached_as_note_survives_pickle(tmp_path: Path) -> None:
+    """`_CachingCall` adds a `-> cached as ...` note before pickling into
+    errors.db. Notes must round-trip so the re-raise points to the cache key."""
+    with pytest.raises(ValueError) as exc_info:
+        _add(True, tmp_path).run(5.0)
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("cached as" in n for n in notes)
+    with pytest.raises(ValueError) as exc_info:
+        _add(False, tmp_path).run(5.0)
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("cached as" in n for n in notes)
+    assert any("mode='retry'" in n for n in notes)
+
+
+def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
+    """A residual errors.db row without any corresponding work (e.g. a
+    cleanup that wiped the CacheDict but left the DB) is wiped + recomputed
+    on `mode='retry'` — no traps."""
+    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
+    paths.ensure_folders()
+    with errors.ErrorRegistry(paths.cache_folder) as reg:
+        reg.record(paths.item_uid, RuntimeError("stale"), "tb")
+        assert paths.item_uid in reg.get([paths.item_uid])
+
+    assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
+    with errors.ErrorRegistry(paths.cache_folder) as reg:
+        assert paths.item_uid not in reg.get([paths.item_uid])

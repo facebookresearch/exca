@@ -279,11 +279,9 @@ class Step(exca.helpers.DiscriminatedModel):
             e.add_note(f"  -> in {step!r}")
             raise
 
-        # Sync state back to original step's infra (with_input creates a copy)
-        if step is not self and self.infra is not None:
-            self.infra._ram_cache = step.infra._ram_cache  # type: ignore[union-attr]
-            if self.infra.mode == "force":
-                object.__setattr__(self.infra, "mode", "cached")
+        # Reset force after a successful run (only when `with_input` made a copy).
+        if step is not self and self.infra is not None and self.infra.mode == "force":
+            object.__setattr__(self.infra, "mode", "cached")
 
         return result
 
@@ -333,7 +331,9 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def has_cache(self) -> bool:
         """Check if result is cached."""
-        return self.infra.has_cache() if self.infra else False
+        if self.infra is None:
+            return False
+        return self.infra._cache_status().outcome is not None
 
     def clear_cache(self) -> None:
         """Clear cached result."""
@@ -484,15 +484,14 @@ class Chain(Step):
             elif force_active:
                 _set_mode_recursive([step], "force")
 
-        # Find latest cached result to skip already-computed steps
+        # Find latest cached result to skip already-computed steps.
         start_idx = 0
         for k, step in enumerate(reversed(steps)):
-            if step.infra is None:
+            if step.infra is None or step.infra.mode == "force":
                 continue
-            if step.infra.mode == "force":
-                continue
-            if step.infra.has_cache():
-                args = (step.infra.cached_result(),)
+            cache = step.infra._cache_status()
+            if cache.outcome is not None:
+                args = (cache.load(),)
                 start_idx = len(steps) - k
                 break
 
@@ -568,9 +567,10 @@ class Chain(Step):
     def clear_cache(self, recursive: bool = True) -> None:
         """Clear cache, optionally including sub-steps."""
         if recursive:
-            chain = self.with_input() if self._previous is None else self
-            for step in chain._step_sequence():
-                step.clear_cache()
+            # `with_input` only wires sub-step `_previous` so `paths` resolves.
+            bound = self.with_input() if self._previous is None else self
+            for sub in bound._step_sequence():
+                sub.clear_cache()
         if self.infra:
             self.infra.clear_cache()
 

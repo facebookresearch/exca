@@ -6,15 +6,18 @@
 
 """Tests for caching behavior (modes, cache paths, intermediate caches)."""
 
-import shutil
+import copy
+import gc
+import pickle
 import typing as tp
+import weakref
 from pathlib import Path
 
 import pytest
 
 import exca.cachedict
 
-from . import backends, conftest
+from . import backends, conftest, errors
 from .base import Chain, Step
 
 # =============================================================================
@@ -43,10 +46,12 @@ def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
     result1 = step.run(*args)
     assert step.with_input(*args).has_cache()
 
-    # Same result from cache (both via run() and via cached_result())
+    # Same result from cache (re-running hits the cache).
     result2 = step.run(*args)
     assert result1 == result2
-    assert step.with_input(*args).infra.cached_result() == result1  # type: ignore[union-attr]
+    bound = step.with_input(*args)
+    assert bound.infra is not None
+    assert bound.infra._cache_status().load() == result1
 
     # Clear and recompute gives different result
     step.with_input(*args).clear_cache()
@@ -370,28 +375,79 @@ def test_clear_cache_recursive(tmp_path: Path) -> None:
 
 
 def test_keep_in_ram(tmp_path: Path) -> None:
-    """Test RAM caching: survives disk deletion, cleared by clear_cache and force."""
+    """Backend integration of `keep_in_ram`: `clear_cache` and `force` wipe
+    the RAM entry along with the disk row. (External rmtree is *not* a
+    documented invalidation path; `_ram_data` shadows missing JSONL.)"""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
     step = conftest.Add(value=10, randomize=True, infra=infra)
 
     out1 = step.run()
-    assert step.infra is not None
-    assert step.infra.has_cache()
+    assert step.has_cache()
 
-    # RAM cache survives disk deletion
-    shutil.rmtree(step.infra.paths.cache_folder)
-    assert not step.infra.has_cache()
-    assert step.run() == out1
-
-    # clear_cache() clears both disk and RAM
-    step.infra.clear_cache()
+    step.infra.clear_cache()  # type: ignore[union-attr]
     out2 = step.run()
     assert out2 != out1
 
-    # Force mode also clears RAM cache
-    step.infra.mode = "force"
+    step.infra.mode = "force"  # type: ignore[union-attr]
     out3 = step.run()
     assert out3 != out2
+
+
+@pytest.mark.parametrize("post_state", ["absent", "error"])
+def test_run_is_success_sticky(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, post_state: str
+) -> None:
+    """Worker returned a value: `Backend.run` returns it whether the
+    post-run cache row is absent (writer skipped / concurrent clear) or
+    is a competitor's error row — success wins."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(value=10, infra=infra)
+
+    def call(self: tp.Any, *args: tp.Any) -> tp.Any:
+        result = self.func(*args)
+        if post_state == "error":
+            with errors.ErrorRegistry(self.paths.cache_folder) as reg:
+                reg.record(self.paths.item_uid, ValueError("competitor"), "tb")
+        return result
+
+    monkeypatch.setattr(backends._CachingCall, "__call__", call)
+    assert step.run(5.0) == 15.0  # 5 + 10
+    monkeypatch.undo()
+    bound = step.with_input(5.0)
+    assert bound.infra is not None
+    paths = bound.infra.paths
+    with errors.ErrorRegistry(paths.cache_folder) as reg:
+        err_uids = reg.get([paths.item_uid])
+    assert paths.item_uid not in bound.infra._cache_dict()
+    assert err_uids == ({paths.item_uid} if post_state == "error" else set())
+
+
+def test_cd_shared_via_registry(tmp_path: Path) -> None:
+    """Backends with matching `(folder, keep_in_ram, cache_type)` share
+    one CacheDict via `_CD_REGISTRY`; a differing key does not. Entries
+    are weak: vanish when no Backend retains them."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
+    step = conftest.Add(value=10, randomize=True, infra=infra)
+    step.run()
+    cd = step.infra._cache_dict()  # type: ignore[union-attr]
+    peers = [
+        copy.deepcopy(step),
+        step.with_input(),
+        conftest.Add(value=10, randomize=True, infra=infra).with_input(),
+        pickle.loads(pickle.dumps(step)),
+    ]
+    assert all(p.infra._cache_dict() is cd for p in peers)  # type: ignore[union-attr]
+    no_ram_infra: tp.Any = {**infra, "keep_in_ram": False}
+    no_ram = conftest.Add(value=10, randomize=True, infra=no_ram_infra)
+    assert no_ram.with_input().infra._cache_dict() is not cd  # type: ignore[union-attr]
+
+    # Drop every strong ref; the WeakValueDictionary entry must die.
+    cd_ref = weakref.ref(cd)
+    peers.clear()
+    step.infra._cd = None  # type: ignore[union-attr]
+    del cd, step
+    gc.collect()
+    assert cd_ref() is None
 
 
 # =============================================================================

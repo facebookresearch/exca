@@ -112,6 +112,7 @@ class CacheDict(tp.Generic[X]):
       files to avoid interferences.
     - checking repeatedly for content can be slow if unavailable, as
       this will repeatedly reload all jsonl files
+    - ``pickle`` and ``copy.deepcopy`` return a fresh view with empty RAM cache.
     """
 
     def __init__(
@@ -127,14 +128,6 @@ class CacheDict(tp.Generic[X]):
         self._keep_in_ram = keep_in_ram
         if self.folder is None and not keep_in_ram:
             raise ValueError("At least folder or keep_in_ram should be activated")
-        if self.folder is not None:
-            self.folder.mkdir(exist_ok=True)
-            if self.permissions is not None:
-                try:
-                    self.folder.chmod(self.permissions)
-                except Exception as e:
-                    msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
-                    logger.warning(msg)
         # file cache access and RAM cache
         self._ram_data: dict[str, X] = {}
         self._key_info: dict[str, DumpInfo] = {}
@@ -153,16 +146,38 @@ class CacheDict(tp.Generic[X]):
         keep_in_ram = self._keep_in_ram
         return f"{name}({self.folder},{keep_in_ram=})"
 
+    # View, not value: pickle / deepcopy give a fresh view; `_ram_data`
+    # is dropped (would silently ship potentially-large data cross-process).
+    def __reduce__(self) -> tp.Any:
+        return (
+            self.__class__,
+            (self.folder, self._keep_in_ram, self.cache_type, self.permissions),
+        )
+
+    def _ensure_folder(self) -> None:
+        """Create folder + apply permissions on demand. Called at first write
+        so lookups on never-written caches stay side-effect free."""
+        if self.folder is None or self.folder.exists():
+            return
+        self.folder.mkdir(parents=True, exist_ok=True)
+        if self.permissions is not None:
+            try:
+                self.folder.chmod(self.permissions)
+            except Exception as e:
+                msg = f"Failed to set permission to {self.permissions} on {self.folder}\n({e})"
+                logger.warning(msg)
+
     def clear(self) -> None:
         self._ram_data.clear()
         self._key_info.clear()
-        if self.folder is not None:
-            # let's remove content but not the folder to keep same permissions
-            for sub in self.folder.iterdir():
-                if sub.is_dir():
-                    shutil.rmtree(sub)
-                else:
-                    sub.unlink()
+        if self.folder is None or not self.folder.exists():
+            return
+        # let's remove content but not the folder to keep same permissions
+        for sub in self.folder.iterdir():
+            if sub.is_dir():
+                shutil.rmtree(sub)
+            else:
+                sub.unlink()
 
     def __bool__(self) -> bool:
         if self._ram_data or self._key_info:
@@ -187,7 +202,7 @@ class CacheDict(tp.Generic[X]):
         duplicates, whichever file comes last in iterdir() order wins
         (non-deterministic); duplicates waste disk but are not cleaned up
         automatically — see docs/internal/debug/concurrent-writes.md."""
-        if self.folder is None:
+        if self.folder is None or not self.folder.exists():
             return
         readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
         if self._jsonl_reading_allowance <= readings:
@@ -290,6 +305,7 @@ class CacheDict(tp.Generic[X]):
         if self._write_ctx is not None:
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
+            self._ensure_folder()
             self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
         try:
             if self._write_ctx is not None:
@@ -344,14 +360,17 @@ class CacheDict(tp.Generic[X]):
             os.utime(self.folder)
 
     def __delitem__(self, key: str) -> None:
-        # necessarily in file cache folder from now on
-        if key not in self._key_info:
-            _ = key in self
-        self._ram_data.pop(key, None)
+        # Standard dict contract: raise KeyError if the key is unknown.
+        # On-disk artifacts are tolerated missing (a prior external
+        # rmtree shouldn't trip a live RAM entry).
         if self._dumper is None:
+            del self._ram_data[key]
             return
+        if key not in self._key_info:
+            _ = key in self  # populate _key_info from disk
+        self._ram_data.pop(key, None)
         dinfo = self._key_info.pop(key)
-        dinfo.delete_info()
+        dinfo.delete_info(ignore_errors=True)
         self._dumper.delete(dinfo.content)
 
     def __contains__(self, key: str) -> bool:
@@ -385,6 +404,10 @@ class JsonlReader:
         self._last = 0
         self._meta: dict[str, tp.Any] = {}
         self.readings = 0
+        # File identity + size at last read. Reset cached `_last` /
+        # `_meta` if the inode changes (rmtree + recreate) or the file
+        # shrinks behind `_last` (truncate-in-place).
+        self._inode: int | None = None
 
     def read(self) -> dict[str, DumpInfo]:
         out: dict[str, DumpInfo] = {}
@@ -392,6 +415,16 @@ class JsonlReader:
         meta_tag = METADATA_TAG.encode("utf8")
         last = 0
         fail = b""
+        try:
+            st = self._fp.stat()
+        except FileNotFoundError:
+            return out
+        replaced = self._inode is not None and self._inode != st.st_ino
+        truncated = st.st_size < self._last
+        if replaced or truncated:
+            self._last = 0
+            self._meta = {}
+        self._inode = st.st_ino
         with self._fp.open("rb") as f:
             if not self._meta:
                 first = f.readline()
