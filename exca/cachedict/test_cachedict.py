@@ -7,6 +7,7 @@
 import gc
 import logging
 import os
+import pickle
 import typing as tp
 from concurrent import futures
 from pathlib import Path
@@ -220,6 +221,44 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     # now complete
     info_path.write_bytes(b"\n".join(lines))
     assert len(cache) == 3
+
+
+def test_pickle_is_view_only(tmp_path: Path) -> None:
+    """CacheDict pickles as a view: same folder, no RAM payload. Disk
+    contents are visible via the unpickled view (re-read from JSONL)."""
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=True)
+    with cache.write():
+        cache["k"] = 7
+    _ = cache["k"]  # populate _ram_data so the strip is observable
+    assert cache._ram_data
+    revived = pickle.loads(pickle.dumps(cache))
+    assert revived.folder == tmp_path
+    assert not revived._ram_data
+    assert revived["k"] == 7
+    with revived.write():
+        revived["k2"] = 9
+
+
+def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
+    """JsonlReader resets cached `_last` / `_meta` on inode change
+    (rmtree + recreate) and on shrink below `_last` (truncate-in-place)."""
+    fp = tmp_path / "x-info.jsonl"
+    fp.write_bytes(b'{"#key": "a", "#type": "Pickle"}\n')
+    reader = cd.JsonlReader(fp)
+    assert "a" in reader.read()
+    inode_a = reader._inode
+
+    fp.unlink()
+    fp.write_bytes(b'{"#key": "bb", "#type": "Pickle"}\n')  # longer: lets "c" shrink
+    assert "bb" in reader.read() and reader._inode != inode_a
+
+    inode_b = reader._inode
+    with fp.open("r+b") as f:
+        f.truncate(0)
+        f.write(b'{"#key": "c", "#type": "Pickle"}\n')
+    assert fp.stat().st_ino == inode_b  # truncate kept inode
+    assert fp.stat().st_size < reader._last  # so size < _last forces reset
+    assert "c" in reader.read()
 
 
 def test_2_caches(tmp_path: Path) -> None:

@@ -121,12 +121,15 @@ def test_shared_file_lifecycle(tmp_path: Path) -> None:
 
 
 def test_context_permissions(tmp_path: Path) -> None:
-    ctx = DumpContext(tmp_path, permissions=0o755)
+    folder = tmp_path / "fresh"
+    ctx = DumpContext(folder, permissions=0o755)
+    assert not folder.exists(), "construction must not materialise the folder"
     with ctx:
         f, name = ctx.shared_file(".data")
         f.write(b"test")
-    mode = oct((tmp_path / name).stat().st_mode)[-3:]
-    assert mode == "755"
+    assert folder.is_dir()
+    assert oct(folder.stat().st_mode)[-3:] == "755"
+    assert oct((folder / name).stat().st_mode)[-3:] == "755"
 
 
 # =============================================================================
