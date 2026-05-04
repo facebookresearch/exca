@@ -197,6 +197,9 @@ class DumpContext:
     def __enter__(self) -> tp.Self:
         self._stack = contextlib.ExitStack()
         self._stack.__enter__()
+        if not self.folder.exists():
+            self.folder.mkdir(parents=True, exist_ok=True)
+            self._created_files.append(self.folder)  # chmod via __exit__
         return self
 
     def __exit__(self, *exc: tp.Any) -> None:
