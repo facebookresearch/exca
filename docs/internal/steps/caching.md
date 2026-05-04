@@ -89,11 +89,9 @@ hand its value back to the forcer.
 
 The session locks `inflight.db` only — direct user calls to
 `Backend.clear_cache` outside `Backend.run` race against in-flight
-workers. The worker writes to the cache before returning and `Backend.run`
-re-reads the result from disk; if the lookup misses (e.g. a concurrent
-`clear_cache` wiped it) `run` raises rather than re-deriving, since the
-result was never round-tripped back through the job (avoids pickling
-large outputs through submitit).
+workers. The worker writes to cache before returning; `Backend.run`
+re-reads from disk and raises if missing — results are not round-tripped
+through the job pickle (would be wasteful under submitit).
 
 Both registries inherit from `AdvisoryRegistry` (`exca/cachedict/registry.py`)
 which provides `journal_mode=DELETE` (avoids WAL — WAL actively breaks
