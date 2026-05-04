@@ -153,7 +153,7 @@ out2 = my_func(a=3, b=4)
 np.testing.assert_array_equal(out2, out)  # should the same (as cached)
 ```
 
-On the long run this is not adviced as this will prevent you from using many features of infra (running an array of jobs, checking their status etc)
+On the long run this is not advised as this will prevent you from using many features of infra (running an array of jobs, checking their status etc)
 
 
 ## Pydantic models

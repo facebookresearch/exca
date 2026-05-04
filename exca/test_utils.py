@@ -355,7 +355,7 @@ class NewDefaultOther2diff(BaseModel):
 
 
 def test_new_default_other2diff() -> None:
-    # revert unneeded to default, so it wont show in model_dump, but we need to define x=13
+    # revert unneeded to default, so it won't show in model_dump, but we need to define x=13
     m = NewDefaultOther2diff(a={"x": 13, "unneeded": "is default"})  # type: ignore
     out = ConfDict.from_model(m, uid=True, exclude_defaults=True)
     assert out.to_yaml().strip() == "a.x: 13"

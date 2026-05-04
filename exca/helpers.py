@@ -206,7 +206,7 @@ class InfraSlurmJob(submitit.SlurmJob[tp.Any]):
 def find_slurm_job(
     *, job_id: str, folder: str | Path | None = None
 ) -> InfraSlurmJob | None:
-    r"""Attemps to instantiate a submitit.SlurmJob instance from a cache folder and a `job_id`,
+    r"""Attempts to instantiate a submitit.SlurmJob instance from a cache folder and a `job_id`,
     looking for it recursively.
     This is based on default configuration of the log folder position
     (:code:`<cache folder>/logs/<username>/<job_id>`), and some additional heuristic that may be

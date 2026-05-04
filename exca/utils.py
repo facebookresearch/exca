@@ -112,7 +112,7 @@ class ConfigExporter(pydantic.BaseModel):
             )
             excluded = info[UID_EXCLUDED]
             forced = info[FORCE_INCLUDED]
-            excluded -= forced  # forced taks over
+            excluded -= forced  # forced takes over
             fields = set(type(obj).model_fields)
             missing = (excluded | forced) - (fields | {"."})
 
@@ -156,7 +156,7 @@ class ConfigExporter(pydantic.BaseModel):
                     continue
                 if not (cfg.exclude_defaults and cfg.uid):
                     continue
-                # possibly remove if all default (appart from excluded attributes)
+                # possibly remove if all default (apart from excluded attributes)
                 if not isinstance(obj[name], pydantic.BaseModel):
                     continue
                 if not isinstance(bobj, pydantic.BaseModel):
@@ -339,7 +339,7 @@ def _set_discriminated_status(
         name = f"{cls.__module__}.{cls.__qualname__}"
         msg = f"It is strongly advised to forbid extra parameters to {name} by adding to its def:\n"
         msg += 'model_config = pydantic.ConfigDict(extra="forbid")\n'
-        msg += '(you can however bypass this error by explicitely setting extra="allow")'
+        msg += '(you can however bypass this error by explicitly setting extra="allow")'
         raise RuntimeError(msg)
     # propagate below
     schema: tp.Any = None
@@ -534,7 +534,7 @@ def temporary_save_path(filepath: Path | str, replace: bool = True) -> tp.Iterat
         yield tmppath
     except Exception:
         if tmppath.exists():
-            msg = "Exception occured, clearing temporary save file %s"
+            msg = "Exception occurred, clearing temporary save file %s"
             logger.warning(msg, tmppath)
             os.remove(tmppath)
         raise

@@ -159,7 +159,7 @@ class BaseInfra(pydantic.BaseModel):
     def __setstate__(self, state: tp.Any) -> None:
         if "__dict__" in state:
             d = state["__dict__"]
-            # compatiblity
+            # compatibility
             d.setdefault("version", "0")
             d.setdefault("mode", "cached")
         if "__pydantic_private__" in state:
@@ -274,7 +274,7 @@ class BaseInfra(pydantic.BaseModel):
         if isinstance(self._infra_method, InfraMethod):  # NOT LEGACY
             m = self._infra_method.method
             factory = f"{m.__module__}.{m.__qualname__}"
-            # if the method is not overriden, then use the current class name
+            # if the method is not overridden, then use the current class name
             current_m = getattr(cls, m.__name__)
             if isinstance(current_m, property) and self._infra_method is current_m.fget:
                 factory = f"{cls.__module__}.{cls.__qualname__}.{name}"
@@ -388,7 +388,7 @@ class BaseInfra(pydantic.BaseModel):
         cdict = self.config(exclude_defaults=True, uid=False)
         cdict.update(kwargs)
         out = self._obj.model_validate(cdict)
-        _ = self.uid()  # trigger uid computation (to propagate dicriminated status)
+        _ = self.uid()  # trigger uid computation (to propagate discriminated status)
         try:
             utils.copy_discriminated_status(self._obj, out)
         except Exception as e:
@@ -468,7 +468,7 @@ class BaseInfraMethod:
 
     def __post_init__(self) -> None:
         if self.method.__name__.startswith("__"):
-            raise ValueError("Private methods cannot be overriden")
+            raise ValueError("Private methods cannot be overridden")
         functools.update_wrapper(self, self.method)  # type: ignore
         if isinstance(self.exclude_from_cache_uid, str):
             if not self.exclude_from_cache_uid.startswith("method:"):
@@ -504,10 +504,10 @@ class InfraMethod(BaseInfraMethod):
             # recheck if infra is available (this may have been skipped for hidden infra)
             _add_name(obj, propagate_defaults=False)
             if self.infra_name is None:
-                self.infra_name = ""  # not found = overriden by another infra instance
+                self.infra_name = ""  # not found = overridden by another infra instance
         infra_name = self.infra_name
         if not infra_name:
-            # bypassing infra as it was overriden
+            # bypassing infra as it was overridden
             return functools.partial(self.method, obj)
         if not isinstance(obj, pydantic.BaseModel):
             raise TypeError("infra can only be added to pydantic.BaseModel")
@@ -530,7 +530,7 @@ class InfraMethod(BaseInfraMethod):
         if "_obj" not in (infra.__pydantic_private__ or {}):
             infra._obj = obj  # only for legacy to decorator change compatibility
         if default_imethod is not self:
-            # bypassing infra as it was overriden
+            # bypassing infra as it was overridden
             return functools.partial(self.method, obj)
         result = infra._method_override
         state = _fast_state(infra)

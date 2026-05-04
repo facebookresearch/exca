@@ -219,12 +219,12 @@ household = Household(pet={"name": "dog"})
 assert household.pet.dog_param == 12
 ```
 
-The syntax requires providing a "discriminator" field which is a constant (a `Literal`) for selecting which class to instantiate. While explicitely stating the discriminator through `pydantic.Field` (as above) or through an annotation (see in `pydantic` documentation) is not strictly necessary with `pydantic`, it is necessary when working with infras so that the discriminator be part of the uid.
+The syntax requires providing a "discriminator" field which is a constant (a `Literal`) for selecting which class to instantiate. While explicitly stating the discriminator through `pydantic.Field` (as above) or through an annotation (see in `pydantic` documentation) is not strictly necessary with `pydantic`, it is necessary when working with infras so that the discriminator be part of the uid.
 
 
 ## Workdir/code copy
 
-Running code on a cluster while still working on the code can be dangereous, as the job will use the state of the code **at start time** and **not at submission time**.
+Running code on a cluster while still working on the code can be dangerous, as the job will use the state of the code **at start time** and **not at submission time**.
 
 In order to avoid surprises, both task/map infra support a `workdir` for copying the code to a different working directory where the decorated function will be running from:
 [Check its parameters here](exca.workdir.WorkDir), in particular, the `copied` parameter can be used to select folders or files or packages installed in editable mode that should be copied to the job's working directory, like in the [`TutorialTask` class from the tutorial section](infra/tutorials:TaskInfra):
