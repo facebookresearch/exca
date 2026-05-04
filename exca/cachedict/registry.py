@@ -76,19 +76,29 @@ class AdvisoryRegistry:
         self.permissions = permissions
         self._conn: sqlite3.Connection | None = None
 
-    def _connect(self) -> sqlite3.Connection:
-        """Lazy-open the DB connection, creating the table if needed."""
+    def _connect(self, *, create: bool = False) -> sqlite3.Connection | None:
+        """Lazy-open the DB connection, creating the table if needed.
+
+        Parameters
+        ----------
+        create:
+            If ``False`` (default), a missing DB returns ``None`` (read /
+            no-op-write paths leave the folder untouched). Writers that
+            materialise rows pass ``True``.
+        """
         if self._conn is not None:
-            if not self.db_path.exists():
-                logger.warning(
-                    "%s registry DB deleted externally, reconnecting: %s",
-                    self._LABEL,
-                    self.db_path,
-                )
-                self.close()
-            else:
+            if self.db_path.exists():
                 return self._conn
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.warning(
+                "%s registry DB deleted externally, reconnecting: %s",
+                self._LABEL,
+                self.db_path,
+            )
+            self.close()
+        if not self.db_path.exists():
+            if not create:
+                return None
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # Autocommit lets subclasses choose per-op between implicit
         # per-statement transactions and explicit BEGIN IMMEDIATE.
         conn = sqlite3.connect(
@@ -110,10 +120,10 @@ class AdvisoryRegistry:
         self._conn = conn
         return conn
 
-    def _safe_connect(self) -> sqlite3.Connection | None:
+    def _safe_connect(self, *, create: bool = False) -> sqlite3.Connection | None:
         """Open guarded by the same corruption gate as :meth:`_safe_execute`."""
         try:
-            return self._connect()
+            return self._connect(create=create)
         except sqlite3.DatabaseError as e:
             # DatabaseError (parent of OperationalError) covers SQLITE_NOTADB
             # raised by executescript on a corrupt header.
@@ -161,13 +171,24 @@ class AdvisoryRegistry:
         self.close()
 
     def _safe_execute(
-        self, op_name: str, fallback: T, fn: tp.Callable[[sqlite3.Connection], T]
+        self,
+        op_name: str,
+        fallback: T,
+        fn: tp.Callable[[sqlite3.Connection], T],
+        *,
+        create: bool = False,
     ) -> T:
         """Run *fn* with graceful degradation: lock contention retries up
         to 3x then returns *fallback* (DB intact); known corruption resets
         the DB; everything else (transient I/O, programming bugs) returns
-        *fallback* without touching the DB."""
-        conn = self._safe_connect()
+        *fallback* without touching the DB.
+
+        Parameters
+        ----------
+        create:
+            Forwarded to :meth:`_connect`.
+        """
+        conn = self._safe_connect(create=create)
         if conn is None:
             return fallback
         for attempt in range(3):

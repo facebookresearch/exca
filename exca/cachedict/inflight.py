@@ -216,7 +216,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
             conn.execute("COMMIT")
             return pre_owned + to_insert
 
-        result = self._safe_execute("claim", list(item_uids), _do)
+        result = self._safe_execute("claim", list(item_uids), _do, create=True)
         logger.debug("Claimed %d/%d items (pid=%d)", len(result), len(item_uids), pid)
         return result
 

@@ -80,7 +80,7 @@ A `Chain` is a specialized `Step` that composes multiple steps sequentially.
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  Backend (base)                                       │  │
 │  │  - folder, cache_type, mode                           │  │
-│  │  - run(), has_cache(), clear_cache(), job()          │  │
+│  │  - run(), clear_cache(), job()                       │  │
 │  └──────────────────────────────────────────────────────┘  │
 │              │                                              │
 │    ┌─────────┴─────────┬─────────────────┐                 │
@@ -113,8 +113,6 @@ class Backend(DiscriminatedModel, discriminator_key="backend"):
         """Execute function with caching based on mode."""
         ...
     
-    def has_cache(self) -> bool: ...
-    def cached_result(self) -> Any: ...
     def clear_cache(self) -> None: ...
     def job(self) -> Job | None: ...
 

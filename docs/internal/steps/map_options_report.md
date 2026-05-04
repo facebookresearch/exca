@@ -422,7 +422,6 @@ folder/
       *.jsonl            # item_uid -> result mapping
     jobs/{item_uid}/     # per-input job folder
       job.pkl
-      error.pkl
 ```
 
 This uses `CacheDict` which:

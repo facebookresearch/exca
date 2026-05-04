@@ -4,7 +4,10 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""AdvisoryRegistry plumbing, exercised through ErrorRegistry."""
+"""AdvisoryRegistry plumbing tests, exercised through ErrorRegistry as
+a real consumer. Seeding goes through ``ErrorRegistry._plant`` (cheap
+bulk presence insert) — these tests don't care about pickled-exception
+content; that path is covered in ``test_errors.py``."""
 
 import logging
 import sqlite3
@@ -19,29 +22,33 @@ from exca.steps import errors
 
 
 def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
-    """DB is created on first op, not at construction; close() is safe to
-    call twice; reconnect detects external deletion mid-session."""
     reg = errors.ErrorRegistry(tmp_path)
     db_path = tmp_path / "errors.db"
+    assert not db_path.exists(), "construction must not materialise the DB"
+
+    # Reads and no-op clears on a never-existed DB stay side-effect free.
+    assert reg.get(["x"]) == set() and reg.load("x") is None
+    reg.clear(["x"])
     assert not db_path.exists()
 
-    reg.record(["a"])
-    assert db_path.is_file()
+    reg._plant(["a"])
+    assert db_path.is_file(), "first write materialises the DB"
     assert reg.get(["a"]) == {"a"}
 
+    # External deletion mid-session: next op silently reconnects.
     db_path.unlink()
     assert reg.get(["a"]) == set()
-    reg.record(["b"])
+    reg._plant(["b"])
     assert reg.get(["b"]) == {"b"}
 
     reg.close()
-    reg.close()
+    reg.close()  # idempotent
 
 
 def test_context_manager(tmp_path: Path) -> None:
     """`with` closes the connection on exit and preserves subclass type."""
     with errors.ErrorRegistry(tmp_path) as reg:
-        reg.record(["a"])
+        reg._plant(["a"])
         assert reg.get(["a"]) == {"a"}
     # Reusing after __exit__ silently reconnects (lazy semantics).
     assert reg.get(["a"]) == {"a"}
@@ -52,7 +59,7 @@ def test_chunked_query(tmp_path: Path) -> None:
     """Querying past QUERY_BATCH_SIZE chunks correctly."""
     reg = errors.ErrorRegistry(tmp_path)
     n = registry.QUERY_BATCH_SIZE * 2 + 17
-    reg.record([f"k_{i}" for i in range(n)])
+    reg._plant([f"k_{i}" for i in range(n)])
     keys = [f"k_{i}" for i in range(n)] + [f"missing_{i}" for i in range(50)]
     assert len(reg.get(keys)) == n
     reg.close()
@@ -64,7 +71,7 @@ def test_retry_loop_recovers_from_transient_lock(
     """A single 'database is locked' is retried; the second attempt lands."""
     monkeypatch.setattr("time.sleep", lambda *_: None)
     reg = errors.ErrorRegistry(tmp_path)
-    reg.record(["warmup"])
+    reg._plant(["warmup"])
 
     attempts = {"n": 0}
 
@@ -72,7 +79,10 @@ def test_retry_loop_recovers_from_transient_lock(
         attempts["n"] += 1
         if attempts["n"] == 1:
             raise sqlite3.OperationalError("database is locked")
-        conn.execute("INSERT INTO errors VALUES ('a')")
+        conn.execute(
+            "INSERT INTO errors (item_uid, exception, traceback) VALUES (?, ?, ?)",
+            ("a", b"", ""),
+        )
 
     reg._safe_execute("flaky", None, flaky)
     assert attempts["n"] == 2  # retry actually ran
@@ -87,7 +97,7 @@ def test_lock_exhaustion_preserves_db(
     other workers may still need its rows)."""
     monkeypatch.setattr("time.sleep", lambda *_: None)
     reg = errors.ErrorRegistry(tmp_path)
-    reg.record(["warmup"])
+    reg._plant(["warmup"])
     db_path = tmp_path / "errors.db"
 
     def always_locked(conn: sqlite3.Connection) -> None:
@@ -103,7 +113,7 @@ def test_non_corruption_errors_preserve_db(tmp_path: Path) -> None:
     """A programming bug or transient I/O error inside fn must not wipe the
     DB — only known-corruption strings trigger _try_reset."""
     reg = errors.ErrorRegistry(tmp_path)
-    reg.record(["seed"])
+    reg._plant(["seed"])
     db_path = tmp_path / "errors.db"
 
     def io_hiccup(conn: sqlite3.Connection) -> None:
@@ -128,7 +138,7 @@ def test_concurrent_writers(tmp_path: Path) -> None:
         reg = errors.ErrorRegistry(tmp_path)
         barrier.wait()
         for j in range(per_thread):
-            reg.record([f"w{wid}_{j}"])
+            reg._plant([f"w{wid}_{j}"])
         reg.close()
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
@@ -154,7 +164,7 @@ def test_graceful_degradation(
     db_path = tmp_path / "errors.db"
 
     seed = errors.ErrorRegistry(tmp_path)
-    seed.record(["warmup"])
+    seed._plant(["warmup"])
     seed.close()
     assert db_path.exists()
 
@@ -164,7 +174,7 @@ def test_graceful_degradation(
         db_path.chmod(0o000)
     elif break_mode == "schema_drift":
         # Plant an `errors` table with the wrong column set so the next
-        # INSERT/SELECT hits "no such column: item_uid".
+        # INSERT/SELECT hits a "no such column" error.
         db_path.unlink()
         with sqlite3.connect(db_path) as conn:
             conn.execute("CREATE TABLE errors (id INTEGER PRIMARY KEY)")
@@ -173,7 +183,7 @@ def test_graceful_degradation(
 
     reg = errors.ErrorRegistry(tmp_path)
     with caplog.at_level(logging.WARNING):
-        reg.record(["a"])
+        reg._plant(["a"])
         reg.get(["a"])
     reg.close()
 
@@ -181,14 +191,14 @@ def test_graceful_degradation(
         db_path.chmod(stat.S_IRWXU)
 
     reg2 = errors.ErrorRegistry(tmp_path)
-    reg2.record(["recovered"])
+    reg2._plant(["recovered"])
     assert reg2.get(["recovered"]) == {"recovered"}
     reg2.close()
 
 
 def test_permissions_applied(tmp_path: Path) -> None:
     reg = errors.ErrorRegistry(tmp_path, permissions=0o600)
-    reg.record(["a"])
+    reg._plant(["a"])
     mode = stat.S_IMODE((tmp_path / "errors.db").stat().st_mode)
     assert mode == 0o600
     reg.close()
