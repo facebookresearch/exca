@@ -357,7 +357,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         because `__reduce__` makes deepcopy / unpickle yield a fresh view
         rather than the live handle."""
         ct = self._effective_cache_type()
-        key = (str(self.paths.cache_folder), self.keep_in_ram, ct)
+        key = (str(self.paths.cache_folder.resolve()), self.keep_in_ram, ct)
         # get / setdefault are non-atomic across threads — single-threaded
         # construction is assumed (Pydantic build, deepcopy, unpickle).
         cd = _CD_REGISTRY.get(key)
