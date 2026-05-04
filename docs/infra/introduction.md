@@ -1,6 +1,6 @@
 # Exca - Execution and caching
 
-This is an explanation to why `exca` was built. If you are only intereseted in how to use it, you can move to [tutorials](tutorials.md) and [how-to](howto.md) pages.
+This is an explanation to why `exca` was built. If you are only interested in how to use it, you can move to [tutorials](tutorials.md) and [how-to](howto.md) pages.
 
 Here are the challenges we want to face:
 1. config validation and remote computation
@@ -52,7 +52,7 @@ mytask = MyTask(x=12)
 mytask.x  # this is 12
 
 # MyTask(x="blublu")  
-# >> ValidationError: 1 validation error for MyTask (x hould be a valid integer)
+# >> ValidationError: 1 validation error for MyTask (x should be a valid integer)
 ```
 
 Pydantic supports hierarchical configurations:
@@ -268,7 +268,7 @@ Discriminated unions make it easier to make **modular pipelines** as one can swa
 
 ## Challenge #3: Experiment/computation caching
 
-`exca` can also handle **caching of the computation result** with no extra effort, so any computation already performed will only be recomputed if explicitely required.
+`exca` can also handle **caching of the computation result** with no extra effort, so any computation already performed will only be recomputed if explicitly required.
 
 A lot of additional benefits also come for free:
 - sub-configs can have their own infra.

@@ -15,7 +15,7 @@ import pydantic
 import pytest
 
 from . import helpers
-from .map import MapInfra, to_chunks
+from .map import MapInfra, _make_pool_executor, to_chunks
 
 PACKAGE = MapInfra.__module__.split(".", maxsplit=1)[0]
 logging.getLogger(PACKAGE).setLevel(logging.DEBUG)
@@ -168,6 +168,16 @@ def test_map_infra_perm(tmp_path: Path) -> None:
     assert after > before
 
 
+def test_pool_executor_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(**_kwargs: tp.Any) -> tp.Any:
+        raise PermissionError("simulated sem_open EPERM")
+
+    monkeypatch.setattr(concurrent.futures, "ProcessPoolExecutor", boom)
+    ex = _make_pool_executor("processpool", max_workers=2)
+    assert isinstance(ex, concurrent.futures.ThreadPoolExecutor)
+    ex.shutdown()
+
+
 def test_map_infra_debug(tmp_path: Path) -> None:
     whatever = Whatever(infra={"folder": tmp_path, "cluster": "debug"})  # type: ignore
     _ = list(whatever.process([1, 2, 2, 3]))
@@ -269,15 +279,6 @@ def test_to_chunks(
     )
     sizes = tuple(len(chunk) for chunk in chunks)
     assert sizes == expected
-
-
-def test_max_workers() -> None:
-    # existence of _max_worers is used in map.py but not backed by
-    # typing, so let's check it here
-    with concurrent.futures.ProcessPoolExecutor() as p_ex:
-        assert isinstance(p_ex._max_workers, int)  # type: ignore
-    with concurrent.futures.ThreadPoolExecutor() as t_ex:
-        assert isinstance(t_ex._max_workers, int)
 
 
 def test_missing_item_uid() -> None:

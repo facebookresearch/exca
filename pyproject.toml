@@ -126,3 +126,12 @@ addopts = ["--ignore=build", "--ignore=dist"]
   init_forbid_extra = true
   init_typed = true
   warn_required_dynamic_aliases = true
+
+[tool.codespell]
+# Ref: https://github.com/codespell-project/codespell#using-a-config-file
+skip = '.git,.git-meta,.gitignore,.gitattributes,*.css,*.pkl,*.svg,*.pdf,*.min.*'
+check-hidden = true
+# ignore-regex = ''
+# expec: variable name (short for "expected") used in tests
+# tring: intentional substring in elided uid hash test fixtures (string=... truncated)
+ignore-words-list = 'expec,tring'

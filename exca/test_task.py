@@ -391,7 +391,7 @@ def test_mode_with_array(tmp_path: Path) -> None:
     params = {"infra.cluster": "local", "infra.mode": "force"}
     with cfg.infra.job_array() as tasks:
         tasks.extend([c.infra.clone_obj(params) for c in cfgs])
-        # t.infra.mode is actually unecessary cos using cfg.infra.mode
+        # t.infra.mode is actually unnecessary cos using cfg.infra.mode
         assert all(t.infra.mode == "force" for t in tasks)
     out2 = [c.process() for c in tasks]
     for a1, a2 in zip(out, out2):

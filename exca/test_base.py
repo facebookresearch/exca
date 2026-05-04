@@ -138,8 +138,8 @@ def test_subclass_infra_func_raw(tmp_path: Path) -> None:
     "cls,name",
     [
         (Base, "Base.func,12"),
-        (SubFunc, "Base.func,12"),  # function is overriden
-        (SubInfra2Func, "Base.func,12"),  # function is overriden
+        (SubFunc, "Base.func,12"),  # function is overridden
+        (SubInfra2Func, "Base.func,12"),  # function is overridden
         (SubBase, "SubBase.func,12"),  # function is the same -> get new class
     ],
 )
