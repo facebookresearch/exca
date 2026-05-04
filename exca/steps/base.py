@@ -333,7 +333,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """Check if result is cached."""
         if self.infra is None:
             return False
-        return self.infra._cache_status().outcome is not None
+        return self.infra._cached().status is not None
 
     def clear_cache(self) -> None:
         """Clear cached result."""
@@ -489,9 +489,9 @@ class Chain(Step):
         for k, step in enumerate(reversed(steps)):
             if step.infra is None or step.infra.mode == "force":
                 continue
-            cache = step.infra._cache_status()
-            if cache.outcome is not None:
-                args = (cache.load(),)
+            cached = step.infra._cached()
+            if cached.status is not None:
+                args = (cached.load(),)
                 start_idx = len(steps) - k
                 break
 

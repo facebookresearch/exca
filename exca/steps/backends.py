@@ -119,11 +119,11 @@ ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 
 
 @dataclasses.dataclass
-class _CacheStatus:
-    """Outcome of a cache lookup. ``lookup`` builds it; pre-loads any
-    cached exception so ``load`` doesn't re-query."""
+class _CachedEntry:
+    """Result of looking up an item in the cache. ``lookup`` builds it;
+    pre-loads any cached exception so ``load`` doesn't re-query."""
 
-    outcome: tp.Literal["success", "error", None]
+    status: tp.Literal["success", "error", None]
     _cd: exca.cachedict.CacheDict[tp.Any]
     _uid: str
     _err: BaseException | None = None  # pre-loaded; see `lookup`.
@@ -133,7 +133,7 @@ class _CacheStatus:
         cls,
         cd: exca.cachedict.CacheDict[tp.Any],
         uid: str,
-    ) -> "_CacheStatus":
+    ) -> "_CachedEntry":
         """Read CacheDict first — a success is the most recent event."""
         folder = cd.folder
         if folder is None or not folder.exists():
@@ -154,11 +154,11 @@ class _CacheStatus:
     def load(self) -> tp.Any:
         """Return the cached value, re-raise the cached error, or
         ``None`` if absent."""
-        if self.outcome == "success":
+        if self.status == "success":
             return self._cd[self._uid]
-        if self.outcome == "error":
+        if self.status == "error":
             if self._err is None:  # `lookup` always pre-loads on "error".
-                raise RuntimeError(f"_CacheStatus(error) missing _err for {self._uid}")
+                raise RuntimeError(f"_CachedEntry(error) missing _err for {self._uid}")
             raise self._err
         return None
 
@@ -371,14 +371,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._cd = cd  # strong ref so the WeakValueDictionary entry survives
         return cd
 
-    def _cache_status(self) -> _CacheStatus:
-        return _CacheStatus.lookup(self._cache_dict(), self.paths.item_uid)
+    def _cached(self) -> _CachedEntry:
+        return _CachedEntry.lookup(self._cache_dict(), self.paths.item_uid)
 
     def clear_cache(self) -> None:
         """Drop everything cached for this item (cd row, error row, job folder)."""
         uid = self.paths.item_uid
         cd = self._cache_dict()
-        # Cancel before rmtree — once `job.pkl` is gone, the handle is lost.
+        # Cancel before rmtree — `job.pkl` carries the only handle.
         if self.paths.job_pkl.exists():
             try:
                 with self.paths.job_pkl.open("rb") as f:
@@ -386,16 +386,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 if not job.done():
                     job.cancel()
             except Exception as e:
-                # Fail open: disk wipe still happens below.
-                logger.warning(
-                    "Failed to cancel %s[%s]: %s",
-                    self.paths.step_uid,
-                    uid,
-                    e,
-                )
-        # Order: success first, then error row. A partial mid-clear
-        # (success gone, error still there) surfaces as a recoverable
-        # cached error rather than a silent stale-success — fail closed.
+                logger.warning("Failed to cancel %s[%s]: %s", self.paths.step_uid, uid, e)
+        # Success first → a mid-clear crash leaves a recoverable cached
+        # error rather than a stale success (fail closed).
         if uid in cd:
             del cd[uid]
         if self.paths.cache_folder.exists():
@@ -421,13 +414,13 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._check_configs(write=True)
 
         # Pre-lock fast path: cached value / cached error / read-only miss.
-        cache = self._cache_status()
-        if cache.outcome == "success" and self.mode != "force":
+        cached = self._cached()
+        if cached.status == "success" and self.mode != "force":
             logger.debug("Cache hit: %s[%s]", self.paths.step_uid, self.paths.item_uid)
-            return cache.load()
-        if cache.outcome == "error" and self.mode in ("cached", "read-only"):
-            cache.load()  # raises
-        if cache.outcome is None and self.mode == "read-only":
+            return cached.load()
+        if cached.status == "error" and self.mode in ("cached", "read-only"):
+            cached.load()  # raises
+        if cached.status is None and self.mode == "read-only":
             raise RuntimeError(
                 f"No cache in read-only mode: {self.paths.step_uid}[{self.paths.item_uid}]"
             )
@@ -440,15 +433,15 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             # Re-check under the lock — competitors may have populated.
             # `read-only` already returned/raised pre-lock; only "cached"
             # reaches the error branch here.
-            cache = self._cache_status()
-            if cache.outcome == "success" and self.mode != "force":
-                return cache.load()
-            if cache.outcome == "error" and self.mode == "cached":
-                cache.load()  # raises
+            cached = self._cached()
+            if cached.status == "success" and self.mode != "force":
+                return cached.load()
+            if cached.status == "error" and self.mode == "cached":
+                cached.load()  # raises
 
             # force always wipes; retry only on a cached error.
             if self.mode == "force" or (
-                self.mode == "retry" and cache.outcome == "error"
+                self.mode == "retry" and cached.status == "error"
             ):
                 if self.mode == "retry":
                     logger.warning(
@@ -482,9 +475,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         # Success is sticky: our worker computed `fresh`, so prefer it
         # over a competitor's error row that may have appeared between
         # submit and re-lookup.
-        cache = self._cache_status()
-        if cache.outcome == "success":
-            return cache.load()
+        cached = self._cached()
+        if cached.status == "success":
+            return cached.load()
         return fresh
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:

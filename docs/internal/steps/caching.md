@@ -39,7 +39,7 @@ to wrong results.
 - **Failure**: `INSERT OR REPLACE INTO errors (item_uid, exception, traceback)`
   with the pickled exception and formatted traceback, then re-raise.
 
-`_CacheStatus.lookup(cd, uid)` checks CacheDict first (success is the
+`_CachedEntry.lookup(cd, uid)` checks CacheDict first (success is the
 most recent event for the uid), then loads any cached exception in one
 SELECT against `errors.db`. The BLOB carries the live exception (with
 `__notes__` set by the writer); on re-raise the reader appends the

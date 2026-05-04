@@ -51,7 +51,7 @@ def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
     assert result1 == result2
     bound = step.with_input(*args)
     assert bound.infra is not None
-    assert bound.infra._cache_status().load() == result1
+    assert bound.infra._cached().load() == result1
 
     # Clear and recompute gives different result
     step.with_input(*args).clear_cache()
