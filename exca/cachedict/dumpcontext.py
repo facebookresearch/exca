@@ -197,6 +197,8 @@ class DumpContext:
     def __enter__(self) -> tp.Self:
         self._stack = contextlib.ExitStack()
         self._stack.__enter__()
+        self.folder.mkdir(parents=True, exist_ok=True)
+        self._created_files.append(self.folder)  # re-chmod for shared caches
         return self
 
     def __exit__(self, *exc: tp.Any) -> None:

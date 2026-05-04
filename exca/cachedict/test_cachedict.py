@@ -4,9 +4,11 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import copy
 import gc
 import logging
 import os
+import pickle
 import typing as tp
 from concurrent import futures
 from pathlib import Path
@@ -222,6 +224,30 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     assert len(cache) == 3
 
 
+def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
+    """JsonlReader resets cached `_last` / `_meta` on inode change
+    (rmtree + recreate) and on shrink below `_last` (truncate-in-place)."""
+    fp = tmp_path / "x-info.jsonl"
+    fp.write_bytes(b'{"#key": "a", "#type": "Pickle"}\n')
+    reader = cd.JsonlReader(fp)
+    assert "a" in reader.read()
+    inode_a = reader._inode
+
+    # Replace via rename: unlink+write reuses inodes on tmpfs/ext4.
+    other = tmp_path / "other.jsonl"
+    other.write_bytes(b'{"#key": "bb", "#type": "Pickle"}\n')  # longer: lets "c" shrink
+    other.replace(fp)
+    assert "bb" in reader.read() and reader._inode != inode_a
+
+    inode_b = reader._inode
+    with fp.open("r+b") as f:
+        f.truncate(0)
+        f.write(b'{"#key": "c", "#type": "Pickle"}\n')
+    assert fp.stat().st_ino == inode_b  # truncate kept inode
+    assert fp.stat().st_size < reader._last  # so size < _last forces reset
+    assert "c" in reader.read()
+
+
 def test_2_caches(tmp_path: Path) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
@@ -246,6 +272,16 @@ def test_2_caches_memmap(tmp_path: Path) -> None:
     _ = cache2["blublu2"]
     assert "blublu" in cache2._ram_data
     _ = cache2["blublu"]
+
+
+def test_clone_is_view_only(tmp_path: Path) -> None:
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=True)
+    with cache.write():
+        cache["k"] = 7
+    assert cache["k"] == 7 and cache._ram_data
+    for revived in (pickle.loads(pickle.dumps(cache)), copy.deepcopy(cache)):
+        assert revived.folder == tmp_path and not revived._ram_data
+        assert revived["k"] == 7
 
 
 @pytest.mark.parametrize("cache_type", ["MemmapArrayFile", "String"])
