@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import copy
 import gc
 import logging
 import os
@@ -269,11 +270,16 @@ def test_2_caches_memmap(tmp_path: Path) -> None:
     _ = cache2["blublu2"]
     assert "blublu" in cache2._ram_data
     _ = cache2["blublu"]
-    # __reduce__ yields a view: folder kept, _ram_data dropped (so a pickled
-    # CacheDict shipped to a worker doesn't carry GBs of cached arrays).
-    revived = pickle.loads(pickle.dumps(cache2))
-    assert revived.folder == tmp_path and not revived._ram_data
-    assert "blublu" in revived  # still reachable on disk
+
+
+def test_clone_is_view_only(tmp_path: Path) -> None:
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=True)
+    with cache.write():
+        cache["k"] = 7
+    assert cache["k"] == 7 and cache._ram_data
+    for revived in (pickle.loads(pickle.dumps(cache)), copy.deepcopy(cache)):
+        assert revived.folder == tmp_path and not revived._ram_data
+        assert revived["k"] == 7
 
 
 @pytest.mark.parametrize("cache_type", ["MemmapArrayFile", "String"])
