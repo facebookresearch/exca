@@ -164,9 +164,7 @@ class _CachedEntry:
 
 
 class _CachingCall:
-    """Wrapper that caches result (or error) from within the job. Returns
-    nothing — the driver re-reads from cache, avoiding a pickle round-trip
-    of the result back through submitit / ."""
+    """Worker-side wrapper: runs the user function, writes result or error to cache."""
 
     def __init__(
         self,
@@ -178,6 +176,8 @@ class _CachingCall:
         self.paths = paths
         self.cache_type = cache_type
 
+    # Returns None: the driver re-reads from cache, so the result never
+    # round-trips through a job pickle (matters for submitit).
     def __call__(self, *args: tp.Any) -> None:
         self.paths.ensure_folders()
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
@@ -471,10 +471,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 job = self._submit(wrapper, *args)
                 if reg is not None:
                     inflight.record_worker_info(reg, [item_uid], job)
-            job.result()  # raises on worker failure (also recorded); return value unused
+            job.result()  # raises on worker failure (also recorded)
 
-        # Worker wrote to cache before returning; re-read from disk rather
-        # than pickling the result back through the job (matters for submitit).
+        # Worker wrote to cache before returning; read it back from disk.
         cached = self._cached()
         if cached.status != "success":
             raise RuntimeError(
@@ -490,8 +489,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
 
 class _InlineJob:
-    """Dummy job for inline execution: completion signal only (the value
-    is read from cache, not carried here)."""
+    """Completion signal for inline execution; the value lives in cache."""
 
     def result(self) -> None:
         return None
