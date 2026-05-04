@@ -389,10 +389,11 @@ class JsonlReader:
         self._last = 0
         self._meta: dict[str, tp.Any] = {}
         self.readings = 0
-        # File identity + size at last read. Reset cached `_last` /
-        # `_meta` if the inode changes (rmtree + recreate) or the file
-        # shrinks behind `_last` (truncate-in-place).
-        self._inode: int | None = None
+        # (inode, mtime) at last read — drift triggers a full re-read.
+        # mtime catches inode-reuse rewrites (FS recycles inodes after
+        # unlink+recreate, common on tmpfs/ext4). Appends also re-read
+        # in full; JSONLs are small key indexes, cost is negligible.
+        self._stamp: tuple[int, float] | None = None
 
     def read(self) -> dict[str, DumpInfo]:
         out: dict[str, DumpInfo] = {}
@@ -404,12 +405,12 @@ class JsonlReader:
             st = self._fp.stat()
         except FileNotFoundError:
             return out
-        replaced = self._inode is not None and self._inode != st.st_ino
-        truncated = st.st_size < self._last
-        if replaced or truncated:
+        stamp = (st.st_ino, st.st_mtime)
+        # Size shrink is a backstop for truncate when mtime resolution is coarse.
+        if self._stamp != stamp or st.st_size < self._last:
             self._last = 0
             self._meta = {}
-        self._inode = st.st_ino
+        self._stamp = stamp
         with self._fp.open("rb") as f:
             if not self._meta:
                 first = f.readline()

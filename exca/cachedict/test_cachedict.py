@@ -9,6 +9,7 @@ import gc
 import logging
 import os
 import pickle
+import time
 import typing as tp
 from concurrent import futures
 from pathlib import Path
@@ -224,27 +225,23 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     assert len(cache) == 3
 
 
-def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
-    """JsonlReader resets cached `_last` / `_meta` on inode change
-    (rmtree + recreate) and on shrink below `_last` (truncate-in-place)."""
+def test_jsonl_reader_resets_on_rewrite_or_truncate(tmp_path: Path) -> None:
+    """JsonlReader resets on truncate-in-place and unlink+recreate, even
+    when the FS reuses the inode."""
     fp = tmp_path / "x-info.jsonl"
     fp.write_bytes(b'{"#key": "a", "#type": "Pickle"}\n')
     reader = cd.JsonlReader(fp)
     assert "a" in reader.read()
-    inode_a = reader._inode
 
-    # Replace via rename: unlink+write reuses inodes on tmpfs/ext4.
-    other = tmp_path / "other.jsonl"
-    other.write_bytes(b'{"#key": "bb", "#type": "Pickle"}\n')  # longer: lets "c" shrink
-    other.replace(fp)
-    assert "bb" in reader.read() and reader._inode != inode_a
-
-    inode_b = reader._inode
+    time.sleep(0.01)  # ensure mtime moves on coarse clocks
     with fp.open("r+b") as f:
         f.truncate(0)
-        f.write(b'{"#key": "c", "#type": "Pickle"}\n')
-    assert fp.stat().st_ino == inode_b  # truncate kept inode
-    assert fp.stat().st_size < reader._last  # so size < _last forces reset
+        f.write(b'{"#key": "b", "#type": "Pickle"}\n')
+    assert "b" in reader.read()
+
+    time.sleep(0.01)
+    fp.unlink()
+    fp.write_bytes(b'{"#key": "c", "#type": "Pickle"}\n')
     assert "c" in reader.read()
 
 
