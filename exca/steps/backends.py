@@ -120,8 +120,8 @@ ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 
 @dataclasses.dataclass
 class _CachedEntry:
-    """Result of looking up an item in the cache. ``lookup`` builds it;
-    pre-loads any cached exception so ``load`` doesn't re-query."""
+    """Result of looking up an item in the cache: a ``status`` plus a
+    ``load()`` to materialise the cached value or re-raise the cached error."""
 
     status: tp.Literal["success", "error", None]
     _cd: exca.cachedict.CacheDict[tp.Any]
@@ -164,7 +164,9 @@ class _CachedEntry:
 
 
 class _CachingCall:
-    """Wrapper that caches result (or error) from within the job."""
+    """Wrapper that caches result (or error) from within the job. Returns
+    nothing — the driver re-reads from cache, avoiding a pickle round-trip
+    of the result back through submitit / ."""
 
     def __init__(
         self,
@@ -176,7 +178,7 @@ class _CachingCall:
         self.paths = paths
         self.cache_type = cache_type
 
-    def __call__(self, *args: tp.Any) -> tp.Any:
+    def __call__(self, *args: tp.Any) -> None:
         self.paths.ensure_folders()
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=self.paths.cache_folder, cache_type=self.cache_type
@@ -192,7 +194,6 @@ class _CachingCall:
         if self.paths.item_uid not in cd:
             with cd.write():
                 cd[self.paths.item_uid] = result
-        return result
 
 
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
@@ -470,29 +471,30 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 job = self._submit(wrapper, *args)
                 if reg is not None:
                     inflight.record_worker_info(reg, [item_uid], job)
-            fresh = job.result()  # raises on worker failure (also recorded)
+            job.result()  # raises on worker failure (also recorded); return value unused
 
-        # Success is sticky: our worker computed `fresh`, so prefer it
-        # over a competitor's error row that may have appeared between
-        # submit and re-lookup.
+        # Worker wrote to cache before returning; re-read from disk rather
+        # than pickling the result back through the job (matters for submitit).
         cached = self._cached()
-        if cached.status == "success":
-            return cached.load()
-        return fresh
+        if cached.status != "success":
+            raise RuntimeError(
+                f"Worker completed but cache is missing for "
+                f"{self.paths.step_uid}[{self.paths.item_uid}]"
+            )
+        return cached.load()
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
         """Submit wrapper for execution. Default: inline execution."""
-        return _InlineJob(wrapper(*args))
+        wrapper(*args)
+        return _InlineJob()
 
 
 class _InlineJob:
-    """Dummy job for inline execution; carries the worker's return value."""
+    """Dummy job for inline execution: completion signal only (the value
+    is read from cache, not carried here)."""
 
-    def __init__(self, value: tp.Any = None) -> None:
-        self._value = value
-
-    def result(self) -> tp.Any:
-        return self._value
+    def result(self) -> None:
+        return None
 
 
 class Cached(Backend):

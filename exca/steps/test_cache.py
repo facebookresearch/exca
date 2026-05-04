@@ -17,7 +17,7 @@ import pytest
 
 import exca.cachedict
 
-from . import backends, conftest, errors
+from . import backends, conftest
 from .base import Chain, Step
 
 # =============================================================================
@@ -391,35 +391,6 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     step.infra.mode = "force"  # type: ignore[union-attr]
     out3 = step.run()
     assert out3 != out2
-
-
-@pytest.mark.parametrize("post_state", ["absent", "error"])
-def test_run_is_success_sticky(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, post_state: str
-) -> None:
-    """Worker returned a value: `Backend.run` returns it whether the
-    post-run cache row is absent (writer skipped / concurrent clear) or
-    is a competitor's error row — success wins."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = conftest.Add(value=10, infra=infra)
-
-    def call(self: tp.Any, *args: tp.Any) -> tp.Any:
-        result = self.func(*args)
-        if post_state == "error":
-            with errors.ErrorRegistry(self.paths.cache_folder) as reg:
-                reg.record(self.paths.item_uid, ValueError("competitor"), "tb")
-        return result
-
-    monkeypatch.setattr(backends._CachingCall, "__call__", call)
-    assert step.run(5.0) == 15.0  # 5 + 10
-    monkeypatch.undo()
-    bound = step.with_input(5.0)
-    assert bound.infra is not None
-    paths = bound.infra.paths
-    with errors.ErrorRegistry(paths.cache_folder) as reg:
-        err_uids = reg.get([paths.item_uid])
-    assert paths.item_uid not in bound.infra._cache_dict()
-    assert err_uids == ({paths.item_uid} if post_state == "error" else set())
 
 
 def test_cd_shared_via_registry(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from exca import cachedict
 from exca.steps import backends, conftest, errors
 
 
@@ -39,6 +40,18 @@ def test_error_registry_lifecycle(tmp_path: Path) -> None:
     reg.clear(["a", "never_recorded"])
     assert reg.get(["a", "b"]) == {"b"}
     reg.close()
+
+
+def test_cached_entry_lookup_success_shadows_error(tmp_path: Path) -> None:
+    cd: cachedict.CacheDict[int] = cachedict.CacheDict(folder=tmp_path)
+    with cd.write():
+        cd["uid"] = 7
+    with errors.ErrorRegistry(tmp_path) as reg:
+        reg.record("uid", ValueError("stale"), "tb")
+    # CacheDict-first: a successful re-run obsoletes a stale cached error.
+    entry = backends._CachedEntry.lookup(cd, "uid")
+    assert entry.status == "success", "concurrent error row must not shadow cd success"
+    assert entry.load() == 7
 
 
 def test_unpicklable_exception_falls_back_to_runtime_error(tmp_path: Path) -> None:
