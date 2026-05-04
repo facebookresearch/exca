@@ -346,7 +346,6 @@ class CacheDict(tp.Generic[X]):
             os.utime(self.folder)
 
     def __delitem__(self, key: str) -> None:
-        # Standard dict contract: raise KeyError if the key is unknown.
         # On-disk artifacts are tolerated missing (a prior external
         # rmtree shouldn't trip a live RAM entry).
         if self._dumper is None:

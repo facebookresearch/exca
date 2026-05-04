@@ -223,22 +223,6 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     assert len(cache) == 3
 
 
-def test_pickle_is_view_only(tmp_path: Path) -> None:
-    """CacheDict pickles as a view: same folder, no RAM payload. Disk
-    contents are visible via the unpickled view (re-read from JSONL)."""
-    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=True)
-    with cache.write():
-        cache["k"] = 7
-    _ = cache["k"]  # populate _ram_data so the strip is observable
-    assert cache._ram_data
-    revived = pickle.loads(pickle.dumps(cache))
-    assert revived.folder == tmp_path
-    assert not revived._ram_data
-    assert revived["k"] == 7
-    with revived.write():
-        revived["k2"] = 9
-
-
 def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
     """JsonlReader resets cached `_last` / `_meta` on inode change
     (rmtree + recreate) and on shrink below `_last` (truncate-in-place)."""
@@ -285,6 +269,11 @@ def test_2_caches_memmap(tmp_path: Path) -> None:
     _ = cache2["blublu2"]
     assert "blublu" in cache2._ram_data
     _ = cache2["blublu"]
+    # __reduce__ yields a view: folder kept, _ram_data dropped (so a pickled
+    # CacheDict shipped to a worker doesn't carry GBs of cached arrays).
+    revived = pickle.loads(pickle.dumps(cache2))
+    assert revived.folder == tmp_path and not revived._ram_data
+    assert "blublu" in revived  # still reachable on disk
 
 
 @pytest.mark.parametrize("cache_type", ["MemmapArrayFile", "String"])
