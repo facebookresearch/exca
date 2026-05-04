@@ -233,8 +233,10 @@ def test_jsonl_reader_resets_on_replace_or_truncate(tmp_path: Path) -> None:
     assert "a" in reader.read()
     inode_a = reader._inode
 
-    fp.unlink()
-    fp.write_bytes(b'{"#key": "bb", "#type": "Pickle"}\n')  # longer: lets "c" shrink
+    # Replace via rename: unlink+write reuses inodes on tmpfs/ext4.
+    other = tmp_path / "other.jsonl"
+    other.write_bytes(b'{"#key": "bb", "#type": "Pickle"}\n')  # longer: lets "c" shrink
+    other.replace(fp)
     assert "bb" in reader.read() and reader._inode != inode_a
 
     inode_b = reader._inode
