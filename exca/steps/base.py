@@ -9,7 +9,7 @@
 Step holds pydantic config and `_run`; identity (`step_uid`, `uid`)
 is computed by `exca.steps.identity` from `(self, value)` at call time.
 `_execute` routes computation inline or via backend, keyed on a
-`QueryHandle` that the Step constructs from `(uid, aligned_prefix)`.
+`QueryHandle` that the Step constructs from `(uid, aligned prefix)`.
 """
 
 from __future__ import annotations
@@ -291,24 +291,34 @@ class Step(exca.helpers.DiscriminatedModel):
     def query(
         self,
         value: tp.Any = NoValue(),
-        aligned_prefix: tp.Sequence["Step"] = (),
         *,
-        uid: str | None = None,
+        _aligned_prefix: tp.Sequence["Step"] = (),
+        _uid: str | None = None,
     ) -> QueryHandle:
-        """Resolve ``(self, value)`` to a cache handle. Returns an
-        unconfigured handle when there is no infra/folder. ``uid``
-        preempts ``materialize_uid(value)`` when provided."""
+        """Return a :class:`QueryHandle` for inspecting or clearing the cache.
+
+        Parameters
+        ----------
+        value:
+            The input value to look up. Omit for no-input steps.
+
+        Returns
+        -------
+        QueryHandle
+            Handle to inspect, retrieve, or clear the cached result.
+        """
         if self.infra is None or self.infra.folder is None:
             return QueryHandle()
-        assert uid is None or isinstance(value, NoValue), "pass value or uid, not both"
-        if uid is None:
-            uid = identity.materialize_uid(value)
+        if _uid is not None and not isinstance(value, NoValue):
+            raise ValueError("pass value or _uid, not both")
+        if _uid is None:
+            _uid = identity.materialize_uid(value)
         cache_type = self._resolve_cache_type()
-        steps = list(aligned_prefix) + list(self._aligned_step())
+        steps = list(_aligned_prefix) + list(self._aligned_step())
         paths = backends.StepPaths(
             self.infra.folder,
             identity.step_uid(steps),
-            uid,
+            _uid,
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=cache_type)
         return QueryHandle(paths, cd, cache_type, backend=self.infra)
@@ -330,7 +340,18 @@ class Step(exca.helpers.DiscriminatedModel):
     # =========================================================================
 
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
-        """Execute with caching and backend handling."""
+        """Execute the step, using the cache and backend when configured.
+
+        Parameters
+        ----------
+        value:
+            Input to the step. Omit for no-input steps.
+
+        Returns
+        -------
+        Any
+            Cached or freshly computed result.
+        """
         built = self._resolve_step()
         if built is not self:
             return built.run(value)
@@ -488,12 +509,12 @@ class Chain(Step):
     def query(
         self,
         value: tp.Any = NoValue(),
-        aligned_prefix: tp.Sequence[Step] = (),
         *,
-        uid: str | None = None,
+        _aligned_prefix: tp.Sequence[Step] = (),
+        _uid: str | None = None,
     ) -> QueryHandle:
-        base = super().query(value, aligned_prefix, uid=uid)
-        sub = self._collect_sub_handles(value, aligned_prefix, uid=uid)
+        base = super().query(value, _aligned_prefix=_aligned_prefix, _uid=_uid)
+        sub = self._collect_sub_handles(value, _aligned_prefix, uid=_uid)
         return QueryHandle(
             base._paths,
             base._cache_dict,
@@ -513,7 +534,7 @@ class Chain(Step):
         prefix = list(aligned_prefix)
         handles: list[QueryHandle] = []
         for step in _resolve_all(self._step_sequence()):
-            handles.append(step.query(value, prefix, uid=uid))
+            handles.append(step.query(value, _aligned_prefix=prefix, _uid=uid))
             prefix = prefix + step._aligned_step()
         return handles
 
@@ -532,7 +553,7 @@ class Chain(Step):
             _set_mode_recursive(steps, "force")
 
         uid = identity.materialize_uid(value)
-        handle = self.query(uid=uid)
+        handle = self.query(_uid=uid)
         if handle._paths is not None:
             handle.paths.ensure_folders()
             identity.write_configs(handle.paths.step_folder, self._aligned_step())
@@ -615,7 +636,7 @@ class Chain(Step):
             if step.infra is None or step.infra.mode == "force":
                 continue
             idx = len(steps) - 1 - k
-            sub_handle = step.query(aligned_prefix=per_step_prefix[idx], uid=uid)
+            sub_handle = step.query(_aligned_prefix=per_step_prefix[idx], _uid=uid)
             if sub_handle.cached():
                 args = (sub_handle.result(),)
                 start_idx = idx + 1
@@ -628,7 +649,7 @@ class Chain(Step):
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i + 1, total, step_name)
             sub_prefix = per_step_prefix[i]
-            sub_handle = step.query(aligned_prefix=sub_prefix, uid=uid)
+            sub_handle = step.query(_aligned_prefix=sub_prefix, _uid=uid)
             if sub_handle._paths is not None:
                 sub_handle.paths.ensure_folders()
                 identity.write_configs(

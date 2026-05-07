@@ -12,7 +12,7 @@ How a step's results, errors, and in-flight state are stored and how
 │   ├── *.pkl|*.npy|...      # CacheDict value payloads
 │   ├── inflight.db          # claim/release registry
 │   └── errors.db            # cached exception per errored uid
-├── jobs/{item_uid}/         # submitit backends only
+├── jobs/{uid}/              # submitit backends only
 │   └── job.pkl              # pickled submitit Job (see "Submitit interaction")
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
@@ -34,7 +34,7 @@ to wrong results.
 
 `_CachingCall` wraps the user function:
 
-- **Success**: `cd[item_uid] = result` (no-op if another worker already
+- **Success**: `cd[uid] = result` (no-op if another worker already
   wrote it — handles inflight reclaim).
 - **Failure**: `INSERT OR REPLACE INTO errors (item_uid, exception, traceback)`
   with the pickled exception and formatted traceback, then re-raise.
@@ -73,7 +73,7 @@ handle picks the new index up via folder-mtime invalidation in
 
 ## Concurrency
 
-Two callers hitting the same `(step_uid, item_uid)` would race. The
+Two callers hitting the same `(step_uid, uid)` would race. The
 `inflight_session` context manager wraps submit-and-wait: `claim([uid])`
 returns the subset this caller now owns; non-claimers wait via
 `wait_for_inflight` (polls the DB; reclaims dead PIDs); the session

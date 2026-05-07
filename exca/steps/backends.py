@@ -30,8 +30,6 @@ import exca
 from exca.cachedict import inflight
 
 from . import errors
-from .identity import _NOINPUT_UID as _NOINPUT_UID  # noqa: F401
-from .identity import NoValue as NoValue  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +84,8 @@ class StepPaths:
 class QueryHandle:
     """Cache handle for a ``(step, value)`` pair.
 
-    Returned by ``Step.query()``. Use ``cached()`` / ``result()`` to
-    inspect, ``clear_cache()`` to invalidate.
+    Returned by :meth:`Step.query`. Provides read-only access to the
+    cache entry and its on-disk paths.
     """
 
     def __init__(
@@ -109,14 +107,14 @@ class QueryHandle:
 
     @property
     def paths(self) -> StepPaths:
-        """Path layout; raises if no infra is configured."""
+        """On-disk path layout (:class:`StepPaths`) for this entry."""
         if self._paths is None:
             raise RuntimeError("no infra configured on this step")
         return self._paths
 
     @property
     def cache_dict(self) -> exca.cachedict.CacheDict[tp.Any]:
-        """CacheDict backing this handle; raises if no infra is configured."""
+        """:class:`~exca.cachedict.CacheDict` for this entry."""
         if self._cache_dict is None:
             raise RuntimeError("no infra configured on this step")
         return self._cache_dict
@@ -142,9 +140,13 @@ class QueryHandle:
         return entry.result()
 
     def clear_cache(self, recursive: bool = True) -> None:
-        """Drop the cache entry (cd row, error row, job folder). No-op
-        if unconfigured. When ``recursive`` (default), also clears
-        sub-step caches (populated by container steps like Chain)."""
+        """Delete the cached result and associated files.
+
+        Parameters
+        ----------
+        recursive:
+            Also clear sub-step caches (e.g. inside a :class:`Chain`).
+        """
         if recursive:
             for sub in self._sub_handles:
                 sub.clear_cache()

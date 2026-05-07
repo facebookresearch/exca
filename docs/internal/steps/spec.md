@@ -114,14 +114,12 @@ class Step(DiscriminatedModel):
 ### QueryHandle
 
 ```python
-@dataclass(frozen=True)
 class QueryHandle:
-    paths: StepPaths | None             # None = unconfigured (no infra)
-    cd: CacheDict | None
-    cache_type: str | None
-    _sub_handles: tuple[QueryHandle, ...]  # populated by container steps
+    # public properties (raise RuntimeError if unconfigured)
+    paths: StepPaths
+    cache_dict: CacheDict
+    status: Literal["success", "error", None]
 
-    status: Literal["success", "error", None]  # property
     def cached(self) -> bool: ...        # success or error present
     def result(self) -> Any: ...         # return cached value or re-raise error
     def clear_cache(self, recursive=True) -> None: ...

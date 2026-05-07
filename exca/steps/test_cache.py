@@ -7,6 +7,7 @@
 """Tests for caching behavior (modes, cache paths, intermediate caches)."""
 
 import typing as tp
+from collections import defaultdict
 from pathlib import Path
 
 import pytest
@@ -93,7 +94,7 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     # Chain shares cache folder with last step; cache_type cascades from CACHE_TYPE.
     last_step = chain._step_sequence()[-1]
     chain_handle = chain.query()
-    last_handle = last_step.query(aligned_prefix=chain._aligned_step()[:-1])
+    last_handle = last_step.query(_aligned_prefix=chain._aligned_step()[:-1])
     assert chain_handle.paths.step_folder == last_handle.paths.step_folder
     assert chain_handle._cache_type == "Pickle"
     assert last_handle._cache_type == "Pickle"
@@ -414,8 +415,6 @@ def test_complex_input_caching(tmp_path: Path) -> None:
 
 def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     """Force mode step should not prevent using earlier caches."""
-    from collections import defaultdict
-
     call_counts: dict[str, int] = defaultdict(int)
 
     class StepA(Step):
@@ -441,7 +440,7 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     prefix: list[Step] = []
     for step in chain._step_sequence():
         if step.infra is not None:
-            sub_handle = step.query(backends.NoValue(), prefix)
+            sub_handle = step.query(backends.NoValue(), _aligned_prefix=prefix)
             cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
                 folder=sub_handle.paths.cache_folder
             )
