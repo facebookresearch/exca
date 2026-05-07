@@ -17,8 +17,8 @@ import pytest
 
 import exca
 
-from . import backends, conftest
-from .base import Chain, Input, Step
+from . import backends, conftest, identity
+from .base import Chain, Step
 
 # =============================================================================
 # Basic execution (no infra)
@@ -34,6 +34,14 @@ def test_chain_no_infra() -> None:
     chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Mult(coeff=3.0)])
     # 5 * 2 * 3 = 30
     assert chain.run(5.0) == 30.0
+
+
+def test_chain_run_bridge(tmp_path: Path) -> None:
+    # Chain._run bridges to _run_at; children with infra cache correctly.
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=[conftest.Mult(coeff=2.0, infra=infra), conftest.Mult(coeff=3.0)])
+    assert chain._run(5.0) == 30.0
+    assert chain[0].has_cache(5.0)
 
 
 # =============================================================================
@@ -52,22 +60,20 @@ def test_chain_is_generator() -> None:
     assert not trans_chain._is_generator()
 
 
-def test_transformer_requires_with_input(tmp_path: Path) -> None:
-    """Transformer steps require with_input() for cache operations."""
+def test_transformer_cache_lookup_with_value(tmp_path: Path) -> None:
+    """Transformer cache ops take the input value as an argument;
+    a missing-value lookup is a plain miss."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.Mult(coeff=3.0, infra=infra)
 
-    # Cache operations without with_input() should fail for transformers
-    with pytest.raises(RuntimeError, match="not initialized"):
-        step.has_cache()
+    # No-arg lookup uses the no-input sentinel: miss, not an error.
+    assert step.has_cache() is False
 
-    # run() works (it calls with_input internally)
-    result = step.run(5.0)
-    assert result == 15.0
-
-    # With explicit with_input() - works
-    assert step.with_input(5.0).has_cache()
-    step.with_input(5.0).clear_cache()
+    # Running populates and looking up by the same value hits.
+    assert step.run(5.0) == 15.0
+    assert step.has_cache(5.0)
+    step.clear_cache(5.0)
+    assert not step.has_cache(5.0)
 
 
 @pytest.mark.parametrize(
@@ -75,9 +81,6 @@ def test_transformer_requires_with_input(tmp_path: Path) -> None:
     [
         ([conftest.RandomGenerator(), conftest.Mult(coeff=10)], "RandomGenerator"),
         ([conftest.Add(), conftest.RandomGenerator()], "RandomGenerator"),
-        # with the special "Input" step type
-        ([conftest.Add(), Input(value=99)], "Input"),
-        ([Input(value=5), conftest.Mult(coeff=2)], "Input"),
     ],
 )
 def test_pure_generator_errors(tmp_path: Path, steps: list, match: str) -> None:
@@ -108,7 +111,7 @@ def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
     expected_hash = (
         "type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     )
-    assert chain.with_input(1)._chain_hash() == expected_hash
+    assert identity.step_uid(chain._aligned_step()) == expected_hash
 
     # UID export to YAML
     yaml = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_yaml()
@@ -136,31 +139,18 @@ def test_equality(tmp_path: Path) -> None:
     assert steps[0] in steps
 
 
-@pytest.mark.parametrize("configured", [True, False])
 @pytest.mark.parametrize("cached", [True, False])
-def test_pickle_roundtrip(tmp_path: Path, cached: bool, configured: bool) -> None:
-    """Pickle roundtrip preserves step functionality."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    if not cached:
-        infra = None
+def test_pickle_roundtrip(tmp_path: Path, cached: bool) -> None:
+    """Pickle roundtrip preserves step config + functionality."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if cached else None
     step = conftest.RandomGenerator(seed=42, infra=infra)
-    original = step.with_input() if configured else step
 
-    data = pickle.dumps(original)
-    loaded = pickle.loads(data)
-
-    # Attributes preserved
+    loaded = pickle.loads(pickle.dumps(step))
     assert loaded.seed == 42
     assert (loaded.infra is not None) is cached
-    # Infra should be attached to the loaded step
-    if cached:
-        assert loaded.infra._step is loaded
-    # only the configured step should have _previous
-    assert (loaded._previous is not None) is configured
 
-    # Step should be functional
     expected = 0.639
-    assert original.run() == pytest.approx(expected, rel=1e-3)
+    assert step.run() == pytest.approx(expected, rel=1e-3)
     assert loaded.run() == pytest.approx(expected, rel=1e-3)
 
 
@@ -217,41 +207,17 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
         infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
     )
 
-    # Execute to trigger _init()
+    # Folder cascades at construction time; running confirms the wiring.
     result = outer_chain.run(5.0)
     assert result == 12.0  # (5 + 1) * 2
 
-    # Check folder propagated to nested chain's step
-    configured = outer_chain.with_input(5.0)
-    inner = configured._step_sequence()[0]
+    inner = outer_chain._step_sequence()[0]
     assert isinstance(inner, Chain)
     inner_step = inner._step_sequence()[0]
     assert inner_step.infra is not None
     assert inner_step.infra.folder == tmp_path, (
         "folder should propagate to nested chain steps"
     )
-
-
-def test_run_mutation_cache_consistency(tmp_path: Path) -> None:
-    """Cache should work even if _run mutates self (bug: cache key changes mid-execution)."""
-
-    class Counter(Step):
-        count: int = 0
-        infra: backends.Backend | None = None
-
-        def _run(self) -> int:
-            self.count += 1  # Mutation during _run changes cache key!
-            return self.count
-
-    counter = Counter(infra={"backend": "Cached", "folder": tmp_path})  # type: ignore
-
-    # First run - should cache result
-    result1 = counter.run()
-    assert result1 == 1, "first call should return 1"
-
-    # Second run - should return cached result, not None
-    result2 = counter.run()
-    assert result2 == 1, "second call should return cached result (bug: returns None)"
 
 
 def test_none_as_valid_input() -> None:

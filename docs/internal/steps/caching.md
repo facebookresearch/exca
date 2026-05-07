@@ -53,14 +53,14 @@ deletes the CacheDict entry, the `errors.db` row, and `rmtree(jobs/<uid>)`
 in that order. A partial mid-clear (success gone, error row still
 there) surfaces as a recoverable cached error — fail closed, not open.
 
-## RAM caching and the shared CacheDict
+## RAM caching and the per-Backend CacheDict
 
-`Backend._cache_dict()` looks up the CacheDict in a process-level
-`WeakValueDictionary` keyed on `(folder, keep_in_ram, cache_type)`.
-Sibling Backends — `with_input` copies, deepcopies, fresh peers — share
-the handle, so RAM hits and `clear_cache` mutations propagate without
-explicit rewires. The entry dies with its last Backend; the next caller
-starts with empty RAM.
+`Backend._cache_dict()` memoises CacheDicts in a per-instance
+`dict[Path, CacheDict]` (`_cds`), keyed on `cache_folder`. A Step
+used in multiple chain contexts has different `step_uid`s (and thus
+different `cache_folder`s), so each gets its own CacheDict. The
+handle persists across `run()` calls on the same Backend, so
+`keep_in_ram` survives.
 
 With `keep_in_ram=True`, `__contains__` and `__getitem__` consult
 `_ram_data` before disk, so repeat reads don't re-decode. RAM is wiped

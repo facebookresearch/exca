@@ -117,6 +117,6 @@ def test_chain_and_caching(tmp_path: Path) -> None:
     assert chain.run() == pytest.approx(expected)
     assert chain.run() == chain.run()
 
-    # with_input serializes then reconstructs — Func must survive
+    # Run-time serialization for cache lookup must survive Func wrapping.
     chain2 = Chain(steps=[Func(function=scale, factor=5.0)], infra=infra)
     assert chain2.run(3.0) == 15.0

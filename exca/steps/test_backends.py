@@ -60,7 +60,7 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     assert out1 == out2
 
     # Job exists
-    job = chain.with_input(1).job()
+    job = chain.job(1)
     assert job is not None
     assert isinstance(job, submitit.Job)
 
@@ -112,7 +112,7 @@ def test_backend_error_caching(tmp_path: Path) -> None:
         chain2.run(2)
 
     # Clear and retry succeeds
-    chain2.with_input(2).clear_cache()
+    chain2.clear_cache(2)
     assert chain2.run(2) == 21  # 2 * 10 + 1
 
 
@@ -175,25 +175,14 @@ def test_force_with_taskinfra(tmp_path: Path) -> None:
     assert out2 == out3
 
 
-def test_paths_property_requires_initialization(tmp_path: Path) -> None:
-    """Test that paths property raises for transformers if not initialized."""
-    # Mult is a pure transformer (requires input)
+def test_probe_layout(tmp_path: Path) -> None:
+    """`Step._probe(value)` resolves paths lazily; folders only exist after run."""
     step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
-    assert step.infra is not None
-    with pytest.raises(RuntimeError, match="Step not initialized"):
-        _ = step.infra.paths
-
-    # After initialization, it works
-    initialized = step.with_input(1.0)
-    assert initialized.infra is not None
-    assert initialized.infra.paths.step_folder.exists() is False  # Not created yet
-    initialized.run()  # Run to create folders
-    assert initialized.infra.paths.cache_folder.exists()
-
-    # Generator (Add has default) auto-configures without initialization
-    gen_step = conftest.Add(infra=backends.Cached(folder=tmp_path))
-    assert gen_step.infra is not None
-    _ = gen_step.infra.paths  # No error - auto-configured
+    probe = step._probe(1.0)
+    assert probe is not None
+    assert probe.paths.step_folder.exists() is False
+    step.run(1.0)
+    assert probe.paths.cache_folder.exists()
 
 
 # =============================================================================
@@ -206,8 +195,9 @@ def test_config_files_and_consistency(tmp_path: Path) -> None:
     step = conftest.Mult(coeff=3.0, infra=backends.Cached(folder=tmp_path))
     assert step.run(10.0) == 30.0
 
-    # Check config files exist with correct content (list format)
-    step_folder = step.with_input(10.0).infra.paths.step_folder  # type: ignore
+    probe = step._probe(10.0)
+    assert probe is not None
+    step_folder = probe.paths.step_folder
     expected_uid = "- coeff: 3.0\n  type: Mult\n"
     assert (step_folder / "uid.yaml").read_text("utf8") == expected_uid
     assert (step_folder / "full-uid.yaml").read_text("utf8") == expected_uid
@@ -215,7 +205,7 @@ def test_config_files_and_consistency(tmp_path: Path) -> None:
 
     # Inconsistent uid.yaml raises error
     (step_folder / "uid.yaml").write_text("- coeff: 999.0\n  type: Mult\n")
-    step.with_input(10.0).clear_cache()
+    step.clear_cache(10.0)
     with pytest.raises(RuntimeError, match="Inconsistent uid config"):
         step.run(10.0)
 
