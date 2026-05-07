@@ -51,7 +51,7 @@ def test_cached_entry_lookup_success_shadows_error(tmp_path: Path) -> None:
     # CacheDict-first: a successful re-run obsoletes a stale cached error.
     entry = backends._CachedEntry.lookup(cd, "uid")
     assert entry.status == "success", "concurrent error row must not shadow cd success"
-    assert entry.load() == 7
+    assert entry.result() == 7
 
 
 def test_unpicklable_exception_falls_back_to_runtime_error(tmp_path: Path) -> None:
@@ -90,13 +90,14 @@ def _add(error: bool, tmp_path: Path, mode: str = "cached") -> tp.Any:
 def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     """End-to-end: a failing Step caches + re-raises; retry mode clears
     cache + registry row and recomputes."""
-    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
+    handle = _add(True, tmp_path).query(5.0)
+    paths = handle.paths
     with pytest.raises(ValueError):
         _add(True, tmp_path).run(5.0)
 
     with errors.ErrorRegistry(paths.cache_folder) as reg:
-        assert reg.get(None) == {paths.item_uid}
-        loaded = reg.load(paths.item_uid)
+        assert reg.get(None) == {paths.uid}
+        loaded = reg.load(paths.uid)
     assert isinstance(loaded, ValueError)
 
     # Cached and read-only both re-raise.
@@ -108,7 +109,7 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     # Retry: clear + recompute.
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
     with errors.ErrorRegistry(paths.cache_folder) as reg:
-        assert reg.get([paths.item_uid]) == set()
+        assert reg.get([paths.uid]) == set()
 
 
 def test_clear_cache_partial_failure_leaves_recoverable_error(
@@ -118,22 +119,22 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
     not a stale success."""
     step = _add(False, tmp_path)
     assert step.run(5.0) == 6.0
-    bound = step.with_input(5.0)
-    paths = bound.infra.paths
+    handle = step.query(5.0)
+    paths = handle.paths
     with errors.ErrorRegistry(paths.cache_folder) as reg:
-        reg.record(paths.item_uid, ValueError("stale"), "tb")
+        reg.record(paths.uid, ValueError("stale"), "tb")
 
     def boom(self: tp.Any, item_uids: list[str]) -> None:
         raise OSError("simulated DB failure")
 
     monkeypatch.setattr(errors.ErrorRegistry, "clear", boom)
     with pytest.raises(OSError):
-        bound.infra.clear_cache()
+        step.query(5.0).clear_cache()
     monkeypatch.undo()
 
     # cd entry is gone, errors row remains → cached error on next read.
     with errors.ErrorRegistry(paths.cache_folder) as reg:
-        assert paths.item_uid in reg.get([paths.item_uid])
+        assert paths.uid in reg.get([paths.uid])
     with pytest.raises(ValueError):
         _add(False, tmp_path).run(5.0)
     # And recovers via retry.
@@ -158,12 +159,13 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     """A residual errors.db row without any corresponding work (e.g. a
     cleanup that wiped the CacheDict but left the DB) is wiped + recomputed
     on `mode='retry'` — no traps."""
-    paths = backends.StepPaths.from_step(tmp_path, _add(True, tmp_path), 5.0)
-    paths.ensure_folders()
+    handle = _add(True, tmp_path).query(5.0)
+    paths = handle.paths
+    paths._ensure_folders()
     with errors.ErrorRegistry(paths.cache_folder) as reg:
-        reg.record(paths.item_uid, RuntimeError("stale"), "tb")
-        assert paths.item_uid in reg.get([paths.item_uid])
+        reg.record(paths.uid, RuntimeError("stale"), "tb")
+        assert paths.uid in reg.get([paths.uid])
 
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
     with errors.ErrorRegistry(paths.cache_folder) as reg:
-        assert paths.item_uid not in reg.get([paths.item_uid])
+        assert paths.uid not in reg.get([paths.uid])

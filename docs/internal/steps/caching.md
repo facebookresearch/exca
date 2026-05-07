@@ -12,7 +12,7 @@ How a step's results, errors, and in-flight state are stored and how
 │   ├── *.pkl|*.npy|...      # CacheDict value payloads
 │   ├── inflight.db          # claim/release registry
 │   └── errors.db            # cached exception per errored uid
-├── jobs/{item_uid}/         # submitit backends only
+├── jobs/{uid}/              # submitit backends only
 │   └── job.pkl              # pickled submitit Job (see "Submitit interaction")
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
@@ -34,7 +34,7 @@ to wrong results.
 
 `_CachingCall` wraps the user function:
 
-- **Success**: `cd[item_uid] = result` (no-op if another worker already
+- **Success**: `cd[uid] = result` (no-op if another worker already
   wrote it — handles inflight reclaim).
 - **Failure**: `INSERT OR REPLACE INTO errors (item_uid, exception, traceback)`
   with the pickled exception and formatted traceback, then re-raise.
@@ -53,14 +53,14 @@ deletes the CacheDict entry, the `errors.db` row, and `rmtree(jobs/<uid>)`
 in that order. A partial mid-clear (success gone, error row still
 there) surfaces as a recoverable cached error — fail closed, not open.
 
-## RAM caching and the shared CacheDict
+## RAM caching and the per-Backend CacheDict
 
-`Backend._cache_dict()` looks up the CacheDict in a process-level
-`WeakValueDictionary` keyed on `(folder, keep_in_ram, cache_type)`.
-Sibling Backends — `with_input` copies, deepcopies, fresh peers — share
-the handle, so RAM hits and `clear_cache` mutations propagate without
-explicit rewires. The entry dies with its last Backend; the next caller
-starts with empty RAM.
+`Backend._cache_dict()` memoises CacheDicts in a per-instance
+`dict[Path, CacheDict]` (`_cds`), keyed on `cache_folder`. A Step
+used in multiple chain contexts has different `step_uid`s (and thus
+different `cache_folder`s), so each gets its own CacheDict. The
+handle persists across `run()` calls on the same Backend, so
+`keep_in_ram` survives.
 
 With `keep_in_ram=True`, `__contains__` and `__getitem__` consult
 `_ram_data` before disk, so repeat reads don't re-decode. RAM is wiped
@@ -73,7 +73,7 @@ handle picks the new index up via folder-mtime invalidation in
 
 ## Concurrency
 
-Two callers hitting the same `(step_uid, item_uid)` would race. The
+Two callers hitting the same `(step_uid, uid)` would race. The
 `inflight_session` context manager wraps submit-and-wait: `claim([uid])`
 returns the subset this caller now owns; non-claimers wait via
 `wait_for_inflight` (polls the DB; reclaims dead PIDs); the session
