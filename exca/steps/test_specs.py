@@ -167,7 +167,7 @@ class _PidRecorder(Step):
     pid_file: Path = Path()
 
     def _run(self, value: float) -> float:
-        self.pid_file.write_text(str(os.getpid()))
+        self.pid_file.write_text(str(os.getpid()), encoding="utf-8")
         return value + 1
 
 
@@ -177,7 +177,7 @@ def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
     last = _PidRecorder(pid_file=tmp_path / "1.txt", infra=local)
     chain = Chain(steps=[_PidRecorder(pid_file=tmp_path / "0.txt", infra=cached), last])
     assert chain.run(5.0) == 7.0
-    pids = [int((tmp_path / f"{k}.txt").read_text()) for k in range(2)]
+    pids = [int((tmp_path / f"{k}.txt").read_text(encoding="utf-8")) for k in range(2)]
     assert pids[0] == os.getpid(), "First step should run in the main process"
     assert pids[1] != os.getpid(), "Second step should run in a sub-process"
     # chain query fallbacks to the last step, even if execution did not use the last step backend
