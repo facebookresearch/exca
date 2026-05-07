@@ -87,7 +87,7 @@ sequentially. It shares a cache entry with its last step (same
 │                                                            │
 │  Backend (base)                                            │
 │  - folder, mode, keep_in_ram                               │
-│  - run(func, args, probe) / clear_cache(probe) / job(probe)│
+│  - run(func, args, handle) / clear_cache(handle) / job(handle)│
 │        │                                                   │
 │   ┌────┴────┬────────────┬─────────────┐                   │
 │   ▼         ▼            ▼             ▼                   │
@@ -227,14 +227,14 @@ When `step.run(value)` is called:
 1. `_resolve_step()` — if non-self, delegate to resolved step.
 2. Compute `uid = materialize_uid(value)`, build `QueryHandle`
    via `query(uid=uid)`.
-3. `_execute(args, probe=handle)` — routes inline or to
-   `Backend.run(func, args, probe=handle)`.
+3. `_execute(args, handle=handle)` — routes inline or to
+   `Backend.run(func, args, handle=handle)`.
 4. Backend handles cache modes, inflight coordination, and
    job submission. See `caching.md`.
 
 For chains: `Chain._execute` binds `(uid, aligned_prefix)` into
 `functools.partial(self._run_at, ...)` and dispatches the partial.
-`_run_at` walks children, computing per-child probes and calling
+`_run_at` walks children, computing per-child handles and calling
 `step._execute(...)` on each.
 
 ## Future Work

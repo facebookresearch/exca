@@ -73,7 +73,6 @@ def test_cache_key_deterministic(
     if as_chain:
         step = Chain(steps=[conftest.Mult(coeff=3.0)], infra=infra)
     handle = step.query(5.0)
-    assert handle.paths is not None
     assert handle.paths.step_uid == "coeff=3,type=Mult-4c6b8f5f"
     assert handle.paths.uid == "value=5-39801320"
 

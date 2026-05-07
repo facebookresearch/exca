@@ -91,7 +91,6 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     """End-to-end: a failing Step caches + re-raises; retry mode clears
     cache + registry row and recomputes."""
     handle = _add(True, tmp_path).query(5.0)
-    assert handle.paths is not None
     paths = handle.paths
     with pytest.raises(ValueError):
         _add(True, tmp_path).run(5.0)
@@ -121,7 +120,6 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
     step = _add(False, tmp_path)
     assert step.run(5.0) == 6.0
     handle = step.query(5.0)
-    assert handle.paths is not None
     paths = handle.paths
     with errors.ErrorRegistry(paths.cache_folder) as reg:
         reg.record(paths.uid, ValueError("stale"), "tb")
@@ -162,7 +160,6 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     cleanup that wiped the CacheDict but left the DB) is wiped + recomputed
     on `mode='retry'` — no traps."""
     handle = _add(True, tmp_path).query(5.0)
-    assert handle.paths is not None
     paths = handle.paths
     paths.ensure_folders()
     with errors.ErrorRegistry(paths.cache_folder) as reg:

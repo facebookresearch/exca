@@ -178,7 +178,6 @@ def test_query_layout(tmp_path: Path) -> None:
     """`Step.query(value)` resolves paths lazily; folders only exist after run."""
     step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
     handle = step.query(1.0)
-    assert handle.paths is not None
     assert handle.paths.step_folder.exists() is False
     step.run(1.0)
     assert handle.paths.cache_folder.exists()
@@ -195,7 +194,6 @@ def test_config_files_and_consistency(tmp_path: Path) -> None:
     assert step.run(10.0) == 30.0
 
     handle = step.query(10.0)
-    assert handle.paths is not None
     step_folder = handle.paths.step_folder
     expected_uid = "- coeff: 3.0\n  type: Mult\n"
     assert (step_folder / "uid.yaml").read_text("utf8") == expected_uid

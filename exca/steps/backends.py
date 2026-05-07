@@ -83,49 +83,71 @@ class StepPaths:
         self.job_folder.mkdir(parents=True, exist_ok=True)
 
 
-@dataclasses.dataclass(frozen=True)
 class QueryHandle:
     """Cache handle for a ``(step, value)`` pair.
 
-    Always returned by ``Step.query()`` — acts as a null-object when
-    the step has no infra (``paths`` is None, ``cached()`` returns
-    False, mutators are no-ops).
+    Returned by ``Step.query()``. Use ``cached()`` / ``result()`` to
+    inspect, ``clear_cache()`` to invalidate.
     """
 
-    paths: StepPaths | None = None
-    cd: exca.cachedict.CacheDict[tp.Any] | None = None
-    # Carried so `_CachingCall` can rebuild a writer-side `CacheDict`
-    # without consulting the Step.
-    cache_type: str | None = None
-    _backend: "Backend | None" = dataclasses.field(default=None, repr=False)
-    # Populated by container steps (Chain, etc.) at query time.
-    _sub_handles: tuple["QueryHandle", ...] = dataclasses.field(default=(), repr=False)
+    def __init__(
+        self,
+        paths: StepPaths | None = None,
+        cache_dict: exca.cachedict.CacheDict[tp.Any] | None = None,
+        cache_type: str | None = None,
+        backend: Backend | None = None,
+        sub_handles: tuple[QueryHandle, ...] = (),
+    ) -> None:
+        self._paths = paths
+        self._cache_dict = cache_dict
+        # Carried so `_CachingCall` can rebuild a writer-side `CacheDict`
+        # without consulting the Step.
+        self._cache_type = cache_type
+        self._backend = backend
+        # Populated by container steps (Chain, etc.) at query time.
+        self._sub_handles = sub_handles
+
+    @property
+    def paths(self) -> StepPaths:
+        """Path layout; raises if no infra is configured."""
+        if self._paths is None:
+            raise RuntimeError("no infra configured on this step")
+        return self._paths
+
+    @property
+    def cache_dict(self) -> exca.cachedict.CacheDict[tp.Any]:
+        """CacheDict backing this handle; raises if no infra is configured."""
+        if self._cache_dict is None:
+            raise RuntimeError("no infra configured on this step")
+        return self._cache_dict
 
     @property
     def status(self) -> tp.Literal["success", "error", None]:
         """Cache status: ``"success"``, ``"error"``, or ``None``."""
-        if self.cd is None or self.paths is None:
+        if self._cache_dict is None or self._paths is None:
             return None
-        return _CachedEntry.lookup(self.cd, self.paths.uid).status
+        return _CachedEntry.lookup(self._cache_dict, self._paths.uid).status
 
     def cached(self) -> bool:
         """True iff there is a cached success or error."""
         return self.status is not None
 
     def result(self) -> tp.Any:
-        """Return the cached value, re-raise a cached error, or
-        ``None`` if nothing is cached."""
-        if self.cd is None or self.paths is None:
-            raise RuntimeError("no infra configured on this step; nothing cached")
-        return _CachedEntry.lookup(self.cd, self.paths.uid).result()
+        """Return the cached value, or re-raise a cached error."""
+        entry = _CachedEntry.lookup(self.cache_dict, self.paths.uid)
+        if entry.status is None:
+            raise RuntimeError(
+                f"no cached result for {self.paths.step_uid}[{self.paths.uid}]"
+            )
+        return entry.result()
 
     def clear_cache(self, recursive: bool = True) -> None:
         """Drop the cache entry (cd row, error row, job folder). No-op
         if unconfigured. When ``recursive`` (default), also clears
         sub-step caches (populated by container steps like Chain)."""
         if recursive:
-            for h in self._sub_handles:
-                h.clear_cache()
+            for sub in self._sub_handles:
+                sub.clear_cache()
         if self._backend is not None:
             self._backend.clear_cache(self)
 
@@ -315,7 +337,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def clear_cache(self, handle: QueryHandle) -> None:
         """Drop everything cached for this handle (cd row, error row, job folder)."""
-        paths, cd = handle.paths, handle.cd
+        paths, cd = handle.paths, handle.cache_dict
         uid = paths.uid
         # Cancel before rmtree — `job.pkl` carries the only handle.
         if paths.job_pkl.exists():
@@ -358,7 +380,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         handle: QueryHandle,
     ) -> tp.Any:
         """Execute `func(*args)` with caching keyed on `handle`."""
-        paths, cd = handle.paths, handle.cd
+        paths, cd = handle.paths, handle.cache_dict
         uid = paths.uid
 
         # Pre-lock fast path: cached value / cached error / read-only miss.
@@ -407,7 +429,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 logger.debug("Recovering job: %s", paths.job_pkl)
 
             if job is None:
-                wrapper = _CachingCall(func, paths, handle.cache_type)
+                wrapper = _CachingCall(func, paths, handle._cache_type)
                 job = self._submit(wrapper, *args)
                 if reg is not None:
                     inflight.record_worker_info(reg, [uid], job)

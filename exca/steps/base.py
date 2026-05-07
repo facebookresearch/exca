@@ -252,7 +252,7 @@ class Step(exca.helpers.DiscriminatedModel):
         aligned_prefix: tp.Sequence["Step"] = (),
     ) -> tp.Any:
         """Run this step's computation, inline or via backend."""
-        if handle.paths is None or self.infra is None:
+        if handle._paths is None or self.infra is None:
             return self._run(*args)
         return self.infra.run(self._run, args, handle=handle)
 
@@ -311,7 +311,7 @@ class Step(exca.helpers.DiscriminatedModel):
             uid,
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=cache_type)
-        return QueryHandle(paths, cd, cache_type, _backend=self.infra)
+        return QueryHandle(paths, cd, cache_type, backend=self.infra)
 
     def _check_cache_type(self) -> None:
         """Validate the deprecated ``infra.cache_type`` against the Step's
@@ -338,7 +338,7 @@ class Step(exca.helpers.DiscriminatedModel):
         self._check_cache_type()
         was_force = self.infra is not None and self.infra.mode == "force"
         handle = self.query(value)
-        if handle.paths is not None:
+        if handle._paths is not None:
             handle.paths.ensure_folders()
             identity.write_configs(handle.paths.step_folder, self._aligned_step())
 
@@ -495,11 +495,11 @@ class Chain(Step):
         base = super().query(value, aligned_prefix, uid=uid)
         sub = self._collect_sub_handles(value, aligned_prefix, uid=uid)
         return QueryHandle(
-            paths=base.paths,
-            cd=base.cd,
-            cache_type=base.cache_type,
-            _backend=base._backend,
-            _sub_handles=tuple(sub),
+            base._paths,
+            base._cache_dict,
+            base._cache_type,
+            backend=base._backend,
+            sub_handles=tuple(sub),
         )
 
     def _collect_sub_handles(
@@ -533,7 +533,7 @@ class Chain(Step):
 
         uid = identity.materialize_uid(value)
         handle = self.query(uid=uid)
-        if handle.paths is not None:
+        if handle._paths is not None:
             handle.paths.ensure_folders()
             identity.write_configs(handle.paths.step_folder, self._aligned_step())
             # Chain and last step share a cache entry — if any internal step
@@ -573,7 +573,7 @@ class Chain(Step):
             uid=uid,
             aligned_prefix=tuple(aligned_prefix),
         )
-        if handle.paths is None or self.infra is None:
+        if handle._paths is None or self.infra is None:
             return func(*args)
         return self.infra.run(func, args, handle=handle)
 
@@ -629,7 +629,7 @@ class Chain(Step):
             logger.debug("Running step %d/%d: %s", i + 1, total, step_name)
             sub_prefix = per_step_prefix[i]
             sub_handle = step.query(aligned_prefix=sub_prefix, uid=uid)
-            if sub_handle.paths is not None:
+            if sub_handle._paths is not None:
                 sub_handle.paths.ensure_folders()
                 identity.write_configs(
                     sub_handle.paths.step_folder,

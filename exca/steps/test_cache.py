@@ -94,10 +94,9 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     last_step = chain._step_sequence()[-1]
     chain_handle = chain.query()
     last_handle = last_step.query(aligned_prefix=chain._aligned_step()[:-1])
-    assert chain_handle.paths is not None and last_handle.paths is not None
     assert chain_handle.paths.step_folder == last_handle.paths.step_folder
-    assert chain_handle.cache_type == "Pickle"
-    assert last_handle.cache_type == "Pickle"
+    assert chain_handle._cache_type == "Pickle"
+    assert last_handle._cache_type == "Pickle"
 
 
 @pytest.mark.parametrize("classvar_name", [None, "CACHE_TYPE", "_DEFAULT_CACHE_TYPE"])
@@ -410,7 +409,6 @@ def test_complex_input_caching(tmp_path: Path) -> None:
 
     # Check the uid is deterministic
     handle = step.query(data)
-    assert handle.paths is not None
     assert handle.paths.uid == "value=(1,{a=12})-240df6f3", handle.paths.uid
 
 
@@ -444,7 +442,6 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     for step in chain._step_sequence():
         if step.infra is not None:
             sub_handle = step.query(backends.NoValue(), prefix)
-            assert sub_handle.paths is not None
             cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
                 folder=sub_handle.paths.cache_folder
             )
