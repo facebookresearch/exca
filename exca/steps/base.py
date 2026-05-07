@@ -262,7 +262,7 @@ class Step(exca.helpers.DiscriminatedModel):
         Default: this step only. Compound steps override to also descend.
         """
         if self.infra is not None and self.infra.folder is None:
-            self.infra = self.infra.model_copy(update={"folder": parent_folder})
+            self.infra.folder = parent_folder
 
     # =========================================================================
     # Identity
@@ -519,30 +519,14 @@ class Chain(Step):
         _aligned_prefix: tp.Sequence[Step] = (),
         _uid: str | None = None,
     ) -> QueryHandle:
-        base = super().query(value, _aligned_prefix=_aligned_prefix, _uid=_uid)
-        sub = self._collect_sub_handles(value, _aligned_prefix, uid=_uid)
-        return QueryHandle(
-            base._paths,
-            base._cache_dict,
-            base._cache_type,
-            backend=base._backend,
-            sub_handles=tuple(sub),
-        )
-
-    def _collect_sub_handles(
-        self,
-        value: tp.Any,
-        aligned_prefix: tp.Sequence[Step],
-        *,
-        uid: str | None = None,
-    ) -> list[QueryHandle]:
-        """Build child handles with growing prefix (same walk as _run_at)."""
-        prefix = list(aligned_prefix)
-        handles: list[QueryHandle] = []
+        handle = super().query(value, _aligned_prefix=_aligned_prefix, _uid=_uid)
+        prefix = list(_aligned_prefix)
+        sub: list[QueryHandle] = []
         for step in _resolve_all(self._step_sequence()):
-            handles.append(step.query(value, _aligned_prefix=prefix, _uid=uid))
+            sub.append(step.query(value, _aligned_prefix=prefix, _uid=_uid))
             prefix = prefix + step._aligned_step()
-        return handles
+        handle._sub_handles = tuple(sub)
+        return handle
 
     # =========================================================================
     # Execution

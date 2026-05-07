@@ -244,9 +244,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     _is_off_process: tp.ClassVar[bool] = False
 
     folder: Path | None = None
-    cache_type: str | None = (
-        None  # deprecated: declare `CACHE_TYPE` on the Step subclass.
-    )
+    # deprecated: declare `CACHE_TYPE` on the Step subclass.
+    cache_type: str | None = None
 
     mode: ModeType = "cached"
     keep_in_ram: bool = False
@@ -264,9 +263,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             return "force"
         return v
 
-    # Per-Backend memo: same instance reused across `run()` calls so
-    # `keep_in_ram` survives. Keyed on cache_folder because a Step used
-    # in multiple chain contexts has different `step_uid`s.
+    # memoize so `keep_in_ram` survives. Keyed on cache_folder as a Step
+    # could be reused in other chain contexts, with different `step_uid`s.
     _cds: dict[Path, exca.cachedict.CacheDict[tp.Any]] = pydantic.PrivateAttr(
         default_factory=dict
     )
