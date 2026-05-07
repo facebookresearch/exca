@@ -254,7 +254,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """Run this step's computation, inline or via backend."""
         if handle._paths is None or self.infra is None:
             return self._run(*args)
-        return self.infra.run(self._run, args, handle=handle)
+        return self.infra._run(self._run, args, handle=handle)
 
     def _propagate_folder(self, parent_folder: Path) -> None:
         """Apply ``parent_folder`` to own ``infra`` when unset.
@@ -602,7 +602,7 @@ class Chain(Step):
         )
         if handle._paths is None or self.infra is None:
             return func(*args)
-        return self.infra.run(func, args, handle=handle)
+        return self.infra._run(func, args, handle=handle)
 
     def _run(self, *args: tp.Any) -> tp.Any:
         # Bridges `_run(*args)` to `_run_at` for the standalone case;

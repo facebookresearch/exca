@@ -143,12 +143,12 @@ class QueryHandle:
             for sub in self._sub_handles:
                 sub.clear_cache()
         if self._backend is not None:
-            self._backend.clear_cache(self)
+            self._backend._clear_cache(self)
 
     def job(self) -> submitit.Job[tp.Any] | None:
         """Get the submitit job, or ``None``."""
         if self._backend is not None:
-            return self._backend.job(self)
+            return self._backend._job(self)
         return None
 
 
@@ -282,10 +282,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 return False
         return True
 
-    # =========================================================================
-    # CacheDict
-    # =========================================================================
-
     def _cache_dict(
         self, cache_folder: Path, *, cache_type: str | None
     ) -> exca.cachedict.CacheDict[tp.Any]:
@@ -302,11 +298,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             self._cds[cache_folder] = cd
         return cd
 
-    # =========================================================================
-    # Cache operations
-    # =========================================================================
-
-    def clear_cache(self, handle: QueryHandle) -> None:
+    def _clear_cache(self, handle: QueryHandle) -> None:
         """Drop everything cached for this handle (cd row, error row, job folder)."""
         paths, cd = handle.paths, handle.cache_dict
         uid = paths.uid
@@ -329,8 +321,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if paths.job_folder.exists():
             shutil.rmtree(paths.job_folder)
 
-    def job(self, handle: QueryHandle) -> submitit.Job[tp.Any] | None:
-        """Get submitit job for this handle, or None."""
+    def _job(self, handle: QueryHandle) -> submitit.Job[tp.Any] | None:
         return self._load_job(handle.paths)
 
     def _load_job(self, paths: StepPaths) -> submitit.Job[tp.Any] | None:
@@ -339,18 +330,13 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 return pickle.load(f)  # type: ignore
         return None
 
-    # =========================================================================
-    # Execution
-    # =========================================================================
-
-    def run(
+    def _run(
         self,
         func: tp.Callable[..., tp.Any],
         args: tuple[tp.Any, ...],
         *,
         handle: QueryHandle,
     ) -> tp.Any:
-        """Execute `func(*args)` with caching keyed on `handle`."""
         paths, cd = handle.paths, handle.cache_dict
         uid = paths.uid
 
@@ -383,7 +369,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             ):
                 if self.mode == "retry":
                     logger.warning("Retrying failed step: %s[%s]", paths.step_uid, uid)
-                self.clear_cache(handle)  # cancels any running job
+                self._clear_cache(handle)  # cancels any running job
 
             # Recover an in-flight prior job (driver crash, retry of a
             # done-but-failed job). force / retry-on-error already cleared;
