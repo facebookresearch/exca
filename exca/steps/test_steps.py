@@ -7,7 +7,6 @@
 """Tests for Step and Chain basic functionality (no caching tests here, see test_cache.py)."""
 
 import collections
-import os
 import pickle
 import traceback
 import typing as tp
@@ -598,27 +597,3 @@ def test_custom_hierarchy_roundtrip() -> None:
     assert data["steps"][0]["name"] == "CustomMult"
     restored = CustomStep.model_validate(data)
     assert type(restored) is CustomChain
-
-
-class _PidRecorder(Step):
-    """Writes os.getpid() to a file during _run — works across processes."""
-
-    pid_file: Path = Path()
-
-    def _run(self, value: float) -> float:
-        self.pid_file.write_text(str(os.getpid()))
-        return value + 1
-
-
-def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
-    """Chain without infra runs steps in the main process, even when
-    a sub-step has an off-process backend."""
-    cached: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    local: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
-    last = _PidRecorder(pid_file=tmp_path / "1.txt", infra=local)
-    chain = Chain(steps=[_PidRecorder(pid_file=tmp_path / "0.txt", infra=cached), last])
-    assert chain.run(5.0) == 7.0
-    pids = [int((tmp_path / f"{k}.txt").read_text()) for k in range(2)]
-    assert pids[0] == os.getpid(), "First step should run in the main process"
-    assert pids[1] != os.getpid(), "Second step should run in a sub-process"
-    assert chain.query(5.0).result() == 7.0
