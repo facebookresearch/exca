@@ -335,6 +335,12 @@ class Step(exca.helpers.DiscriminatedModel):
                 f"the Step's declared CACHE_TYPE ({declared!r}); use only CACHE_TYPE."
             )
 
+    def with_input(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # deprecated
+        raise AttributeError(
+            "with_input() was removed; pass the value directly to run(value) "
+            "or query(value)"
+        )
+
     # =========================================================================
     # Execution
     # =========================================================================

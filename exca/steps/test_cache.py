@@ -14,7 +14,7 @@ import pytest
 
 import exca.cachedict
 
-from . import backends, conftest
+from . import conftest, identity
 from .base import Chain, Step
 
 # =============================================================================
@@ -440,11 +440,11 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     prefix: list[Step] = []
     for step in chain._step_sequence():
         if step.infra is not None:
-            sub_handle = step.query(backends.NoValue(), _aligned_prefix=prefix)
+            sub_handle = step.query(identity.NoValue(), _aligned_prefix=prefix)
             cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
                 folder=sub_handle.paths.cache_folder
             )
-            assert backends._NOINPUT_UID in cd
+            assert identity._NOINPUT_UID in cd
         prefix = prefix + step._aligned_step()
 
     call_counts.clear()
