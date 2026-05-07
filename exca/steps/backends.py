@@ -88,8 +88,8 @@ class QueryHandle:
     """Cache handle for a ``(step, value)`` pair.
 
     Always returned by ``Step.query()`` — acts as a null-object when
-    the step has no infra (``configured`` is False, ``cached()``
-    returns False, mutators are no-ops).
+    the step has no infra (``paths`` is None, ``cached()`` returns
+    False, mutators are no-ops).
     """
 
     paths: StepPaths | None = None
@@ -113,7 +113,8 @@ class QueryHandle:
         return self.status is not None
 
     def result(self) -> tp.Any:
-        """Return the cached value or re-raise a cached error."""
+        """Return the cached value, re-raise a cached error, or
+        ``None`` if nothing is cached."""
         if self.cd is None or self.paths is None:
             raise RuntimeError("no infra configured on this step; nothing cached")
         return _CachedEntry.lookup(self.cd, self.paths.uid).result()
@@ -309,12 +310,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return cd
 
     # =========================================================================
-    # Cache operations (probe-driven)
+    # Cache operations
     # =========================================================================
 
-    def clear_cache(self, probe: QueryHandle) -> None:
-        """Drop everything cached for this probe (cd row, error row, job folder)."""
-        paths, cd = probe.paths, probe.cd
+    def clear_cache(self, handle: QueryHandle) -> None:
+        """Drop everything cached for this handle (cd row, error row, job folder)."""
+        paths, cd = handle.paths, handle.cd
         uid = paths.uid
         # Cancel before rmtree — `job.pkl` carries the only handle.
         if paths.job_pkl.exists():
@@ -335,9 +336,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if paths.job_folder.exists():
             shutil.rmtree(paths.job_folder)
 
-    def job(self, probe: QueryHandle) -> submitit.Job[tp.Any] | None:
-        """Get submitit job for this probe, or None."""
-        return self._load_job(probe.paths)
+    def job(self, handle: QueryHandle) -> submitit.Job[tp.Any] | None:
+        """Get submitit job for this handle, or None."""
+        return self._load_job(handle.paths)
 
     def _load_job(self, paths: StepPaths) -> submitit.Job[tp.Any] | None:
         if paths.job_pkl.exists():
@@ -354,10 +355,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         func: tp.Callable[..., tp.Any],
         args: tuple[tp.Any, ...],
         *,
-        probe: QueryHandle,
+        handle: QueryHandle,
     ) -> tp.Any:
-        """Execute `func(*args)` with caching keyed on `probe`."""
-        paths, cd = probe.paths, probe.cd
+        """Execute `func(*args)` with caching keyed on `handle`."""
+        paths, cd = handle.paths, handle.cd
         uid = paths.uid
 
         # Pre-lock fast path: cached value / cached error / read-only miss.
@@ -389,7 +390,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             ):
                 if self.mode == "retry":
                     logger.warning("Retrying failed step: %s[%s]", paths.step_uid, uid)
-                self.clear_cache(probe)  # cancels any running job
+                self.clear_cache(handle)  # cancels any running job
 
             # Recover an in-flight prior job (driver crash, retry of a
             # done-but-failed job). force / retry-on-error already cleared;
@@ -406,7 +407,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 logger.debug("Recovering job: %s", paths.job_pkl)
 
             if job is None:
-                wrapper = _CachingCall(func, paths, probe.cache_type)
+                wrapper = _CachingCall(func, paths, handle.cache_type)
                 job = self._submit(wrapper, *args)
                 if reg is not None:
                     inflight.record_worker_info(reg, [uid], job)

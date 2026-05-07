@@ -247,14 +247,14 @@ class Step(exca.helpers.DiscriminatedModel):
         self,
         args: tuple[tp.Any, ...],
         *,
-        probe: QueryHandle = QueryHandle(),
+        handle: QueryHandle = QueryHandle(),
         uid: str | None = None,
         aligned_prefix: tp.Sequence["Step"] = (),
     ) -> tp.Any:
         """Run this step's computation, inline or via backend."""
-        if probe.paths is None or self.infra is None:
+        if handle.paths is None or self.infra is None:
             return self._run(*args)
-        return self.infra.run(self._run, args, probe=probe)
+        return self.infra.run(self._run, args, handle=handle)
 
     def _propagate_folder(self, parent_folder: Path) -> None:
         """Apply ``parent_folder`` to own ``infra`` when unset.
@@ -344,7 +344,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
-            result = self._execute(args, probe=handle)
+            result = self._execute(args, handle=handle)
         except Exception as e:
             e.add_note(f"  -> in {self!r}")
             raise
@@ -545,7 +545,7 @@ class Chain(Step):
 
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
-            result = self._execute(args, probe=handle, uid=uid)
+            result = self._execute(args, handle=handle, uid=uid)
         except Exception as e:
             e.add_note(f"  -> in {self!r}")
             raise
@@ -562,7 +562,7 @@ class Chain(Step):
         self,
         args: tuple[tp.Any, ...],
         *,
-        probe: QueryHandle = QueryHandle(),
+        handle: QueryHandle = QueryHandle(),
         uid: str | None = None,
         aligned_prefix: tp.Sequence[Step] = (),
     ) -> tp.Any:
@@ -573,9 +573,9 @@ class Chain(Step):
             uid=uid,
             aligned_prefix=tuple(aligned_prefix),
         )
-        if probe.paths is None or self.infra is None:
+        if handle.paths is None or self.infra is None:
             return func(*args)
-        return self.infra.run(func, args, probe=probe)
+        return self.infra.run(func, args, handle=handle)
 
     def _run(self, *args: tp.Any) -> tp.Any:
         # Bridges `_run(*args)` to `_run_at` for the standalone case;
@@ -638,7 +638,7 @@ class Chain(Step):
             try:
                 result = step._execute(
                     args,
-                    probe=sub_handle,
+                    handle=sub_handle,
                     uid=uid,
                     aligned_prefix=sub_prefix,
                 )

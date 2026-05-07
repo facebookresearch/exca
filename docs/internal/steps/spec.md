@@ -174,9 +174,9 @@ class Multiply(Step):
 
 step = Multiply(coeff=3.0, infra={"backend": "Cached", "folder": "/tmp/cache"})
 result = step.run(5.0)       # 15.0
-h = step.query(5.0)
-assert h is not None and h.cached()
-h.clear_cache()
+q = step.query(5.0)
+assert q.cached()
+q.clear_cache()
 ```
 
 ### Generator Step
@@ -189,8 +189,8 @@ class LoadData(Step):
 
 step = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
 data = step.run()
-h = step.query()
-assert h is not None and h.cached()
+q = step.query()
+assert q.cached()
 ```
 
 ### Chain with Mixed Infrastructure
