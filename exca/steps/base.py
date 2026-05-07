@@ -366,7 +366,7 @@ class Step(exca.helpers.DiscriminatedModel):
         was_force = self.infra is not None and self.infra.mode == "force"
         handle = self.query(value)
         if handle._paths is not None:
-            handle.paths.ensure_folders()
+            handle.paths._ensure_folders()
             identity.write_configs(handle.paths.step_folder, self._aligned_step())
 
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
@@ -561,7 +561,7 @@ class Chain(Step):
         uid = identity.materialize_uid(value)
         handle = self.query(_uid=uid)
         if handle._paths is not None:
-            handle.paths.ensure_folders()
+            handle.paths._ensure_folders()
             identity.write_configs(handle.paths.step_folder, self._aligned_step())
             # Chain and last step share a cache entry — if any internal step
             # is force, the chain's stored result is also stale. Clear here
@@ -657,7 +657,7 @@ class Chain(Step):
             sub_prefix = per_step_prefix[i]
             sub_handle = step.query(_aligned_prefix=sub_prefix, _uid=uid)
             if sub_handle._paths is not None:
-                sub_handle.paths.ensure_folders()
+                sub_handle.paths._ensure_folders()
                 identity.write_configs(
                     sub_handle.paths.step_folder,
                     list(sub_prefix) + list(step._aligned_step()),

@@ -161,7 +161,7 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     on `mode='retry'` — no traps."""
     handle = _add(True, tmp_path).query(5.0)
     paths = handle.paths
-    paths.ensure_folders()
+    paths._ensure_folders()
     with errors.ErrorRegistry(paths.cache_folder) as reg:
         reg.record(paths.uid, RuntimeError("stale"), "tb")
         assert paths.uid in reg.get([paths.uid])

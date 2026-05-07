@@ -34,11 +34,6 @@ from . import errors
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# StepPaths and QueryHandle
-# =============================================================================
-
-
 @dataclasses.dataclass(frozen=True)
 class StepPaths:
     """Path layout for one (step_uid, uid) pair.
@@ -66,17 +61,14 @@ class StepPaths:
         return self.step_folder / "jobs" / self.uid
 
     @property
-    def job_pkl(self) -> Path:
-        """Path to job.pkl for this item."""
+    def _job_pkl(self) -> Path:
         return self.job_folder / "job.pkl"
 
     @property
-    def logs_folder(self) -> str:
-        """submitit logs folder template (with %j placeholder)."""
+    def _logs_folder(self) -> str:
         return str(self.step_folder / "logs" / "%j")
 
-    def ensure_folders(self) -> None:
-        """Create cache_folder and job_folder."""
+    def _ensure_folders(self) -> None:
         self.cache_folder.mkdir(parents=True, exist_ok=True)
         self.job_folder.mkdir(parents=True, exist_ok=True)
 
@@ -160,11 +152,6 @@ class QueryHandle:
         return None
 
 
-# =============================================================================
-# Cached entry
-# =============================================================================
-
-
 ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 
 
@@ -213,11 +200,6 @@ class _CachedEntry:
         return None
 
 
-# =============================================================================
-# Caching call (worker side)
-# =============================================================================
-
-
 class _CachingCall:
     """Worker-side wrapper: runs the user function, writes result or error to cache."""
 
@@ -234,7 +216,7 @@ class _CachingCall:
     # Returns None: the driver re-reads from cache, so the result never
     # round-trips through a job pickle (matters for submitit).
     def __call__(self, *args: tp.Any) -> None:
-        self.paths.ensure_folders()
+        self.paths._ensure_folders()
         cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
             folder=self.paths.cache_folder, cache_type=self.cache_type
         )
@@ -249,11 +231,6 @@ class _CachingCall:
         if self.paths.uid not in cd:
             with cd.write():
                 cd[self.paths.uid] = result
-
-
-# =============================================================================
-# Backend
-# =============================================================================
 
 
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
@@ -342,9 +319,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         paths, cd = handle.paths, handle.cache_dict
         uid = paths.uid
         # Cancel before rmtree — `job.pkl` carries the only handle.
-        if paths.job_pkl.exists():
+        if paths._job_pkl.exists():
             try:
-                with paths.job_pkl.open("rb") as f:
+                with paths._job_pkl.open("rb") as f:
                     job = pickle.load(f)
                 if not job.done():
                     job.cancel()
@@ -365,8 +342,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return self._load_job(handle.paths)
 
     def _load_job(self, paths: StepPaths) -> submitit.Job[tp.Any] | None:
-        if paths.job_pkl.exists():
-            with paths.job_pkl.open("rb") as f:
+        if paths._job_pkl.exists():
+            with paths._job_pkl.open("rb") as f:
                 return pickle.load(f)  # type: ignore
         return None
 
@@ -424,11 +401,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 try:
                     job.result()
                 except Exception:
-                    logger.warning("Retrying failed job: %s", paths.job_pkl)
-                    paths.job_pkl.unlink()
+                    logger.warning("Retrying failed job: %s", paths._job_pkl)
+                    paths._job_pkl.unlink()
                     job = None
             elif job is not None:
-                logger.debug("Recovering job: %s", paths.job_pkl)
+                logger.debug("Recovering job: %s", paths._job_pkl)
 
             if job is None:
                 wrapper = _CachingCall(func, paths, handle._cache_type)
@@ -490,19 +467,17 @@ class _SubmititBackend(Backend):
         return params
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
-        wrapper.paths.ensure_folders()  # Create folders before writing job.pkl
-        # AutoExecutor(cluster=_CLUSTER) fails fast at construction if the
-        # target cluster is unavailable (e.g. "slurm" but no `srun`)
+        wrapper.paths._ensure_folders()
         executor = submitit.AutoExecutor(
-            folder=wrapper.paths.logs_folder, cluster=self._CLUSTER
+            folder=wrapper.paths._logs_folder, cluster=self._CLUSTER
         )
         executor.update_parameters(**self._submitit_params())
 
         with submitit.helpers.clean_env():
             job = executor.submit(wrapper, *args)
 
-        logger.debug("Saving job: %s", wrapper.paths.job_pkl)
-        with wrapper.paths.job_pkl.open("wb") as f:
+        logger.debug("Saving job: %s", wrapper.paths._job_pkl)
+        with wrapper.paths._job_pkl.open("wb") as f:
             pickle.dump(job, f)
 
         return job
