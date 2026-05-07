@@ -51,7 +51,7 @@ def test_cached_entry_lookup_success_shadows_error(tmp_path: Path) -> None:
     # CacheDict-first: a successful re-run obsoletes a stale cached error.
     entry = backends._CachedEntry.lookup(cd, "uid")
     assert entry.status == "success", "concurrent error row must not shadow cd success"
-    assert entry.load() == 7
+    assert entry.result() == 7
 
 
 def test_unpicklable_exception_falls_back_to_runtime_error(tmp_path: Path) -> None:
@@ -90,9 +90,9 @@ def _add(error: bool, tmp_path: Path, mode: str = "cached") -> tp.Any:
 def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     """End-to-end: a failing Step caches + re-raises; retry mode clears
     cache + registry row and recomputes."""
-    probe = _add(True, tmp_path)._probe(5.0)
-    assert probe is not None
-    paths = probe.paths
+    handle = _add(True, tmp_path).query(5.0)
+    assert handle.paths is not None
+    paths = handle.paths
     with pytest.raises(ValueError):
         _add(True, tmp_path).run(5.0)
 
@@ -120,9 +120,9 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
     not a stale success."""
     step = _add(False, tmp_path)
     assert step.run(5.0) == 6.0
-    probe = step._probe(5.0)
-    assert probe is not None
-    paths = probe.paths
+    handle = step.query(5.0)
+    assert handle.paths is not None
+    paths = handle.paths
     with errors.ErrorRegistry(paths.cache_folder) as reg:
         reg.record(paths.uid, ValueError("stale"), "tb")
 
@@ -131,7 +131,7 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
 
     monkeypatch.setattr(errors.ErrorRegistry, "clear", boom)
     with pytest.raises(OSError):
-        step.clear_cache(5.0)
+        step.query(5.0).clear_cache()
     monkeypatch.undo()
 
     # cd entry is gone, errors row remains → cached error on next read.
@@ -161,9 +161,9 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     """A residual errors.db row without any corresponding work (e.g. a
     cleanup that wiped the CacheDict but left the DB) is wiped + recomputed
     on `mode='retry'` — no traps."""
-    probe = _add(True, tmp_path)._probe(5.0)
-    assert probe is not None
-    paths = probe.paths
+    handle = _add(True, tmp_path).query(5.0)
+    assert handle.paths is not None
+    paths = handle.paths
     paths.ensure_folders()
     with errors.ErrorRegistry(paths.cache_folder) as reg:
         reg.record(paths.uid, RuntimeError("stale"), "tb")

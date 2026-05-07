@@ -9,7 +9,7 @@
 Step holds pydantic config and `_run`; identity (`step_uid`, `uid`)
 is computed by `exca.steps.identity` from `(self, value)` at call time.
 `_execute` routes computation inline or via backend, keyed on a
-`_StepProbe` that the Step constructs from `(uid, aligned_prefix)`.
+`QueryHandle` that the Step constructs from `(uid, aligned_prefix)`.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import exca
 from exca import utils
 
 from . import backends, identity
-from .backends import _StepProbe
+from .backends import QueryHandle
 from .identity import NoValue
 
 logger = logging.getLogger(__name__)
@@ -247,12 +247,12 @@ class Step(exca.helpers.DiscriminatedModel):
         self,
         args: tuple[tp.Any, ...],
         *,
-        probe: _StepProbe | None = None,
+        probe: QueryHandle = QueryHandle(),
         uid: str | None = None,
         aligned_prefix: tp.Sequence["Step"] = (),
     ) -> tp.Any:
         """Run this step's computation, inline or via backend."""
-        if probe is None or self.infra is None:
+        if probe.paths is None or self.infra is None:
             return self._run(*args)
         return self.infra.run(self._run, args, probe=probe)
 
@@ -263,17 +263,6 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         if self.infra is not None and self.infra.folder is None:
             self.infra = self.infra.model_copy(update={"folder": parent_folder})
-
-    def _clear_recursive(
-        self, value: tp.Any, aligned_prefix: tp.Sequence["Step"]
-    ) -> None:
-        """Clear own cache for the given (value, prefix). Compound steps
-        override to also walk children."""
-        if self.infra is None:
-            return
-        probe = self._probe(value, aligned_prefix)
-        if probe is not None:
-            self.infra.clear_cache(probe)
 
     # =========================================================================
     # Identity
@@ -299,18 +288,18 @@ class Step(exca.helpers.DiscriminatedModel):
             return None
         return built._exca_uid_dict_override()
 
-    def _probe(
+    def query(
         self,
         value: tp.Any = NoValue(),
         aligned_prefix: tp.Sequence["Step"] = (),
         *,
         uid: str | None = None,
-    ) -> _StepProbe | None:
-        """Resolve ``(self, value)`` to a cache handle. ``None`` if there
-        is no infra/folder. ``uid`` preempts ``materialize_uid(value)``
-        when provided."""
+    ) -> QueryHandle:
+        """Resolve ``(self, value)`` to a cache handle. Returns an
+        unconfigured handle when there is no infra/folder. ``uid``
+        preempts ``materialize_uid(value)`` when provided."""
         if self.infra is None or self.infra.folder is None:
-            return None
+            return QueryHandle()
         assert uid is None or isinstance(value, NoValue), "pass value or uid, not both"
         if uid is None:
             uid = identity.materialize_uid(value)
@@ -322,7 +311,7 @@ class Step(exca.helpers.DiscriminatedModel):
             uid,
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=cache_type)
-        return _StepProbe(paths, cd, cache_type)
+        return QueryHandle(paths, cd, cache_type, _backend=self.infra)
 
     def _check_cache_type(self) -> None:
         """Validate the deprecated ``infra.cache_type`` against the Step's
@@ -337,34 +326,6 @@ class Step(exca.helpers.DiscriminatedModel):
             )
 
     # =========================================================================
-    # Cache operations
-    # =========================================================================
-
-    def has_cache(self, value: tp.Any = NoValue()) -> bool:
-        """True iff there's a cached success or error for ``value``."""
-        probe = self._probe(value)
-        if probe is None:
-            return False
-        entry = backends._CachedEntry.lookup(probe.cd, probe.paths.uid)
-        return entry.status is not None
-
-    def clear_cache(self, value: tp.Any = NoValue()) -> None:
-        """Drop the cache entry for ``value`` (no-op if no infra)."""
-        probe = self._probe(value)
-        if probe is not None:
-            assert self.infra is not None
-            self.infra.clear_cache(probe)
-
-    def job(self, value: tp.Any = NoValue()) -> tp.Any:
-        """Get the submitit job for ``value``, or ``None``."""
-        probe = self._probe(value)
-        return (
-            self.infra.job(probe)
-            if probe is not None and self.infra is not None
-            else None
-        )
-
-    # =========================================================================
     # Execution
     # =========================================================================
 
@@ -376,14 +337,14 @@ class Step(exca.helpers.DiscriminatedModel):
 
         self._check_cache_type()
         was_force = self.infra is not None and self.infra.mode == "force"
-        probe = self._probe(value)
-        if probe is not None:
-            probe.paths.ensure_folders()
-            identity.write_configs(probe.paths.step_folder, self._aligned_step())
+        handle = self.query(value)
+        if handle.paths is not None:
+            handle.paths.ensure_folders()
+            identity.write_configs(handle.paths.step_folder, self._aligned_step())
 
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
-            result = self._execute(args, probe=probe)
+            result = self._execute(args, probe=handle)
         except Exception as e:
             e.add_note(f"  -> in {self!r}")
             raise
@@ -521,6 +482,42 @@ class Chain(Step):
         return {"steps": exporter.apply(chain)["steps"]}
 
     # =========================================================================
+    # Query
+    # =========================================================================
+
+    def query(
+        self,
+        value: tp.Any = NoValue(),
+        aligned_prefix: tp.Sequence[Step] = (),
+        *,
+        uid: str | None = None,
+    ) -> QueryHandle:
+        base = super().query(value, aligned_prefix, uid=uid)
+        sub = self._collect_sub_handles(value, aligned_prefix, uid=uid)
+        return QueryHandle(
+            paths=base.paths,
+            cd=base.cd,
+            cache_type=base.cache_type,
+            _backend=base._backend,
+            _sub_handles=tuple(sub),
+        )
+
+    def _collect_sub_handles(
+        self,
+        value: tp.Any,
+        aligned_prefix: tp.Sequence[Step],
+        *,
+        uid: str | None = None,
+    ) -> list[QueryHandle]:
+        """Build child handles with growing prefix (same walk as _run_at)."""
+        prefix = list(aligned_prefix)
+        handles: list[QueryHandle] = []
+        for step in _resolve_all(self._step_sequence()):
+            handles.append(step.query(value, prefix, uid=uid))
+            prefix = prefix + step._aligned_step()
+        return handles
+
+    # =========================================================================
     # Execution
     # =========================================================================
 
@@ -535,20 +532,20 @@ class Chain(Step):
             _set_mode_recursive(steps, "force")
 
         uid = identity.materialize_uid(value)
-        probe = self._probe(uid=uid)
-        if probe is not None:
-            probe.paths.ensure_folders()
-            identity.write_configs(probe.paths.step_folder, self._aligned_step())
+        handle = self.query(uid=uid)
+        if handle.paths is not None:
+            handle.paths.ensure_folders()
+            identity.write_configs(handle.paths.step_folder, self._aligned_step())
             # Chain and last step share a cache entry — if any internal step
             # is force, the chain's stored result is also stale. Clear here
             # so `infra.run` below doesn't return the cached chain result.
+            # Non-recursive: child force-clearing is handled by `_run_at`.
             if any_force:
-                assert self.infra is not None
-                self.infra.clear_cache(probe)
+                handle.clear_cache(recursive=False)
 
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
-            result = self._execute(args, probe=probe, uid=uid)
+            result = self._execute(args, probe=handle, uid=uid)
         except Exception as e:
             e.add_note(f"  -> in {self!r}")
             raise
@@ -565,7 +562,7 @@ class Chain(Step):
         self,
         args: tuple[tp.Any, ...],
         *,
-        probe: _StepProbe | None = None,
+        probe: QueryHandle = QueryHandle(),
         uid: str | None = None,
         aligned_prefix: tp.Sequence[Step] = (),
     ) -> tp.Any:
@@ -576,7 +573,7 @@ class Chain(Step):
             uid=uid,
             aligned_prefix=tuple(aligned_prefix),
         )
-        if probe is None or self.infra is None:
+        if probe.paths is None or self.infra is None:
             return func(*args)
         return self.infra.run(func, args, probe=probe)
 
@@ -618,12 +615,9 @@ class Chain(Step):
             if step.infra is None or step.infra.mode == "force":
                 continue
             idx = len(steps) - 1 - k
-            sub_probe = step._probe(aligned_prefix=per_step_prefix[idx], uid=uid)
-            if sub_probe is None:
-                continue
-            cached = backends._CachedEntry.lookup(sub_probe.cd, sub_probe.paths.uid)
-            if cached.status is not None:
-                args = (cached.load(),)
+            sub_handle = step.query(aligned_prefix=per_step_prefix[idx], uid=uid)
+            if sub_handle.cached():
+                args = (sub_handle.result(),)
                 start_idx = idx + 1
                 break
 
@@ -634,17 +628,17 @@ class Chain(Step):
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i + 1, total, step_name)
             sub_prefix = per_step_prefix[i]
-            sub_probe = step._probe(aligned_prefix=sub_prefix, uid=uid)
-            if sub_probe is not None:
-                sub_probe.paths.ensure_folders()
+            sub_handle = step.query(aligned_prefix=sub_prefix, uid=uid)
+            if sub_handle.paths is not None:
+                sub_handle.paths.ensure_folders()
                 identity.write_configs(
-                    sub_probe.paths.step_folder,
+                    sub_handle.paths.step_folder,
                     list(sub_prefix) + list(step._aligned_step()),
                 )
             try:
                 result = step._execute(
                     args,
-                    probe=sub_probe,
+                    probe=sub_handle,
                     uid=uid,
                     aligned_prefix=sub_prefix,
                 )
@@ -663,20 +657,6 @@ class Chain(Step):
             stacklevel=2,
         )
         return self.run(value)
-
-    def clear_cache(self, value: tp.Any = NoValue(), recursive: bool = True) -> None:
-        """Clear cache for ``value``, optionally including sub-steps."""
-        if recursive:
-            self._clear_recursive(value, ())
-        else:
-            super().clear_cache(value)
-
-    def _clear_recursive(self, value: tp.Any, aligned_prefix: tp.Sequence[Step]) -> None:
-        prefix = list(aligned_prefix)
-        for step in self._step_sequence():
-            step._clear_recursive(value, prefix)
-            prefix = prefix + step._aligned_step()
-        super()._clear_recursive(value, aligned_prefix)
 
 
 Step._exca_chain_class = Chain

@@ -72,10 +72,10 @@ def test_cache_key_deterministic(
     step: tp.Any = conftest.Mult(coeff=3.0, infra=infra)
     if as_chain:
         step = Chain(steps=[conftest.Mult(coeff=3.0)], infra=infra)
-    probe = step._probe(5.0)
-    assert probe is not None
-    assert probe.paths.step_uid == "coeff=3,type=Mult-4c6b8f5f"
-    assert probe.paths.uid == "value=5-39801320"
+    handle = step.query(5.0)
+    assert handle.paths is not None
+    assert handle.paths.step_uid == "coeff=3,type=Mult-4c6b8f5f"
+    assert handle.paths.uid == "value=5-39801320"
 
 
 # -----------------------------------------------------------------------------
@@ -149,6 +149,6 @@ def test_exec_params_are_model_config_not_run_kwargs(tmp_path: Path) -> None:
     step.run()  # populate
     step.infra.mode = "read-only"  # toggle behavior purely via model state
     assert step.run() == step.run()  # still works from cache
-    step.clear_cache()
+    step.query().clear_cache()
     with pytest.raises(RuntimeError, match="read-only"):
         step.run()

@@ -37,8 +37,8 @@ A `Step` is the fundamental unit that:
 ### Backend (Discriminated Model)
 
 `Backend` is a discriminated model with `discriminator_key="backend"`.
-It receives a `_StepProbe` (paths + CacheDict + cache_type)
-constructed caller-side by `Step._probe`. Backend never reads from
+It receives a `QueryHandle` (paths + CacheDict + cache_type)
+constructed caller-side by `Step.query`. Backend never reads from
 a Step — no back-ref, no topology walks.
 
 - **Cached**: Inline execution + caching (base class for all)
@@ -78,7 +78,8 @@ sequentially. It shares a cache entry with its last step (same
 │  Identity: step_uid + uid computed by `identity` module    │
 │  from (aligned_steps, value) at call time.                 │
 │                                                            │
-│  _execute: routes _run inline or to Backend.run via probe  │
+│  query(value) → QueryHandle (cache introspection handle)   │
+│  _execute: routes _run inline or to Backend.run via handle │
 └────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────┐
@@ -107,18 +108,38 @@ class Step(DiscriminatedModel):
     def _run(self, ...) -> Any:          # override: computation
     def _resolve_step(self) -> "Step":   # override: decompose into chain
     def run(self, value=NoValue()) -> Any:
-    def has_cache(self, value=NoValue()) -> bool:
-    def clear_cache(self, value=NoValue()) -> None:
-    def job(self, value=NoValue()) -> Any:
+    def query(self, value=NoValue()) -> QueryHandle:
 ```
+
+### QueryHandle
+
+```python
+@dataclass(frozen=True)
+class QueryHandle:
+    paths: StepPaths | None             # None = unconfigured (no infra)
+    cd: CacheDict | None
+    cache_type: str | None
+    _sub_handles: tuple[QueryHandle, ...]  # populated by container steps
+
+    status: Literal["success", "error", None]  # property
+    def cached(self) -> bool: ...        # success or error present
+    def result(self) -> Any: ...         # return cached value or re-raise error
+    def clear_cache(self, recursive=True) -> None: ...
+    def job(self) -> submitit.Job | None: ...
+```
+
+`query()` always returns a `QueryHandle` — null-object when unconfigured.
+`Chain.query()` overrides to populate `_sub_handles` with child
+handles (prefix-walked). `clear_cache(recursive=True)` walks
+`_sub_handles` first, so the same method works for Step (leaf) and
+any container (Chain, future Parallel, etc.).
 
 ### Chain
 
 ```python
 class Chain(Step):
     steps: Sequence[Step] | OrderedDict[str, Step]
-
-    def clear_cache(self, value=NoValue(), recursive=True) -> None:
+    def query(...) -> QueryHandle:       # overrides: populates _sub_handles
 ```
 
 ### Step Resolution (`_resolve_step`)
@@ -153,8 +174,9 @@ class Multiply(Step):
 
 step = Multiply(coeff=3.0, infra={"backend": "Cached", "folder": "/tmp/cache"})
 result = step.run(5.0)       # 15.0
-assert step.has_cache(5.0)
-step.clear_cache(5.0)
+h = step.query(5.0)
+assert h is not None and h.cached()
+h.clear_cache()
 ```
 
 ### Generator Step
@@ -167,7 +189,8 @@ class LoadData(Step):
 
 step = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
 data = step.run()
-assert step.has_cache()
+h = step.query()
+assert h is not None and h.cached()
 ```
 
 ### Chain with Mixed Infrastructure
@@ -202,10 +225,10 @@ step.run(bad_input)               # clears error, recomputes
 When `step.run(value)` is called:
 
 1. `_resolve_step()` — if non-self, delegate to resolved step.
-2. Compute `uid = materialize_uid(value)`, build `_StepProbe`
-   via `_probe(uid=uid)`.
-3. `_execute(args, probe=probe)` — routes inline or to
-   `Backend.run(func, args, probe=probe)`.
+2. Compute `uid = materialize_uid(value)`, build `QueryHandle`
+   via `query(uid=uid)`.
+3. `_execute(args, probe=handle)` — routes inline or to
+   `Backend.run(func, args, probe=handle)`.
 4. Backend handles cache modes, inflight coordination, and
    job submission. See `caching.md`.
 

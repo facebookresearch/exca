@@ -40,17 +40,15 @@ def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
     # Run with or without input
     args = (5.0,) if use_input else ()
     result1 = step.run(*args)
-    assert step.has_cache(*args)
+    assert step.query(*args).cached()
 
     # Same result from cache (re-running hits the cache).
     result2 = step.run(*args)
     assert result1 == result2
-    probe = step._probe(*args)
-    assert probe is not None
-    assert backends._CachedEntry.lookup(probe.cd, probe.paths.uid).load() == result1
+    assert step.query(*args).result() == result1
 
     # Clear and recompute gives different result
-    step.clear_cache(*args)
+    step.query(*args).clear_cache()
     result3 = step.run(*args)
     assert result3 != result1
 
@@ -71,10 +69,10 @@ def test_intermediate_cache(tmp_path: Path) -> None:
 
     # Intermediate cache exists
     gen_step = chain._step_sequence()[0]
-    assert gen_step.has_cache()
+    assert gen_step.query().cached()
 
     # Clear chain cache but keep intermediate
-    chain.clear_cache(recursive=False)
+    chain.query().clear_cache(recursive=False)
     result2 = chain.run()
     assert result1 == result2  # Same because generator cached
 
@@ -94,12 +92,12 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
 
     # Chain shares cache folder with last step; cache_type cascades from CACHE_TYPE.
     last_step = chain._step_sequence()[-1]
-    chain_probe = chain._probe()
-    last_probe = last_step._probe(aligned_prefix=chain._aligned_step()[:-1])
-    assert chain_probe is not None and last_probe is not None
-    assert chain_probe.paths.step_folder == last_probe.paths.step_folder
-    assert chain_probe.cache_type == "Pickle"
-    assert last_probe.cache_type == "Pickle"
+    chain_handle = chain.query()
+    last_handle = last_step.query(aligned_prefix=chain._aligned_step()[:-1])
+    assert chain_handle.paths is not None and last_handle.paths is not None
+    assert chain_handle.paths.step_folder == last_handle.paths.step_folder
+    assert chain_handle.cache_type == "Pickle"
+    assert last_handle.cache_type == "Pickle"
 
 
 @pytest.mark.parametrize("classvar_name", [None, "CACHE_TYPE", "_DEFAULT_CACHE_TYPE"])
@@ -358,13 +356,13 @@ def test_clear_cache_recursive(tmp_path: Path) -> None:
 
     out1 = chain.run()
 
-    # Clear only chain cache
-    chain.clear_cache(recursive=False)
+    # Clear chain cache but keep intermediate
+    chain.query().clear_cache(recursive=False)
     out2 = chain.run()
     assert out2 == pytest.approx(out1, abs=1e-9)  # Generator still cached
 
-    # Clear all caches
-    chain.clear_cache(recursive=True)
+    # Clear all caches (recursive=True is the default)
+    chain.query().clear_cache()
     out3 = chain.run()
     assert out3 != pytest.approx(out1, abs=1e-9)  # New random value
 
@@ -377,9 +375,9 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     step = conftest.Add(value=10, randomize=True, infra=infra)
 
     out1 = step.run()
-    assert step.has_cache()
+    assert step.query().cached()
 
-    step.clear_cache()
+    step.query().clear_cache()
     out2 = step.run()
     assert out2 != out1
 
@@ -411,9 +409,9 @@ def test_complex_input_caching(tmp_path: Path) -> None:
     assert step.run(data) != step.run(12)
 
     # Check the uid is deterministic
-    probe = step._probe(data)
-    assert probe is not None
-    assert probe.paths.uid == "value=(1,{a=12})-240df6f3", probe.paths.uid
+    handle = step.query(data)
+    assert handle.paths is not None
+    assert handle.paths.uid == "value=(1,{a=12})-240df6f3", handle.paths.uid
 
 
 def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
@@ -445,10 +443,10 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     prefix: list[Step] = []
     for step in chain._step_sequence():
         if step.infra is not None:
-            sub_probe = step._probe(backends.NoValue(), prefix)
-            assert sub_probe is not None
+            sub_handle = step.query(backends.NoValue(), prefix)
+            assert sub_handle.paths is not None
             cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-                folder=sub_probe.paths.cache_folder
+                folder=sub_handle.paths.cache_folder
             )
             assert backends._NOINPUT_UID in cd
         prefix = prefix + step._aligned_step()

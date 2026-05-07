@@ -7,8 +7,8 @@
 """Backend classes with integrated caching.
 
 Backend executes a Step's `_run` and caches the result keyed by a
-`_StepProbe` (paths + CacheDict + cache_type) constructed caller-side
-by `Step._probe`. Backend stays Step-agnostic — no back-ref, no value
+`QueryHandle` (paths + CacheDict + cache_type) constructed caller-side
+by `Step.query`. Backend stays Step-agnostic — no back-ref, no value
 inspection, no chain-topology walks.
 """
 
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# StepPaths and probe
+# StepPaths and QueryHandle
 # =============================================================================
 
 
@@ -84,19 +84,55 @@ class StepPaths:
 
 
 @dataclasses.dataclass(frozen=True)
-class _StepProbe:
-    """`(step, value) → cache handle`. Pure data, no methods.
+class QueryHandle:
+    """Cache handle for a ``(step, value)`` pair.
 
-    Constructed by `Step._probe(value, aligned_prefix)`; consumed by
-    `Backend.{run, clear_cache, job}` so Backend never reconstructs the
-    cache key itself.
+    Always returned by ``Step.query()`` — acts as a null-object when
+    the step has no infra (``configured`` is False, ``cached()``
+    returns False, mutators are no-ops).
     """
 
-    paths: StepPaths
-    cd: exca.cachedict.CacheDict[tp.Any]
+    paths: StepPaths | None = None
+    cd: exca.cachedict.CacheDict[tp.Any] | None = None
     # Carried so `_CachingCall` can rebuild a writer-side `CacheDict`
     # without consulting the Step.
-    cache_type: str | None
+    cache_type: str | None = None
+    _backend: "Backend | None" = dataclasses.field(default=None, repr=False)
+    # Populated by container steps (Chain, etc.) at query time.
+    _sub_handles: tuple["QueryHandle", ...] = dataclasses.field(default=(), repr=False)
+
+    @property
+    def status(self) -> tp.Literal["success", "error", None]:
+        """Cache status: ``"success"``, ``"error"``, or ``None``."""
+        if self.cd is None or self.paths is None:
+            return None
+        return _CachedEntry.lookup(self.cd, self.paths.uid).status
+
+    def cached(self) -> bool:
+        """True iff there is a cached success or error."""
+        return self.status is not None
+
+    def result(self) -> tp.Any:
+        """Return the cached value or re-raise a cached error."""
+        if self.cd is None or self.paths is None:
+            raise RuntimeError("no infra configured on this step; nothing cached")
+        return _CachedEntry.lookup(self.cd, self.paths.uid).result()
+
+    def clear_cache(self, recursive: bool = True) -> None:
+        """Drop the cache entry (cd row, error row, job folder). No-op
+        if unconfigured. When ``recursive`` (default), also clears
+        sub-step caches (populated by container steps like Chain)."""
+        if recursive:
+            for h in self._sub_handles:
+                h.clear_cache()
+        if self._backend is not None:
+            self._backend.clear_cache(self)
+
+    def job(self) -> "submitit.Job[tp.Any] | None":
+        """Get the submitit job, or ``None``."""
+        if self._backend is not None:
+            return self._backend.job(self)
+        return None
 
 
 # =============================================================================
@@ -110,7 +146,7 @@ ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 @dataclasses.dataclass
 class _CachedEntry:
     """Result of looking up an item in the cache: a ``status`` plus a
-    ``load()`` to materialise the cached value or re-raise the cached error."""
+    ``result()`` to materialise the cached value or re-raise the cached error."""
 
     status: tp.Literal["success", "error", None]
     _cd: exca.cachedict.CacheDict[tp.Any]
@@ -140,7 +176,7 @@ class _CachedEntry:
         )
         return cls("error", cd, uid, _err=err)
 
-    def load(self) -> tp.Any:
+    def result(self) -> tp.Any:
         """Return the cached value, re-raise the cached error, or
         ``None`` if absent."""
         if self.status == "success":
@@ -198,7 +234,7 @@ class _CachingCall:
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     """Base class for execution backends with integrated caching.
 
-    Driven by a `_StepProbe` (paths + CacheDict + cache_type) the caller
+    Driven by a `QueryHandle` (paths + CacheDict + cache_type) the caller
     constructs from `(step, value)`. Backend never reads from a Step.
     """
 
@@ -276,7 +312,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Cache operations (probe-driven)
     # =========================================================================
 
-    def clear_cache(self, probe: _StepProbe) -> None:
+    def clear_cache(self, probe: QueryHandle) -> None:
         """Drop everything cached for this probe (cd row, error row, job folder)."""
         paths, cd = probe.paths, probe.cd
         uid = paths.uid
@@ -299,7 +335,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if paths.job_folder.exists():
             shutil.rmtree(paths.job_folder)
 
-    def job(self, probe: _StepProbe) -> submitit.Job[tp.Any] | None:
+    def job(self, probe: QueryHandle) -> submitit.Job[tp.Any] | None:
         """Get submitit job for this probe, or None."""
         return self._load_job(probe.paths)
 
@@ -318,7 +354,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         func: tp.Callable[..., tp.Any],
         args: tuple[tp.Any, ...],
         *,
-        probe: _StepProbe,
+        probe: QueryHandle,
     ) -> tp.Any:
         """Execute `func(*args)` with caching keyed on `probe`."""
         paths, cd = probe.paths, probe.cd
@@ -328,9 +364,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         cached = _CachedEntry.lookup(cd, uid)
         if cached.status == "success" and self.mode != "force":
             logger.debug("Cache hit: %s[%s]", paths.step_uid, uid)
-            return cached.load()
+            return cached.result()
         if cached.status == "error" and self.mode in ("cached", "read-only"):
-            cached.load()  # raises
+            cached.result()  # raises
         if cached.status is None and self.mode == "read-only":
             raise RuntimeError(f"No cache in read-only mode: {paths.step_uid}[{uid}]")
 
@@ -343,9 +379,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             # reaches the error branch here.
             cached = _CachedEntry.lookup(cd, uid)
             if cached.status == "success" and self.mode != "force":
-                return cached.load()
+                return cached.result()
             if cached.status == "error" and self.mode == "cached":
-                cached.load()  # raises
+                cached.result()  # raises
 
             # force always wipes; retry only on a cached error.
             if self.mode == "force" or (
@@ -382,7 +418,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             raise RuntimeError(
                 f"Worker completed but cache is missing for {paths.step_uid}[{uid}]"
             )
-        return cached.load()
+        return cached.result()
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any) -> tp.Any:
         """Submit wrapper for execution. Default: inline execution."""
