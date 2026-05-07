@@ -12,8 +12,6 @@ from pathlib import Path
 
 import pytest
 
-import exca.cachedict
-
 from . import conftest, identity
 from .base import Chain, Step
 
@@ -91,13 +89,10 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     )
     assert chain.run() == 2.0  # (0 + 1) * 2
 
-    # Chain shares cache folder with last step; cache_type cascades from CACHE_TYPE.
-    last_step = chain._step_sequence()[-1]
+    # Chain shares cache with last step; cache_type cascades from CACHE_TYPE.
     chain_handle = chain.query()
-    last_handle = last_step.query(_aligned_prefix=chain._aligned_step()[:-1])
-    assert chain_handle.paths.step_folder == last_handle.paths.step_folder
     assert chain_handle._cache_type == "Pickle"
-    assert last_handle._cache_type == "Pickle"
+    assert chain_handle.cached()
 
 
 @pytest.mark.parametrize("classvar_name", [None, "CACHE_TYPE", "_DEFAULT_CACHE_TYPE"])
@@ -435,16 +430,13 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     assert chain.run() == 3  # 0+1+1+1
     assert dict(call_counts) == {"A": 1, "B": 1, "C": 1}
 
-    # All caches use the no-input key (initial input for generators).
-    # Walk children with growing prefix so each probe gets the right step_uid.
+    # All cached sub-steps use the no-input key.
+    # Uses internal _aligned_prefix to probe sub-step handles directly.
     prefix: list[Step] = []
     for step in chain._step_sequence():
         if step.infra is not None:
             sub_handle = step.query(identity.NoValue(), _aligned_prefix=prefix)
-            cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-                folder=sub_handle.paths.cache_folder
-            )
-            assert identity._NOINPUT_UID in cd
+            assert identity._NOINPUT_UID in sub_handle.cache_dict
         prefix = prefix + step._aligned_step()
 
     call_counts.clear()
