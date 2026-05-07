@@ -145,7 +145,7 @@ class QueryHandle:
         if self._backend is not None:
             self._backend.clear_cache(self)
 
-    def job(self) -> "submitit.Job[tp.Any] | None":
+    def job(self) -> submitit.Job[tp.Any] | None:
         """Get the submitit job, or ``None``."""
         if self._backend is not None:
             return self._backend.job(self)
@@ -234,19 +234,11 @@ class _CachingCall:
 
 
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
-    """Base class for execution backends with integrated caching.
-
-    Driven by a `QueryHandle` (paths + CacheDict + cache_type) the caller
-    constructs from `(step, value)`. Backend never reads from a Step.
-    """
+    """Base class for execution backends with integrated caching."""
 
     @classmethod
     def _exclude_from_cls_uid(cls) -> list[str]:
         return ["."]  # force ignored in uid
-
-    # Read by `run` dispatch. False on inline backends (no concurrent
-    # worker can observe or claim a same-process call).
-    _REQUIRES_INFLIGHT: tp.ClassVar[bool] = True
 
     # Read by `Chain.model_post_init` to require a cached upstream when True.
     _is_off_process: tp.ClassVar[bool] = False
@@ -275,7 +267,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Per-Backend memo: same instance reused across `run()` calls so
     # `keep_in_ram` survives. Keyed on cache_folder because a Step used
     # in multiple chain contexts has different `step_uid`s.
-    _cds: dict[Path, "exca.cachedict.CacheDict[tp.Any]"] = pydantic.PrivateAttr(
+    _cds: dict[Path, exca.cachedict.CacheDict[tp.Any]] = pydantic.PrivateAttr(
         default_factory=dict
     )
 
@@ -296,7 +288,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _cache_dict(
         self, cache_folder: Path, *, cache_type: str | None
-    ) -> "exca.cachedict.CacheDict[tp.Any]":
+    ) -> exca.cachedict.CacheDict[tp.Any]:
         """Per-Backend CacheDict, memoised by cache_folder so `keep_in_ram`
         and disk handles persist across `run()` calls."""
         cd = self._cds.get(cache_folder)
@@ -373,7 +365,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             raise RuntimeError(f"No cache in read-only mode: {paths.step_uid}[{uid}]")
 
         reg: inflight.InflightRegistry | None = None
-        if self._REQUIRES_INFLIGHT:
+        if self._is_off_process:
             reg = inflight.InflightRegistry(paths.cache_folder)
         with inflight.inflight_session(reg, [uid]):
             # Re-check under the lock — competitors may have populated.
@@ -437,8 +429,6 @@ class _InlineJob:
 
 class Cached(Backend):
     """Inline execution + caching."""
-
-    _REQUIRES_INFLIGHT: tp.ClassVar[bool] = False
 
 
 class _SubmititBackend(Backend):
