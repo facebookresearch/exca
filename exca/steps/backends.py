@@ -273,12 +273,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """Compare backends by declared model fields."""
         if not isinstance(other, Backend):
             return NotImplemented
-        if type(self) is not type(other):
-            return False
-        for field in type(self).model_fields:
-            if getattr(self, field) != getattr(other, field):
-                return False
-        return True
+        return type(self) is type(other) and all(
+            getattr(self, f) == getattr(other, f) for f in type(self).model_fields
+        )
 
     def _cache_dict(
         self, cache_folder: Path, *, cache_type: str | None
@@ -300,15 +297,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """Drop everything cached for this handle (cd row, error row, job folder)."""
         paths, cd = handle.paths, handle.cache_dict
         uid = paths.uid
-        # Cancel before rmtree — `job.pkl` carries the only handle.
-        if paths._job_pkl.exists():
-            try:
-                with paths._job_pkl.open("rb") as f:
-                    job = pickle.load(f)
-                if not job.done():
-                    job.cancel()
-            except Exception as e:
-                logger.warning("Failed to cancel %s[%s]: %s", paths.step_uid, uid, e)
+        try:
+            job = self._job(handle)
+            if job is not None and not job.done():
+                job.cancel()
+        except Exception as e:
+            logger.warning("Failed to cancel %s[%s]: %s", paths.step_uid, uid, e)
         # Success first → a mid-clear crash leaves a recoverable cached
         # error rather than a stale success (fail closed).
         if uid in cd:
@@ -320,11 +314,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             shutil.rmtree(paths.job_folder)
 
     def _job(self, handle: QueryHandle) -> submitit.Job[tp.Any] | None:
-        return self._load_job(handle.paths)
-
-    def _load_job(self, paths: StepPaths) -> submitit.Job[tp.Any] | None:
-        if paths._job_pkl.exists():
-            with paths._job_pkl.open("rb") as f:
+        if handle.paths._job_pkl.exists():
+            with handle.paths._job_pkl.open("rb") as f:
                 return pickle.load(f)  # type: ignore
         return None
 
@@ -372,7 +363,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             # Recover an in-flight prior job (driver crash, retry of a
             # done-but-failed job). force / retry-on-error already cleared;
             # retry + still-running keeps the existing handle.
-            job = self._load_job(paths)
+            job = self._job(handle)
             if job is not None and self.mode == "retry" and job.done():
                 try:
                     job.result()

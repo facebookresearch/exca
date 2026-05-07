@@ -254,6 +254,11 @@ class Step(exca.helpers.DiscriminatedModel):
         """Run this step's computation, inline or via backend."""
         if handle._paths is None or self.infra is None:
             return self._run(*args)
+        handle.paths._ensure_folders()
+        identity.write_configs(
+            handle.paths.step_folder,
+            list(aligned_prefix) + list(self._aligned_step()),
+        )
         return self.infra._run(self._run, args, handle=handle)
 
     def _propagate_folder(self, parent_folder: Path) -> None:
@@ -365,10 +370,6 @@ class Step(exca.helpers.DiscriminatedModel):
         self._check_cache_type()
         was_force = self.infra is not None and self.infra.mode == "force"
         handle = self.query(value)
-        if handle._paths is not None:
-            handle.paths._ensure_folders()
-            identity.write_configs(handle.paths.step_folder, self._aligned_step())
-
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
             result = self._execute(args, handle=handle)
@@ -544,15 +545,12 @@ class Chain(Step):
 
         uid = identity.materialize_uid(value)
         handle = self.query(_uid=uid)
-        if handle._paths is not None:
-            handle.paths._ensure_folders()
-            identity.write_configs(handle.paths.step_folder, self._aligned_step())
+        if handle._paths is not None and any_force:
             # Chain and last step share a cache entry — if any internal step
             # is force, the chain's stored result is also stale. Clear here
             # so `infra.run` below doesn't return the cached chain result.
             # Non-recursive: child force-clearing is handled by `_run_at`.
-            if any_force:
-                handle.clear_cache(recursive=False)
+            handle.clear_cache(recursive=False)
 
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
@@ -586,6 +584,11 @@ class Chain(Step):
         )
         if handle._paths is None or self.infra is None:
             return func(*args)
+        handle.paths._ensure_folders()
+        identity.write_configs(
+            handle.paths.step_folder,
+            list(aligned_prefix) + list(self._aligned_step()),
+        )
         return self.infra._run(func, args, handle=handle)
 
     def _run(self, *args: tp.Any) -> tp.Any:
@@ -640,12 +643,6 @@ class Chain(Step):
             logger.debug("Running step %d/%d: %s", i + 1, total, step_name)
             sub_prefix = per_step_prefix[i]
             sub_handle = step.query(_aligned_prefix=sub_prefix, _uid=uid)
-            if sub_handle._paths is not None:
-                sub_handle.paths._ensure_folders()
-                identity.write_configs(
-                    sub_handle.paths.step_folder,
-                    list(sub_prefix) + list(step._aligned_step()),
-                )
             try:
                 result = step._execute(
                     args,
