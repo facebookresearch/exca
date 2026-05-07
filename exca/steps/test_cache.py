@@ -431,13 +431,9 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     assert dict(call_counts) == {"A": 1, "B": 1, "C": 1}
 
     # All cached sub-steps use the no-input key.
-    # Uses internal _aligned_prefix to probe sub-step handles directly.
-    prefix: list[Step] = []
-    for step in chain._step_sequence():
+    for i, step in enumerate(chain._step_sequence()):
         if step.infra is not None:
-            sub_handle = step.query(identity.NoValue(), _aligned_prefix=prefix)
-            assert identity._NOINPUT_UID in sub_handle.cache_dict
-        prefix = prefix + step._aligned_step()
+            assert identity._NOINPUT_UID in chain[: i + 1].query().cache_dict
 
     call_counts.clear()
     step_b = chain._step_sequence()[1]

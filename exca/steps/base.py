@@ -15,6 +15,7 @@ is computed by `exca.steps.identity` from `(self, value)` at call time.
 from __future__ import annotations
 
 import collections
+import copy
 import functools
 import inspect
 import logging
@@ -526,6 +527,10 @@ class Chain(Step):
         for step in _resolve_all(self._step_sequence()):
             sub.append(step.query(value, _aligned_prefix=prefix, _uid=_uid))
             prefix = prefix + step._aligned_step()
+        # Chain shares identity with last step — if the chain itself has
+        # no infra, borrow the last step's handle for user inspection.
+        if handle._paths is None and sub and sub[-1]._paths is not None:
+            handle = copy.copy(sub[-1])
         handle._sub_handles = tuple(sub)
         return handle
 
