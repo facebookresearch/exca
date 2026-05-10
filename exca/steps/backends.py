@@ -249,8 +249,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     mode: ModeType = "cached"
     keep_in_ram: bool = False
-    # uids already force-recomputed this Backend lifetime; persists across
-    # run() calls, resets on pickle (workers always start fresh).
     _recomputed: set[str] = pydantic.PrivateAttr(default_factory=set)
 
     @pydantic.field_validator("mode", mode="before")
@@ -352,7 +350,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             if cached.status == "success" and not forcing:
                 return cached.result()
             if cached.status == "error" and self.mode == "cached":
-                cached.result()  # raises
+                cached.result()  # read-only already returned/raised pre-lock
 
             if forcing or (self.mode == "retry" and cached.status == "error"):
                 if self.mode == "retry":
@@ -381,7 +379,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             finally:
                 if forcing:
                     self._recomputed.add(uid)
-        cached = _CachedEntry.lookup(cd, uid)
+        cached = _CachedEntry.lookup(cd, uid)  # _CachingCall writes to disk
         if cached.status != "success":
             raise RuntimeError(
                 f"Worker completed but cache is missing for {paths.step_uid}[{uid}]"

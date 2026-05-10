@@ -553,6 +553,7 @@ class Chain(Step):
                 found = True
             if found and sub_handle.cached():
                 sub_handle.clear_cache(recursive=True)
+        # Chain-level force with no child invalidation: all children stale.
         if _needs_rerun(self, uid, handle):
             if not found:
                 for sub_handle in handle._sub_handles:
