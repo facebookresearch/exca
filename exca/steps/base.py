@@ -69,6 +69,19 @@ def _flatten_levels(steps: tp.Sequence["Step"]) -> list["Step"]:
     return out
 
 
+def _needs_rerun(step: "Step", uid: str | None, handle: QueryHandle) -> bool:
+    """True if *step* will recompute for this uid: pending force, or
+    retry with a cached error."""
+    infra = step.infra
+    if infra is None:
+        return False
+    if infra.mode == "force" and uid not in infra._recomputed:
+        return True
+    if infra.mode == "retry" and handle.status == "error":
+        return True
+    return False
+
+
 @pydantic.model_validator(mode="before")
 def _infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
     """Convert backend instances to dicts to prevent sharing."""
@@ -112,24 +125,6 @@ def _infra_validator_after(self: tp.Any) -> tp.Any:
 def _is_step(value: tp.Any, disc_key: str) -> bool:
     """True if value is a Step instance or a dict containing the discriminator key."""
     return isinstance(value, Step) or (isinstance(value, dict) and disc_key in value)
-
-
-def _set_mode_recursive(steps: tp.Iterable["Step"], mode: str) -> None:
-    """Set ``infra.mode`` on each step and recurse into nested ``Chain``
-    children. ``object.__setattr__`` bypasses TaskInfra freeze."""
-    for step in steps:
-        if step.infra is not None:
-            object.__setattr__(step.infra, "mode", mode)
-        if isinstance(step, Chain):
-            _set_mode_recursive(step._step_sequence(), mode)
-
-
-def _iter_with_descendants(step: "Step") -> tp.Iterator["Step"]:
-    """Yield ``step`` and (for Chains) its transitive children."""
-    yield step
-    if isinstance(step, Chain):
-        for s in step._step_sequence():
-            yield from _iter_with_descendants(s)
 
 
 class Step(exca.helpers.DiscriminatedModel):
@@ -369,18 +364,13 @@ class Step(exca.helpers.DiscriminatedModel):
             return built.run(value)
 
         self._check_cache_type()
-        was_force = self.infra is not None and self.infra.mode == "force"
         handle = self.query(value)
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
-            result = self._execute(args, handle=handle)
+            return self._execute(args, handle=handle)
         except Exception as e:
             e.add_note(f"  -> in {self!r}")
             raise
-
-        if was_force and self.infra is not None and self.infra.mode == "force":
-            object.__setattr__(self.infra, "mode", "cached")
-        return result
 
     def forward(self, value: tp.Any = NoValue()) -> tp.Any:  # deprecated: use run()
         warnings.warn(
@@ -540,37 +530,39 @@ class Chain(Step):
 
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
         self._check_cache_type()
-        steps = self._step_sequence()
-        any_force = any(
-            s.infra is not None and s.infra.mode == "force" for s in steps + (self,)
-        )
-        # Chain-in-force cascades down to (nested) children before running.
-        if self.infra is not None and self.infra.mode == "force":
-            _set_mode_recursive(steps, "force")
-
         uid = identity.materialize_uid(value)
         handle = self.query(_uid=uid)
-        if handle._paths is not None and any_force:
-            # Chain and last step share a cache entry — if any internal step
-            # is force, the chain's stored result is also stale. Clear here
-            # so `infra.run` below doesn't return the cached chain result.
-            # Non-recursive: child force-clearing is handled by `_run_at`.
-            handle.clear_cache(recursive=False)
-
+        self._clear_stale_caches(uid, handle)
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
-            result = self._execute(args, handle=handle, uid=uid)
+            return self._execute(args, handle=handle, uid=uid)
         except Exception as e:
             e.add_note(f"  -> in {self!r}")
             raise
-        finally:
-            # ``force`` is one-shot: every step still in force after the run
-            # (originally-set or propagated by ``_run_at``) reverts to
-            # ``"cached"`` so propagated force doesn't leak across calls.
-            for s in _iter_with_descendants(self):
-                if s.infra is not None and s.infra.mode == "force":
-                    object.__setattr__(s.infra, "mode", "cached")
-        return result
+
+    def _clear_stale_caches(self, uid: str | None, handle: QueryHandle) -> bool:
+        """Walk handle tree, clear caches from the first pending
+        force/retry onward.  Returns True if any invalidation found."""
+        found = False
+        steps = tuple(_resolve_all(self._step_sequence()))
+        for step, sub_handle in zip(steps, handle._sub_handles):
+            if isinstance(step, Chain):
+                if step._clear_stale_caches(uid, sub_handle):
+                    found = True
+            elif _needs_rerun(step, uid, sub_handle):
+                found = True
+            if found and sub_handle.cached():
+                sub_handle.clear_cache(recursive=True)
+        # Chain-level force with no child invalidation: all children stale.
+        if _needs_rerun(self, uid, handle):
+            if not found:
+                for sub_handle in handle._sub_handles:
+                    if sub_handle.cached():
+                        sub_handle.clear_cache(recursive=True)
+            found = True
+        if found and handle._paths is not None and handle.cached():
+            handle.clear_cache(recursive=False)
+        return found
 
     def _execute(
         self,
@@ -610,38 +602,24 @@ class Chain(Step):
     ) -> tp.Any:
         """Walk children with growing prefix; ``uid`` keys the cache."""
         steps = tuple(_resolve_all(self._step_sequence()))
+        total = len(steps)
 
-        # Force propagation: a force at step k propagates to k+1, k+2, ...
-        # `_set_mode_recursive` descends into nested Chain children.
-        force_active = False
-        for step in steps:
-            if step.infra is not None and step.infra.mode == "force":
-                force_active = True
-                if isinstance(step, Chain):
-                    _set_mode_recursive(step._step_sequence(), "force")
-            elif force_active:
-                _set_mode_recursive([step], "force")
-
-        # `per_step_prefix[i]` is the prefix consumed before step i; child i's
-        # full aligned chain is `per_step_prefix[i] + steps[i]._aligned_step()`.
         per_step_prefix: list[list[Step]] = [list(aligned_prefix)]
         for s in steps[:-1]:
             per_step_prefix.append(per_step_prefix[-1] + s._aligned_step())
 
-        # Find latest cached result among children to skip earlier work.
+        # Find latest cached result to skip earlier work.
         start_idx = 0
         for k, step in enumerate(reversed(steps)):
-            if step.infra is None or step.infra.mode == "force":
+            if step.infra is None:
                 continue
-            idx = len(steps) - 1 - k
+            idx = total - 1 - k
             sub_handle = step.query(_aligned_prefix=per_step_prefix[idx], _uid=uid)
             if sub_handle.cached():
                 args = (sub_handle.result(),)
                 start_idx = idx + 1
                 break
 
-        # Run remaining steps
-        total = len(steps)
         for i in range(start_idx, total):
             step = steps[i]
             step_name = type(step).__name__
