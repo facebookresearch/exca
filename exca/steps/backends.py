@@ -273,11 +273,13 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self, uid: str, cached_status: tp.Literal["success", "error", None]
     ) -> bool:
         """True if this uid needs (re)computation under the current mode."""
-        if self.mode == "force" and uid not in self._recomputed:
+        if cached_status is None:
+            return self.mode != "read-only"
+        if uid in self._recomputed:
+            return False
+        if self.mode == "force":
             return True
         if self.mode == "retry" and cached_status == "error":
-            return True
-        if cached_status is None and self.mode != "read-only":
             return True
         return False
 
@@ -420,7 +422,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                         inflight.record_worker_info(reg, [handle.uid], job)
                 job.result()
             finally:
-                if self.mode == "force":
+                if self.mode in ("force", "retry"):
                     self._recomputed.add(handle.uid)
         cached = _CachedEntry.lookup(handle.cache_dict, handle.uid)
         if cached.status != "success":

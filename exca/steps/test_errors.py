@@ -121,14 +121,21 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
         assert reg.get([handle.uid]) == set()
 
 
-def test_force_one_shot_on_error(tmp_path: Path) -> None:
-    step = _add(True, tmp_path, mode="force")
+@pytest.mark.parametrize("mode", ["force", "retry"])
+def test_recompute_one_shot_on_error(tmp_path: Path, mode: str) -> None:
+    step = _add(True, tmp_path)
     with pytest.raises(ValueError):
         step.run(5.0)
+    # initial error is dumped,force/retry should clear it only once
+    step = _add(True, tmp_path, mode=mode)
     with pytest.raises(ValueError) as exc_info:
         step.run(5.0)
-    notes = getattr(exc_info.value, "__notes__", [])
-    assert any("reraising" in n for n in notes), "force one-shot on error"
+    notes = exc_info.value.__notes__
+    assert not any("reraising" in n for n in notes), "fresh"
+    with pytest.raises(ValueError) as exc_info:
+        step.run(5.0)
+    notes = exc_info.value.__notes__
+    assert any("reraising" in n for n in notes), "one-shot"
 
 
 def test_clear_cache_partial_failure_leaves_recoverable_error(
