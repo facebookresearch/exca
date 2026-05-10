@@ -175,8 +175,8 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
     out2 = step.run()  # forces recompute
     assert out1 != out2
 
-    out3 = step.run()  # uses cache (_recomputed tracks the uid)
-    assert out2 == out3
+    out3 = step.run()
+    assert out2 == out3, "force is one-shot per uid"
 
 
 def test_force_propagates_downstream(tmp_path: Path) -> None:
@@ -199,9 +199,8 @@ def test_force_propagates_downstream(tmp_path: Path) -> None:
     out2 = chain2.run()
     assert out2 != out1  # add recomputed due to force propagation
 
-    # After force, subsequent calls use cache (_recomputed)
     out3 = chain2.run()
-    assert out2 == out3
+    assert out2 == out3, "force is one-shot"
 
 
 def test_force_forward_deprecated(tmp_path: Path) -> None:
@@ -239,14 +238,13 @@ def test_force_nested_chains(tmp_path: Path) -> None:
     out2 = outer.run()
     assert out1 != out2  # inner's add_random recomputed
 
-    # Subsequent call uses cache (_recomputed)
     out3 = outer.run()
-    assert out2 == out3
+    assert out2 == out3, "force is one-shot"
 
     # force on inner chain also propagates to downstream
     outer2 = outer.model_copy(deep=True)
     outer2._step_sequence()[2].infra.mode = "force"  # type: ignore
-    # gen's force from earlier is still set but _recomputed prevents re-forcing
+    # gen still has mode="force" but its uid is already recomputed (one-shot)
     gen = outer._step_sequence()[0]
     assert gen.infra.mode == "force"  # type: ignore[union-attr]
     assert identity._NOINPUT_UID in gen.infra._recomputed  # type: ignore[union-attr]

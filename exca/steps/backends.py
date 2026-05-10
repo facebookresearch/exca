@@ -331,7 +331,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     ) -> tp.Any:
         paths, cd = handle.paths, handle.cache_dict
         uid = paths.uid
-        # force + already recomputed this lifetime → treat as cached
         forcing = self.mode == "force" and uid not in self._recomputed
 
         # Pre-lock fast path: cached value / cached error / read-only miss.
@@ -348,6 +347,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if self._is_off_process:
             reg = inflight.InflightRegistry(paths.cache_folder)
         with inflight.inflight_session(reg, [uid]):
+            # Re-check under the lock — a concurrent worker may have populated.
             cached = _CachedEntry.lookup(cd, uid)
             if cached.status == "success" and not forcing:
                 return cached.result()
@@ -359,6 +359,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     logger.warning("Retrying failed step: %s[%s]", paths.step_uid, uid)
                 self._clear_cache(handle)
 
+            # Recover an in-flight job from a prior run (driver crash, etc.).
             job = self._job(handle)
             if job is not None and self.mode == "retry" and job.done():
                 try:

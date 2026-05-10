@@ -69,7 +69,7 @@ def _flatten_levels(steps: tp.Sequence["Step"]) -> list["Step"]:
     return out
 
 
-def _needs_rerun(step: "Step", uid: str | None, handle: "QueryHandle") -> bool:
+def _needs_rerun(step: "Step", uid: str | None, handle: QueryHandle) -> bool:
     """True if *step* will recompute for this uid: pending force, or
     retry with a cached error."""
     infra = step.infra
@@ -599,8 +599,7 @@ class Chain(Step):
         uid: str | None,
         aligned_prefix: tp.Sequence[Step],
     ) -> tp.Any:
-        """Walk children with growing prefix; ``uid`` keys the cache.
-        Force logic is handled upfront by ``_clear_stale_caches``."""
+        """Walk children with growing prefix; ``uid`` keys the cache."""
         steps = tuple(_resolve_all(self._step_sequence()))
         total = len(steps)
 
