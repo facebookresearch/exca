@@ -69,17 +69,23 @@ def _flatten_levels(steps: tp.Sequence["Step"]) -> list["Step"]:
     return out
 
 
+def _aligned_prefixes(
+    steps: tp.Sequence["Step"], prefix: tp.Sequence["Step"] = ()
+) -> list[list["Step"]]:
+    """Cumulative aligned prefix for each step in *steps*."""
+    result: list[list[Step]] = [list(prefix)]
+    for s in steps[:-1]:
+        result.append(result[-1] + s._aligned_step())
+    return result
+
+
 def _needs_rerun(step: "Step", uid: str | None, handle: QueryHandle) -> bool:
-    """True if *step* will recompute for this uid: pending force, or
-    retry with a cached error."""
-    infra = step.infra
-    if infra is None:
+    """True if *step* will recompute a cached entry (pending force or retry).
+    Cache miss returns False — no downstream invalidation needed."""
+    if step.infra is None or uid is None:
         return False
-    if infra.mode == "force" and uid not in infra._recomputed:
-        return True
-    if infra.mode == "retry" and handle.status == "error":
-        return True
-    return False
+    status = handle.status
+    return status is not None and step.infra._should_compute(uid, status)
 
 
 @pydantic.model_validator(mode="before")
@@ -512,11 +518,12 @@ class Chain(Step):
         _uid: str | None = None,
     ) -> QueryHandle:
         handle = super().query(value, _aligned_prefix=_aligned_prefix, _uid=_uid)
-        prefix = list(_aligned_prefix)
-        sub: list[QueryHandle] = []
-        for step in _resolve_all(self._step_sequence()):
-            sub.append(step.query(value, _aligned_prefix=prefix, _uid=_uid))
-            prefix = prefix + step._aligned_step()
+        steps = tuple(_resolve_all(self._step_sequence()))
+        prefixes = _aligned_prefixes(steps, _aligned_prefix)
+        sub = [
+            step.query(value, _aligned_prefix=pfx, _uid=_uid)
+            for step, pfx in zip(steps, prefixes)
+        ]
         # Chain shares identity with last step — if the chain itself has
         # no infra, borrow the last step's handle for user inspection.
         if handle._paths is None and sub and sub[-1]._paths is not None:
@@ -603,10 +610,7 @@ class Chain(Step):
         """Walk children with growing prefix; ``uid`` keys the cache."""
         steps = tuple(_resolve_all(self._step_sequence()))
         total = len(steps)
-
-        per_step_prefix: list[list[Step]] = [list(aligned_prefix)]
-        for s in steps[:-1]:
-            per_step_prefix.append(per_step_prefix[-1] + s._aligned_step())
+        per_step_prefix = _aligned_prefixes(steps, aligned_prefix)
 
         # Find latest cached result to skip earlier work.
         start_idx = 0
