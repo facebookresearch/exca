@@ -6,8 +6,8 @@
 
 """Identity helpers for Step pipelines.
 
-Pure functions to derive the cache key from a `(steps, value)` pair
-and write out the matching configs.
+Derives the cache key from a `(steps, value)` pair and writes out
+the matching configs.
 """
 
 from __future__ import annotations
@@ -31,22 +31,25 @@ class NoValue:
     """Sentinel for unset input (e.g. a generator step has no value to bind)."""
 
 
-def step_uid(steps: tp.Sequence["Step"]) -> str:
+def step_uid(steps: tp.Sequence[Step]) -> str:
     """Slash-joined per-step uid; empty input → empty string."""
     opts = {"exclude_defaults": True, "uid": True}
     return "/".join(exca.ConfDict.from_model(s, **opts).to_uid() for s in steps)
 
 
-def materialize_uid(value: tp.Any) -> str:
-    """Per-value uid, or `_NOINPUT_UID` for the no-input sentinel."""
+def materialize_uid(step: Step, value: tp.Any) -> str:
+    """Per-value uid: calls ``step.item_uid``, falls back to ConfDict."""
     if isinstance(value, NoValue):
         return _NOINPUT_UID
+    custom = step.item_uid(value)
+    if custom is not None:
+        return custom
     return exca.ConfDict(value=value).to_uid()
 
 
 def write_configs(
     step_folder: Path,
-    aligned_steps: tp.Sequence["Step"],
+    aligned_steps: tp.Sequence[Step],
     *,
     write: bool = True,
 ) -> None:

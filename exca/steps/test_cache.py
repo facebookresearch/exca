@@ -91,7 +91,6 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
 
     # Chain shares cache with last step; cache_type cascades from CACHE_TYPE.
     chain_handle = chain.query()
-    assert chain_handle._cache_type == "Pickle"
     assert chain_handle.cached()
 
 
@@ -427,7 +426,22 @@ def test_complex_input_caching(tmp_path: Path) -> None:
 
     # Check the uid is deterministic
     handle = step.query(data)
-    assert handle.paths.uid == "value=(1,{a=12})-240df6f3", handle.paths.uid
+    assert handle.uid == "value=(1,{a=12})-240df6f3", handle.uid
+
+
+def test_item_uid_override_in_chain(tmp_path: Path) -> None:
+    class Custom(Step):
+        def item_uid(self, value: tp.Any) -> str:
+            return "custom"
+
+        def _run(self, x: int) -> int:
+            return x + 1
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = Custom(infra=infra)
+    chain = Chain(steps=[Custom(), conftest.Mult(coeff=2)], infra=infra)
+    assert step.query(1).uid == "custom"
+    assert chain.query(1).uid == "custom", "chain should use first step's item_uid"
 
 
 def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:

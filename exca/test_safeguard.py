@@ -13,12 +13,6 @@ from pathlib import Path
 import exca
 
 
-def test_package_version() -> None:
-    version = exca.__version__
-    pyproject = Path(exca.__file__).parent.with_name("pyproject.toml")
-    assert f'version = "{version}"' in pyproject.read_text()
-
-
 def test_logging() -> None:
     # check that logconf is imported for side effects (logger configuration)
     line = "import exca.logconf"

@@ -2,7 +2,12 @@
 
 ## [Unreleased]
 
+## 0.5.24 - 26-05-10
+
 - `exca/steps`: `Step.query()` returns a `QueryHandle` for inspecting, retrieving, or clearing cached results. `with_input()` removed. [#245]
+- `exca/steps`: force mode propagates to downstream steps. [#246]
+- `exca/steps`: `Step.item_uid()` hook for custom cache keys; force mode is one-shot even on error (bug fix). [#247]
+- `exca/steps`: off-process dispatch without a cached upstream raises at construction. [#239]
 
 ## 0.5.23 - 26-04-28
 

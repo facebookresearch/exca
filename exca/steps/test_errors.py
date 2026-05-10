@@ -54,6 +54,16 @@ def test_cached_entry_lookup_success_shadows_error(tmp_path: Path) -> None:
     assert entry.result() == 7
 
 
+def test_lookup_statuses_batch(tmp_path: Path) -> None:
+    cd: cachedict.CacheDict[int] = cachedict.CacheDict(folder=tmp_path)
+    with cd.write():
+        cd["ok"] = 1
+    with errors.ErrorRegistry(tmp_path) as reg:
+        reg.record("err", ValueError("boom"), "tb")
+    statuses = backends._CachedEntry.lookup_statuses(cd, ["ok", "err", "miss"])
+    assert statuses == {"ok": "success", "err": "error", "miss": None}
+
+
 def test_unpicklable_exception_falls_back_to_runtime_error(tmp_path: Path) -> None:
     """Both writer (un-picklable on dump) and reader (un-importable on load)
     fall back to RuntimeError(traceback)."""
@@ -91,13 +101,12 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     """End-to-end: a failing Step caches + re-raises; retry mode clears
     cache + registry row and recomputes."""
     handle = _add(True, tmp_path).query(5.0)
-    paths = handle.paths
     with pytest.raises(ValueError):
         _add(True, tmp_path).run(5.0)
 
-    with errors.ErrorRegistry(paths.cache_folder) as reg:
-        assert reg.get(None) == {paths.uid}
-        loaded = reg.load(paths.uid)
+    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+        assert reg.get(None) == {handle.uid}
+        loaded = reg.load(handle.uid)
     assert isinstance(loaded, ValueError)
 
     # Cached and read-only both re-raise.
@@ -108,8 +117,25 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
 
     # Retry: clear + recompute.
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
-    with errors.ErrorRegistry(paths.cache_folder) as reg:
-        assert reg.get([paths.uid]) == set()
+    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+        assert reg.get([handle.uid]) == set()
+
+
+@pytest.mark.parametrize("mode", ["force", "retry"])
+def test_recompute_one_shot_on_error(tmp_path: Path, mode: str) -> None:
+    step = _add(True, tmp_path)
+    with pytest.raises(ValueError):
+        step.run(5.0)
+    # initial error is dumped,force/retry should clear it only once
+    step = _add(True, tmp_path, mode=mode)
+    with pytest.raises(ValueError) as exc_info:
+        step.run(5.0)
+    notes = exc_info.value.__notes__
+    assert not any("reraising" in n for n in notes), "should recompute"
+    with pytest.raises(ValueError) as exc_info:
+        step.run(5.0)
+    notes = exc_info.value.__notes__
+    assert any("reraising" in n for n in notes), "should not recompute"
 
 
 def test_clear_cache_partial_failure_leaves_recoverable_error(
@@ -120,9 +146,8 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
     step = _add(False, tmp_path)
     assert step.run(5.0) == 6.0
     handle = step.query(5.0)
-    paths = handle.paths
-    with errors.ErrorRegistry(paths.cache_folder) as reg:
-        reg.record(paths.uid, ValueError("stale"), "tb")
+    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+        reg.record(handle.uid, ValueError("stale"), "tb")
 
     def boom(self: tp.Any, item_uids: list[str]) -> None:
         raise OSError("simulated DB failure")
@@ -133,8 +158,8 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
     monkeypatch.undo()
 
     # cd entry is gone, errors row remains → cached error on next read.
-    with errors.ErrorRegistry(paths.cache_folder) as reg:
-        assert paths.uid in reg.get([paths.uid])
+    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+        assert handle.uid in reg.get([handle.uid])
     with pytest.raises(ValueError):
         _add(False, tmp_path).run(5.0)
     # And recovers via retry.
@@ -160,12 +185,11 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     cleanup that wiped the CacheDict but left the DB) is wiped + recomputed
     on `mode='retry'` — no traps."""
     handle = _add(True, tmp_path).query(5.0)
-    paths = handle.paths
-    paths._ensure_folders()
-    with errors.ErrorRegistry(paths.cache_folder) as reg:
-        reg.record(paths.uid, RuntimeError("stale"), "tb")
-        assert paths.uid in reg.get([paths.uid])
+    handle.paths._ensure_folders(handle.uid)
+    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+        reg.record(handle.uid, RuntimeError("stale"), "tb")
+        assert handle.uid in reg.get([handle.uid])
 
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
-    with errors.ErrorRegistry(paths.cache_folder) as reg:
-        assert paths.uid not in reg.get([paths.uid])
+    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+        assert handle.uid not in reg.get([handle.uid])
