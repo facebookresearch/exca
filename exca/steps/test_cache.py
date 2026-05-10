@@ -295,13 +295,12 @@ def test_force_on_grandchild(tmp_path: Path) -> None:
 
 def test_retry_on_grandchild(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    # error is excluded from uid so toggling doesn't change the cache key
     failing = conftest.Add(value=1, error=True, infra=infra)
     inner = Chain(steps=[failing, conftest.Mult(coeff=10)], infra=infra)
     outer = Chain(steps=[inner, conftest.Add(value=2)], infra=infra)
     with pytest.raises(ValueError, match="Triggered an error"):
         outer.run()
-    failing.error = False
+    failing.error = False  # excluded from uid, so cache key is unchanged
     failing.infra.mode = "retry"  # type: ignore
     assert outer.run() == 12.0  # (0 + 1) * 10 + 2
 
