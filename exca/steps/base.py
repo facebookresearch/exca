@@ -328,7 +328,7 @@ class Step(exca.helpers.DiscriminatedModel):
             _uid,
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=cache_type)
-        return QueryHandle(paths, cd, cache_type, backend=self.infra)
+        return QueryHandle(paths, cd, backend=self.infra)
 
     def _check_cache_type(self) -> None:
         """Validate the deprecated ``infra.cache_type`` against the Step's

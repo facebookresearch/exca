@@ -91,7 +91,6 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
 
     # Chain shares cache with last step; cache_type cascades from CACHE_TYPE.
     chain_handle = chain.query()
-    assert chain_handle._cache_type == "Pickle"
     assert chain_handle.cached()
 
 

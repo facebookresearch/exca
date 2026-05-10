@@ -7,8 +7,8 @@
 """Backend classes with integrated caching.
 
 Backend executes a Step's `_run` and caches the result keyed by a
-`QueryHandle` (paths + CacheDict + cache_type) constructed caller-side
-by `Step.query`. Backend stays Step-agnostic — no back-ref, no value
+`QueryHandle` (paths + CacheDict) constructed caller-side by
+`Step.query`. Backend stays Step-agnostic — no back-ref, no value
 inspection, no chain-topology walks.
 """
 
@@ -39,7 +39,7 @@ class StepPaths:
     """Path layout for one ``(step_uid, uid)`` pair.
 
     Step-level paths (``step_folder``, ``cache_folder``, ``_logs_folder``)
-    depend only on ``base_folder`` and ``step_uid``.  Item-level paths
+    depend only on ``base_folder`` and ``step_uid``.  Per-uid paths
     (``job_folder``, ``_job_pkl``) additionally require ``uid``.
 
     See `docs/internal/steps/caching.md` for the on-disk tree.
@@ -65,7 +65,7 @@ class StepPaths:
     def _logs_folder(self) -> str:
         return str(self.step_folder / "logs" / "%j")
 
-    # -- item-level (uid-dependent) --
+    # -- per-uid --
 
     @property
     def job_folder(self) -> Path:
@@ -92,13 +92,11 @@ class QueryHandle:
         self,
         paths: StepPaths | None = None,
         cache_dict: exca.cachedict.CacheDict[tp.Any] | None = None,
-        cache_type: str | None = None,
         backend: Backend | None = None,
         sub_handles: tuple[QueryHandle, ...] = (),
     ) -> None:
         self._paths = paths
         self._cache_dict = cache_dict
-        self._cache_type = cache_type
         self._backend = backend
         # Populated by container steps (Chain, etc.) at query time.
         self._sub_handles = sub_handles
@@ -368,8 +366,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     ) -> tp.Any:
         paths, cd = handle.paths, handle.cache_dict
         uid = paths.uid
-        forcing = self.mode == "force" and uid not in self._recomputed
-
         # Pre-lock fast path: cached value / cached error / read-only miss.
         cached = _CachedEntry.lookup(cd, uid)
         if not self._should_compute(uid, cached.status):
@@ -393,7 +389,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 if cached.status == "error":
                     cached.result()  # read-only already returned/raised pre-lock
 
-            if forcing or (self.mode == "retry" and cached.status == "error"):
+            if cached.status is not None:
                 if self.mode == "retry":
                     logger.warning("Retrying failed step: %s[%s]", paths.step_uid, uid)
                 self._clear_cache(handle)
@@ -418,7 +414,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             try:
                 job.result()
             finally:
-                if forcing:
+                if self.mode == "force":
                     self._recomputed.add(uid)
         cached = _CachedEntry.lookup(cd, uid)  # _CachingCall writes to disk
         if cached.status != "success":
