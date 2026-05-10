@@ -131,11 +131,11 @@ def test_recompute_one_shot_on_error(tmp_path: Path, mode: str) -> None:
     with pytest.raises(ValueError) as exc_info:
         step.run(5.0)
     notes = exc_info.value.__notes__
-    assert not any("reraising" in n for n in notes), "fresh"
+    assert not any("reraising" in n for n in notes), "should recompute"
     with pytest.raises(ValueError) as exc_info:
         step.run(5.0)
     notes = exc_info.value.__notes__
-    assert any("reraising" in n for n in notes), "one-shot"
+    assert any("reraising" in n for n in notes), "should not recompute"
 
 
 def test_clear_cache_partial_failure_leaves_recoverable_error(
