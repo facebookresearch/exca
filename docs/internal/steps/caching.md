@@ -67,11 +67,9 @@ With `keep_in_ram=True`, `__contains__` and `__getitem__` consult
 in lockstep with disk by `Backend.clear_cache` (and by `force`, which
 calls it); external rmtrees that don't go through Backend leave stale
 RAM. Cross-process workers get a fresh view via `CacheDict.__reduce__`.
-`_CachingCall` receives the Backend's memoised CacheDict (inline case)
-or a fresh one via `CacheDict.__reduce__` (submitit case). In the inline
-case writes are visible immediately; in the submitit case the shared
-handle picks the new index up via folder-mtime invalidation in
-`_read_info_files`.
+`_CachingCall` writes via the Backend's CacheDict; cross-process
+workers get a reduced copy and the driver picks up new entries via
+folder-mtime invalidation in `_read_info_files`.
 
 ## Concurrency
 
