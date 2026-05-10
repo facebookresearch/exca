@@ -36,20 +36,13 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass(frozen=True)
 class StepPaths:
-    """Path layout for one ``(step_uid, uid)`` pair.
+    """On-disk path layout for a step: ``base_folder / step_uid / {cache,jobs,logs}``.
 
-    Step-level paths (``step_folder``, ``cache_folder``, ``_logs_folder``)
-    depend only on ``base_folder`` and ``step_uid``.  Per-uid paths
-    (``job_folder``, ``_job_pkl``) additionally require ``uid``.
-
-    See `docs/internal/steps/caching.md` for the on-disk tree.
+    See `docs/internal/steps/caching.md` for the full tree.
     """
 
     base_folder: Path
     step_uid: str
-    uid: str
-
-    # -- step-level (uid-independent) --
 
     @property
     def step_folder(self) -> Path:
@@ -65,20 +58,16 @@ class StepPaths:
     def _logs_folder(self) -> str:
         return str(self.step_folder / "logs" / "%j")
 
-    # -- per-uid --
+    def job_folder(self, uid: str) -> Path:
+        """Job folder for a specific uid."""
+        return self.step_folder / "jobs" / uid
 
-    @property
-    def job_folder(self) -> Path:
-        """Job folder for this specific item."""
-        return self.step_folder / "jobs" / self.uid
+    def _job_pkl(self, uid: str) -> Path:
+        return self.job_folder(uid) / "job.pkl"
 
-    @property
-    def _job_pkl(self) -> Path:
-        return self.job_folder / "job.pkl"
-
-    def _ensure_folders(self) -> None:
+    def _ensure_folders(self, uid: str) -> None:
         self.cache_folder.mkdir(parents=True, exist_ok=True)
-        self.job_folder.mkdir(parents=True, exist_ok=True)
+        self.job_folder(uid).mkdir(parents=True, exist_ok=True)
 
 
 class QueryHandle:
@@ -93,11 +82,13 @@ class QueryHandle:
         paths: StepPaths | None = None,
         cache_dict: exca.cachedict.CacheDict[tp.Any] | None = None,
         backend: Backend | None = None,
+        uid: str = "",
         sub_handles: tuple[QueryHandle, ...] = (),
     ) -> None:
         self._paths = paths
         self._cache_dict = cache_dict
         self._backend = backend
+        self.uid = uid
         # Populated by container steps (Chain, etc.) at query time.
         self._sub_handles = sub_handles
 
@@ -120,7 +111,7 @@ class QueryHandle:
         """Cache status: ``"success"``, ``"error"``, or ``None``."""
         if self._cache_dict is None or self._paths is None:
             return None
-        return _CachedEntry.lookup(self._cache_dict, self._paths.uid).status
+        return _CachedEntry.lookup(self._cache_dict, self.uid).status
 
     def cached(self) -> bool:
         """True iff there is a cached success or error."""
@@ -128,11 +119,9 @@ class QueryHandle:
 
     def result(self) -> tp.Any:
         """Return the cached value, or re-raise a cached error."""
-        entry = _CachedEntry.lookup(self.cache_dict, self.paths.uid)
+        entry = _CachedEntry.lookup(self.cache_dict, self.uid)
         if entry.status is None:
-            raise RuntimeError(
-                f"no cached result for {self.paths.step_uid}[{self.paths.uid}]"
-            )
+            raise RuntimeError(f"no cached result for {self.paths.step_uid}[{self.uid}]")
         return entry.result()
 
     def clear_cache(self, recursive: bool = True) -> None:
@@ -179,7 +168,8 @@ class _CachedEntry:
         status = cls.lookup_statuses(cd, [uid])[uid]
         if status != "error":
             return cls(status, cd, uid)
-        assert cd.folder is not None  # status="error" implies folder exists
+        if cd.folder is None:
+            return cls(None, cd, uid)
         with errors.ErrorRegistry(cd.folder) as reg:
             err = reg.load(uid)
         if err is None:
@@ -333,27 +323,32 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _clear_cache(self, handle: QueryHandle) -> None:
         """Drop everything cached for this handle (cd row, error row, job folder)."""
-        paths, cd = handle.paths, handle.cache_dict
-        uid = paths.uid
         try:
             job = self._job(handle)
             if job is not None and not job.done():
                 job.cancel()
         except Exception as e:
-            logger.warning("Failed to cancel %s[%s]: %s", paths.step_uid, uid, e)
+            logger.warning(
+                "Failed to cancel %s[%s]: %s",
+                handle.paths.step_uid,
+                handle.uid,
+                e,
+            )
         # Success first → a mid-clear crash leaves a recoverable cached
         # error rather than a stale success (fail closed).
-        if uid in cd:
-            del cd[uid]
-        if paths.cache_folder.exists():
-            with errors.ErrorRegistry(paths.cache_folder) as reg:
-                reg.clear([uid])
-        if paths.job_folder.exists():
-            shutil.rmtree(paths.job_folder)
+        if handle.uid in handle.cache_dict:
+            del handle.cache_dict[handle.uid]
+        if handle.paths.cache_folder.exists():
+            with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+                reg.clear([handle.uid])
+        job_folder = handle.paths.job_folder(handle.uid)
+        if job_folder.exists():
+            shutil.rmtree(job_folder)
 
     def _job(self, handle: QueryHandle) -> submitit.Job[tp.Any] | None:
-        if handle.paths._job_pkl.exists():
-            with handle.paths._job_pkl.open("rb") as f:
+        job_pkl = handle.paths._job_pkl(handle.uid)
+        if job_pkl.exists():
+            with job_pkl.open("rb") as f:
                 return pickle.load(f)  # type: ignore
         return None
 
@@ -364,26 +359,27 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         *,
         handle: QueryHandle,
     ) -> tp.Any:
-        paths, cd = handle.paths, handle.cache_dict
-        uid = paths.uid
+        paths = handle.paths
         # Pre-lock fast path: cached value / cached error / read-only miss.
-        cached = _CachedEntry.lookup(cd, uid)
-        if not self._should_compute(uid, cached.status):
+        cached = _CachedEntry.lookup(handle.cache_dict, handle.uid)
+        if not self._should_compute(handle.uid, cached.status):
             if cached.status == "success":
-                logger.debug("Cache hit: %s[%s]", paths.step_uid, uid)
+                logger.debug("Cache hit: %s[%s]", paths.step_uid, handle.uid)
                 return cached.result()
             if cached.status == "error":
                 cached.result()  # raises
             # status is None + read-only
-            raise RuntimeError(f"No cache in read-only mode: {paths.step_uid}[{uid}]")
+            raise RuntimeError(
+                f"No cache in read-only mode: {paths.step_uid}[{handle.uid}]"
+            )
 
         reg: inflight.InflightRegistry | None = None
         if self._is_off_process:
             reg = inflight.InflightRegistry(paths.cache_folder)
-        with inflight.inflight_session(reg, [uid]):
+        with inflight.inflight_session(reg, [handle.uid]):
             # Re-check under the lock — a concurrent worker may have populated.
-            cached = _CachedEntry.lookup(cd, uid)
-            if not self._should_compute(uid, cached.status):
+            cached = _CachedEntry.lookup(handle.cache_dict, handle.uid)
+            if not self._should_compute(handle.uid, cached.status):
                 if cached.status == "success":
                     return cached.result()
                 if cached.status == "error":
@@ -391,7 +387,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
             if cached.status is not None:
                 if self.mode == "retry":
-                    logger.warning("Retrying failed step: %s[%s]", paths.step_uid, uid)
+                    logger.warning(
+                        "Retrying failed step: %s[%s]",
+                        paths.step_uid,
+                        handle.uid,
+                    )
                 self._clear_cache(handle)
 
             # Recover an in-flight job from a prior run (driver crash, etc.).
@@ -400,32 +400,32 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 try:
                     job.result()
                 except Exception:
-                    logger.warning("Retrying failed job: %s", paths._job_pkl)
-                    paths._job_pkl.unlink()
+                    job_pkl = paths._job_pkl(handle.uid)
+                    logger.warning("Retrying failed job: %s", job_pkl)
+                    job_pkl.unlink()
                     job = None
             elif job is not None:
-                logger.debug("Recovering job: %s", paths._job_pkl)
+                logger.debug("Recovering job: %s", paths._job_pkl(handle.uid))
 
             if job is None:
-                wrapper = _CachingCall(func, cd, uid)
+                wrapper = _CachingCall(func, handle.cache_dict, handle.uid)
                 job = self._submit(wrapper, *args, paths=paths)
                 if reg is not None:
-                    inflight.record_worker_info(reg, [uid], job)
+                    inflight.record_worker_info(reg, [handle.uid], job)
             try:
                 job.result()
             finally:
                 if self.mode == "force":
-                    self._recomputed.add(uid)
-        cached = _CachedEntry.lookup(cd, uid)  # _CachingCall writes to disk
+                    self._recomputed.add(handle.uid)
+        cached = _CachedEntry.lookup(handle.cache_dict, handle.uid)
         if cached.status != "success":
             raise RuntimeError(
-                f"Worker completed but cache is missing for {paths.step_uid}[{uid}]"
+                f"Worker completed but cache is missing for "
+                f"{paths.step_uid}[{handle.uid}]"
             )
         return cached.result()
 
-    def _submit(
-        self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths | None = None
-    ) -> tp.Any:
+    def _submit(self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths) -> tp.Any:
         """Submit wrapper for execution. Default: inline execution."""
         wrapper(*args)
         return _InlineJob()
@@ -467,19 +467,17 @@ class _SubmititBackend(Backend):
             params["name"] = params.pop("job_name")
         return params
 
-    def _submit(
-        self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths | None = None
-    ) -> tp.Any:
-        assert paths is not None, "off-process submit requires paths"
-        paths._ensure_folders()
+    def _submit(self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths) -> tp.Any:
+        paths._ensure_folders(wrapper.uid)
         executor = submitit.AutoExecutor(folder=paths._logs_folder, cluster=self._CLUSTER)
         executor.update_parameters(**self._submitit_params())
 
         with submitit.helpers.clean_env():
             job = executor.submit(wrapper, *args)
 
-        logger.debug("Saving job: %s", paths._job_pkl)
-        with paths._job_pkl.open("wb") as f:
+        job_pkl = paths._job_pkl(wrapper.uid)
+        logger.debug("Saving job: %s", job_pkl)
+        with job_pkl.open("wb") as f:
             pickle.dump(job, f)
 
         return job

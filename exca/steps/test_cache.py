@@ -426,7 +426,7 @@ def test_complex_input_caching(tmp_path: Path) -> None:
 
     # Check the uid is deterministic
     handle = step.query(data)
-    assert handle.paths.uid == "value=(1,{a=12})-240df6f3", handle.paths.uid
+    assert handle.uid == "value=(1,{a=12})-240df6f3", handle.uid
 
 
 def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:

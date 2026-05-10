@@ -256,7 +256,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """Run this step's computation, inline or via backend."""
         if handle._paths is None or self.infra is None:
             return self._run(*args)
-        handle.paths._ensure_folders()
+        handle.paths._ensure_folders(handle.uid)
         identity.write_configs(
             handle.paths.step_folder,
             list(aligned_prefix) + list(self._aligned_step()),
@@ -325,10 +325,9 @@ class Step(exca.helpers.DiscriminatedModel):
         paths = backends.StepPaths(
             self.infra.folder,
             identity.step_uid(steps),
-            _uid,
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=cache_type)
-        return QueryHandle(paths, cd, backend=self.infra)
+        return QueryHandle(paths, cd, backend=self.infra, uid=_uid)
 
     def _check_cache_type(self) -> None:
         """Validate the deprecated ``infra.cache_type`` against the Step's
@@ -588,7 +587,7 @@ class Chain(Step):
         )
         if handle._paths is None or self.infra is None:
             return func(*args)
-        handle.paths._ensure_folders()
+        handle.paths._ensure_folders(handle.uid)
         identity.write_configs(
             handle.paths.step_folder,
             list(aligned_prefix) + list(self._aligned_step()),
