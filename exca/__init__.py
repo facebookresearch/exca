@@ -6,10 +6,15 @@
 
 """Execution and caching tool for python"""
 
+from importlib import metadata as _metadata
+
 from . import helpers as helpers
 from .confdict import ConfDict as ConfDict
 from .map import MapInfra as MapInfra
 from .task import SubmitInfra as SubmitInfra
 from .task import TaskInfra as TaskInfra
 
-__version__ = "0.5.23"
+try:  # convenience only
+    __version__ = _metadata.version("exca")
+except _metadata.PackageNotFoundError:
+    __version__ = "dev"
