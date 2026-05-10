@@ -283,13 +283,8 @@ def test_force_deeply_nested(tmp_path: Path) -> None:
     assert out3 != out2  # innermost recomputed again
 
 
-def test_force_and_retry_on_grandchild(tmp_path: Path) -> None:
-    """Force and retry on a step nested inside a sub-chain propagate
-    through parent chains: force clears stale caches, retry clears
-    error caches."""
+def test_force_on_grandchild(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-
-    # -- force --
     gen = conftest.RandomGenerator(infra=infra)
     inner = Chain(steps=[gen, conftest.Mult(coeff=10)], infra=infra)
     outer = Chain(steps=[inner, conftest.Add(value=1)], infra=infra)
@@ -297,16 +292,18 @@ def test_force_and_retry_on_grandchild(tmp_path: Path) -> None:
     gen.infra.mode = "force"  # type: ignore
     assert outer.run() != out1
 
-    # -- retry --
+
+def test_retry_on_grandchild(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     # error is excluded from uid so toggling doesn't change the cache key
     failing = conftest.Add(value=1, error=True, infra=infra)
-    inner_r = Chain(steps=[failing, conftest.Mult(coeff=10)], infra=infra)
-    outer_r = Chain(steps=[inner_r, conftest.Add(value=2)], infra=infra)
+    inner = Chain(steps=[failing, conftest.Mult(coeff=10)], infra=infra)
+    outer = Chain(steps=[inner, conftest.Add(value=2)], infra=infra)
     with pytest.raises(ValueError, match="Triggered an error"):
-        outer_r.run()
+        outer.run()
     failing.error = False
     failing.infra.mode = "retry"  # type: ignore
-    assert outer_r.run() == 12.0  # (0 + 1) * 10 + 2
+    assert outer.run() == 12.0  # (0 + 1) * 10 + 2
 
 
 # =============================================================================
