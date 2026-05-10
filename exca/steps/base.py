@@ -241,6 +241,10 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         return self
 
+    def item_uid(self, value: tp.Any) -> str | None:
+        """Custom cache uid for *value*, or ``None`` for default keying."""
+        return None
+
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
@@ -319,7 +323,7 @@ class Step(exca.helpers.DiscriminatedModel):
         if _uid is not None and not isinstance(value, NoValue):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
-            _uid = identity.materialize_uid(value)
+            _uid = identity.materialize_uid(value, step=self)
         cache_type = self._resolve_cache_type()
         steps = list(_aligned_prefix) + list(self._aligned_step())
         paths = backends.StepPaths(
@@ -536,7 +540,7 @@ class Chain(Step):
 
     def run(self, value: tp.Any = NoValue()) -> tp.Any:
         self._check_cache_type()
-        uid = identity.materialize_uid(value)
+        uid = identity.materialize_uid(value, step=self)
         handle = self.query(_uid=uid)
         self._clear_stale_caches(uid, handle)
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
@@ -598,7 +602,9 @@ class Chain(Step):
         # Bridges `_run(*args)` to `_run_at` for the standalone case;
         # also sets `has_run` in `__pydantic_init_subclass__`.
         value: tp.Any = args[0] if args else NoValue()
-        return self._run_at(*args, uid=identity.materialize_uid(value), aligned_prefix=())
+        return self._run_at(
+            *args, uid=identity.materialize_uid(value, step=self), aligned_prefix=()
+        )
 
     def _run_at(
         self,

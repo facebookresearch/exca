@@ -54,6 +54,16 @@ def test_cached_entry_lookup_success_shadows_error(tmp_path: Path) -> None:
     assert entry.result() == 7
 
 
+def test_lookup_statuses_batch(tmp_path: Path) -> None:
+    cd: cachedict.CacheDict[int] = cachedict.CacheDict(folder=tmp_path)
+    with cd.write():
+        cd["ok"] = 1
+    with errors.ErrorRegistry(tmp_path) as reg:
+        reg.record("err", ValueError("boom"), "tb")
+    statuses = backends._CachedEntry.lookup_statuses(cd, ["ok", "err", "miss"])
+    assert statuses == {"ok": "success", "err": "error", "miss": None}
+
+
 def test_unpicklable_exception_falls_back_to_runtime_error(tmp_path: Path) -> None:
     """Both writer (un-picklable on dump) and reader (un-importable on load)
     fall back to RuntimeError(traceback)."""
@@ -109,6 +119,16 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
     with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
         assert reg.get([handle.uid]) == set()
+
+
+def test_force_one_shot_on_error(tmp_path: Path) -> None:
+    step = _add(True, tmp_path, mode="force")
+    with pytest.raises(ValueError):
+        step.run(5.0)
+    with pytest.raises(ValueError) as exc_info:
+        step.run(5.0)
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("reraising" in n for n in notes), "force one-shot on error"
 
 
 def test_clear_cache_partial_failure_leaves_recoverable_error(

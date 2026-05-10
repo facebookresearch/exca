@@ -37,10 +37,14 @@ def step_uid(steps: tp.Sequence["Step"]) -> str:
     return "/".join(exca.ConfDict.from_model(s, **opts).to_uid() for s in steps)
 
 
-def materialize_uid(value: tp.Any) -> str:
-    """Per-value uid, or `_NOINPUT_UID` for the no-input sentinel."""
+def materialize_uid(value: tp.Any, step: "Step | None" = None) -> str:
+    """Per-value uid: calls ``step.item_uid`` if provided, falls back to ConfDict."""
     if isinstance(value, NoValue):
         return _NOINPUT_UID
+    if step is not None:
+        custom = step.item_uid(value)
+        if custom is not None:
+            return custom
     return exca.ConfDict(value=value).to_uid()
 
 

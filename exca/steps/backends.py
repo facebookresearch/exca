@@ -165,6 +165,7 @@ class _CachedEntry:
         uid: str,
     ) -> "_CachedEntry":
         """Single-uid lookup with full error materialisation."""
+        # CacheDict success shadows any stale error row.
         status = cls.lookup_statuses(cd, [uid])[uid]
         if status != "error":
             return cls(status, cd, uid)
@@ -223,10 +224,12 @@ class _CachingCall:
         func: tp.Callable[..., tp.Any],
         cache_dict: exca.cachedict.CacheDict[tp.Any],
         uid: str,
+        step_uid: str,
     ):
         self.func = func
         self.cache_dict = cache_dict
         self.uid = uid
+        self.step_uid = step_uid
 
     # Returns None: the driver re-reads from cache, so the result never
     # round-trips through a job pickle (matters for submitit).
@@ -238,7 +241,7 @@ class _CachingCall:
             result = self.func(*args)
         except Exception as e:
             if folder is not None:
-                e.add_note(f"  -> cached as {folder.parent.name}[{self.uid}]")
+                e.add_note(f"  -> cached as {self.step_uid}[{self.uid}]")
                 tb = "".join(traceback.format_exception(e))
                 with errors.ErrorRegistry(folder) as reg:
                     reg.record(self.uid, e, tb)
@@ -407,12 +410,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             elif job is not None:
                 logger.debug("Recovering job: %s", paths._job_pkl(handle.uid))
 
-            if job is None:
-                wrapper = _CachingCall(func, handle.cache_dict, handle.uid)
-                job = self._submit(wrapper, *args, paths=paths)
-                if reg is not None:
-                    inflight.record_worker_info(reg, [handle.uid], job)
             try:
+                if job is None:
+                    wrapper = _CachingCall(
+                        func, handle.cache_dict, handle.uid, paths.step_uid
+                    )
+                    job = self._submit(wrapper, *args, paths=paths)
+                    if reg is not None:
+                        inflight.record_worker_info(reg, [handle.uid], job)
                 job.result()
             finally:
                 if self.mode == "force":
