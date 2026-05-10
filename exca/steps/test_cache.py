@@ -175,7 +175,7 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
     out2 = step.run()  # forces recompute
     assert out1 != out2
 
-    out3 = step.run()  # uses cache (mode reset to "cached")
+    out3 = step.run()  # uses cache (_recomputed tracks the uid)
     assert out2 == out3
 
 
@@ -199,7 +199,7 @@ def test_force_propagates_downstream(tmp_path: Path) -> None:
     out2 = chain2.run()
     assert out2 != out1  # add recomputed due to force propagation
 
-    # After force, subsequent calls use cache (mode resets)
+    # After force, subsequent calls use cache (_recomputed)
     out3 = chain2.run()
     assert out2 == out3
 
@@ -239,15 +239,17 @@ def test_force_nested_chains(tmp_path: Path) -> None:
     out2 = outer.run()
     assert out1 != out2  # inner's add_random recomputed
 
-    # Subsequent call uses cache (mode reset)
+    # Subsequent call uses cache (_recomputed)
     out3 = outer.run()
     assert out2 == out3
 
     # force on inner chain also propagates to downstream
     outer2 = outer.model_copy(deep=True)
     outer2._step_sequence()[2].infra.mode = "force"  # type: ignore
-    # infra mode in first step should have been reverted to cached
-    assert outer._step_sequence()[0].infra.mode == "cached"  # type: ignore
+    # gen's force from earlier is still set but _recomputed prevents re-forcing
+    gen = outer._step_sequence()[0]
+    assert gen.infra.mode == "force"  # type: ignore[union-attr]
+    assert identity._NOINPUT_UID in gen.infra._recomputed  # type: ignore[union-attr]
     out4 = outer2.run()
     assert out4 != out3  # downstream recomputed
 
@@ -281,6 +283,32 @@ def test_force_deeply_nested(tmp_path: Path) -> None:
     chain.infra.mode = "force"
     out3 = chain.run(10)
     assert out3 != out2  # innermost recomputed again
+
+
+def test_force_and_retry_on_grandchild(tmp_path: Path) -> None:
+    """Force and retry on a step nested inside a sub-chain propagate
+    through parent chains: force clears stale caches, retry clears
+    error caches."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+
+    # -- force --
+    gen = conftest.RandomGenerator(infra=infra)
+    inner = Chain(steps=[gen, conftest.Mult(coeff=10)], infra=infra)
+    outer = Chain(steps=[inner, conftest.Add(value=1)], infra=infra)
+    out1 = outer.run()
+    gen.infra.mode = "force"  # type: ignore
+    assert outer.run() != out1
+
+    # -- retry --
+    # error is excluded from uid so toggling doesn't change the cache key
+    failing = conftest.Add(value=1, error=True, infra=infra)
+    inner_r = Chain(steps=[failing, conftest.Mult(coeff=10)], infra=infra)
+    outer_r = Chain(steps=[inner_r, conftest.Add(value=2)], infra=infra)
+    with pytest.raises(ValueError, match="Triggered an error"):
+        outer_r.run()
+    failing.error = False
+    failing.infra.mode = "retry"  # type: ignore
+    assert outer_r.run() == 12.0  # (0 + 1) * 10 + 2
 
 
 # =============================================================================

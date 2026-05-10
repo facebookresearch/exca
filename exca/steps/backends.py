@@ -249,6 +249,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     mode: ModeType = "cached"
     keep_in_ram: bool = False
+    # uids already force-recomputed this Backend lifetime; persists across
+    # run() calls, resets on pickle (workers always start fresh).
+    _recomputed: set[str] = pydantic.PrivateAttr(default_factory=set)
 
     @pydantic.field_validator("mode", mode="before")
     @classmethod
@@ -328,10 +331,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     ) -> tp.Any:
         paths, cd = handle.paths, handle.cache_dict
         uid = paths.uid
+        # force + already recomputed this lifetime → treat as cached
+        forcing = self.mode == "force" and uid not in self._recomputed
 
         # Pre-lock fast path: cached value / cached error / read-only miss.
         cached = _CachedEntry.lookup(cd, uid)
-        if cached.status == "success" and self.mode != "force":
+        if cached.status == "success" and not forcing:
             logger.debug("Cache hit: %s[%s]", paths.step_uid, uid)
             return cached.result()
         if cached.status == "error" and self.mode in ("cached", "read-only"):
@@ -343,26 +348,17 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if self._is_off_process:
             reg = inflight.InflightRegistry(paths.cache_folder)
         with inflight.inflight_session(reg, [uid]):
-            # Re-check under the lock — competitors may have populated.
-            # `read-only` already returned/raised pre-lock; only "cached"
-            # reaches the error branch here.
             cached = _CachedEntry.lookup(cd, uid)
-            if cached.status == "success" and self.mode != "force":
+            if cached.status == "success" and not forcing:
                 return cached.result()
             if cached.status == "error" and self.mode == "cached":
                 cached.result()  # raises
 
-            # force always wipes; retry only on a cached error.
-            if self.mode == "force" or (
-                self.mode == "retry" and cached.status == "error"
-            ):
+            if forcing or (self.mode == "retry" and cached.status == "error"):
                 if self.mode == "retry":
                     logger.warning("Retrying failed step: %s[%s]", paths.step_uid, uid)
-                self._clear_cache(handle)  # cancels any running job
+                self._clear_cache(handle)
 
-            # Recover an in-flight prior job (driver crash, retry of a
-            # done-but-failed job). force / retry-on-error already cleared;
-            # retry + still-running keeps the existing handle.
             job = self._job(handle)
             if job is not None and self.mode == "retry" and job.done():
                 try:
@@ -379,9 +375,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 job = self._submit(wrapper, *args)
                 if reg is not None:
                     inflight.record_worker_info(reg, [uid], job)
-            job.result()  # raises on worker failure (also recorded)
-
-        # Worker wrote to cache before returning; read it back from disk.
+            try:
+                job.result()
+            finally:
+                if forcing:
+                    self._recomputed.add(uid)
         cached = _CachedEntry.lookup(cd, uid)
         if cached.status != "success":
             raise RuntimeError(
