@@ -245,6 +245,15 @@ class Step(exca.helpers.DiscriminatedModel):
         """Custom cache uid for *value*, or ``None`` for default keying."""
         return None
 
+    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+        """Override for vectorised batch compute (GPU, vector ops).
+
+        Must yield one result per input value, in order.
+        Default loops ``_run`` over inputs.
+        """
+        for v in values:
+            yield self._run(v)
+
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
