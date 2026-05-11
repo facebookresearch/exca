@@ -41,7 +41,7 @@ def test_chain_run_bridge(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(steps=[conftest.Mult(coeff=2.0, infra=infra), conftest.Mult(coeff=3.0)])
     assert chain._run(5.0) == 30.0
-    assert chain[0].query(5.0).cached()
+    assert chain[0].lookup(5.0).cached()
 
 
 # =============================================================================
@@ -67,13 +67,13 @@ def test_transformer_cache_lookup_with_value(tmp_path: Path) -> None:
     step = conftest.Mult(coeff=3.0, infra=infra)
 
     # No-arg lookup uses the no-input sentinel: miss, not an error.
-    assert not step.query().cached()
+    assert not step.lookup().cached()
 
     # Running populates and looking up by the same value hits.
     assert step.run(5.0) == 15.0
-    assert step.query(5.0).cached()
-    step.query(5.0).clear_cache()
-    assert not step.query(5.0).cached()
+    assert step.lookup(5.0).cached()
+    step.lookup(5.0).clear_cache()
+    assert not step.lookup(5.0).cached()
 
 
 @pytest.mark.parametrize(

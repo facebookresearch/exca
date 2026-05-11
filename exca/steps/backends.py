@@ -7,8 +7,8 @@
 """Backend classes with integrated caching.
 
 Backend executes a Step's `_run` and caches the result keyed by a
-`QueryHandle` (paths + CacheDict) constructed caller-side by
-`Step.query`. Backend stays Step-agnostic — no back-ref, no value
+`LookupHandle` (paths + CacheDict) constructed caller-side by
+`Step.lookup`. Backend stays Step-agnostic — no back-ref, no value
 inspection, no chain-topology walks.
 """
 
@@ -70,10 +70,10 @@ class StepPaths:
         self.job_folder(uid).mkdir(parents=True, exist_ok=True)
 
 
-class QueryHandle:
+class LookupHandle:
     """Cache handle for a ``(step, value)`` pair.
 
-    Returned by :meth:`Step.query`. Provides read-only access to the
+    Returned by :meth:`Step.lookup`. Provides read-only access to the
     cache entry and its on-disk paths.
     """
 
@@ -83,13 +83,13 @@ class QueryHandle:
         cache_dict: exca.cachedict.CacheDict[tp.Any] | None = None,
         backend: Backend | None = None,
         uid: str = "",
-        sub_handles: tuple[QueryHandle, ...] = (),
+        sub_handles: tuple[LookupHandle, ...] = (),
     ) -> None:
         self._paths = paths
         self._cache_dict = cache_dict
         self._backend = backend
         self.uid = uid
-        # Populated by container steps (Chain, etc.) at query time.
+        # Populated by container steps (Chain, etc.) at lookup time.
         self._sub_handles = sub_handles
 
     @property
@@ -326,7 +326,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             self._cds[cache_folder] = cd
         return cd
 
-    def _clear_cache(self, handle: QueryHandle) -> None:
+    def _clear_cache(self, handle: LookupHandle) -> None:
         """Drop everything cached for this handle (cd row, error row, job folder)."""
         try:
             job = self._job(handle)
@@ -350,7 +350,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if job_folder.exists():
             shutil.rmtree(job_folder)
 
-    def _job(self, handle: QueryHandle) -> submitit.Job[tp.Any] | None:
+    def _job(self, handle: LookupHandle) -> submitit.Job[tp.Any] | None:
         job_pkl = handle.paths._job_pkl(handle.uid)
         if job_pkl.exists():
             with job_pkl.open("rb") as f:
@@ -362,7 +362,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         func: tp.Callable[..., tp.Any],
         args: tuple[tp.Any, ...],
         *,
-        handle: QueryHandle,
+        handle: LookupHandle,
     ) -> tp.Any:
         paths = handle.paths
         # Pre-lock fast path: cached value / cached error / read-only miss.
