@@ -4,7 +4,7 @@
 
 ## 0.5.25 - 26-05-11
 
-- `exca/steps`: `Step.query()` renamed to `Step.lookup()` (`LookupHandle`); avoids field-name clash with downstream pydantic subclasses. `Step.clear_cache()` is a temporary deprecation shim. [#245]
+- `exca/steps`: `Step.lookup()` returns a `LookupHandle` for inspecting, retrieving, or clearing cached results. `with_input()` removed; `clear_cache()` deprecated. [#245]
 - `exca/steps`: force mode propagates to downstream steps. [#246]
 - `exca/steps`: `Step.item_uid()` hook for custom cache keys; force mode is one-shot even on error (bug fix). [#247]
 - `exca/steps`: off-process dispatch without a cached upstream raises at construction. [#239]
