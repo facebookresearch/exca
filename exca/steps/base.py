@@ -28,7 +28,7 @@ import pydantic
 import exca
 from exca import utils
 
-from . import backends, identity
+from . import backends, identity, items
 from .backends import QueryHandle
 from .identity import NoValue
 
@@ -252,7 +252,8 @@ class Step(exca.helpers.DiscriminatedModel):
         Default loops ``_run`` over inputs.
         """
         for v in values:
-            yield self._run(v)
+            args = () if isinstance(v, NoValue) else (v,)
+            yield self._run(*args)
 
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
@@ -380,6 +381,9 @@ class Step(exca.helpers.DiscriminatedModel):
         built = self._resolve_step()
         if built is not self:
             return built.run(value)
+
+        if isinstance(value, items.Items):
+            return items.StepItems(self, value)
 
         self._check_cache_type()
         handle = self.query(value)

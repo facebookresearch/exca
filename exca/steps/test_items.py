@@ -4,14 +4,16 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for Items class hierarchy and _run_batch (step 1)."""
+"""Tests for Items class hierarchy and execution."""
 
 import pickle
+import typing as tp
 from pathlib import Path
 
 import exca.cachedict
 
 from . import conftest, items
+from .base import Step
 from .identity import NoValue
 
 
@@ -44,3 +46,39 @@ def test_pickle_round_trip(tmp_path: Path) -> None:
 def test_run_batch_default() -> None:
     step = conftest.Mult(coeff=3.0)
     assert list(step._run_batch([2.0, 4.0])) == [6.0, 12.0]
+
+
+def test_inline_items() -> None:
+    step = conftest.Add(value=5.0)
+    assert list(step.run(items.Items([1.0, 2.0]))) == [6.0, 7.0]
+    assert list(step.run(items.Items())) == [5.0]
+
+
+def test_items_lazy() -> None:
+    consumed: list[float] = []
+
+    def gen() -> tp.Iterator[float]:
+        for x in [1.0, 2.0, 3.0]:
+            consumed.append(x)
+            yield x
+
+    result = conftest.Mult(coeff=2.0).run(items.Items(gen()))
+    assert consumed == [], "upstream consumed before iteration"
+    assert list(result) == [2.0, 4.0, 6.0]
+
+
+class _CustomBatch(Step):
+    def _run(self, value: float) -> float:
+        return value + 1
+
+    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+        for v in values:
+            yield v * 10
+
+
+def test_items_uses_run_batch() -> None:
+    step = _CustomBatch()
+    assert step.run(1.0) == 2.0, "scalar path uses _run"
+    assert list(step.run(items.Items([1.0, 2.0]))) == [10.0, 20.0], (
+        "Items path uses _run_batch"
+    )

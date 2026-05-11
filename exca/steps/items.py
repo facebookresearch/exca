@@ -56,7 +56,7 @@ class StepItems(Items):
         self._upstream = upstream
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
-        raise NotImplementedError("StepItems iteration wired in step 2")
+        yield from self._step._run_batch(self._upstream)
 
 
 class BoundaryItems(Items):
