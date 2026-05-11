@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from . import conftest
+from . import conftest, items
 from .base import Chain, Step
 
 # -----------------------------------------------------------------------------
@@ -182,3 +182,39 @@ def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
     assert pids[1] != os.getpid(), "Second step should run in a sub-process"
     # chain query fallbacks to the last step, even if execution did not use the last step backend
     assert chain.query(5.0).result() == 7.0
+
+
+# -----------------------------------------------------------------------------
+# One execution engine for scalar and batch
+# "step.run(value) and list(step.run(Items([value])))[0] share a cache entry
+#  and the same code path."
+# -----------------------------------------------------------------------------
+
+
+def test_scalar_and_items_share_cache(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(value=1.0, randomize=True, infra=infra)
+    scalar = step.run(10.0)
+    assert list(step.run(items.Items([10.0]))) == [scalar]
+
+
+# -----------------------------------------------------------------------------
+# Iterator results, no upfront materialisation
+# "Datasets too large to fit in memory must traverse the pipeline lazily."
+# -----------------------------------------------------------------------------
+
+
+def test_items_lazy_iteration() -> None:
+    consumed: list[float] = []
+
+    def gen() -> tp.Iterator[float]:
+        for x in [1.0, 2.0]:
+            consumed.append(x)
+            yield x
+
+    it = iter(conftest.Mult(coeff=2.0).run(items.Items(gen())))
+    assert consumed == [], "run() must not consume upstream"
+    assert next(it) == 2.0
+    assert consumed == [1.0], "one item consumed per next()"
+    assert next(it) == 4.0
+    assert consumed == [1.0, 2.0]

@@ -54,19 +54,6 @@ def test_inline_items() -> None:
     assert list(step.run(items.Items())) == [5.0]
 
 
-def test_items_lazy() -> None:
-    consumed: list[float] = []
-
-    def gen() -> tp.Iterator[float]:
-        for x in [1.0, 2.0, 3.0]:
-            consumed.append(x)
-            yield x
-
-    result = conftest.Mult(coeff=2.0).run(items.Items(gen()))
-    assert consumed == [], "upstream consumed before iteration"
-    assert list(result) == [2.0, 4.0, 6.0]
-
-
 class _CustomBatch(Step):
     def _run(self, value: float) -> float:
         return value + 1
@@ -78,7 +65,5 @@ class _CustomBatch(Step):
 
 def test_items_uses_run_batch() -> None:
     step = _CustomBatch()
-    assert step.run(1.0) == 2.0, "scalar path uses _run"
-    assert list(step.run(items.Items([1.0, 2.0]))) == [10.0, 20.0], (
-        "Items path uses _run_batch"
-    )
+    assert step.run(1.0) == 10.0
+    assert list(step.run(items.Items([1.0, 2.0]))) == [10.0, 20.0]

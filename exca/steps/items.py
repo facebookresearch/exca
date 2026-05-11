@@ -56,7 +56,7 @@ class StepItems(Items):
         self._upstream = upstream
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
-        yield from self._step._run_batch(self._upstream)
+        yield from self._step._execute_items(self._upstream)
 
 
 class BoundaryItems(Items):

@@ -277,6 +277,22 @@ class Step(exca.helpers.DiscriminatedModel):
         )
         return self.infra._run(self._run, args, handle=handle)
 
+    def _execute_items(self, upstream: items.Items) -> tp.Iterator[tp.Any]:
+        """Iterate *upstream* through this step: inline or via Backend."""
+        self._check_cache_type()
+        try:
+            if self.infra is None:
+                yield from self._run_batch(upstream)
+                return
+            for value in upstream:
+                uid = identity.materialize_uid(self, value)
+                handle = self.query(_uid=uid)
+                args = () if isinstance(value, NoValue) else (value,)
+                yield self._execute(args, handle=handle)
+        except Exception as e:
+            e.add_note(f"  -> in {self!r}")
+            raise
+
     def _propagate_folder(self, parent_folder: Path) -> None:
         """Apply ``parent_folder`` to own ``infra`` when unset.
 
@@ -382,17 +398,12 @@ class Step(exca.helpers.DiscriminatedModel):
         if built is not self:
             return built.run(value)
 
-        if isinstance(value, items.Items):
-            return items.StepItems(self, value)
-
-        self._check_cache_type()
-        handle = self.query(value)
-        args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
-        try:
-            return self._execute(args, handle=handle)
-        except Exception as e:
-            e.add_note(f"  -> in {self!r}")
-            raise
+        is_items = isinstance(value, items.Items)
+        upstream = value if is_items else items.Items([value])
+        result = items.StepItems(self, upstream)
+        if is_items:
+            return result
+        return next(iter(result))
 
     def forward(self, value: tp.Any = NoValue()) -> tp.Any:  # deprecated: use run()
         warnings.warn(
