@@ -30,7 +30,6 @@ from exca import utils
 
 from . import backends, identity, items
 from .backends import QueryHandle
-from .identity import NoValue
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +68,38 @@ def _flatten_levels(steps: tp.Sequence[Step]) -> list[Step]:
     return out
 
 
+def _dispatch_step(
+    step: Step,
+    args: tuple[tp.Any, ...],
+    *,
+    uid: str,
+    prefix: tp.Sequence[Step],
+    mode: identity.ModeType,
+) -> tp.Any:
+    """Run one item through *step* during a chain walk."""
+    func: tp.Callable[..., tp.Any]
+    if isinstance(step, Chain):
+        func = functools.partial(
+            step._run_at,
+            uid=uid,
+            aligned_prefix=prefix,
+            initial_mode=mode,
+        )
+    else:
+        func = step._run
+    if step.infra is None or step.infra.folder is None:
+        return func(*args)
+    paths = step._make_paths(prefix)
+    value = args[0] if args else identity.NoValue()
+    batch = items.ValuesItems(
+        values=[value],
+        uids=[uid],
+        step_uid=paths.step_uid,
+        mode=mode,
+    )
+    return next(iter(step.infra._run(func, batch, paths=paths)))
+
+
 def _aligned_prefixes(
     steps: tp.Sequence[Step], prefix: tp.Sequence[Step] = ()
 ) -> list[list[Step]]:
@@ -77,15 +108,6 @@ def _aligned_prefixes(
     for s in steps[:-1]:
         result.append(result[-1] + s._aligned_step())
     return result
-
-
-def _needs_rerun(step: Step, uid: str | None, handle: QueryHandle) -> bool:
-    """True if *step* will recompute a cached entry (pending force or retry).
-    Cache miss returns False — no downstream invalidation needed."""
-    if step.infra is None or uid is None:
-        return False
-    status = handle.status
-    return status is not None and step.infra._should_compute(uid, status)
 
 
 @pydantic.model_validator(mode="before")
@@ -252,43 +274,33 @@ class Step(exca.helpers.DiscriminatedModel):
         Default loops ``_run`` over inputs.
         """
         for v in values:
-            args = () if isinstance(v, NoValue) else (v,)
+            args = () if isinstance(v, identity.NoValue) else (v,)
             yield self._run(*args)
 
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
 
-    def _execute(
-        self,
-        args: tuple[tp.Any, ...],
-        *,
-        handle: QueryHandle = QueryHandle(),
-        uid: str | None = None,
-        aligned_prefix: tp.Sequence[Step] = (),
-    ) -> tp.Any:
-        """Run this step's computation, inline or via backend."""
-        if handle._paths is None or self.infra is None:
-            return self._run(*args)
-        handle.paths._ensure_folders(handle.uid)
-        identity.write_configs(
-            handle.paths.step_folder,
-            list(aligned_prefix) + list(self._aligned_step()),
-        )
-        return self.infra._run(self._run, args, handle=handle)
-
-    def _execute_items(self, upstream: items.Items) -> tp.Iterator[tp.Any]:
+    def _execute(self, upstream: items.Items) -> tp.Iterator[tp.Any]:
         """Iterate *upstream* through this step: inline or via Backend."""
         self._check_cache_type()
         try:
-            if self.infra is None:
+            if self.infra is None or self.infra.folder is None:
                 yield from self._run_batch(upstream)
                 return
+            values: list[tp.Any] = []
+            uids: list[str] = []
             for value in upstream:
-                uid = identity.materialize_uid(self, value)
-                handle = self.query(_uid=uid)
-                args = () if isinstance(value, NoValue) else (value,)
-                yield self._execute(args, handle=handle)
+                uids.append(identity.materialize_uid(self, value))
+                values.append(value)
+            paths = self._make_paths()
+            batch = items.ValuesItems(
+                values=values,
+                uids=uids,
+                step_uid=paths.step_uid,
+                mode=upstream._mode,
+            )
+            yield from self.infra._run(self._run, batch, paths=paths)
         except Exception as e:
             e.add_note(f"  -> in {self!r}")
             raise
@@ -317,6 +329,18 @@ class Step(exca.helpers.DiscriminatedModel):
             return self.CACHE_TYPE
         return getattr(self, "_DEFAULT_CACHE_TYPE", None)
 
+    def _make_paths(self, prefix: tp.Sequence[Step] = ()) -> backends.StepPaths:
+        """Build StepPaths, create folder, write configs."""
+        aligned = list(prefix) + list(self._aligned_step())
+        paths = backends.StepPaths(
+            self.infra.folder,  # type: ignore[arg-type]
+            identity.step_uid(aligned),
+            cache_type=self._resolve_cache_type(),
+        )
+        paths.step_folder.mkdir(parents=True, exist_ok=True)
+        identity.write_configs(paths.step_folder, aligned)
+        return paths
+
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
         if "has_resolve" not in self._step_flags:
             return None
@@ -327,7 +351,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def query(
         self,
-        value: tp.Any = NoValue(),
+        value: tp.Any = identity.NoValue(),
         *,
         _aligned_prefix: tp.Sequence[Step] = (),
         _uid: str | None = None,
@@ -346,7 +370,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         if self.infra is None or self.infra.folder is None:
             return QueryHandle()
-        if _uid is not None and not isinstance(value, NoValue):
+        if _uid is not None and not isinstance(value, identity.NoValue):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
@@ -381,7 +405,7 @@ class Step(exca.helpers.DiscriminatedModel):
     # Execution
     # =========================================================================
 
-    def run(self, value: tp.Any = NoValue()) -> tp.Any:
+    def run(self, value: tp.Any = identity.NoValue()) -> tp.Any:
         """Execute the step, using the cache and backend when configured.
 
         Parameters
@@ -405,7 +429,9 @@ class Step(exca.helpers.DiscriminatedModel):
             return result
         return next(iter(result))
 
-    def forward(self, value: tp.Any = NoValue()) -> tp.Any:  # deprecated: use run()
+    def forward(
+        self, value: tp.Any = identity.NoValue()
+    ) -> tp.Any:  # deprecated: use run()
         warnings.warn(
             "Step.forward() is deprecated, use run() instead",
             DeprecationWarning,
@@ -539,7 +565,7 @@ class Chain(Step):
 
     def query(
         self,
-        value: tp.Any = NoValue(),
+        value: tp.Any = identity.NoValue(),
         *,
         _aligned_prefix: tp.Sequence[Step] = (),
         _uid: str | None = None,
@@ -564,121 +590,126 @@ class Chain(Step):
     # Execution
     # =========================================================================
 
-    def run(self, value: tp.Any = NoValue()) -> tp.Any:
-        self._check_cache_type()
-        first = _resolve_all(self._step_sequence())[0]
-        uid = identity.materialize_uid(first, value)
-        handle = self.query(_uid=uid)
-        self._clear_stale_caches(uid, handle)
-        args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
-        try:
-            return self._execute(args, handle=handle, uid=uid)
-        except Exception as e:
-            e.add_note(f"  -> in {self!r}")
-            raise
-
-    def _clear_stale_caches(self, uid: str | None, handle: QueryHandle) -> bool:
-        """Walk handle tree, clear caches from the first pending
-        force/retry onward.  Returns True if any invalidation found."""
-        found = False
-        steps = tuple(_resolve_all(self._step_sequence()))
-        for step, sub_handle in zip(steps, handle._sub_handles):
+    def _descendant_mode(self, base: identity.ModeType = "cached") -> identity.ModeType:
+        """Most aggressive mode across all descendant steps (recursive)."""
+        mode = base
+        for step in _resolve_all(self._step_sequence()):
+            if step.infra is not None:
+                mode = backends.effective_mode(mode, step.infra.mode)
             if isinstance(step, Chain):
-                if step._clear_stale_caches(uid, sub_handle):
-                    found = True
-            elif _needs_rerun(step, uid, sub_handle):
-                found = True
-            if found and sub_handle.cached():
-                sub_handle.clear_cache(recursive=True)
-        # Chain-level force with no child invalidation: all children stale.
-        if _needs_rerun(self, uid, handle):
-            if not found:
-                for sub_handle in handle._sub_handles:
-                    if sub_handle.cached():
-                        sub_handle.clear_cache(recursive=True)
-            found = True
-        if found and handle._paths is not None and handle.cached():
-            handle.clear_cache(recursive=False)
-        return found
+                mode = step._descendant_mode(mode)
+        return mode
 
-    def _execute(
-        self,
-        args: tuple[tp.Any, ...],
-        *,
-        handle: QueryHandle = QueryHandle(),
-        uid: str | None = None,
-        aligned_prefix: tp.Sequence[Step] = (),
-    ) -> tp.Any:
-        # Bind chain-walk context into `_run_at`; the partial is picklable
-        # by stdlib pickle (submitit `job.pkl`).
-        func = functools.partial(
-            self._run_at,
-            uid=uid,
-            aligned_prefix=tuple(aligned_prefix),
-        )
-        if handle._paths is None or self.infra is None:
-            return func(*args)
-        handle.paths._ensure_folders(handle.uid)
-        identity.write_configs(
-            handle.paths.step_folder,
-            list(aligned_prefix) + list(self._aligned_step()),
-        )
-        return self.infra._run(func, args, handle=handle)
+    def _execute(self, upstream: items.Items) -> tp.Iterator[tp.Any]:
+        """Thread Items through chain levels.
+
+        One-level (self.infra set): compute effective mode from children +
+        upstream, dispatch via Backend per item with that mode.
+        Dissolved (self.infra is None): per-item through _run_at with
+        upstream mode for cache resume and propagation.
+        """
+        self._check_cache_type()
+        steps = tuple(_resolve_all(self._step_sequence()))
+        first = steps[0]
+        upstream_mode = upstream._mode
+
+        if self.infra is not None and self.infra.folder is not None:
+            # Effective mode from all descendants + upstream.
+            chain_eff = backends.effective_mode(
+                self.infra.mode, self._descendant_mode(upstream_mode)
+            )
+            paths = self._make_paths()
+            func = functools.partial(self._run_at, initial_mode=chain_eff)
+            values: list[tp.Any] = []
+            uids: list[str] = []
+            for value in upstream:
+                uids.append(identity.materialize_uid(first, value))
+                values.append(value)
+            batch = items.ValuesItems(
+                values=values,
+                uids=uids,
+                step_uid=paths.step_uid,
+                mode=chain_eff,
+            )
+            try:
+                yield from self.infra._run(func, batch, paths=paths)
+            except Exception as e:
+                e.add_note(f"  -> in {self!r}")
+                raise
+            return
+
+        # Dissolved: per-item, lazy.
+        for value in upstream:
+            uid = identity.materialize_uid(first, value)
+            args: tuple[tp.Any, ...] = (
+                () if isinstance(value, identity.NoValue) else (value,)
+            )
+            try:
+                yield self._run_at(*args, uid=uid, initial_mode=upstream_mode)
+            except Exception as e:
+                e.add_note(f"  -> in {self!r}")
+                raise
 
     def _run(self, *args: tp.Any) -> tp.Any:
-        # Bridges `_run(*args)` to `_run_at` for the standalone case;
-        # also sets `has_run` in `__pydantic_init_subclass__`.
-        value: tp.Any = args[0] if args else NoValue()
-        first = _resolve_all(self._step_sequence())[0]
-        return self._run_at(
-            *args, uid=identity.materialize_uid(first, value), aligned_prefix=()
-        )
+        # Bridges `_run(*args)` to `_run_at`; also sets `has_run`
+        # in `__pydantic_init_subclass__`.
+        return self._run_at(*args)
 
     def _run_at(
         self,
         *args: tp.Any,
-        uid: str | None,
-        aligned_prefix: tp.Sequence[Step],
+        uid: str | None = None,
+        aligned_prefix: tp.Sequence[Step] = (),
+        initial_mode: identity.ModeType = "cached",
     ) -> tp.Any:
         """Walk children with growing prefix; ``uid`` keys the cache."""
         steps = tuple(_resolve_all(self._step_sequence()))
         total = len(steps)
+        if uid is None:
+            value: tp.Any = args[0] if args else identity.NoValue()
+            uid = identity.materialize_uid(steps[0], value)
         per_step_prefix = _aligned_prefixes(steps, aligned_prefix)
 
-        # Find latest cached result to skip earlier work.
-        start_idx = 0
-        for k, step in enumerate(reversed(steps)):
-            if step.infra is None:
+        # Forward scan: propagate mode, find latest valid cache for resume.
+        mode: identity.ModeType = initial_mode
+        last_cached: tuple[int, tp.Any] | None = None
+        for i, step in enumerate(steps):
+            if step.infra is None or step.infra.folder is None:
                 continue
-            idx = total - 1 - k
-            sub_handle = step.query(_aligned_prefix=per_step_prefix[idx], _uid=uid)
-            if sub_handle.cached():
-                args = (sub_handle.result(),)
-                start_idx = idx + 1
-                break
+            handle = step.query(_aligned_prefix=per_step_prefix[i], _uid=uid)
+            eff = backends.effective_mode(step.infra.mode, mode)
+            if handle.cached() and eff == "cached":
+                last_cached = (i, handle.result())
+            mode = backends.effective_mode(mode, step.infra.mode)
 
+        start_idx = 0
+        if last_cached is not None:
+            start_idx = last_cached[0] + 1
+            args = (last_cached[1],)
+            mode = "cached"
+        else:
+            mode = initial_mode
         for i in range(start_idx, total):
             step = steps[i]
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i + 1, total, step_name)
-            sub_prefix = per_step_prefix[i]
-            sub_handle = step.query(_aligned_prefix=sub_prefix, _uid=uid)
             try:
-                result = step._execute(
-                    args,
-                    handle=sub_handle,
-                    uid=uid,
-                    aligned_prefix=sub_prefix,
+                result = _dispatch_step(
+                    step, args, uid=uid, prefix=per_step_prefix[i], mode=mode
                 )
             except Exception as e:
                 e.add_note(f"  -> while running step {i + 1}/{total}: {step_name}")
                 raise
+            if step.infra is not None:
+                mode = backends.effective_mode(mode, step.infra.mode)
             args = (result,)
             logger.debug("Completed step %d/%d: %s", i + 1, total, step_name)
 
         return args[0]
 
-    def forward(self, value: tp.Any = NoValue()) -> tp.Any:  # deprecated: use run()
+    def forward(
+        self, value: tp.Any = identity.NoValue()
+    ) -> tp.Any:  # deprecated: use run()
         warnings.warn(
             "Chain.forward() is deprecated, use run() instead",
             DeprecationWarning,

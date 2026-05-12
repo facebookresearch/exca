@@ -27,6 +27,9 @@ if tp.TYPE_CHECKING:
 _NOINPUT_UID = "__exca_no_input__"
 
 
+ModeType = tp.Literal["cached", "force", "read-only", "retry"]
+
+
 class NoValue:
     """Sentinel for unset input (e.g. a generator step has no value to bind)."""
 

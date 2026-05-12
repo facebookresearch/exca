@@ -12,14 +12,13 @@ from pathlib import Path
 
 import exca.cachedict
 
-from . import conftest, items
+from . import conftest, identity, items
 from .base import Step
-from .identity import NoValue
 
 
 def test_items_no_args_default() -> None:
     result = list(items.Items())
-    assert len(result) == 1 and isinstance(result[0], NoValue)
+    assert len(result) == 1 and isinstance(result[0], identity.NoValue)
 
 
 def test_cached_items(tmp_path: Path) -> None:

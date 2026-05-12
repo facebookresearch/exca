@@ -26,11 +26,9 @@ from .base import Chain, Step
 
 
 @pytest.mark.parametrize("with_cache", [False, True])
-def test_downstream_cache_hit_skips_upstream_run(
-    tmp_path: Path, with_cache: bool
-) -> None:
-    # Consequence: the cache key must come from a uid carried from the root,
-    # not from the transformed upstream output — else checking it requires `_run`.
+def test_downstream_cache_skips_upstream(tmp_path: Path, with_cache: bool) -> None:
+    # Cache key comes from a uid carried from the root, not from the
+    # transformed upstream output — else checking the cache requires _run.
     calls = {"up": 0}
 
     class Upstream(Step):
@@ -39,13 +37,37 @@ def test_downstream_cache_hit_skips_upstream_run(
             return x + 1.0
 
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_cache else None
-    chain = Chain(steps=[Upstream(), conftest.Mult(coeff=10.0, infra=infra)])
 
-    chain.run()
-    chain.run()
-    # Without a downstream cache, upstream fires on every run. With one,
-    # the second run must never touch upstream — that is the invariant.
+    def make_chain() -> Chain:
+        return Chain(steps=[Upstream(), conftest.Mult(coeff=10.0, infra=infra)])
+
+    make_chain().run()
+    make_chain().run()
     assert calls["up"] == (1 if with_cache else 2)
+
+
+@pytest.mark.parametrize("as_chain", [False, True])
+def test_heterogeneous_items_cache(tmp_path: Path, as_chain: bool) -> None:
+    """Only uncached items trigger _run."""
+    calls: list[float] = []
+
+    class Counting(Step):
+        def _run(self, x: float) -> float:
+            calls.append(x)
+            return x * 2
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step: tp.Any = Counting(infra=infra)
+    if as_chain:
+        step = Chain(steps=[step, conftest.Mult(coeff=1.0, infra=infra)])
+
+    list(step.run(items.Items([1.0, 2.0])))
+    assert calls == [1.0, 2.0]
+
+    calls.clear()
+    result = list(step.run(items.Items([1.0, 2.0, 3.0])))
+    assert calls == [3.0], "Only the new item should compute"
+    assert result == [2.0, 4.0, 6.0]
 
 
 # -----------------------------------------------------------------------------
@@ -93,9 +115,8 @@ def test_cache_shared_across_chain_lengths(tmp_path: Path) -> None:
     chain2 = Chain(
         steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=100)]
     )
-    out1 = chain1.run()
-    out2 = chain2.run()
-    assert out2 == pytest.approx(10 * out1, abs=1e-9)
+    out = [c.run() for c in (chain1, chain2)]
+    assert out[1] == pytest.approx(10 * out[0], abs=1e-9)
 
 
 # -----------------------------------------------------------------------------
@@ -106,8 +127,9 @@ def test_cache_shared_across_chain_lengths(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mode,recomputes", [("cached", False), ("force", True)])
+@pytest.mark.parametrize("dissolved", [False, True])
 def test_force_recomputes_and_propagates(
-    tmp_path: Path, mode: str, recomputes: bool
+    tmp_path: Path, mode: str, recomputes: bool, dissolved: bool
 ) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(
@@ -115,17 +137,16 @@ def test_force_recomputes_and_propagates(
             conftest.RandomGenerator(infra=infra),
             conftest.Add(randomize=True, infra=infra),
         ],
-        infra=infra,
+        infra=None if dissolved else infra,
     )
     out1 = chain.run()
-
-    # Switch mode on upstream only: force must also recompute downstream
-    # (its input changed), "cached" must not.
     gen = chain._step_sequence()[0]
     assert gen.infra is not None
     gen.infra.mode = mode  # type: ignore[assignment]
     out2 = chain.run()
-    assert (out2 != out1) is recomputes
+    assert (out2 != out1) is recomputes, (
+        f"mode={mode}: expected {'new' if recomputes else 'same'} result"
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -191,9 +212,12 @@ def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_scalar_and_items_share_cache(tmp_path: Path) -> None:
+@pytest.mark.parametrize("as_chain", [False, True])
+def test_scalar_and_items_share_cache(tmp_path: Path, as_chain: bool) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = conftest.Add(value=1.0, randomize=True, infra=infra)
+    step: tp.Any = conftest.Add(value=1.0, randomize=True, infra=infra)
+    if as_chain:
+        step = Chain(steps=[step, conftest.Mult(coeff=2.0)])
     scalar = step.run(10.0)
     assert list(step.run(items.Items([10.0]))) == [scalar]
 

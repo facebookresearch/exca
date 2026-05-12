@@ -25,8 +25,7 @@ import typing as tp
 
 import exca.cachedict
 
-from .backends import ModeType
-from .identity import NoValue
+from . import identity
 
 if tp.TYPE_CHECKING:
     from .base import Step
@@ -36,10 +35,19 @@ class Items:
     """User-facing root: wraps an ``Iterable[Any]``.
 
     ``Items()`` with no arguments is equivalent to ``Items([NoValue()])``.
+    ``_mode`` carries the upstream execution mode through the pipeline.
     """
 
-    def __init__(self, values: tp.Iterable[tp.Any] | None = None) -> None:
-        self._values: tp.Iterable[tp.Any] = [NoValue()] if values is None else values
+    def __init__(
+        self,
+        values: tp.Iterable[tp.Any] | None = None,
+        *,
+        _mode: identity.ModeType = "cached",
+    ) -> None:
+        self._values: tp.Iterable[tp.Any] = (
+            [identity.NoValue()] if values is None else values
+        )
+        self._mode = _mode
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         return iter(self._values)
@@ -49,14 +57,19 @@ class StepItems(Items):
     """Lazy graph node: triggers execution when iterated.
 
     Constructed by ``step.run(items)``; iteration enters ``step._execute``.
+    ``_mode`` is the effective mode after this step (max of upstream and step).
     """
 
     def __init__(self, step: Step, upstream: Items) -> None:
         self._step = step
         self._upstream = upstream
+        from .backends import effective_mode
+
+        step_mode = step.infra.mode if step.infra is not None else "cached"
+        self._mode = effective_mode(step_mode, upstream._mode)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
-        yield from self._step._execute_items(self._upstream)
+        yield from self._step._execute(self._upstream)
 
 
 class BoundaryItems(Items):
@@ -71,7 +84,7 @@ class BoundaryItems(Items):
         *,
         uids: tp.Sequence[str],
         step_uid: str,
-        mode: ModeType = "cached",
+        mode: identity.ModeType = "cached",
     ) -> None:
         self._uids = uids
         self._step_uid = step_uid
@@ -90,7 +103,7 @@ class ValuesItems(BoundaryItems):
         values: tp.Sequence[tp.Any],
         uids: tp.Sequence[str],
         step_uid: str,
-        mode: ModeType = "cached",
+        mode: identity.ModeType = "cached",
     ) -> None:
         super().__init__(uids=uids, step_uid=step_uid, mode=mode)
         self._values = values
@@ -108,7 +121,7 @@ class CachedItems(BoundaryItems):
         cache_dict: exca.cachedict.CacheDict[tp.Any],
         uids: tp.Sequence[str],
         step_uid: str,
-        mode: ModeType = "cached",
+        mode: identity.ModeType = "cached",
     ) -> None:
         super().__init__(uids=uids, step_uid=step_uid, mode=mode)
         self._cache_dict = cache_dict
