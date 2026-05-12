@@ -64,7 +64,11 @@ class StepItems(Items):
         self._mode = effective_mode(step_mode, upstream._mode)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
-        yield from self._step._execute(self._upstream)
+        try:
+            yield from self._step._execute(self._upstream)
+        except Exception as e:
+            e.add_note(f"  -> while running step {self._step!r}")
+            raise
 
 
 class BoundaryItems(Items):

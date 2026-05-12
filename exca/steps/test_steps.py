@@ -36,14 +36,6 @@ def test_chain_no_infra() -> None:
     assert chain.run(5.0) == 30.0
 
 
-def test_chain_run_bridge(tmp_path: Path) -> None:
-    # Chain._run bridges to _run_at; children with infra cache correctly.
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(steps=[conftest.Mult(coeff=2.0, infra=infra), conftest.Mult(coeff=3.0)])
-    assert chain._run(5.0) == 30.0
-    assert chain[0].query(5.0).cached()
-
-
 # =============================================================================
 # Generator vs Transformer detection
 # =============================================================================
@@ -342,7 +334,7 @@ def test_resolve_step_in_chain() -> None:
 
 def test_resolve_step_must_override_run_or_resolve() -> None:
     """Step with neither _run nor _resolve_step raises TypeError."""
-    with pytest.raises(TypeError, match="must override _run or _resolve_step"):
+    with pytest.raises(TypeError, match="must override _run"):
 
         class BadStep(Step):
             value: int = 0

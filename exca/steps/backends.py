@@ -226,38 +226,44 @@ class _CachedEntry:
 
 
 class _CachingCall:
-    """Worker-side wrapper: runs the user function, writes result or error to cache."""
+    """Worker-side wrapper: runs a batch function, writes each result to cache."""
 
     def __init__(
         self,
-        func: tp.Callable[..., tp.Any],
+        run_batch: tp.Callable[[tp.Iterable[tp.Any]], tp.Iterator[tp.Any]],
         cache_dict: exca.cachedict.CacheDict[tp.Any],
-        uid: str,
+        uids: tp.Sequence[str],
         step_uid: str,
     ):
-        self.func = func
+        self.run_batch = run_batch
         self.cache_dict = cache_dict
-        self.uid = uid
+        self.uids = uids
         self.step_uid = step_uid
 
     # Returns None: the driver re-reads from cache, so the result never
     # round-trips through a job pickle (matters for submitit).
-    def __call__(self, *args: tp.Any) -> None:
+    def __call__(self, batch: tp.Any) -> None:
         folder = self.cache_dict.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
-        try:
-            result = self.func(*args)
-        except Exception as e:
-            if folder is not None:
-                e.add_note(f"  -> cached as {self.step_uid}[{self.uid}]")
-                tb = "".join(traceback.format_exception(e))
-                with errors.ErrorRegistry(folder) as reg:
-                    reg.record(self.uid, e, tb)
-            raise
-        if self.uid not in self.cache_dict:
-            with self.cache_dict.write():
-                self.cache_dict[self.uid] = result
+        results = iter(self.run_batch(batch))
+        for uid in self.uids:
+            try:
+                result = next(results)
+            except StopIteration:
+                raise RuntimeError(
+                    f"run_batch yielded fewer results than items ({len(self.uids)})"
+                ) from None
+            except Exception as e:
+                if folder is not None:
+                    e.add_note(f"  -> cached as {self.step_uid}[{uid}]")
+                    tb = "".join(traceback.format_exception(e))
+                    with errors.ErrorRegistry(folder) as reg:
+                        reg.record(uid, e, tb)
+                raise
+            if uid not in self.cache_dict:
+                with self.cache_dict.write():
+                    self.cache_dict[uid] = result
 
 
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
@@ -377,12 +383,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _run(
         self,
-        func: tp.Callable[..., tp.Any],
+        run_batch: tp.Callable[[tp.Iterable[tp.Any]], tp.Iterator[tp.Any]],
         batch: items.BoundaryItems,
         *,
         paths: StepPaths,
     ) -> items.CachedItems:
-        """Execute *func* for each item in *batch*, caching per uid.
+        """Execute *run_batch* for uncached items, caching per uid.
 
         Returns a :class:`~items.CachedItems` backed by the cache —
         values are read from disk on iteration, never buffered in memory.
@@ -409,46 +415,51 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 self._clear_cache(paths=paths, cd=cd, uid=uid)
             to_compute.add(uid)
 
-        # 2. Compute missing entries (skipped entirely when to_compute is empty,
-        #    so upstream generators never fire for full cache hits).
-        for value, uid in zip(batch, uids) if to_compute else ():
-            if uid not in to_compute:
-                continue
-            args = () if isinstance(value, identity.NoValue) else (value,)
+        # 2. Compute missing entries as a single batch.
+        #    Values are pulled lazily so upstream generators interleave
+        #    with caching (important when an inline step feeds a cached one).
+        if to_compute:
+            filtered_uids = [u for u in uids if u in to_compute]
+            for uid in filtered_uids:
+                paths._ensure_folders(uid)
             reg: inflight.InflightRegistry | None = None
             if self._is_off_process:
                 reg = inflight.InflightRegistry(paths.cache_folder)
-            with inflight.inflight_session(reg, [uid]):
-                # Re-check after acquiring lock (another worker may have finished).
-                entry = _CachedEntry.lookup(cd, uid)
-                if entry.status == "success":
-                    continue
-                job = self._job(paths=paths, uid=uid)
-                if job is not None and mode == "retry" and job.done():
-                    try:
-                        job.result()
-                    except Exception:
-                        job_pkl = paths._job_pkl(uid)
-                        logger.warning("Retrying failed job: %s", job_pkl)
-                        job_pkl.unlink()
-                        job = None
-                elif job is not None:
-                    logger.debug("Recovering job: %s", paths._job_pkl(uid))
-                try:
-                    if job is None:
-                        paths._ensure_folders(uid)
-                        wrapper = _CachingCall(func, cd, uid, paths.step_uid)
-                        job = self._submit(wrapper, *args, paths=paths)
-                        if reg is not None:
-                            inflight.record_worker_info(reg, [uid], job)
-                    job.result()
-                finally:
-                    if mode in ("force", "retry"):
-                        self._recomputed.add(uid)
-                if _CachedEntry.lookup(cd, uid).status != "success":
-                    raise RuntimeError(
-                        f"Worker completed but cache missing: {paths.step_uid}[{uid}]"
+            with inflight.inflight_session(reg, filtered_uids):
+                # Re-check after lock (another worker may have finished).
+                still_uids = [
+                    u
+                    for u in filtered_uids
+                    if _CachedEntry.lookup(cd, u).status != "success"
+                ]
+                if still_uids:
+                    still_set = set(still_uids)
+
+                    def _lazy() -> tp.Iterator[tp.Any]:
+                        for value, uid in zip(batch, uids):
+                            if uid in still_set:
+                                yield value
+
+                    filtered = items.ValuesItems(
+                        values=_lazy(),
+                        uids=still_uids,
+                        step_uid=paths.step_uid,
+                        mode=mode,
                     )
+                    wrapper = _CachingCall(run_batch, cd, still_uids, paths.step_uid)
+                    try:
+                        job = self._submit(wrapper, filtered, paths=paths)
+                        if reg is not None:
+                            inflight.record_worker_info(reg, still_uids, job)
+                        job.result()
+                    finally:
+                        if mode in ("force", "retry"):
+                            self._recomputed.update(still_uids)
+                for uid in filtered_uids:
+                    if _CachedEntry.lookup(cd, uid).status != "success":
+                        raise RuntimeError(
+                            f"Worker completed but cache missing: {paths.step_uid}[{uid}]"
+                        )
 
         return items.CachedItems(
             cache_dict=cd,
@@ -500,18 +511,24 @@ class _SubmititBackend(Backend):
         return params
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths) -> tp.Any:
-        paths._ensure_folders(wrapper.uid)
+        # Materialize lazy values for pickling.
+        args = tuple(
+            items.ValuesItems(
+                values=list(a), uids=a._uids, step_uid=a._step_uid, mode=a._mode
+            )
+            if isinstance(a, items.ValuesItems)
+            else a
+            for a in args
+        )
         executor = submitit.AutoExecutor(folder=paths._logs_folder, cluster=self._CLUSTER)
         executor.update_parameters(**self._submitit_params())
-
         with submitit.helpers.clean_env():
             job = executor.submit(wrapper, *args)
-
-        job_pkl = paths._job_pkl(wrapper.uid)
-        logger.debug("Saving job: %s", job_pkl)
-        with job_pkl.open("wb") as f:
-            pickle.dump(job, f)
-
+        for uid in wrapper.uids:
+            job_pkl = paths._job_pkl(uid)
+            logger.debug("Saving job: %s", job_pkl)
+            with job_pkl.open("wb") as f:
+                pickle.dump(job, f)
         return job
 
 
