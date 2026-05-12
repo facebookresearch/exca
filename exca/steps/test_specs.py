@@ -245,6 +245,4 @@ def test_chain_items_per_step_batching(tmp_path: Path) -> None:
     assert result == [1000, 2000, 3000]
     expected = (1, 2, 3)  # step1 (cached): batches eagerly
     expected += (10, 100, 20, 200, 30, 300)  # step2+3 interleave lazily
-    assert tuple(calls) == expected, (
-        "cached steps batch; inline intermediates NOT bulk-materialized"
-    )
+    assert tuple(calls) == expected, "wrong computation interleaving"

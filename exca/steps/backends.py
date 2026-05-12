@@ -389,48 +389,40 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         mode = effective_mode(self.mode, batch._mode)
-        uids = list(batch._uids)
+        uids = batch._uids
 
-        # Fast path: if every uid is already cached, skip value iteration
-        # entirely — upstream generators never fire.
-        if mode == "cached" and all(
-            _CachedEntry.lookup(cd, u).status == "success" for u in uids
-        ):
-            return items.CachedItems(
-                cache_dict=cd,
-                uids=uids,
-                step_uid=paths.step_uid,
-                mode=mode,
-            )
+        # 1. Scan uids: classify each as hit / error / needs-compute.
+        to_compute: set[str] = set()
+        for uid in uids:
+            entry = _CachedEntry.lookup(cd, uid)
+            if not self._should_compute(uid, entry.status, mode):
+                if entry.status == "error":
+                    entry.result()  # raises
+                if entry.status is None:
+                    raise RuntimeError(
+                        f"No cache in read-only mode: {paths.step_uid}[{uid}]"
+                    )
+                continue
+            if entry.status is not None:
+                if mode == "retry":
+                    logger.warning("Retrying failed step: %s[%s]", paths.step_uid, uid)
+                self._clear_cache(paths=paths, cd=cd, uid=uid)
+            to_compute.add(uid)
 
-        for value, uid in zip(batch, uids):
+        # 2. Compute missing entries (skipped entirely when to_compute is empty,
+        #    so upstream generators never fire for full cache hits).
+        for value, uid in zip(batch, uids) if to_compute else ():
+            if uid not in to_compute:
+                continue
             args = () if isinstance(value, identity.NoValue) else (value,)
-            cached = _CachedEntry.lookup(cd, uid)
-            if not self._should_compute(uid, cached.status, mode):
-                if cached.status == "success":
-                    logger.debug("Cache hit: %s[%s]", paths.step_uid, uid)
-                    continue
-                if cached.status == "error":
-                    cached.result()  # raises
-                raise RuntimeError(f"No cache in read-only mode: {paths.step_uid}[{uid}]")
-
             reg: inflight.InflightRegistry | None = None
             if self._is_off_process:
                 reg = inflight.InflightRegistry(paths.cache_folder)
             with inflight.inflight_session(reg, [uid]):
-                cached = _CachedEntry.lookup(cd, uid)
-                if not self._should_compute(uid, cached.status, mode):
-                    if cached.status == "error":
-                        cached.result()
+                # Re-check after acquiring lock (another worker may have finished).
+                entry = _CachedEntry.lookup(cd, uid)
+                if entry.status == "success":
                     continue
-
-                if cached.status is not None:
-                    if mode == "retry":
-                        logger.warning(
-                            "Retrying failed step: %s[%s]", paths.step_uid, uid
-                        )
-                    self._clear_cache(paths=paths, cd=cd, uid=uid)
-
                 job = self._job(paths=paths, uid=uid)
                 if job is not None and mode == "retry" and job.done():
                     try:
@@ -442,7 +434,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                         job = None
                 elif job is not None:
                     logger.debug("Recovering job: %s", paths._job_pkl(uid))
-
                 try:
                     if job is None:
                         paths._ensure_folders(uid)
@@ -454,12 +445,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 finally:
                     if mode in ("force", "retry"):
                         self._recomputed.add(uid)
+                if _CachedEntry.lookup(cd, uid).status != "success":
+                    raise RuntimeError(
+                        f"Worker completed but cache missing: {paths.step_uid}[{uid}]"
+                    )
 
-            cached = _CachedEntry.lookup(cd, uid)
-            if cached.status != "success":
-                raise RuntimeError(
-                    f"Worker completed but cache is missing for {paths.step_uid}[{uid}]"
-                )
         return items.CachedItems(
             cache_dict=cd,
             uids=uids,
