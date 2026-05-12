@@ -100,7 +100,7 @@ def _add(error: bool, tmp_path: Path, mode: str = "cached") -> tp.Any:
 def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     """End-to-end: a failing Step caches + re-raises; retry mode clears
     cache + registry row and recomputes."""
-    handle = _add(True, tmp_path).query(5.0)
+    handle = _add(True, tmp_path).lookup(5.0)
     with pytest.raises(ValueError):
         _add(True, tmp_path).run(5.0)
 
@@ -145,7 +145,7 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
     not a stale success."""
     step = _add(False, tmp_path)
     assert step.run(5.0) == 6.0
-    handle = step.query(5.0)
+    handle = step.lookup(5.0)
     with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
         reg.record(handle.uid, ValueError("stale"), "tb")
 
@@ -154,7 +154,7 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
 
     monkeypatch.setattr(errors.ErrorRegistry, "clear", boom)
     with pytest.raises(OSError):
-        step.query(5.0).clear_cache()
+        step.lookup(5.0).clear_cache()
     monkeypatch.undo()
 
     # cd entry is gone, errors row remains → cached error on next read.
@@ -184,7 +184,7 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     """A residual errors.db row without any corresponding work (e.g. a
     cleanup that wiped the CacheDict but left the DB) is wiped + recomputed
     on `mode='retry'` — no traps."""
-    handle = _add(True, tmp_path).query(5.0)
+    handle = _add(True, tmp_path).lookup(5.0)
     handle.paths._ensure_folders(handle.uid)
     with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
         reg.record(handle.uid, RuntimeError("stale"), "tb")

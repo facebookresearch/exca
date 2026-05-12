@@ -9,7 +9,7 @@
 Step holds pydantic config and `_run`; identity (`step_uid`, `uid`)
 is computed by `exca.steps.identity` from `(self, value)` at call time.
 `_execute` routes computation inline or via backend, keyed on a
-`QueryHandle` that the Step constructs from `(uid, aligned prefix)`.
+`LookupHandle` that the Step constructs from `(uid, aligned prefix)`.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import exca
 from exca import utils
 
 from . import backends, identity
-from .backends import QueryHandle
+from .backends import LookupHandle
 from .identity import NoValue
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def _aligned_prefixes(
     return result
 
 
-def _needs_rerun(step: Step, uid: str | None, handle: QueryHandle) -> bool:
+def _needs_rerun(step: Step, uid: str | None, handle: LookupHandle) -> bool:
     """True if *step* will recompute a cached entry (pending force or retry).
     Cache miss returns False — no downstream invalidation needed."""
     if step.infra is None or uid is None:
@@ -253,7 +253,7 @@ class Step(exca.helpers.DiscriminatedModel):
         self,
         args: tuple[tp.Any, ...],
         *,
-        handle: QueryHandle = QueryHandle(),
+        handle: LookupHandle = LookupHandle(),
         uid: str | None = None,
         aligned_prefix: tp.Sequence[Step] = (),
     ) -> tp.Any:
@@ -299,14 +299,14 @@ class Step(exca.helpers.DiscriminatedModel):
             return None
         return built._exca_uid_dict_override()
 
-    def query(
+    def lookup(
         self,
         value: tp.Any = NoValue(),
         *,
         _aligned_prefix: tp.Sequence[Step] = (),
         _uid: str | None = None,
-    ) -> QueryHandle:
-        """Return a :class:`QueryHandle` for inspecting or clearing the cache.
+    ) -> LookupHandle:
+        """Return a :class:`LookupHandle` for inspecting or clearing the cache.
 
         Parameters
         ----------
@@ -315,11 +315,11 @@ class Step(exca.helpers.DiscriminatedModel):
 
         Returns
         -------
-        QueryHandle
+        LookupHandle
             Handle to inspect, retrieve, or clear the cached result.
         """
         if self.infra is None or self.infra.folder is None:
-            return QueryHandle()
+            return LookupHandle()
         if _uid is not None and not isinstance(value, NoValue):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
@@ -331,7 +331,7 @@ class Step(exca.helpers.DiscriminatedModel):
             identity.step_uid(steps),
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=cache_type)
-        return QueryHandle(paths, cd, backend=self.infra, uid=_uid)
+        return LookupHandle(paths, cd, backend=self.infra, uid=_uid)
 
     def _check_cache_type(self) -> None:
         """Validate the deprecated ``infra.cache_type`` against the Step's
@@ -348,8 +348,16 @@ class Step(exca.helpers.DiscriminatedModel):
     def with_input(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # deprecated
         raise AttributeError(
             "with_input() was removed; pass the value directly to run(value) "
-            "or query(value)"
+            "or lookup(value)"
         )
+
+    def clear_cache(self) -> None:  # deprecated
+        warnings.warn(
+            "Step.clear_cache() is deprecated, use lookup().clear_cache() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.lookup().clear_cache()
 
     # =========================================================================
     # Execution
@@ -373,7 +381,7 @@ class Step(exca.helpers.DiscriminatedModel):
             return built.run(value)
 
         self._check_cache_type()
-        handle = self.query(value)
+        handle = self.lookup(value)
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
             return self._execute(args, handle=handle)
@@ -510,23 +518,23 @@ class Chain(Step):
         return {"steps": exporter.apply(chain)["steps"]}
 
     # =========================================================================
-    # Query
+    # Lookup
     # =========================================================================
 
-    def query(
+    def lookup(
         self,
         value: tp.Any = NoValue(),
         *,
         _aligned_prefix: tp.Sequence[Step] = (),
         _uid: str | None = None,
-    ) -> QueryHandle:
+    ) -> LookupHandle:
         steps = tuple(_resolve_all(self._step_sequence()))
         if _uid is None:
             _uid = identity.materialize_uid(steps[0], value)
-        handle = super().query(_aligned_prefix=_aligned_prefix, _uid=_uid)
+        handle = super().lookup(_aligned_prefix=_aligned_prefix, _uid=_uid)
         prefixes = _aligned_prefixes(steps, _aligned_prefix)
         sub = [
-            step.query(_aligned_prefix=pfx, _uid=_uid)
+            step.lookup(_aligned_prefix=pfx, _uid=_uid)
             for step, pfx in zip(steps, prefixes)
         ]
         # Chain shares identity with last step — if the chain itself has
@@ -544,7 +552,7 @@ class Chain(Step):
         self._check_cache_type()
         first = _resolve_all(self._step_sequence())[0]
         uid = identity.materialize_uid(first, value)
-        handle = self.query(_uid=uid)
+        handle = self.lookup(_uid=uid)
         self._clear_stale_caches(uid, handle)
         args: tuple[tp.Any, ...] = () if isinstance(value, NoValue) else (value,)
         try:
@@ -553,7 +561,7 @@ class Chain(Step):
             e.add_note(f"  -> in {self!r}")
             raise
 
-    def _clear_stale_caches(self, uid: str | None, handle: QueryHandle) -> bool:
+    def _clear_stale_caches(self, uid: str | None, handle: LookupHandle) -> bool:
         """Walk handle tree, clear caches from the first pending
         force/retry onward.  Returns True if any invalidation found."""
         found = False
@@ -581,7 +589,7 @@ class Chain(Step):
         self,
         args: tuple[tp.Any, ...],
         *,
-        handle: QueryHandle = QueryHandle(),
+        handle: LookupHandle = LookupHandle(),
         uid: str | None = None,
         aligned_prefix: tp.Sequence[Step] = (),
     ) -> tp.Any:
@@ -627,7 +635,7 @@ class Chain(Step):
             if step.infra is None:
                 continue
             idx = total - 1 - k
-            sub_handle = step.query(_aligned_prefix=per_step_prefix[idx], _uid=uid)
+            sub_handle = step.lookup(_aligned_prefix=per_step_prefix[idx], _uid=uid)
             if sub_handle.cached():
                 args = (sub_handle.result(),)
                 start_idx = idx + 1
@@ -638,7 +646,7 @@ class Chain(Step):
             step_name = type(step).__name__
             logger.debug("Running step %d/%d: %s", i + 1, total, step_name)
             sub_prefix = per_step_prefix[i]
-            sub_handle = step.query(_aligned_prefix=sub_prefix, _uid=uid)
+            sub_handle = step.lookup(_aligned_prefix=sub_prefix, _uid=uid)
             try:
                 result = step._execute(
                     args,
