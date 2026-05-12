@@ -353,7 +353,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def clear_cache(self) -> None:  # deprecated
         warnings.warn(
-            "Step.clear_cache() is deprecated, use lookup(value).clear_cache() instead",
+            "Step.clear_cache() is deprecated, use lookup().clear_cache() instead",
             DeprecationWarning,
             stacklevel=2,
         )
