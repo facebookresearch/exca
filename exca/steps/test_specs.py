@@ -233,24 +233,18 @@ def test_chain_items_per_step_batching(tmp_path: Path) -> None:
     calls: list[float] = []
 
     class Track(Step):
-        coeff: float = 10.0
+        coeff: int = 10
 
-        def _run(self, x: float) -> float:
+        def _run(self, x: int) -> int:
             calls.append(x)
             return x * self.coeff
 
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(steps=[Track(infra=infra), Track(), Track(infra=infra)])
-    result = list(chain.run(items.Items([1.0, 2.0, 3.0])))
-    assert result == [1000.0, 2000.0, 3000.0]
-    assert tuple(calls) == (
-        1.0,
-        2.0,
-        3.0,  # step1 (cached): batches eagerly
-        10.0,
-        100.0,
-        20.0,
-        200.0,
-        30.0,
-        300.0,  # step2+3 interleave lazily
-    ), "cached steps batch; inline intermediates are NOT bulk-materialized"
+    result = list(chain.run(items.Items([1, 2, 3])))
+    assert result == [1000, 2000, 3000]
+    expected = (1, 2, 3)  # step1 (cached): batches eagerly
+    expected += (10, 100, 20, 200, 30, 300)  # step2+3 interleave lazily
+    assert tuple(calls) == expected, (
+        "cached steps batch; inline intermediates NOT bulk-materialized"
+    )
