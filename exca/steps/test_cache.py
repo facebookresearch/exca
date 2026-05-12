@@ -137,6 +137,22 @@ def test_mode_readonly(tmp_path: Path) -> None:
     assert chain.run() == out1
 
 
+def test_readonly_does_not_propagate(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    ro_step = conftest.Mult(coeff=2.0, infra={**infra, "mode": "read-only"})
+    downstream = conftest.Mult(coeff=3.0, infra=infra)
+    chain = Chain(steps=[ro_step, downstream])
+    # Populate both caches first.
+    warm = Chain(
+        steps=[
+            conftest.Mult(coeff=2.0, infra=infra),
+            conftest.Mult(coeff=3.0, infra=infra),
+        ]
+    )
+    assert warm.run(5.0) == 30.0
+    assert chain.run(5.0) == 30.0
+
+
 def test_mode_retry_short_circuits_on_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

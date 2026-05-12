@@ -109,7 +109,7 @@ def test_cache_key_deterministic(
 
 def test_cache_shared_across_chain_lengths(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    # Same generator (randomize=True, no seed) is the shared upstream prefix.
+    # Same generator (seed=None, non-deterministic) is the shared upstream prefix.
     # If its cache is reused, chain2's value is derivable from chain1's.
     chain1 = Chain(steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=10)])
     chain2 = Chain(
@@ -201,7 +201,7 @@ def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
     pids = [int((tmp_path / f"{k}.txt").read_text(encoding="utf-8")) for k in range(2)]
     assert pids[0] == os.getpid(), "First step should run in the main process"
     assert pids[1] != os.getpid(), "Second step should run in a sub-process"
-    # chain query fallbacks to the last step, even if execution did not use the last step backend
+    # chain query falls back to the last step's cache
     assert chain.query(5.0).result() == 7.0
 
 
@@ -223,22 +223,34 @@ def test_scalar_and_items_share_cache(tmp_path: Path, as_chain: bool) -> None:
 
 
 # -----------------------------------------------------------------------------
-# Iterator results, no upfront materialisation
+# Lazy iteration
 # "Datasets too large to fit in memory must traverse the pipeline lazily."
 # -----------------------------------------------------------------------------
 
 
-def test_items_lazy_iteration() -> None:
-    consumed: list[float] = []
+def test_chain_items_per_step_batching(tmp_path: Path) -> None:
+    """Dissolved chain batches per step: all items through step1, then step2."""
+    calls: list[float] = []
 
-    def gen() -> tp.Iterator[float]:
-        for x in [1.0, 2.0]:
-            consumed.append(x)
-            yield x
+    class Track(Step):
+        coeff: float = 10.0
 
-    it = iter(conftest.Mult(coeff=2.0).run(items.Items(gen())))
-    assert consumed == [], "run() must not consume upstream"
-    assert next(it) == 2.0
-    assert consumed == [1.0], "one item consumed per next()"
-    assert next(it) == 4.0
-    assert consumed == [1.0, 2.0]
+        def _run(self, x: float) -> float:
+            calls.append(x)
+            return x * self.coeff
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=[Track(infra=infra), Track(), Track(infra=infra)])
+    result = list(chain.run(items.Items([1.0, 2.0, 3.0])))
+    assert result == [1000.0, 2000.0, 3000.0]
+    assert tuple(calls) == (
+        1.0,
+        2.0,
+        3.0,  # step1 (cached): batches eagerly
+        10.0,
+        100.0,
+        20.0,
+        200.0,
+        30.0,
+        300.0,  # step2+3 interleave lazily
+    ), "cached steps batch; inline intermediates are NOT bulk-materialized"

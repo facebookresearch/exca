@@ -77,16 +77,7 @@ def _dispatch_step(
     mode: identity.ModeType,
 ) -> tp.Any:
     """Run one item through *step* during a chain walk."""
-    func: tp.Callable[..., tp.Any]
-    if isinstance(step, Chain):
-        func = functools.partial(
-            step._run_at,
-            uid=uid,
-            aligned_prefix=prefix,
-            initial_mode=mode,
-        )
-    else:
-        func = step._run
+    func = step._backend_func(uid=uid, prefix=prefix, mode=mode)
     if step.infra is None or step.infra.folder is None:
         return func(*args)
     paths = step._make_paths(prefix)
@@ -277,30 +268,29 @@ class Step(exca.helpers.DiscriminatedModel):
             args = () if isinstance(v, identity.NoValue) else (v,)
             yield self._run(*args)
 
+    def _backend_func(self, **_kw: tp.Any) -> tp.Callable[..., tp.Any]:
+        """Callable used by Backend and ``_dispatch_step``. Chain overrides."""
+        return self._run
+
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
 
-    def _execute(self, upstream: items.Items) -> tp.Iterator[tp.Any]:
-        """Iterate *upstream* through this step: inline or via Backend."""
+    def _execute(
+        self, upstream: items.BoundaryItems, prefix: tp.Sequence[Step] = ()
+    ) -> items.Items:
+        """Push *upstream* through this step, return result as Items."""
         self._check_cache_type()
-        try:
-            if self.infra is None or self.infra.folder is None:
-                yield from self._run_batch(upstream)
-                return
-            values: list[tp.Any] = []
-            uids: list[str] = []
-            for value in upstream:
-                uids.append(identity.materialize_uid(self, value))
-                values.append(value)
-            paths = self._make_paths()
-            batch = items.ValuesItems(
-                values=values,
-                uids=uids,
-                step_uid=paths.step_uid,
+        if self.infra is None or self.infra.folder is None:
+            return items.ValuesItems(
+                values=self._run_batch(upstream),
+                uids=upstream._uids,
+                step_uid=upstream._step_uid,
                 mode=upstream._mode,
             )
-            yield from self.infra._run(self._run, batch, paths=paths)
+        try:
+            paths = self._make_paths(prefix=prefix)
+            return self.infra._run(self._run, upstream, paths=paths)
         except Exception as e:
             e.add_note(f"  -> in {self!r}")
             raise
@@ -423,8 +413,19 @@ class Step(exca.helpers.DiscriminatedModel):
             return built.run(value)
 
         is_items = isinstance(value, items.Items)
-        upstream = value if is_items else items.Items([value])
-        result = items.StepItems(self, upstream)
+        inp = value if is_items else items.Items([value])
+        # Materialize uids at entrance so _execute always receives
+        # BoundaryItems and never drains upstream generators for uids.
+        if not isinstance(inp, items.BoundaryItems):
+            values = list(inp)
+            uids = [identity.materialize_uid(self, v) for v in values]
+            inp = items.ValuesItems(
+                values=values,
+                uids=uids,
+                step_uid=identity.step_uid(list(self._aligned_step())),
+                mode=inp._mode,
+            )
+        result = items.StepItems(self, inp)
         if is_items:
             return result
         return next(iter(result))
@@ -600,59 +601,55 @@ class Chain(Step):
                 mode = step._descendant_mode(mode)
         return mode
 
-    def _execute(self, upstream: items.Items) -> tp.Iterator[tp.Any]:
-        """Thread Items through chain levels.
+    def _execute(
+        self, upstream: items.BoundaryItems, prefix: tp.Sequence[Step] = ()
+    ) -> items.Items:
+        """Push *upstream* through the chain, return result as Items.
 
-        One-level (self.infra set): compute effective mode from children +
-        upstream, dispatch via Backend per item with that mode.
-        Dissolved (self.infra is None): per-item through _run_at with
-        upstream mode for cache resume and propagation.
+        One-level (self.infra set): batch-dispatch via Backend.
+        Dissolved (self.infra is None): compose child _execute calls.
         """
         self._check_cache_type()
         steps = tuple(_resolve_all(self._step_sequence()))
-        first = steps[0]
-        upstream_mode = upstream._mode
 
         if self.infra is not None and self.infra.folder is not None:
-            # Effective mode from all descendants + upstream.
             chain_eff = backends.effective_mode(
-                self.infra.mode, self._descendant_mode(upstream_mode)
+                self.infra.mode, self._descendant_mode(upstream._mode)
             )
-            paths = self._make_paths()
-            func = functools.partial(self._run_at, initial_mode=chain_eff)
-            values: list[tp.Any] = []
-            uids: list[str] = []
-            for value in upstream:
-                uids.append(identity.materialize_uid(first, value))
-                values.append(value)
+            paths = self._make_paths(prefix=prefix)
+            func = self._backend_func(mode=chain_eff)
+            # Propagate descendant mode so Backend sees force/retry.
             batch = items.ValuesItems(
-                values=values,
-                uids=uids,
-                step_uid=paths.step_uid,
+                values=upstream,
+                uids=upstream._uids,
+                step_uid=upstream._step_uid,
                 mode=chain_eff,
             )
             try:
-                yield from self.infra._run(func, batch, paths=paths)
+                return self.infra._run(func, batch, paths=paths)
             except Exception as e:
                 e.add_note(f"  -> in {self!r}")
                 raise
-            return
 
-        # Dissolved: per-item, lazy.
-        for value in upstream:
-            uid = identity.materialize_uid(first, value)
-            args: tuple[tp.Any, ...] = (
-                () if isinstance(value, identity.NoValue) else (value,)
-            )
-            try:
-                yield self._run_at(*args, uid=uid, initial_mode=upstream_mode)
-            except Exception as e:
-                e.add_note(f"  -> in {self!r}")
-                raise
+        # Dissolved: compose child _execute calls.
+        current: items.Items = upstream
+        accumulated = list(prefix)
+        for step in steps:
+            current = step._execute(current, prefix=tuple(accumulated))
+            accumulated.append(step)
+        return current
+
+    def _backend_func(self, **kw: tp.Any) -> tp.Callable[..., tp.Any]:
+        """Bind chain-walk context so Backend calls ``_run_at`` correctly."""
+        return functools.partial(
+            self._run_at,
+            uid=kw.get("uid"),
+            aligned_prefix=kw.get("prefix", ()),
+            initial_mode=kw.get("mode", "cached"),
+        )
 
     def _run(self, *args: tp.Any) -> tp.Any:
-        # Bridges `_run(*args)` to `_run_at`; also sets `has_run`
-        # in `__pydantic_init_subclass__`.
+        # Bridges `_run(*args)` to `_run_at`; read by `__pydantic_init_subclass__`
         return self._run_at(*args)
 
     def _run_at(

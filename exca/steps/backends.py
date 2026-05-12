@@ -149,9 +149,11 @@ class QueryHandle:
 def effective_mode(
     own: identity.ModeType, propagated: identity.ModeType
 ) -> identity.ModeType:
-    """Most aggressive mode wins; ``read-only`` always wins (refuses to compute)."""
+    """Most aggressive mode wins; ``read-only`` is local-only (does not propagate)."""
     if own == "read-only":
         return "read-only"
+    if propagated == "read-only":
+        propagated = "cached"
     return max(own, propagated, key=("cached", "retry", "force").index)
 
 
@@ -376,24 +378,33 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _run(
         self,
         func: tp.Callable[..., tp.Any],
-        batch: tp.Any,
+        batch: items.BoundaryItems,
         *,
         paths: StepPaths,
     ) -> items.CachedItems:
         """Execute *func* for each item in *batch*, caching per uid.
 
-        *batch* must be iterable (yields values) and expose ``._uids``
-        (sequence of cache keys) and ``._mode`` (upstream execution mode).
         Returns a :class:`~items.CachedItems` backed by the cache —
         values are read from disk on iteration, never buffered in memory.
         """
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         mode = effective_mode(self.mode, batch._mode)
-        uids: list[str] = []
-        for value, uid in zip(batch, batch._uids):
-            uids.append(uid)
+        uids = list(batch._uids)
+
+        # Fast path: if every uid is already cached, skip value iteration
+        # entirely — upstream generators never fire.
+        if mode == "cached" and all(
+            _CachedEntry.lookup(cd, u).status == "success" for u in uids
+        ):
+            return items.CachedItems(
+                cache_dict=cd,
+                uids=uids,
+                step_uid=paths.step_uid,
+                mode=mode,
+            )
+
+        for value, uid in zip(batch, uids):
             args = () if isinstance(value, identity.NoValue) else (value,)
-            # Pre-lock fast path: cached / error / read-only miss.
             cached = _CachedEntry.lookup(cd, uid)
             if not self._should_compute(uid, cached.status, mode):
                 if cached.status == "success":

@@ -35,7 +35,6 @@ class Items:
     """User-facing root: wraps an ``Iterable[Any]``.
 
     ``Items()`` with no arguments is equivalent to ``Items([NoValue()])``.
-    ``_mode`` carries the upstream execution mode through the pipeline.
     """
 
     def __init__(
@@ -54,16 +53,12 @@ class Items:
 
 
 class StepItems(Items):
-    """Lazy graph node: triggers execution when iterated.
-
-    Constructed by ``step.run(items)``; iteration enters ``step._execute``.
-    ``_mode`` is the effective mode after this step (max of upstream and step).
-    """
+    """Lazy graph node: triggers execution when iterated."""
 
     def __init__(self, step: Step, upstream: Items) -> None:
         self._step = step
         self._upstream = upstream
-        from .backends import effective_mode
+        from .backends import effective_mode  # circular: backends imports items
 
         step_mode = step.infra.mode if step.infra is not None else "cached"
         self._mode = effective_mode(step_mode, upstream._mode)
@@ -75,8 +70,6 @@ class StepItems(Items):
 class BoundaryItems(Items):
     """Chunk identity for backend dispatch: type-level boundary that
     prevents ``StepItems`` from reaching ``Backend._run``.
-
-    All fields set once at construction.
     """
 
     def __init__(
@@ -100,13 +93,13 @@ class ValuesItems(BoundaryItems):
     def __init__(
         self,
         *,
-        values: tp.Sequence[tp.Any],
+        values: tp.Iterable[tp.Any],
         uids: tp.Sequence[str],
         step_uid: str,
         mode: identity.ModeType = "cached",
     ) -> None:
         super().__init__(uids=uids, step_uid=step_uid, mode=mode)
-        self._values = values
+        self._values = values  # may be a generator (single iteration)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         return iter(self._values)
