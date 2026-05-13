@@ -4,6 +4,9 @@ env:
 
 on: [push]
 
+permissions:
+  contents: read
+
 jobs:
   run-on-ubuntu:
     runs-on: ubuntu-latest
