@@ -58,7 +58,7 @@ def _resolve_all(steps: tp.Iterable[Step]) -> list[Step]:
 
 
 def _flatten_levels(steps: tp.Sequence[Step]) -> list[Step]:
-    """Chains without infra dissolve into children; chains with infra stay as one level."""
+    """Chains without infra flatten into children; chains with infra stay as one level."""
     out: list[Step] = []
     for s in steps:
         if isinstance(s, Chain) and s.infra is None:
@@ -515,14 +515,14 @@ class Chain(Step):
 
     def _is_generator(self) -> bool:
         """Chain is a generator if its first step is a generator."""
-        steps = self._step_sequence()
+        steps = _resolve_all(self._step_sequence())
         return steps[0]._is_generator() if steps else True
 
     def _resolve_cache_type(self) -> str | None:
         # Chain shares a cache entry with last step, so formats must agree.
         if self.CACHE_TYPE is not None:
             return self.CACHE_TYPE
-        seq = self._step_sequence()
+        seq = _resolve_all(self._step_sequence())
         return seq[-1]._resolve_cache_type() if seq else None
 
     def _aligned_step(self) -> list[Step]:
@@ -603,7 +603,7 @@ class Chain(Step):
 
     def _has_pending_recompute(self, uids: tp.Sequence[str]) -> bool:
         """True if any descendant Backend still needs force/retry for a uid."""
-        for step in self._step_sequence():
+        for step in _resolve_all(self._step_sequence()):
             if isinstance(step, Chain) and step._has_pending_recompute(uids):
                 return True
             if step.infra is not None and step.infra.mode not in ("cached", "read-only"):

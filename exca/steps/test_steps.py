@@ -365,6 +365,23 @@ def test_resolve_step_uid_consistency() -> None:
     assert step_uid == chain_uid
 
 
+def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
+    inner = conftest.AddWithTransforms(  # resolves to Chain([stripped, Mult(force)])
+        value=1,
+        transforms=[
+            conftest.Mult(
+                coeff=2,
+                infra={"backend": "Cached", "folder": tmp_path, "mode": "force"},
+            )
+        ],
+    )
+    chain = Chain(
+        steps=[inner],
+        infra={"backend": "Cached", "folder": tmp_path / "chain"},
+    )
+    assert chain._has_pending_recompute(["uid0"]), "Did not resolve Mult mode"
+
+
 # =============================================================================
 # Error notes (Python 3.11+)
 # =============================================================================
@@ -530,8 +547,8 @@ def test_chain_rejects_off_process_with_uncached_upstream(
 
 
 def test_chain_off_process_validation_walks_nested_chains(tmp_path: Path) -> None:
-    # Inner-without-infra dissolves into outer (last inner step is the upstream
-    # checked); inner-with-infra stays as one level whose cache satisfies it.
+    # Inner chain without infra flattens into outer (last inner step is the
+    # upstream checked); inner with infra stays as one level whose cache satisfies it.
     cached: tp.Any = {"backend": "Cached", "folder": tmp_path}
     inner_uncached = Chain(steps=[_step(tmp_path, 2.0, None), _step(tmp_path, 3.0, None)])
     inner_cached = Chain(

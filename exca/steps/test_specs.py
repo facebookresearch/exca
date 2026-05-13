@@ -62,7 +62,6 @@ def test_downstream_cache_skips_upstream(tmp_path: Path, with_cache: bool) -> No
 
 @pytest.mark.parametrize("as_chain", [False, True])
 def test_heterogeneous_items_cache(tmp_path: Path, as_chain: bool) -> None:
-    """Only uncached items trigger _run."""
     calls: list[float] = []
 
     class Counting(Step):
@@ -141,9 +140,9 @@ def test_cache_shared_across_chain_lengths(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mode,recomputes", [("cached", False), ("force", True)])
-@pytest.mark.parametrize("dissolved", [False, True])
+@pytest.mark.parametrize("chain_infra", [False, True])
 def test_force_recomputes_and_propagates(
-    tmp_path: Path, mode: str, recomputes: bool, dissolved: bool
+    tmp_path: Path, mode: str, recomputes: bool, chain_infra: bool
 ) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(
@@ -151,7 +150,7 @@ def test_force_recomputes_and_propagates(
             conftest.RandomGenerator(infra=infra),
             conftest.Add(randomize=True, infra=infra),
         ],
-        infra=None if dissolved else infra,
+        infra=infra if chain_infra else None,
     )
     out1 = chain.run()
     gen = chain._step_sequence()[0]
@@ -190,9 +189,9 @@ def test_exec_params_are_model_config_not_run_kwargs(tmp_path: Path) -> None:
 
 
 # -----------------------------------------------------------------------------
-# Chain dissolution
-# "chain.infra = None → chain dissolves into children; each child runs with
-#  its own backend. The chain does not route through any child's backend."
+# Chain without infra
+# "chain.infra = None → each child runs with its own backend.
+#  The chain does not cache or route through any child's backend."
 # -----------------------------------------------------------------------------
 
 
@@ -243,7 +242,6 @@ def test_scalar_and_items_share_cache(tmp_path: Path, as_chain: bool) -> None:
 
 
 def test_chain_items_per_step_batching(tmp_path: Path) -> None:
-    """Dissolved chain batches per step: all items through step1, then step2."""
     calls: list[float] = []
 
     class Track(Step):
