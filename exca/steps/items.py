@@ -44,12 +44,27 @@ class Items:
         return iter(self._values)
 
 
-def _annotated_batch(step: Step, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+def _annotated_batch(
+    step: Step,
+    values: tp.Iterable[tp.Any],
+    *,
+    uids: tp.Sequence[str] | None = None,
+) -> tp.Iterator[tp.Any]:
+    n_out = 0
     try:
-        yield from step._run_batch(values)
+        for result in step._run_batch(values):
+            n_out += 1
+            yield result
     except Exception as e:
-        e.add_note(f"  -> while running step {step!r}")
+        uid = uids[n_out] if uids is not None and n_out < len(uids) else None
+        e.add_note(f"  -> while running step {step!r}" + (f"[{uid}]" if uid else ""))
+        if uid is not None:
+            e._failed_uid = uid  # type: ignore[attr-defined]
         raise
+    if uids is not None and n_out < len(uids):
+        raise RuntimeError(
+            f"{step!r}._run_batch yielded {n_out} results for {len(uids)} inputs"
+        )
 
 
 class StepItems(Items):
@@ -76,6 +91,11 @@ class StepItems(Items):
         self._upstream = tuple(upstream)
         self._pending = tuple(pending)
         self._mode = mode
+
+    def __len__(self) -> int:
+        if self._subset_uids is not None:
+            return len(self._subset_uids)
+        return len(self._source)
 
     @property
     def uids(self) -> tp.Sequence[str]:
@@ -116,6 +136,7 @@ class StepItems(Items):
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         current: tp.Iterable[tp.Any] = (self._source[uid] for uid in self.uids)
+        uids = self.uids
         for step in self._pending:
-            current = _annotated_batch(step, current)
+            current = _annotated_batch(step, current, uids=uids)
         return iter(current)

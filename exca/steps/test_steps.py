@@ -379,7 +379,7 @@ def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
         steps=[inner],
         infra={"backend": "Cached", "folder": tmp_path / "chain"},
     )
-    assert chain._has_pending_recompute(["uid0"]), "Did not resolve Mult mode"
+    assert chain._inner_mode() == "force", "Did not resolve Mult mode"
 
 
 # =============================================================================

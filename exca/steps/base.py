@@ -243,14 +243,19 @@ class Step(exca.helpers.DiscriminatedModel):
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
 
+    def _inner_mode(self) -> identity.ModeType:
+        """Effective mode considering resolved sub-steps."""
+        resolved = self._resolve_step()
+        if resolved is not self:
+            return resolved._inner_mode()
+        return "cached" if self.infra is None else self.infra.mode
+
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         """Push *batch* through this step, return result as StepItems."""
         self._check_cache_type()
         if self.infra is None or self.infra.folder is None:
             return batch.apply_step(self)
-        upstream = tuple(batch._upstream) + tuple(self._aligned_step())
-        paths = self._make_paths(upstream)
-        return self.infra._run(self._run_batch, batch, paths=paths, upstream=upstream)
+        return self.infra._run(self, batch)
 
     def _propagate_folder(self, parent_folder: Path) -> None:
         """Apply ``parent_folder`` to own ``infra`` when unset.
@@ -565,27 +570,15 @@ class Chain(Step):
         # _walk_steps returns a StepItems; iterating it composes transforms.
         yield from self._walk_steps(values)  # type: ignore[arg-type]
 
-    def _has_pending_recompute(self, uids: tp.Sequence[str]) -> bool:
-        """True if any descendant Backend still needs force/retry for a uid."""
-        for step in _resolve_all(self._step_sequence()):
-            if isinstance(step, Chain) and step._has_pending_recompute(uids):
-                return True
-            if step.infra is not None and step.infra.mode not in ("cached", "read-only"):
-                if any(uid not in step.infra._recomputed for uid in uids):
-                    return True
-        return False
+    def _inner_mode(self) -> identity.ModeType:
+        own: identity.ModeType = "cached" if self.infra is None else self.infra.mode
+        return backends.effective_mode(
+            own, *(s._inner_mode() for s in _resolve_all(self._step_sequence()))
+        )
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        """Inline: walk sub-steps directly. Backend: clear stale caches
-        from pending force/retry, then delegate to Step._dispatch."""
         if self.infra is None or self.infra.folder is None:
             return self._walk_steps(batch)
-        if self._has_pending_recompute(batch.uids):
-            aligned = tuple(batch._upstream) + tuple(self._aligned_step())
-            paths = self._make_paths(aligned)
-            cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-            for uid in batch.uids:
-                self.infra._clear_cache(paths=paths, cd=cd, uid=uid)
         return super()._dispatch(batch)
 
     def forward(

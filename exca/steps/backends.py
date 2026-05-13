@@ -147,14 +147,15 @@ class LookupHandle:
 
 
 def effective_mode(
-    own: identity.ModeType, propagated: identity.ModeType
+    own: identity.ModeType, *propagated: identity.ModeType
 ) -> identity.ModeType:
     """Most aggressive mode wins; ``read-only`` is local-only (does not propagate)."""
     if own == "read-only":
         return "read-only"
-    if propagated == "read-only":
-        propagated = "cached"
-    return max(own, propagated, key=("cached", "retry", "force").index)
+    modes = [own]
+    for m in propagated:
+        modes.append("cached" if m == "read-only" else m)
+    return max(modes, key=("cached", "retry", "force").index)
 
 
 @dataclasses.dataclass
@@ -226,44 +227,36 @@ class _CachedEntry:
 
 
 class _CachingCall:
-    """Worker-side wrapper: runs a batch function, writes each result to cache."""
+    """Worker-side wrapper: runs a step's batch function, writes each result to cache."""
 
-    def __init__(
-        self,
-        run_batch: tp.Callable[[tp.Iterable[tp.Any]], tp.Iterator[tp.Any]],
-        cache_dict: exca.cachedict.CacheDict[tp.Any],
-        uids: tp.Sequence[str],
-        step_uid: str,
-    ):
-        self.run_batch = run_batch
+    def __init__(self, step: tp.Any, cache_dict: exca.cachedict.CacheDict[tp.Any]):
+        self.step = step
         self.cache_dict = cache_dict
-        self.uids = uids
-        self.step_uid = step_uid
 
     # Returns None: the driver re-reads from cache, so the result never
     # round-trips through a job pickle (matters for submitit).
-    def __call__(self, batch: tp.Any) -> None:
+    def __call__(self, batch: items.StepItems) -> None:
         folder = self.cache_dict.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
-        results = iter(self.run_batch(batch))
-        for uid in self.uids:
-            try:
-                result = next(results)
-            except StopIteration:
-                raise RuntimeError(
-                    f"run_batch yielded fewer results than items ({len(self.uids)})"
-                ) from None
-            except Exception as e:
-                if folder is not None:
-                    e.add_note(f"  -> cached as {self.step_uid}[{uid}]")
-                    tb = "".join(traceback.format_exception(e))
-                    with errors.ErrorRegistry(folder) as reg:
-                        reg.record(uid, e, tb)
-                raise
-            if uid not in self.cache_dict:
-                with self.cache_dict.write():
-                    self.cache_dict[uid] = result
+        uids = batch.uids
+        results = items._annotated_batch(self.step, batch, uids=uids)
+        try:
+            with self.cache_dict.write():
+                for uid, result in zip(uids, results):
+                    if uid not in self.cache_dict:
+                        self.cache_dict[uid] = result
+        except Exception as e:
+            failed_uid: str | None = getattr(e, "_failed_uid", None)
+            if folder is not None and failed_uid is not None:
+                step_uid = identity.step_uid(
+                    tuple(batch._upstream) + tuple(self.step._aligned_step())
+                )
+                e.add_note(f"  -> cached as {step_uid}[{failed_uid}]")
+                tb = "".join(traceback.format_exception(e))
+                with errors.ErrorRegistry(folder) as reg:
+                    reg.record(failed_uid, e, tb)
+            raise
 
 
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
@@ -381,21 +374,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 return pickle.load(f)  # type: ignore
         return None
 
-    def _run(
-        self,
-        run_batch: tp.Callable[[tp.Iterable[tp.Any]], tp.Iterator[tp.Any]],
-        batch: items.StepItems,
-        *,
-        paths: StepPaths,
-        upstream: tp.Sequence[tp.Any] = (),
-    ) -> items.StepItems:
-        """Execute *run_batch* for uncached items, caching per uid.
+    def _run(self, step: tp.Any, batch: items.StepItems) -> items.StepItems:
+        """Execute *step* for uncached items, caching per uid.
 
         Returns a :class:`~items.StepItems` backed by the cache —
         values are read from disk on iteration, never buffered in memory.
         """
+        upstream = tuple(batch._upstream) + tuple(step._aligned_step())
+        paths = step._make_paths(upstream)
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        mode = effective_mode(self.mode, batch._mode)
+        mode = effective_mode(step._inner_mode(), batch._mode)
         uids = batch.uids
 
         # 1. Scan uids: classify each as hit / error / needs-compute.
@@ -431,7 +419,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 still_uids = [u for u in filtered_uids if recheck[u] != "success"]
                 if still_uids:
                     filtered = batch.select(still_uids)
-                    wrapper = _CachingCall(run_batch, cd, still_uids, paths.step_uid)
+                    wrapper = _CachingCall(step, cd)
                     try:
                         job = self._submit(wrapper, filtered, paths=paths)
                         if reg is not None:
@@ -499,11 +487,12 @@ class _SubmititBackend(Backend):
     def _submit(self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths) -> tp.Any:
         # No materialization needed: dict sources are small entrance values,
         # CacheDict pickles as a folder path (worker reads from disk).
+        batch: items.StepItems = args[0]
         executor = submitit.AutoExecutor(folder=paths._logs_folder, cluster=self._CLUSTER)
         executor.update_parameters(**self._submitit_params())
         with submitit.helpers.clean_env():
             job = executor.submit(wrapper, *args)
-        for uid in wrapper.uids:
+        for uid in batch.uids:
             job_pkl = paths._job_pkl(uid)
             logger.debug("Saving job: %s", job_pkl)
             with job_pkl.open("wb") as f:
