@@ -258,3 +258,65 @@ def test_chain_items_per_step_batching(tmp_path: Path) -> None:
     expected = (1, 2, 3)  # step1 (cached): batches eagerly
     expected += (10, 100, 20, 200, 30, 300)  # step2+3 interleave lazily
     assert tuple(calls) == expected, "wrong computation interleaving"
+
+
+# -----------------------------------------------------------------------------
+# Fail fast; partial results cached
+# "A batch failure caches items that completed before the error.
+#  Retry only recomputes uncached items."
+# -----------------------------------------------------------------------------
+
+
+def test_fail_fast_partial_cache(tmp_path: Path) -> None:
+    calls: list[int] = []
+
+    class FailOnValue(Step):
+        coeff: int = 10
+        fail_value: int | None = None
+
+        @classmethod
+        def _exclude_from_cls_uid(cls) -> list[str]:
+            return super()._exclude_from_cls_uid() + ["fail_value"]
+
+        def _run(self, x: int) -> int:
+            calls.append(x)
+            if self.fail_value is not None and x == self.fail_value:
+                raise ValueError("boom")
+            return x * self.coeff
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    with pytest.raises(ValueError):
+        list(FailOnValue(fail_value=3, infra=infra).run(items.Items([1, 2, 3, 4, 5])))
+
+    calls.clear()
+    infra["mode"] = "retry"
+    result = list(FailOnValue(infra=infra).run(items.Items([1, 2, 3, 4, 5])))
+    assert result == [10, 20, 30, 40, 50]
+    assert calls == [3, 4, 5], "items before failure must be cached"
+
+
+# -----------------------------------------------------------------------------
+# Force-once per uid per Backend-instance lifetime
+# "Under mode='force', a uid is recomputed once; subsequent runs reuse cache."
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("as_chain", [False, True])
+def test_force_once_per_lifetime(tmp_path: Path, as_chain: bool) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    if as_chain:
+        step: Step = Chain(
+            steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)],
+            infra=infra,
+        )
+    else:
+        step = conftest.RandomGenerator(infra=infra)
+    out1 = step.run()
+
+    assert step.infra is not None
+    step.infra.mode = "force"  # type: ignore[assignment]
+    out2 = step.run()
+    assert out1 != out2
+
+    out3 = step.run()
+    assert out2 == out3, "force is one-shot per uid"
