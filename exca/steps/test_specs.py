@@ -95,7 +95,7 @@ def test_cache_key_deterministic(
     step: tp.Any = conftest.Mult(coeff=3.0, infra=infra)
     if as_chain:
         step = Chain(steps=[conftest.Mult(coeff=3.0)], infra=infra)
-    handle = step.query(5.0)
+    handle = step.lookup(5.0)
     assert handle.paths.step_uid == "coeff=3,type=Mult-4c6b8f5f"
     assert handle.uid == "value=5-39801320"
 
@@ -170,7 +170,7 @@ def test_exec_params_are_model_config_not_run_kwargs(tmp_path: Path) -> None:
     step.run()  # populate
     step.infra.mode = "read-only"  # toggle behavior purely via model state
     assert step.run() == step.run()  # still works from cache
-    step.query().clear_cache()
+    step.lookup().clear_cache()
     with pytest.raises(RuntimeError, match="read-only"):
         step.run()
 
@@ -202,7 +202,7 @@ def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
     assert pids[0] == os.getpid(), "First step should run in the main process"
     assert pids[1] != os.getpid(), "Second step should run in a sub-process"
     # chain query falls back to the last step's cache
-    assert chain.query(5.0).result() == 7.0
+    assert chain.lookup(5.0).result() == 7.0
 
 
 # -----------------------------------------------------------------------------

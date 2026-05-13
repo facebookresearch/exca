@@ -9,7 +9,7 @@
 Step holds pydantic config and `_run`; identity (`step_uid`, `uid`)
 is computed by `exca.steps.identity` from `(self, value)` at call time.
 `_execute` routes computation inline or via backend, keyed on a
-`QueryHandle` that the Step constructs from `(uid, aligned prefix)`.
+`LookupHandle` that the Step constructs from `(uid, aligned prefix)`.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import exca
 from exca import utils
 
 from . import backends, identity, items
-from .backends import QueryHandle
+from .backends import LookupHandle
 
 logger = logging.getLogger(__name__)
 
@@ -313,14 +313,14 @@ class Step(exca.helpers.DiscriminatedModel):
             return None
         return built._exca_uid_dict_override()
 
-    def query(
+    def lookup(
         self,
         value: tp.Any = identity.NoValue(),
         *,
         _aligned_prefix: tp.Sequence[Step] = (),
         _uid: str | None = None,
-    ) -> QueryHandle:
-        """Return a :class:`QueryHandle` for inspecting or clearing the cache.
+    ) -> LookupHandle:
+        """Return a :class:`LookupHandle` for inspecting or clearing the cache.
 
         Parameters
         ----------
@@ -329,11 +329,11 @@ class Step(exca.helpers.DiscriminatedModel):
 
         Returns
         -------
-        QueryHandle
+        LookupHandle
             Handle to inspect, retrieve, or clear the cached result.
         """
         if self.infra is None or self.infra.folder is None:
-            return QueryHandle()
+            return LookupHandle()
         if _uid is not None and not isinstance(value, identity.NoValue):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
@@ -345,7 +345,7 @@ class Step(exca.helpers.DiscriminatedModel):
             identity.step_uid(steps),
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=cache_type)
-        return QueryHandle(paths, cd, backend=self.infra, uid=_uid)
+        return LookupHandle(paths, cd, backend=self.infra, uid=_uid)
 
     def _check_cache_type(self) -> None:
         """Validate the deprecated ``infra.cache_type`` against the Step's
@@ -362,7 +362,7 @@ class Step(exca.helpers.DiscriminatedModel):
     def with_input(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # deprecated
         raise AttributeError(
             "with_input() was removed; pass the value directly to run(value) "
-            "or query(value)"
+            "or lookup(value)"
         )
 
     # =========================================================================
@@ -386,20 +386,21 @@ class Step(exca.helpers.DiscriminatedModel):
         if built is not self:
             return built.run(value)
 
+        if isinstance(value, items.BoundaryItems):
+            raise TypeError("run() expects a plain value or Items, not BoundaryItems")
         is_items = isinstance(value, items.Items)
         inp = value if is_items else items.Items([value])
         # Materialize uids at entrance so _execute always receives
         # BoundaryItems and never drains upstream generators for uids.
-        if not isinstance(inp, items.BoundaryItems):
-            values = list(inp)
-            uids = [identity.materialize_uid(self, v) for v in values]
-            inp = items.ValuesItems(
-                values=values,
-                uids=uids,
-                step_uid=identity.step_uid(list(self._aligned_step())),
-                mode=inp._mode,
-            )
-        result = items.StepItems(self, inp)
+        values = list(inp)
+        uids = [identity.materialize_uid(self, v) for v in values]
+        boundary = items.ValuesItems(
+            values=values,
+            uids=uids,
+            step_uid=identity.step_uid(list(self._aligned_step())),
+            mode=inp._mode,
+        )
+        result = items.StepItems(self, boundary)
         if is_items:
             return result
         return next(iter(result))
@@ -540,23 +541,23 @@ class Chain(Step):
         return {"steps": exporter.apply(chain)["steps"]}
 
     # =========================================================================
-    # Query
+    # Lookup
     # =========================================================================
 
-    def query(
+    def lookup(
         self,
         value: tp.Any = identity.NoValue(),
         *,
         _aligned_prefix: tp.Sequence[Step] = (),
         _uid: str | None = None,
-    ) -> QueryHandle:
+    ) -> LookupHandle:
         steps = tuple(_resolve_all(self._step_sequence()))
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
-        handle = super().query(_aligned_prefix=_aligned_prefix, _uid=_uid)
+        handle = super().lookup(_aligned_prefix=_aligned_prefix, _uid=_uid)
         prefixes = _aligned_prefixes(steps, _aligned_prefix)
         sub = [
-            step.query(_aligned_prefix=pfx, _uid=_uid)
+            step.lookup(_aligned_prefix=pfx, _uid=_uid)
             for step, pfx in zip(steps, prefixes)
         ]
         # Chain shares identity with last step — if the chain itself has

@@ -7,8 +7,8 @@
 """Backend classes with integrated caching.
 
 Backend executes a Step's `_run` and caches the result keyed by a
-`QueryHandle` (paths + CacheDict) constructed caller-side by
-`Step.query`. Backend stays Step-agnostic — no back-ref, no value
+`LookupHandle` (paths + CacheDict) constructed caller-side by
+`Step.lookup`. Backend stays Step-agnostic — no back-ref, no value
 inspection, no chain-topology walks.
 """
 
@@ -71,10 +71,10 @@ class StepPaths:
         self.job_folder(uid).mkdir(parents=True, exist_ok=True)
 
 
-class QueryHandle:
+class LookupHandle:
     """Cache handle for a ``(step, value)`` pair.
 
-    Returned by :meth:`Step.query`. Provides read-only access to the
+    Returned by :meth:`Step.lookup`. Provides read-only access to the
     cache entry and its on-disk paths.
     """
 
@@ -84,13 +84,13 @@ class QueryHandle:
         cache_dict: exca.cachedict.CacheDict[tp.Any] | None = None,
         backend: Backend | None = None,
         uid: str = "",
-        sub_handles: tuple[QueryHandle, ...] = (),
+        sub_handles: tuple[LookupHandle, ...] = (),
     ) -> None:
         self._paths = paths
         self._cache_dict = cache_dict
         self._backend = backend
         self.uid = uid
-        # Populated by container steps (Chain, etc.) at query time.
+        # Populated by container steps (Chain, etc.) at lookup time.
         self._sub_handles = sub_handles
 
     @property

@@ -39,15 +39,15 @@ def test_basic_cache(tmp_path: Path, use_chain: bool, use_input: bool) -> None:
     # Run with or without input
     args = (5.0,) if use_input else ()
     result1 = step.run(*args)
-    assert step.query(*args).cached()
+    assert step.lookup(*args).cached()
 
     # Same result from cache (re-running hits the cache).
     result2 = step.run(*args)
     assert result1 == result2
-    assert step.query(*args).result() == result1
+    assert step.lookup(*args).result() == result1
 
     # Clear and recompute gives different result
-    step.query(*args).clear_cache()
+    step.lookup(*args).clear_cache()
     result3 = step.run(*args)
     assert result3 != result1
 
@@ -68,10 +68,10 @@ def test_intermediate_cache(tmp_path: Path) -> None:
 
     # Intermediate cache exists
     gen_step = chain._step_sequence()[0]
-    assert gen_step.query().cached()
+    assert gen_step.lookup().cached()
 
     # Clear chain cache but keep intermediate
-    chain.query().clear_cache(recursive=False)
+    chain.lookup().clear_cache(recursive=False)
     result2 = chain.run()
     assert result1 == result2  # Same because generator cached
 
@@ -90,7 +90,7 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     assert chain.run() == 2.0  # (0 + 1) * 2
 
     # Chain shares cache with last step; cache_type cascades from CACHE_TYPE.
-    chain_handle = chain.query()
+    chain_handle = chain.lookup()
     assert chain_handle.cached()
 
 
@@ -386,12 +386,12 @@ def test_clear_cache_recursive(tmp_path: Path) -> None:
     out1 = chain.run()
 
     # Clear chain cache but keep intermediate
-    chain.query().clear_cache(recursive=False)
+    chain.lookup().clear_cache(recursive=False)
     out2 = chain.run()
     assert out2 == pytest.approx(out1, abs=1e-9)  # Generator still cached
 
     # Clear all caches (recursive=True is the default)
-    chain.query().clear_cache()
+    chain.lookup().clear_cache()
     out3 = chain.run()
     assert out3 != pytest.approx(out1, abs=1e-9)  # New random value
 
@@ -404,9 +404,9 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     step = conftest.Add(value=10, randomize=True, infra=infra)
 
     out1 = step.run()
-    assert step.query().cached()
+    assert step.lookup().cached()
 
-    step.query().clear_cache()
+    step.lookup().clear_cache()
     out2 = step.run()
     assert out2 != out1
 
@@ -438,7 +438,7 @@ def test_complex_input_caching(tmp_path: Path) -> None:
     assert step.run(data) != step.run(12)
 
     # Check the uid is deterministic
-    handle = step.query(data)
+    handle = step.lookup(data)
     assert handle.uid == "value=(1,{a=12})-240df6f3", handle.uid
 
 
@@ -453,8 +453,8 @@ def test_item_uid_override_in_chain(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = Custom(infra=infra)
     chain = Chain(steps=[Custom(), conftest.Mult(coeff=2)], infra=infra)
-    assert step.query(1).uid == "custom"
-    assert chain.query(1).uid == "custom", "chain should use first step's item_uid"
+    assert step.lookup(1).uid == "custom"
+    assert chain.lookup(1).uid == "custom", "chain should use first step's item_uid"
 
 
 def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
@@ -482,7 +482,7 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     # All cached sub-steps use the no-input key.
     for i, step in enumerate(chain._step_sequence()):
         if step.infra is not None:
-            assert identity._NOINPUT_UID in chain[: i + 1].query().cache_dict
+            assert identity._NOINPUT_UID in chain[: i + 1].lookup().cache_dict
 
     call_counts.clear()
     step_b = chain._step_sequence()[1]

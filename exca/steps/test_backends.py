@@ -60,7 +60,7 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     assert out1 == out2
 
     # Job exists
-    job = chain.query(1).job()
+    job = chain.lookup(1).job()
     assert isinstance(job, submitit.Job)
 
 
@@ -111,7 +111,7 @@ def test_backend_error_caching(tmp_path: Path) -> None:
         chain2.run(2)
 
     # Clear and retry succeeds
-    chain2.query(2).clear_cache()
+    chain2.lookup(2).clear_cache()
     assert chain2.run(2) == 21  # 2 * 10 + 1
 
 
@@ -175,9 +175,9 @@ def test_force_with_taskinfra(tmp_path: Path) -> None:
 
 
 def test_query_layout(tmp_path: Path) -> None:
-    """`Step.query(value)` resolves paths lazily; folders only exist after run."""
+    """`Step.lookup(value)` resolves paths lazily; folders only exist after run."""
     step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
-    handle = step.query(1.0)
+    handle = step.lookup(1.0)
     assert handle.paths.step_folder.exists() is False
     step.run(1.0)
     assert handle.paths.cache_folder.exists()
@@ -193,7 +193,7 @@ def test_config_files_and_consistency(tmp_path: Path) -> None:
     step = conftest.Mult(coeff=3.0, infra=backends.Cached(folder=tmp_path))
     assert step.run(10.0) == 30.0
 
-    handle = step.query(10.0)
+    handle = step.lookup(10.0)
     step_folder = handle.paths.step_folder
     expected_uid = "- coeff: 3.0\n  type: Mult\n"
     assert (step_folder / "uid.yaml").read_text("utf8") == expected_uid
@@ -202,7 +202,7 @@ def test_config_files_and_consistency(tmp_path: Path) -> None:
 
     # Inconsistent uid.yaml raises error
     (step_folder / "uid.yaml").write_text("- coeff: 999.0\n  type: Mult\n")
-    step.query(10.0).clear_cache()
+    step.lookup(10.0).clear_cache()
     with pytest.raises(RuntimeError, match="Inconsistent uid config"):
         step.run(10.0)
 
