@@ -278,8 +278,10 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _make_paths(self, aligned: tp.Sequence[Step]) -> backends.StepPaths:
         """Build StepPaths, create folder, write configs."""
+        if self.infra is None or self.infra.folder is None:
+            raise RuntimeError("_make_paths requires a configured infra with a folder")
         paths = backends.StepPaths(
-            self.infra.folder,  # type: ignore[arg-type]
+            self.infra.folder,
             identity.step_uid(aligned),
             cache_type=self._resolve_cache_type(),
         )
