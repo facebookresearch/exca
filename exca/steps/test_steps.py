@@ -477,6 +477,18 @@ def test_chain_indexing() -> None:
         chain[10]
 
 
+def test_chain_string_indexing() -> None:
+    steps = collections.OrderedDict(
+        add=conftest.Add(value=1),
+        mult=conftest.Mult(coeff=2),
+    )
+    chain = Chain(steps=steps)
+    assert chain["add"].model_dump() == steps["add"].model_dump()
+    assert chain["mult"].model_dump() == steps["mult"].model_dump()
+    with pytest.raises(KeyError):
+        chain["missing"]
+
+
 def test_chain_slicing(tmp_path: Path) -> None:
     steps = [conftest.Add(value=1), conftest.Mult(coeff=2), conftest.Add(value=3)]
     chain = Chain(steps=steps)
