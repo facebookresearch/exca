@@ -201,7 +201,7 @@ def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
     pids = [int((tmp_path / f"{k}.txt").read_text(encoding="utf-8")) for k in range(2)]
     assert pids[0] == os.getpid(), "First step should run in the main process"
     assert pids[1] != os.getpid(), "Second step should run in a sub-process"
-    # chain query falls back to the last step's cache
+    # chain lookup falls back to the last step's cache
     assert chain.lookup(5.0).result() == 7.0
 
 

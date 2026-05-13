@@ -174,7 +174,7 @@ def test_force_with_taskinfra(tmp_path: Path) -> None:
     assert out2 == out3
 
 
-def test_query_layout(tmp_path: Path) -> None:
+def test_lookup_layout(tmp_path: Path) -> None:
     """`Step.lookup(value)` resolves paths lazily; folders only exist after run."""
     step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
     handle = step.lookup(1.0)
