@@ -20,6 +20,20 @@ from . import conftest, items
 from .base import Chain, Step
 
 # -----------------------------------------------------------------------------
+# Chain is sequential - Chain(steps=[Chain([A, B]), Chain([C, D])])
+# computes D(C(B(A(x))))"
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("with_infra", [False, True])
+def test_chain_is_sequential(tmp_path: Path, with_infra: bool) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
+    sub = [conftest.Mult(coeff=2, infra=infra), conftest.Add(value=1, infra=infra)]
+    chain = Chain(steps=[Chain(steps=sub, infra=infra), Chain(steps=sub, infra=infra)])
+    assert chain.run(2.0) == 11.0
+
+
+# -----------------------------------------------------------------------------
 # No unnecessary recomputation
 # "A downstream cache hit must NEVER trigger upstream `_run`."
 # -----------------------------------------------------------------------------

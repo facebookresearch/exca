@@ -8,14 +8,15 @@
 
 Step holds pydantic config and `_run`; identity (`step_uid`, `uid`)
 is computed by `exca.steps.identity` from `(self, value)` at call time.
-`_execute` routes computation inline or via backend, keyed on a
-`LookupHandle` that the Step constructs from `(uid, aligned prefix)`.
+`_dispatch` routes computation inline or via backend; ``_run_batch``
+does the actual work.
 """
 
 from __future__ import annotations
 
 import collections
 import copy
+import functools
 import inspect
 import logging
 import typing as tp
@@ -254,7 +255,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
 
-    def _execute(
+    def _dispatch(
         self, upstream: items.BoundaryItems, prefix: tp.Sequence[Step] = ()
     ) -> items.Items:
         """Push *upstream* through this step, return result as Items."""
@@ -579,35 +580,26 @@ class Chain(Step):
     # Execution
     # =========================================================================
 
-    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
-        """Dissolved walk: compose sub-step ``_execute`` calls.
-
-        When *values* is a :class:`~items.BoundaryItems` (the normal
-        path from ``Backend._run``), sub-step prefixes start fresh —
-        the chain's own cache folder provides uniqueness.
-        For raw iterables (scalar ``run()`` path), wraps into a
-        single-item ``ValuesItems`` first.
-        """
-        if not isinstance(values, items.BoundaryItems):
-            vlist = list(values)
-            uids = [identity.materialize_uid(self, v) for v in vlist]
-            values = items.ValuesItems(
-                values=vlist,
-                uids=uids,
-                step_uid="",
-                mode="cached",
-            )
+    def _walk_steps(
+        self,
+        values: items.BoundaryItems,
+        prefix: tp.Sequence[Step] = (),
+    ) -> tp.Iterator[tp.Any]:
+        """Compose sub-step ``_execute`` calls, threading *prefix*."""
         steps = tuple(_resolve_all(self._step_sequence()))
         current: items.Items = values
-        acc: list[Step] = []
+        accumulated = list(prefix)
         for step in steps:
-            current = step._execute(current, prefix=tuple(acc))
-            acc.extend(step._aligned_step())
+            current = step._dispatch(current, prefix=tuple(accumulated))
+            accumulated.extend(step._aligned_step())
         try:
             yield from current
         except Exception as e:
             e.add_note(f"  -> while running step in {self!r}")
             raise
+
+    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+        yield from self._walk_steps(values)
 
     def _has_pending_recompute(self, uids: tp.Sequence[str]) -> bool:
         """True if any descendant Backend still needs force/retry for a uid."""
@@ -619,35 +611,26 @@ class Chain(Step):
                     return True
         return False
 
-    def _execute(
+    def _dispatch(
         self, upstream: items.BoundaryItems, prefix: tp.Sequence[Step] = ()
     ) -> items.Items:
-        """Execute the chain.
-
-        With infra: Backend dispatches ``_run_batch`` (dissolved walk),
-        caching the chain-level result per uid.  If a sub-step has a
-        pending force/retry, the chain-level entry is cleared first so
-        Backend sees a miss and walks sub-steps.
-        Without infra: compose child ``_execute`` calls directly,
-        threading the parent prefix for unique cache keys.
-        """
+        """Clear stale caches if needed, then dispatch like Step._dispatch
+        but with prefix threaded into the walk."""
         self._check_cache_type()
-        if self.infra is not None and self.infra.folder is not None:
-            paths = self._make_paths(prefix=prefix)
-            if self._has_pending_recompute(upstream._uids):
-                cd = self.infra._cache_dict(
-                    paths.cache_folder, cache_type=paths.cache_type
-                )
-                for uid in upstream._uids:
-                    self.infra._clear_cache(paths=paths, cd=cd, uid=uid)
-            return self.infra._run(self._run_batch, upstream, paths=paths)
-        steps = tuple(_resolve_all(self._step_sequence()))
-        current: items.Items = upstream
-        accumulated = list(prefix)
-        for step in steps:
-            current = step._execute(current, prefix=tuple(accumulated))
-            accumulated.extend(step._aligned_step())
-        return current
+        walk = functools.partial(self._walk_steps, prefix=prefix)
+        if self.infra is None or self.infra.folder is None:
+            return items.ValuesItems(
+                values=walk(upstream),
+                uids=upstream._uids,
+                step_uid=upstream._step_uid,
+                mode=upstream._mode,
+            )
+        paths = self._make_paths(prefix=prefix)
+        if self._has_pending_recompute(upstream._uids):
+            cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
+            for uid in upstream._uids:
+                self.infra._clear_cache(paths=paths, cd=cd, uid=uid)
+        return self.infra._run(walk, upstream, paths=paths)
 
     def forward(
         self, value: tp.Any = identity.NoValue()

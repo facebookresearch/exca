@@ -65,7 +65,7 @@ class StepItems(Items):
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         try:
-            yield from self._step._execute(self._upstream)
+            yield from self._step._dispatch(self._upstream)
         except Exception as e:
             e.add_note(f"  -> while running step {self._step!r}")
             raise
