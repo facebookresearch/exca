@@ -243,16 +243,14 @@ class Step(exca.helpers.DiscriminatedModel):
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
 
-    def _dispatch(self, upstream: items.StepItems) -> items.StepItems:
-        """Push *upstream* through this step, return result as StepItems."""
+    def _dispatch(self, batch: items.StepItems) -> items.StepItems:
+        """Push *batch* through this step, return result as StepItems."""
         self._check_cache_type()
         if self.infra is None or self.infra.folder is None:
-            return upstream.apply_step(self)
-        upstream_out = tuple(upstream._upstream) + tuple(self._aligned_step())
-        paths = self._make_paths(prefix=upstream._upstream)
-        return self.infra._run(
-            self._run_batch, upstream, paths=paths, upstream=upstream_out
-        )
+            return batch.apply_step(self)
+        upstream = tuple(batch._upstream) + tuple(self._aligned_step())
+        paths = self._make_paths(upstream)
+        return self.infra._run(self._run_batch, batch, paths=paths, upstream=upstream)
 
     def _propagate_folder(self, parent_folder: Path) -> None:
         """Apply ``parent_folder`` to own ``infra`` when unset.
@@ -278,9 +276,8 @@ class Step(exca.helpers.DiscriminatedModel):
             return self.CACHE_TYPE
         return getattr(self, "_DEFAULT_CACHE_TYPE", None)
 
-    def _make_paths(self, prefix: tp.Sequence[Step] = ()) -> backends.StepPaths:
+    def _make_paths(self, aligned: tp.Sequence[Step]) -> backends.StepPaths:
         """Build StepPaths, create folder, write configs."""
-        aligned = list(prefix) + list(self._aligned_step())
         paths = backends.StepPaths(
             self.infra.folder,  # type: ignore[arg-type]
             identity.step_uid(aligned),
@@ -576,17 +573,18 @@ class Chain(Step):
                     return True
         return False
 
-    def _dispatch(self, upstream: items.StepItems) -> items.StepItems:
+    def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         """Inline: walk sub-steps directly. Backend: clear stale caches
         from pending force/retry, then delegate to Step._dispatch."""
         if self.infra is None or self.infra.folder is None:
-            return self._walk_steps(upstream)
-        if self._has_pending_recompute(upstream.uids):
-            paths = self._make_paths(prefix=upstream._upstream)
+            return self._walk_steps(batch)
+        if self._has_pending_recompute(batch.uids):
+            aligned = tuple(batch._upstream) + tuple(self._aligned_step())
+            paths = self._make_paths(aligned)
             cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-            for uid in upstream.uids:
+            for uid in batch.uids:
                 self.infra._clear_cache(paths=paths, cd=cd, uid=uid)
-        return super()._dispatch(upstream)
+        return super()._dispatch(batch)
 
     def forward(
         self, value: tp.Any = identity.NoValue()
