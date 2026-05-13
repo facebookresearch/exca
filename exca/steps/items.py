@@ -9,7 +9,7 @@
 Hierarchy::
 
     Items               user-facing root; wraps Iterable[Any]
-    └── StepItems       source + transforms + prefix + uids + mode
+    └── StepItems       source + pending + upstream + uids + mode
 
 Users only construct ``Items(values)``; ``StepItems`` is framework-internal.
 ``step.run(items)`` returns a ``StepItems`` that the user iterates.
@@ -26,7 +26,6 @@ from . import identity
 if tp.TYPE_CHECKING:
     from .base import Step
 
-_Transform = tp.Callable[[tp.Iterable[tp.Any]], tp.Iterator[tp.Any]]
 _Source = dict[str, tp.Any] | exca.cachedict.CacheDict[tp.Any]
 
 
@@ -45,8 +44,16 @@ class Items:
         return iter(self._values)
 
 
+def _annotated_batch(step: Step, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+    try:
+        yield from step._run_batch(values)
+    except Exception as e:
+        e.add_note(f"  -> while running step {step!r}")
+        raise
+
+
 class StepItems(Items):
-    """Source + transforms: the internal pipeline carrier.
+    """Pipeline carrier for inline computation between cached boundaries.
 
     For dict sources, uids are the dict keys (insertion order).
     For CacheDict sources, an explicit uid subset is required
@@ -58,16 +65,16 @@ class StepItems(Items):
         *,
         source: _Source,
         subset_uids: tp.Sequence[str] | None = None,
-        prefix: tp.Sequence[Step] = (),
-        transforms: tp.Sequence[_Transform] = (),
+        upstream: tp.Sequence[Step] = (),
+        pending: tp.Sequence[Step] = (),
         mode: identity.ModeType = "cached",
     ) -> None:
         if subset_uids is None and not isinstance(source, dict):
             raise TypeError("CacheDict source has no guaranteed order; pass subset_uids")
         self._source = source
         self._subset_uids: tp.Sequence[str] | None = subset_uids
-        self._prefix = tuple(prefix)
-        self._transforms = tuple(transforms)
+        self._upstream = tuple(upstream)
+        self._pending = tuple(pending)
         self._mode = mode
 
     @property
@@ -77,25 +84,12 @@ class StepItems(Items):
         return list(self._source)
 
     def apply_step(self, step: Step) -> StepItems:
-        """Append step's computation and identity.
-
-        Wraps ``_run_batch`` to add an error note on failure.
-        """
-        run_batch = step._run_batch
-        step_repr = repr(step)
-
-        def _annotated(values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
-            try:
-                yield from run_batch(values)
-            except Exception as e:
-                e.add_note(f"  -> while running step {step_repr}")
-                raise
-
+        """Append step's computation and identity."""
         return StepItems(
             source=self._source,
             subset_uids=self._subset_uids,
-            prefix=self._prefix + tuple(step._aligned_step()),
-            transforms=self._transforms + (_annotated,),
+            upstream=self._upstream + tuple(step._aligned_step()),
+            pending=self._pending + (step,),
             mode=self._mode,
         )
 
@@ -108,20 +102,20 @@ class StepItems(Items):
         if isinstance(self._source, dict):
             return StepItems(
                 source={uid: self._source[uid] for uid in uids},
-                prefix=self._prefix,
-                transforms=self._transforms,
+                upstream=self._upstream,
+                pending=self._pending,
                 mode=self._mode,
             )
         return StepItems(
             source=self._source,
             subset_uids=uids,
-            prefix=self._prefix,
-            transforms=self._transforms,
+            upstream=self._upstream,
+            pending=self._pending,
             mode=self._mode,
         )
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         current: tp.Iterable[tp.Any] = (self._source[uid] for uid in self.uids)
-        for transform in self._transforms:
-            current = transform(current)
+        for step in self._pending:
+            current = _annotated_batch(step, current)
         return iter(current)

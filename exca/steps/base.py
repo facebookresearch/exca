@@ -248,10 +248,11 @@ class Step(exca.helpers.DiscriminatedModel):
         self._check_cache_type()
         if self.infra is None or self.infra.folder is None:
             return upstream.apply_step(self)
-        paths = self._make_paths(prefix=upstream._prefix)
-        result = self.infra._run(self._run_batch, upstream, paths=paths)
-        result._prefix = tuple(upstream._prefix) + tuple(self._aligned_step())
-        return result
+        upstream_out = tuple(upstream._upstream) + tuple(self._aligned_step())
+        paths = self._make_paths(prefix=upstream._upstream)
+        return self.infra._run(
+            self._run_batch, upstream, paths=paths, upstream=upstream_out
+        )
 
     def _propagate_folder(self, parent_folder: Path) -> None:
         """Apply ``parent_folder`` to own ``infra`` when unset.
@@ -576,19 +577,16 @@ class Chain(Step):
         return False
 
     def _dispatch(self, upstream: items.StepItems) -> items.StepItems:
-        """Clear stale caches if needed, then dispatch through sub-steps
-        (inline) or via Backend. Prefix threads through StepItems."""
-        self._check_cache_type()
+        """Inline: walk sub-steps directly. Backend: clear stale caches
+        from pending force/retry, then delegate to Step._dispatch."""
         if self.infra is None or self.infra.folder is None:
             return self._walk_steps(upstream)
-        paths = self._make_paths(prefix=upstream._prefix)
         if self._has_pending_recompute(upstream.uids):
+            paths = self._make_paths(prefix=upstream._upstream)
             cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
             for uid in upstream.uids:
                 self.infra._clear_cache(paths=paths, cd=cd, uid=uid)
-        result = self.infra._run(self._walk_steps, upstream, paths=paths)
-        result._prefix = tuple(upstream._prefix) + tuple(self._aligned_step())
-        return result
+        return super()._dispatch(upstream)
 
     def forward(
         self, value: tp.Any = identity.NoValue()

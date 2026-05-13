@@ -273,7 +273,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _exclude_from_cls_uid(cls) -> list[str]:
         return ["."]  # force ignored in uid
 
-    # Read by `Chain.model_post_init` to require a cached upstream when True.
+    # Used by Backend._run for the inflight registry (concurrent worker safety).
     _is_off_process: tp.ClassVar[bool] = False
 
     folder: Path | None = None
@@ -387,6 +387,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         batch: items.StepItems,
         *,
         paths: StepPaths,
+        upstream: tp.Sequence[tp.Any] = (),
     ) -> items.StepItems:
         """Execute *run_batch* for uncached items, caching per uid.
 
@@ -449,6 +450,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return items.StepItems(
             source=cd,
             subset_uids=uids,
+            upstream=upstream,
             mode=mode,
         )
 
