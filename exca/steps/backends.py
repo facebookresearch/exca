@@ -384,18 +384,18 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _run(
         self,
         run_batch: tp.Callable[[tp.Iterable[tp.Any]], tp.Iterator[tp.Any]],
-        batch: items.BoundaryItems,
+        batch: items.StepItems,
         *,
         paths: StepPaths,
-    ) -> items.CachedItems:
+    ) -> items.StepItems:
         """Execute *run_batch* for uncached items, caching per uid.
 
-        Returns a :class:`~items.CachedItems` backed by the cache —
+        Returns a :class:`~items.StepItems` backed by the cache —
         values are read from disk on iteration, never buffered in memory.
         """
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         mode = effective_mode(self.mode, batch._mode)
-        uids = batch._uids
+        uids = batch.uids
 
         # 1. Scan uids: classify each as hit / error / needs-compute.
         statuses = _CachedEntry.lookup_statuses(cd, uids)
@@ -417,8 +417,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             to_compute.add(uid)
 
         # 2. Compute missing entries as a single batch.
-        #    Values are pulled lazily so upstream generators interleave
-        #    with caching (important when an inline step feeds a cached one).
         if to_compute:
             filtered_uids = [u for u in uids if u in to_compute]
             for uid in filtered_uids:
@@ -431,27 +429,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 recheck = _CachedEntry.lookup_statuses(cd, filtered_uids)
                 still_uids = [u for u in filtered_uids if recheck[u] != "success"]
                 if still_uids:
-                    if isinstance(batch, items.CachedItems):
-                        filtered: items.BoundaryItems = items.CachedItems(
-                            cache_dict=batch._cache_dict,
-                            uids=still_uids,
-                            step_uid=paths.step_uid,
-                            mode=mode,
-                        )
-                    else:
-                        still_set = set(still_uids)
-
-                        def _lazy() -> tp.Iterator[tp.Any]:
-                            for value, uid in zip(batch, uids):
-                                if uid in still_set:
-                                    yield value
-
-                        filtered = items.ValuesItems(
-                            values=_lazy(),
-                            uids=still_uids,
-                            step_uid=paths.step_uid,
-                            mode=mode,
-                        )
+                    filtered = batch.select(still_uids)
                     wrapper = _CachingCall(run_batch, cd, still_uids, paths.step_uid)
                     try:
                         job = self._submit(wrapper, filtered, paths=paths)
@@ -468,10 +446,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                             f"Worker completed but cache missing: {paths.step_uid}[{uid}]"
                         )
 
-        return items.CachedItems(
-            cache_dict=cd,
-            uids=uids,
-            step_uid=paths.step_uid,
+        return items.StepItems(
+            source=cd,
+            subset_uids=uids,
             mode=mode,
         )
 
@@ -518,15 +495,8 @@ class _SubmititBackend(Backend):
         return params
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths) -> tp.Any:
-        # Materialize lazy values for pickling.
-        args = tuple(
-            items.ValuesItems(
-                values=list(a), uids=a._uids, step_uid=a._step_uid, mode=a._mode
-            )
-            if isinstance(a, items.ValuesItems)
-            else a
-            for a in args
-        )
+        # No materialization needed: dict sources are small entrance values,
+        # CacheDict pickles as a folder path (worker reads from disk).
         executor = submitit.AutoExecutor(folder=paths._logs_folder, cluster=self._CLUSTER)
         executor.update_parameters(**self._submitit_params())
         with submitit.helpers.clean_env():

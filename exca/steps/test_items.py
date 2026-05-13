@@ -4,16 +4,16 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for Items class hierarchy and execution."""
+"""Tests for Items class hierarchy."""
 
 import pickle
-import typing as tp
 from pathlib import Path
+
+import pytest
 
 import exca.cachedict
 
-from . import conftest, identity, items
-from .base import Step
+from . import identity, items
 
 
 def test_items_no_args_default() -> None:
@@ -21,48 +21,33 @@ def test_items_no_args_default() -> None:
     assert len(result) == 1 and isinstance(result[0], identity.NoValue)
 
 
-def test_cached_items(tmp_path: Path) -> None:
+@pytest.fixture(params=["dict", "cache_dict"])
+def source_abc(request: pytest.FixtureRequest, tmp_path: Path) -> items.StepItems:
+    """StepItems with keys a,b,c → 1,2,3 backed by dict or CacheDict."""
+    if request.param == "dict":
+        return items.StepItems(source={"a": 1, "b": 2, "c": 3})
     cd = exca.cachedict.CacheDict(tmp_path / "cache")
     with cd.write():
-        cd["x"] = 100
-        cd["y"] = 200
-    ci = items.CachedItems(cache_dict=cd, uids=["x", "y"], step_uid="s")
-    assert list(ci) == [100, 200]
+        cd["a"] = 1
+        cd["b"] = 2
+        cd["c"] = 3
+    return items.StepItems(source=cd, subset_uids=["a", "b", "c"])
 
 
-def test_pickle_round_trip(tmp_path: Path) -> None:
-    vi = items.ValuesItems(values=[1, 2], uids=["a", "b"], step_uid="s", mode="force")
-    restored = pickle.loads(pickle.dumps(vi))
-    assert list(restored) == [1, 2]
-    assert restored._uids == ["a", "b"] and restored._mode == "force"
-    cd = exca.cachedict.CacheDict(tmp_path / "cache")
-    with cd.write():
-        cd["u"] = 42
-    ci = items.CachedItems(cache_dict=cd, uids=["u"], step_uid="s")
-    assert list(pickle.loads(pickle.dumps(ci))) == [42]
+def test_step_items_iteration_and_select(source_abc: items.StepItems) -> None:
+    assert list(source_abc) == [1, 2, 3]
+    assert list(source_abc.uids) == ["a", "b", "c"]
+    sub = source_abc.select(["c", "a"])
+    assert list(sub) == [3, 1]
 
 
-def test_run_batch_default() -> None:
-    step = conftest.Mult(coeff=3.0)
-    assert list(step._run_batch([2.0, 4.0])) == [6.0, 12.0]
+def test_step_items_pickle(source_abc: items.StepItems) -> None:
+    restored = pickle.loads(pickle.dumps(source_abc))
+    assert list(restored) == [1, 2, 3]
+    assert list(restored.uids) == ["a", "b", "c"]
 
 
-def test_inline_items() -> None:
-    step = conftest.Add(value=5.0)
-    assert list(step.run(items.Items([1.0, 2.0]))) == [6.0, 7.0]
-    assert list(step.run(items.Items())) == [5.0]
-
-
-class _CustomBatch(Step):
-    def _run(self, value: float) -> float:
-        return value + 1
-
-    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
-        for v in values:
-            yield v * 10
-
-
-def test_items_uses_run_batch() -> None:
-    step = _CustomBatch()
-    assert step.run(1.0) == 10.0
-    assert list(step.run(items.Items([1.0, 2.0]))) == [10.0, 20.0]
+def test_step_items_cache_dict_requires_uids() -> None:
+    cd = exca.cachedict.CacheDict(folder=None, keep_in_ram=True)
+    with pytest.raises(TypeError, match="subset_uids"):
+        items.StepItems(source=cd)

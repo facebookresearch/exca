@@ -8,15 +8,11 @@
 
 Hierarchy::
 
-    Items                 user-facing root; wraps Iterable[Any]
-    ├── StepItems         lazy graph node (step + upstream)
-    └── BoundaryItems     carries chunk identity (uids, step_uid)
-        ├── ValuesItems   level-0 payload (materialised values)
-        └── CachedItems   level-k≥1 payload (cache_dict + uids)
+    Items               user-facing root; wraps Iterable[Any]
+    └── StepItems       source + transforms + prefix + uids + mode
 
-Users only construct ``Items(values)``; subclasses are framework-internal.
-``step.run(items)`` returns an ``Items`` (runtime type ``StepItems``)
-that the user iterates.
+Users only construct ``Items(values)``; ``StepItems`` is framework-internal.
+``step.run(items)`` returns a ``StepItems`` that the user iterates.
 """
 
 from __future__ import annotations
@@ -30,6 +26,9 @@ from . import identity
 if tp.TYPE_CHECKING:
     from .base import Step
 
+_Transform = tp.Callable[[tp.Iterable[tp.Any]], tp.Iterator[tp.Any]]
+_Source = dict[str, tp.Any] | exca.cachedict.CacheDict[tp.Any]
+
 
 class Items:
     """User-facing root: wraps an ``Iterable[Any]``.
@@ -37,92 +36,92 @@ class Items:
     ``Items()`` with no arguments is equivalent to ``Items([NoValue()])``.
     """
 
-    def __init__(
-        self,
-        values: tp.Iterable[tp.Any] | None = None,
-        *,
-        _mode: identity.ModeType = "cached",
-    ) -> None:
+    def __init__(self, values: tp.Iterable[tp.Any] | None = None) -> None:
         self._values: tp.Iterable[tp.Any] = (
             [identity.NoValue()] if values is None else values
         )
-        self._mode = _mode
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         return iter(self._values)
 
 
 class StepItems(Items):
-    """Lazy graph node: triggers execution when iterated."""
+    """Source + transforms: the internal pipeline carrier.
 
-    def __init__(self, step: Step, upstream: Items) -> None:
-        self._step = step
-        self._upstream = upstream
-        from .backends import effective_mode  # circular: backends imports items
-
-        step_mode = step.infra.mode if step.infra is not None else "cached"
-        self._mode = effective_mode(step_mode, upstream._mode)
-
-    def __iter__(self) -> tp.Iterator[tp.Any]:
-        try:
-            yield from self._step._dispatch(self._upstream)
-        except Exception as e:
-            e.add_note(f"  -> while running step {self._step!r}")
-            raise
-
-
-class BoundaryItems(Items):
-    """Chunk identity for backend dispatch: type-level boundary that
-    prevents ``StepItems`` from reaching ``Backend._run``.
+    For dict sources, uids are the dict keys (insertion order).
+    For CacheDict sources, an explicit uid subset is required
+    (the CacheDict may contain keys from other runs).
     """
 
     def __init__(
         self,
         *,
-        uids: tp.Sequence[str],
-        step_uid: str,
+        source: _Source,
+        subset_uids: tp.Sequence[str] | None = None,
+        prefix: tp.Sequence[Step] = (),
+        transforms: tp.Sequence[_Transform] = (),
         mode: identity.ModeType = "cached",
     ) -> None:
-        self._uids = uids
-        self._step_uid = step_uid
+        if subset_uids is None and not isinstance(source, dict):
+            raise TypeError("CacheDict source has no guaranteed order; pass subset_uids")
+        self._source = source
+        self._subset_uids: tp.Sequence[str] | None = subset_uids
+        self._prefix = tuple(prefix)
+        self._transforms = tuple(transforms)
         self._mode = mode
 
+    @property
+    def uids(self) -> tp.Sequence[str]:
+        if self._subset_uids is not None:
+            return self._subset_uids
+        return list(self._source)
+
+    def apply_step(self, step: Step) -> StepItems:
+        """Append step's computation and identity.
+
+        Wraps ``_run_batch`` to add an error note on failure.
+        """
+        run_batch = step._run_batch
+        step_repr = repr(step)
+
+        def _annotated(values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+            try:
+                yield from run_batch(values)
+            except Exception as e:
+                e.add_note(f"  -> while running step {step_repr}")
+                raise
+
+        return StepItems(
+            source=self._source,
+            subset_uids=self._subset_uids,
+            prefix=self._prefix + tuple(step._aligned_step()),
+            transforms=self._transforms + (_annotated,),
+            mode=self._mode,
+        )
+
+    def select(self, uids: tp.Sequence[str]) -> StepItems:
+        """Subset to specific uids.
+
+        Dict source: builds a subset dict (only needed values pickled).
+        CacheDict source: just narrows the uid list (folder-path pickle).
+        """
+        if isinstance(self._source, dict):
+            return StepItems(
+                source={uid: self._source[uid] for uid in uids},
+                prefix=self._prefix,
+                transforms=self._transforms,
+                mode=self._mode,
+            )
+        return StepItems(
+            source=self._source,
+            subset_uids=uids,
+            prefix=self._prefix,
+            transforms=self._transforms,
+            mode=self._mode,
+        )
+
     def __iter__(self) -> tp.Iterator[tp.Any]:
-        raise NotImplementedError("iterate via ValuesItems or CachedItems")
-
-
-class ValuesItems(BoundaryItems):
-    """Level-0 payload: materialised values for a chunk."""
-
-    def __init__(
-        self,
-        *,
-        values: tp.Iterable[tp.Any],
-        uids: tp.Sequence[str],
-        step_uid: str,
-        mode: identity.ModeType = "cached",
-    ) -> None:
-        super().__init__(uids=uids, step_uid=step_uid, mode=mode)
-        self._values = values  # may be a generator (single iteration)
-
-    def __iter__(self) -> tp.Iterator[tp.Any]:
-        return iter(self._values)
-
-
-class CachedItems(BoundaryItems):
-    """Level-k≥1 payload: reads values from a CacheDict by uid."""
-
-    def __init__(
-        self,
-        *,
-        cache_dict: exca.cachedict.CacheDict[tp.Any],
-        uids: tp.Sequence[str],
-        step_uid: str,
-        mode: identity.ModeType = "cached",
-    ) -> None:
-        super().__init__(uids=uids, step_uid=step_uid, mode=mode)
-        self._cache_dict = cache_dict
-
-    def __iter__(self) -> tp.Iterator[tp.Any]:
-        for uid in self._uids:
-            yield self._cache_dict[uid]
+        current: tp.Iterable[tp.Any] = (self._source[uid] for uid in self.uids)
+        for transform in self._transforms:
+            current = transform(current)
+        return iter(current)

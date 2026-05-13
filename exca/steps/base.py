@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import collections
 import copy
-import functools
 import inspect
 import logging
 import typing as tp
@@ -55,17 +54,6 @@ def _resolve_all(steps: tp.Iterable[Step]) -> list[Step]:
         else:
             resolved.append(built)
     return resolved
-
-
-def _flatten_levels(steps: tp.Sequence[Step]) -> list[Step]:
-    """Chains without infra flatten into children; chains with infra stay as one level."""
-    out: list[Step] = []
-    for s in steps:
-        if isinstance(s, Chain) and s.infra is None:
-            out.extend(_flatten_levels(s._step_sequence()))
-        else:
-            out.append(s)
-    return out
 
 
 def _aligned_prefixes(
@@ -255,20 +243,15 @@ class Step(exca.helpers.DiscriminatedModel):
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
 
-    def _dispatch(
-        self, upstream: items.BoundaryItems, prefix: tp.Sequence[Step] = ()
-    ) -> items.Items:
-        """Push *upstream* through this step, return result as Items."""
+    def _dispatch(self, upstream: items.StepItems) -> items.StepItems:
+        """Push *upstream* through this step, return result as StepItems."""
         self._check_cache_type()
         if self.infra is None or self.infra.folder is None:
-            return items.ValuesItems(
-                values=self._run_batch(upstream),
-                uids=upstream._uids,
-                step_uid=upstream._step_uid,
-                mode=upstream._mode,
-            )
-        paths = self._make_paths(prefix=prefix)
-        return self.infra._run(self._run_batch, upstream, paths=paths)
+            return upstream.apply_step(self)
+        paths = self._make_paths(prefix=upstream._prefix)
+        result = self.infra._run(self._run_batch, upstream, paths=paths)
+        result._prefix = tuple(upstream._prefix) + tuple(self._aligned_step())
+        return result
 
     def _propagate_folder(self, parent_folder: Path) -> None:
         """Apply ``parent_folder`` to own ``infra`` when unset.
@@ -395,24 +378,23 @@ class Step(exca.helpers.DiscriminatedModel):
         if built is not self:
             return built.run(value)
 
-        if isinstance(value, items.BoundaryItems):
-            raise TypeError("run() expects a plain value or Items, not BoundaryItems")
+        if isinstance(value, items.StepItems):
+            raise TypeError("run() expects a plain value or Items, not StepItems")
         is_items = isinstance(value, items.Items)
         inp = value if is_items else items.Items([value])
-        # Materialize uids at entrance so _execute always receives
-        # BoundaryItems and never drains upstream generators for uids.
         values = list(inp)
         uids = [identity.materialize_uid(self, v) for v in values]
-        boundary = items.ValuesItems(
-            values=values,
-            uids=uids,
-            step_uid=identity.step_uid(list(self._aligned_step())),
-            mode=inp._mode,
+        boundary = items.StepItems(
+            source=dict(zip(uids, values)),
         )
-        result = items.StepItems(self, boundary)
+        result = self._dispatch(boundary)
         if is_items:
             return result
-        return next(iter(result))
+        try:
+            return next(iter(result))
+        except Exception as e:
+            e.add_note(f"  -> while running step {self!r}")
+            raise
 
     def forward(
         self, value: tp.Any = identity.NoValue()
@@ -454,18 +436,6 @@ class Chain(Step):
         super().model_post_init(__context)
         if not self.steps:
             raise ValueError("steps cannot be empty")
-        # Off-process dispatch needs a cached upstream — see error below.
-        levels = _flatten_levels(self._step_sequence())
-        for prev, nxt in zip(levels, levels[1:]):
-            if nxt.infra is None or not nxt.infra._is_off_process:
-                continue
-            if prev.infra is None:
-                raise ValueError(
-                    f"{type(nxt).__name__} dispatches off-process via "
-                    f"{type(nxt.infra).__name__} but its upstream {prev!r} "
-                    f"has no cache. Set its infra = Cached(folder=...) to "
-                    f"avoid pickling values through submitit."
-                )
         # Folder cascade: chain's folder fills sub-step infras that have none.
         # Static (config-only), runs once at construction.
         folder = (
@@ -582,24 +552,18 @@ class Chain(Step):
 
     def _walk_steps(
         self,
-        values: items.BoundaryItems,
-        prefix: tp.Sequence[Step] = (),
-    ) -> tp.Iterator[tp.Any]:
-        """Compose sub-step ``_execute`` calls, threading *prefix*."""
+        values: items.StepItems,
+    ) -> items.StepItems:
+        """Compose sub-step dispatches; prefix threads through StepItems."""
         steps = tuple(_resolve_all(self._step_sequence()))
-        current: items.Items = values
-        accumulated = list(prefix)
+        current = values
         for step in steps:
-            current = step._dispatch(current, prefix=tuple(accumulated))
-            accumulated.extend(step._aligned_step())
-        try:
-            yield from current
-        except Exception as e:
-            e.add_note(f"  -> while running step in {self!r}")
-            raise
+            current = step._dispatch(current)
+        return current
 
     def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
-        yield from self._walk_steps(values)
+        # _walk_steps returns a StepItems; iterating it composes transforms.
+        yield from self._walk_steps(values)  # type: ignore[arg-type]
 
     def _has_pending_recompute(self, uids: tp.Sequence[str]) -> bool:
         """True if any descendant Backend still needs force/retry for a uid."""
@@ -611,26 +575,20 @@ class Chain(Step):
                     return True
         return False
 
-    def _dispatch(
-        self, upstream: items.BoundaryItems, prefix: tp.Sequence[Step] = ()
-    ) -> items.Items:
-        """Clear stale caches if needed, then dispatch like Step._dispatch
-        but with prefix threaded into the walk."""
+    def _dispatch(self, upstream: items.StepItems) -> items.StepItems:
+        """Clear stale caches if needed, then dispatch through sub-steps
+        (inline) or via Backend. Prefix threads through StepItems."""
         self._check_cache_type()
-        walk = functools.partial(self._walk_steps, prefix=prefix)
         if self.infra is None or self.infra.folder is None:
-            return items.ValuesItems(
-                values=walk(upstream),
-                uids=upstream._uids,
-                step_uid=upstream._step_uid,
-                mode=upstream._mode,
-            )
-        paths = self._make_paths(prefix=prefix)
-        if self._has_pending_recompute(upstream._uids):
+            return self._walk_steps(upstream)
+        paths = self._make_paths(prefix=upstream._prefix)
+        if self._has_pending_recompute(upstream.uids):
             cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-            for uid in upstream._uids:
+            for uid in upstream.uids:
                 self.infra._clear_cache(paths=paths, cd=cd, uid=uid)
-        return self.infra._run(walk, upstream, paths=paths)
+        result = self.infra._run(self._walk_steps, upstream, paths=paths)
+        result._prefix = tuple(upstream._prefix) + tuple(self._aligned_step())
+        return result
 
     def forward(
         self, value: tp.Any = identity.NoValue()
