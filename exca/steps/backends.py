@@ -6,8 +6,7 @@
 
 """Backend classes with integrated caching.
 
-Backend is the execution workhorse: it resolves cache paths via Step
-protocols (`_aligned_step`, `_make_paths`, `_inner_mode`), manages
+Backend is Steps execution workhorse: it resolves cache paths, manages
 cache lookup / force / compute, and writes results through CacheDict.
 """
 
