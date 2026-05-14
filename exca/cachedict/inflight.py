@@ -356,28 +356,18 @@ class InflightRegistry(registry.AdvisoryRegistry):
 def inflight_session(
     reg: InflightRegistry | None,
     item_uids: tp.Collection[str],
-    *,
-    local: bool = False,
 ) -> tp.Iterator[list[str]]:
     """Wait for in-flight items, claim available ones, release+close on exit.
 
     When *reg* is ``None`` (no cache folder), yields all *item_uids*
     unchanged so that callers never need a ``None`` guard.
 
-    Parameters
-    ----------
-    local:
-        Set to ``True`` when items will be processed locally (no Slurm
-        submission). Stamps claims with ``_LOCAL_JOB_ID`` so ``is_alive``
-        can distinguish "local work in progress" from "Slurm submission
-        that never completed ``update_worker_info``".
-
     Self-deadlock is prevented internally: ``wait_for_inflight`` skips items
     owned by the current PID, and ``claim`` treats same-PID rows as already
     ours.
 
-    The registry connection is closed on exit; callers must perform any
-    ``record_worker_info`` calls inside the ``with`` block.
+    Callers should call ``record_worker_info`` inside the ``with`` block
+    to stamp claimed items with an appropriate liveness signal.
     """
     if reg is None:
         yield list(item_uids)
@@ -406,8 +396,6 @@ def inflight_session(
         msg = "Claim race: got %d/%d items, re-waiting"
         logger.info(msg, len(claimed), len(item_uids))
         time.sleep(random.uniform(0.5, 2.0))
-    if local:
-        reg.update_worker_info(claimed, job_id=_LOCAL_JOB_ID)
     try:
         yield claimed
     finally:
@@ -417,10 +405,10 @@ def inflight_session(
 
 
 def record_worker_info(
-    reg: InflightRegistry, item_uids: list[str], job: submitit.Job[tp.Any]
+    reg: InflightRegistry, item_uids: list[str], job: tp.Any = None
 ) -> None:
-    """Stamp a submitit *job*'s worker info on *item_uids*. Slurm jobs get
-    job_id + folder; other backends get the local sentinel."""
+    """Stamp worker info on *item_uids*. Slurm jobs get job_id + folder;
+    everything else (including no job) gets the local PID sentinel."""
     if isinstance(job, submitit.SlurmJob):
         reg.update_worker_info(
             item_uids, job_id=str(job.job_id), job_folder=str(job.paths.folder)

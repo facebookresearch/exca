@@ -79,9 +79,11 @@ def test_inflight_session(tmp_path: Path) -> None:
             raise ValueError("boom")
     assert seen(["a"]) == {}
 
-    # Local: claims marked with job_id="local".
-    with inflight.inflight_session(fresh(), ["loc"], local=True) as claimed:
+    # Local: record_worker_info without job stamps _LOCAL_JOB_ID.
+    reg = fresh()
+    with inflight.inflight_session(reg, ["loc"]) as claimed:
         assert claimed == ["loc"]
+        inflight.record_worker_info(reg, claimed)
         assert seen(["loc"])["loc"].job_id == inflight._LOCAL_JOB_ID
 
     # Nested: inner session must NOT release outer's claim.

@@ -10,12 +10,14 @@ import copy
 import difflib
 import hashlib
 import logging
+import math
 import os
 import shutil
 import sys
 import typing as tp
 import uuid
 import warnings
+from concurrent import futures
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +33,39 @@ FORCE_INCLUDED = "force_included"  # priority over UID_EXCLUDED
 logger = logging.getLogger(__name__)
 DISCRIMINATOR_FIELD = "#infra#pydantic#discriminator"
 T = tp.TypeVar("T", bound=pydantic.BaseModel)
+X = tp.TypeVar("X")
+
+
+def to_chunks(
+    items: list[X], *, max_chunks: int | None, min_items_per_chunk: int = 1
+) -> list[list[X]]:
+    """Split *items* into sub-lists respecting *max_chunks* and *min_items_per_chunk*.
+
+    The last chunk may be smaller than *min_items_per_chunk*.
+    """
+    if not items:
+        return []
+    splits = min(
+        len(items) if max_chunks is None else max_chunks,
+        math.ceil(len(items) / max(1, min_items_per_chunk)),
+    )
+    splits = max(1, splits)
+    per = math.ceil(len(items) / splits)
+    return [items[k * per : (k + 1) * per] for k in range(splits)]
+
+
+def make_pool_executor(pool: str, max_workers: int) -> futures.Executor:
+    """Create a pool executor, falling back to ThreadPoolExecutor if
+    ProcessPoolExecutor cannot be created (e.g. ``sem_open`` EPERM)."""
+    if pool == "processpool":
+        try:
+            return futures.ProcessPoolExecutor(max_workers=max_workers)
+        except PermissionError as e:
+            logger.warning(
+                "ProcessPoolExecutor unavailable (%s); falling back to ThreadPoolExecutor.",
+                e,
+            )
+    return futures.ThreadPoolExecutor(max_workers=max_workers)
 
 
 def _get_uid_info(
