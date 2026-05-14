@@ -566,3 +566,35 @@ def test_run_batch_yield_count(
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
     with pytest.raises(RuntimeError, match=match):
         list(_NumYield(num=num, infra=infra).run(items.Items([10, 20, 30])))
+
+
+class _PairwiseMult(Step):
+    """Consumes inputs 2 at a time, fails on a specific value."""
+
+    fail_value: int = -1
+
+    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+        it = iter(values)
+        for a, b in zip(it, it):
+            if self.fail_value in (a, b):
+                raise ValueError("boom")
+            yield a * 10
+            yield b * 10
+
+
+def test_batch_error_consumed_uids_inline() -> None:
+    """_AnnotatedBatch tracks exactly the consumed-but-not-yielded uids."""
+    step = _PairwiseMult(fail_value=3)
+    with pytest.raises(ValueError, match="boom") as exc_info:
+        list(step.run(items.Items([1, 2, 3, 4, 5, 6])))
+    inflight = getattr(exc_info.value, "_inflight_uids", [])
+    assert len(inflight) == 2, f"expected 2 inflight uids, got {inflight}"
+
+
+def test_batch_error_consumed_uids_cached(tmp_path: Path) -> None:
+    """Cached path gets precise inflight uids via _AnnotatedBatch."""
+    step = _PairwiseMult(fail_value=3, infra={"backend": "Cached", "folder": tmp_path})
+    with pytest.raises(ValueError, match="boom") as exc_info:
+        list(step.run(items.Items([1, 2, 3, 4, 5, 6])))
+    inflight = getattr(exc_info.value, "_inflight_uids", [])
+    assert len(inflight) == 2, f"expected 2 inflight uids, got {inflight}"

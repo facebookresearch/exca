@@ -18,6 +18,7 @@ scalar calls return the scalar result directly.
 
 from __future__ import annotations
 
+import collections
 import typing as tp
 
 import exca.cachedict
@@ -45,33 +46,48 @@ class Items:
         return iter(self._values)
 
 
-def _annotated_batch(
-    step: Step,
-    values: tp.Iterable[tp.Any],
-    *,
-    uids: tp.Sequence[str] | None = None,
-) -> tp.Iterator[tp.Any]:
-    """Iterate ``step._run_batch(values)`` with yield-count validation and error annotation."""
-    n_out = 0
-    expected = len(uids) if uids is not None else None
-    try:
-        for result in step._run_batch(values):
-            if expected is not None and n_out >= expected:
-                raise RuntimeError(
-                    f"{step!r}._run_batch yielded more than {expected} results"
-                )
-            n_out += 1
-            yield result
-    except Exception as e:
-        uid = uids[n_out] if uids is not None and n_out < len(uids) else None
-        e.add_note(f"  -> while running step {step!r}" + (f"[{uid}]" if uid else ""))
-        if uid is not None:
-            e._failed_uid = uid  # type: ignore[attr-defined]
-        raise
-    if expected is not None and n_out < expected:
-        raise RuntimeError(
-            f"{step!r}._run_batch yielded {n_out} results for {expected} inputs"
-        )
+class _AnnotatedBatch:
+    """Wraps ``step._run_batch`` with consumption tracking, yield validation, and error annotation.
+
+    On error, ``_inflight_uids`` on the exception contains the consumed-but-not-yielded uids.
+    """
+
+    def __init__(
+        self, step: Step, values: tp.Iterable[tp.Any], uids: tp.Sequence[str]
+    ) -> None:
+        self.step = step
+        self._values = values
+        self._uid_iter = iter(uids)
+        self._expected = len(uids)
+        self._inflight: collections.deque[str] = collections.deque()
+        self.n_out = 0
+
+    def _tracked(self) -> tp.Iterator[tp.Any]:
+        for v in self._values:
+            self._inflight.append(next(self._uid_iter))
+            yield v
+
+    def __iter__(self) -> tp.Iterator[tp.Any]:
+        try:
+            for result in self.step._run_batch(self._tracked()):
+                if self.n_out >= self._expected:
+                    raise RuntimeError(
+                        f"{self.step!r}._run_batch yielded more than {self._expected} results"
+                    )
+                self._inflight.popleft()
+                self.n_out += 1
+                yield result
+        except Exception as e:
+            failed = list(self._inflight)
+            uid_str = f"[{failed[0]}]" if failed else ""
+            e.add_note(f"  -> while running step {self.step!r}{uid_str}")
+            if failed:
+                e._inflight_uids = failed  # type: ignore[attr-defined]
+            raise
+        if self.n_out < self._expected:
+            raise RuntimeError(
+                f"{self.step!r}._run_batch yielded {self.n_out} results for {self._expected} inputs"
+            )
 
 
 class StepItems(Items):
@@ -135,7 +151,6 @@ class StepItems(Items):
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         current: tp.Iterable[tp.Any] = (self._source[uid] for uid in self.uids)
-        uids = self.uids
         for step in self._pending:
-            current = _annotated_batch(step, current, uids=uids)
+            current = _AnnotatedBatch(step, current, self.uids)
         return iter(current)

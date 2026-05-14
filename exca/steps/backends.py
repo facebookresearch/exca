@@ -255,21 +255,20 @@ class _CachingCall:
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
         uids = batch.uids
-        results = items._annotated_batch(self.step, batch, uids=uids)
+        annotated = items._AnnotatedBatch(self.step, batch, uids)
         try:
             with self.cache_dict.write():
-                uid_iter = iter(uids)
-                for result in results:
-                    uid = next(uid_iter)
+                for uid, result in zip(uids, annotated):
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
         except Exception as e:
-            failed_uid: str | None = getattr(e, "_failed_uid", None)
-            if folder is not None and failed_uid is not None:
-                e.add_note(f"  -> cached as {self.step_uid}[{failed_uid}]")
+            inflight: list[str] = getattr(e, "_inflight_uids", [])
+            if folder is not None and inflight:
+                e.add_note(f"  -> error recorded at {self.step_uid}{inflight}")
                 tb = "".join(traceback.format_exception(e))
                 with errors.ErrorRegistry(folder) as reg:
-                    reg.record(failed_uid, e, tb)
+                    for uid in inflight:
+                        reg.record(uid, e, tb)
             raise
 
 
