@@ -481,8 +481,8 @@ class _SubmititBackend(Backend):
     cpus_per_task: int | None = None
     gpus_per_node: int | None = None
     mem_gb: float | None = None
-    max_jobs: int = 128
-    min_items_per_job: int = 1
+    max_jobs: int = pydantic.Field(128, gt=0)
+    min_items_per_job: int = pydantic.Field(1, gt=0)
 
     # passed as `cluster=` to submitit.AutoExecutor; subclasses pin it.
     _CLUSTER: tp.ClassVar[str | None] = None
@@ -573,7 +573,7 @@ class Auto(Slurm):
 class _PoolBackend(Backend):
     """Base for concurrent.futures pool backends."""
 
-    max_jobs: int | None = 128
+    max_jobs: int | None = pydantic.Field(128, gt=0)
     _POOL_TYPE: tp.ClassVar[str]
 
     def _execute(
@@ -585,6 +585,9 @@ class _PoolBackend(Backend):
         reg: inflight.InflightRegistry | None,
     ) -> None:
         uids = list(pending.uids)
+        if len(uids) <= 1:
+            wrapper(pending)
+            return
         random.shuffle(uids)
         cpus = max(1, (os.cpu_count() or 1) - 1)
         max_workers = min(len(uids), cpus)
