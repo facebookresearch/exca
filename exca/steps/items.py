@@ -12,7 +12,8 @@ Hierarchy::
     └── StepItems       source + pending + upstream + uids + mode
 
 Users only construct ``Items(values)``; ``StepItems`` is framework-internal.
-``step.run(items)`` returns a ``StepItems`` that the user iterates.
+When called with ``Items``, ``step.run(items)`` returns a ``StepItems``;
+scalar calls return the scalar result directly.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ _Source = dict[str, tp.Any] | exca.cachedict.CacheDict[tp.Any]
 class Items:
     """User-facing root: wraps an ``Iterable[Any]``.
 
-    ``Items()`` with no arguments is equivalent to ``Items([NoValue()])``.
+    ``Items()`` with no arguments represents the no-input case.
     """
 
     def __init__(self, values: tp.Iterable[tp.Any] | None = None) -> None:
@@ -50,6 +51,7 @@ def _annotated_batch(
     *,
     uids: tp.Sequence[str] | None = None,
 ) -> tp.Iterator[tp.Any]:
+    """Iterate ``step._run_batch(values)`` with yield-count validation and error annotation."""
     n_out = 0
     expected = len(uids) if uids is not None else None
     try:
@@ -93,8 +95,8 @@ class StepItems(Items):
             if not isinstance(source, dict):
                 raise TypeError("CacheDict source requires explicit uids")
             uids = list(source)
-        # source holds unique uid→value; uids is the full input sequence
-        # (may contain duplicates for expand-after-dedup)
+        # source: unique uid→value mapping; uids: full input sequence
+        # (may repeat uids — iteration reads the same value twice)
         self._source = source
         self.uids = list(uids)
         self._upstream = tuple(upstream)

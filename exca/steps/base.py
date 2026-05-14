@@ -569,6 +569,7 @@ class Chain(Step):
 
     def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
         # _walk_steps returns a StepItems; iterating it composes transforms.
+        # values is actually StepItems here (FIX with _run_items?)
         yield from self._walk_steps(values)  # type: ignore[arg-type]
 
     def _inner_mode(self) -> identity.ModeType:

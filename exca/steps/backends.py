@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import pickle
 import shutil
 import traceback
 import typing as tp
@@ -42,7 +41,7 @@ class StepPaths:
 
     base_folder: Path
     step_uid: str
-    cache_type: str | None = None
+    cache_type: str | None = None  # CacheDict format override (e.g. "Pickle")
 
     @property
     def step_folder(self) -> Path:
@@ -61,9 +60,6 @@ class StepPaths:
     def job_folder(self, uid: str) -> Path:
         """Job folder for a specific uid."""
         return self.step_folder / "jobs" / uid
-
-    def _job_pkl(self, uid: str) -> Path:
-        return self.job_folder(uid) / "job.pkl"
 
     def _ensure_folders(self, uid: str) -> None:
         self.cache_folder.mkdir(parents=True, exist_ok=True)
@@ -139,9 +135,17 @@ class LookupHandle:
             self._backend._clear_cache(paths=self.paths, cd=self.cache_dict, uid=self.uid)
 
     def job(self) -> submitit.Job[tp.Any] | None:
-        """Get the submitit job, or ``None``."""
-        if self._backend is not None:
-            return self._backend._job(paths=self.paths, uid=self.uid)
+        """Get the submitit job from the inflight registry, or ``None``."""
+        if self._backend is None or not self.paths.cache_folder.exists():
+            return None
+        try:
+            reg = inflight.InflightRegistry(self.paths.cache_folder)
+            info = reg.get([self.uid])
+            reg.close()
+            if self.uid in info:
+                return info[self.uid]._job  # type: ignore[attr-defined]
+        except Exception:
+            pass
         return None
 
 
@@ -355,12 +359,17 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         uid: str,
     ) -> None:
         """Drop everything cached for this uid (cd row, error row, job folder)."""
-        try:
-            job = self._job(paths=paths, uid=uid)
-            if job is not None and not job.done():
-                job.cancel()
-        except Exception as e:
-            logger.warning("Failed to cancel %s[%s]: %s", paths.step_uid, uid, e)
+        if self._is_off_process and paths.cache_folder.exists():
+            try:
+                reg = inflight.InflightRegistry(paths.cache_folder)
+                info = reg.get([uid])
+                if uid in info:
+                    wi = info[uid]
+                    if wi._job is not None and not wi._job.done():  # type: ignore[attr-defined]
+                        wi._job.cancel()  # type: ignore[attr-defined]
+                reg.close()
+            except Exception as e:
+                logger.warning("Failed to cancel %s[%s]: %s", paths.step_uid, uid, e)
         # Success first → a mid-clear crash leaves a recoverable cached
         # error rather than a stale success (fail closed).
         if uid in cd:
@@ -372,18 +381,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if job_folder.exists():
             shutil.rmtree(job_folder)
 
-    def _job(self, *, paths: StepPaths, uid: str) -> submitit.Job[tp.Any] | None:
-        job_pkl = paths._job_pkl(uid)
-        if job_pkl.exists():
-            with job_pkl.open("rb") as f:
-                return pickle.load(f)  # type: ignore
-        return None
-
     def _run(self, step: tp.Any, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid.
 
-        Returns a :class:`~items.StepItems` backed by the cache —
-        values are read from disk on iteration, never buffered in memory.
+        Returns a :class:`~items.StepItems` backed by the cache.
         """
         upstream = tuple(batch._upstream) + tuple(step._aligned_step())
         paths = step._make_paths(upstream)
@@ -393,6 +394,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         # Scan: classify each uid as hit / error / needs-compute.
         statuses = _CachedEntry.lookup_statuses(cd, uids)
+        # set: intentionally unordered (no execution-order dependency within a batch)
         to_compute: set[str] = set()
         for uid in uids:
             status = statuses[uid]
@@ -490,16 +492,10 @@ class _SubmititBackend(Backend):
     def _submit(self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths) -> tp.Any:
         # No materialization needed: dict sources are small entrance values,
         # CacheDict pickles as a folder path (worker reads from disk).
-        batch: items.StepItems = args[0]
         executor = submitit.AutoExecutor(folder=paths._logs_folder, cluster=self._CLUSTER)
         executor.update_parameters(**self._submitit_params())
         with submitit.helpers.clean_env():
             job = executor.submit(wrapper, *args)
-        for uid in batch.uids:
-            job_pkl = paths._job_pkl(uid)
-            logger.debug("Saving job: %s", job_pkl)
-            with job_pkl.open("wb") as f:
-                pickle.dump(job, f)
         return job
 
 
