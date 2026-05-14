@@ -567,7 +567,7 @@ class Chain(Step):
         self,
         values: items.StepItems,
     ) -> items.StepItems:
-        """Compose sub-step dispatches; prefix threads through StepItems."""
+        """Compose sub-step dispatches sequentially."""
         steps = tuple(_resolve_all(self._step_sequence()))
         current = values
         for step in steps:
@@ -575,7 +575,6 @@ class Chain(Step):
         return current
 
     def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
-        # _walk_steps returns a StepItems; iterating it composes transforms.
         # values is actually StepItems here (FIX with _run_items?)
         yield from self._walk_steps(values)  # type: ignore[arg-type]
 

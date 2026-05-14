@@ -6,7 +6,7 @@
 
 """Backend classes with integrated caching.
 
-Backend is Steps execution workhorse: it resolves cache paths, manages
+Backend is the execution workhorse: it resolves cache paths, manages
 cache lookup / force / compute, and writes results through CacheDict.
 """
 
@@ -27,6 +27,9 @@ import exca
 from exca.cachedict import inflight
 
 from . import errors, identity, items
+
+if tp.TYPE_CHECKING:
+    from .base import Step
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +109,8 @@ class LookupHandle:
         """Cache status: ``"success"``, ``"error"``, or ``None``."""
         if self._cache_dict is None or self._paths is None:
             return None
+        if not self.uid:
+            raise RuntimeError("LookupHandle has no uid")
         return _CachedEntry.lookup(self._cache_dict, self.uid).status
 
     def cached(self) -> bool:
@@ -114,6 +119,8 @@ class LookupHandle:
 
     def result(self) -> tp.Any:
         """Return the cached value, or re-raise a cached error."""
+        if not self.uid:
+            raise RuntimeError("LookupHandle has no uid")
         entry = _CachedEntry.lookup(self.cache_dict, self.uid)
         if entry.status is None:
             raise RuntimeError(f"no cached result for {self.paths.step_uid}[{self.uid}]")
@@ -233,7 +240,7 @@ class _CachingCall:
 
     def __init__(
         self,
-        step: tp.Any,
+        step: Step,
         cache_dict: exca.cachedict.CacheDict[tp.Any],
         step_uid: str,
     ):
@@ -380,7 +387,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if job_folder.exists():
             shutil.rmtree(job_folder)
 
-    def _run(self, step: tp.Any, batch: items.StepItems) -> items.StepItems:
+    def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid.
 
         Returns a :class:`~items.StepItems` backed by the cache.
@@ -489,8 +496,6 @@ class _SubmititBackend(Backend):
         return params
 
     def _submit(self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths) -> tp.Any:
-        # No materialization needed: dict sources are small entrance values,
-        # CacheDict pickles as a folder path (worker reads from disk).
         executor = submitit.AutoExecutor(folder=paths._logs_folder, cluster=self._CLUSTER)
         executor.update_parameters(**self._submitit_params())
         with submitit.helpers.clean_env():
