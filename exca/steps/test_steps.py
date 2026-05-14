@@ -7,6 +7,7 @@
 """Tests for Step and Chain basic functionality (no caching tests here, see test_cache.py)."""
 
 import collections
+import itertools
 import pickle
 import traceback
 import typing as tp
@@ -568,23 +569,49 @@ def test_run_batch_yield_count(
         list(_NumYield(num=num, infra=infra).run(items.Items([10, 20, 30])))
 
 
-class _PairwiseMult(Step):
+class _GroupedMult(Step):
+    """Consumes inputs in groups, multiplies by 10."""
+
+    _CALLS: tp.ClassVar[list[list[int]]] = []
+    group_size: int = 2
     fail_value: int = -1
 
     def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
         it = iter(values)
-        for a, b in zip(it, it):
-            if self.fail_value in (a, b):
+        while group := list(itertools.islice(it, self.group_size)):
+            if self.fail_value in group:
                 raise ValueError("boom")
-            yield a * 10
-            yield b * 10
+            self._CALLS.append(group)
+            for v in group:
+                yield v * 10
 
 
 @pytest.mark.parametrize("with_infra", [False, True])
 def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
-    step = _PairwiseMult(fail_value=3, infra=infra)
+    step = _GroupedMult(group_size=2, fail_value=3, infra=infra)
     with pytest.raises(ValueError, match="boom") as exc_info:
         list(step.run(items.Items([1, 2, 3, 4, 5, 6])))
     inflight = getattr(exc_info.value, "_inflight_uids", [])
     assert len(inflight) == 2, f"expected 2 inflight uids, got {inflight}"
+
+
+def test_chained_group_sizes_call_order() -> None:
+    _GroupedMult._CALLS.clear()
+    chain = Chain(steps=[_GroupedMult(group_size=s) for s in (2, 3, 1)])
+    result = list(chain.run(items.Items([1, 2, 3, 4])))
+    calls = list(_GroupedMult._CALLS)
+    _GroupedMult._CALLS.clear()
+    assert result == [1000, 2000, 3000, 4000]
+    # Lazy streaming: step2 (group=3) pulls through step1 (group=2),
+    # step3 (group=1) consumes each result immediately.
+    assert calls == [
+        [1, 2],
+        [3, 4],  # step1 produces 2 pairs
+        [10, 20, 30],  # step2 pulls 3 (exhausts both step1 groups)
+        [100],
+        [200],
+        [300],  # step3 consumes step2's 3 results
+        [40],  # step2 gets remaining 1 (partial group)
+        [400],  # step3 consumes it
+    ]
