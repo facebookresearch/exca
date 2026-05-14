@@ -278,26 +278,6 @@ def test_auto_chain_conversion_errors(steps: tp.Any) -> None:
 
 
 # =============================================================================
-# Backward compatibility deprecation shims
-# =============================================================================
-
-
-def test_deprecated_forward() -> None:
-    """Old _forward override and .forward() call both work with DeprecationWarning."""
-
-    class OldStyle(Step):
-        def _forward(self, x: float) -> float:
-            return x * 2
-
-    step = OldStyle()
-    with pytest.warns(DeprecationWarning, match="_forward.*deprecated.*_run"):
-        assert step.run(5.0) == 10.0
-
-    with pytest.warns(DeprecationWarning, match="forward.*deprecated.*run"):
-        assert step.forward(5.0) == 10.0
-
-
-# =============================================================================
 # _resolve_step
 # =============================================================================
 
