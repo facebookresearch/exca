@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `exca/steps`: experimental batch execution via `Items`. `step.run(Items([v1, v2, ...]))` processes multiple inputs sharing per-step caches. `_run_batch` hook for vectorised compute. [#248]
+
 ## 0.5.25 - 26-05-11
 
 - `exca/steps`: `Step.lookup()` returns a `LookupHandle` for inspecting, retrieving, or clearing cached results. `with_input()` removed; `clear_cache()` deprecated. [#245]
