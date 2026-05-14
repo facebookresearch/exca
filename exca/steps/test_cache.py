@@ -139,7 +139,8 @@ def test_mode_readonly(tmp_path: Path) -> None:
 
 def test_readonly_does_not_propagate(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    ro_step = conftest.Mult(coeff=2.0, infra={**infra, "mode": "read-only"})
+    ro_infra: tp.Any = {**infra, "mode": "read-only"}
+    ro_step = conftest.Mult(coeff=2.0, infra=ro_infra)
     downstream = conftest.Mult(coeff=3.0, infra=infra)
     chain = Chain(steps=[ro_step, downstream])
     # Populate both caches first.

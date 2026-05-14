@@ -375,8 +375,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if uid in cd:
             del cd[uid]
         if paths.cache_folder.exists():
-            with errors.ErrorRegistry(paths.cache_folder) as reg:
-                reg.clear([uid])
+            with errors.ErrorRegistry(paths.cache_folder) as ereg:
+                ereg.clear([uid])
         job_folder = paths.job_folder(uid)
         if job_folder.exists():
             shutil.rmtree(job_folder)
