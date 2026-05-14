@@ -167,17 +167,15 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
 
 
 def test_cached_as_note_survives_pickle(tmp_path: Path) -> None:
-    """`_CachingCall` adds a `-> cached as ...` note before pickling into
-    errors.db. Notes must round-trip so the re-raise points to the cache key."""
     with pytest.raises(ValueError) as exc_info:
         _add(True, tmp_path).run(5.0)
     notes = getattr(exc_info.value, "__notes__", [])
-    assert any("cached as" in n for n in notes)
+    assert any("error recorded at" in n for n in notes), "missing record note"
     with pytest.raises(ValueError) as exc_info:
         _add(False, tmp_path).run(5.0)
     notes = getattr(exc_info.value, "__notes__", [])
-    assert any("cached as" in n for n in notes)
-    assert any("mode='retry'" in n for n in notes)
+    assert any("error recorded at" in n for n in notes), "missing record note"
+    assert any("mode='retry'" in n for n in notes), "missing retry note"
 
 
 def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:

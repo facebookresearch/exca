@@ -376,7 +376,7 @@ def test_chain_error_note() -> None:
     with pytest.raises(ValueError) as exc_info:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
-    assert "Add" in formatted and "while running step" in formatted
+    assert "Add" in formatted and "inflight uids" in formatted
 
 
 # =============================================================================
@@ -569,8 +569,6 @@ def test_run_batch_yield_count(
 
 
 class _PairwiseMult(Step):
-    """Consumes inputs 2 at a time, fails on a specific value."""
-
     fail_value: int = -1
 
     def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
@@ -584,7 +582,6 @@ class _PairwiseMult(Step):
 
 @pytest.mark.parametrize("with_infra", [False, True])
 def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
-    """_AnnotatedBatch tracks exactly the consumed-but-not-yielded uids."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
     step = _PairwiseMult(fail_value=3, infra=infra)
     with pytest.raises(ValueError, match="boom") as exc_info:

@@ -79,8 +79,7 @@ class _AnnotatedBatch:
                 yield result
         except Exception as e:
             failed = list(self._inflight)
-            uid_str = f"[{failed[0]}]" if failed else ""
-            e.add_note(f"  -> while running step {self.step!r}{uid_str}")
+            e.add_note(f"  -> in {self.step!r}, inflight uids: {failed}")
             if failed:
                 e._inflight_uids = failed  # type: ignore[attr-defined]
             raise
