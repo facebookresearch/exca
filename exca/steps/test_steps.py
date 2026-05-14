@@ -599,19 +599,16 @@ def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
 def test_chained_group_sizes_call_order() -> None:
     _GroupedMult._CALLS.clear()
     chain = Chain(steps=[_GroupedMult(group_size=s) for s in (2, 3, 1)])
-    result = list(chain.run(items.Items([1, 2, 3, 4])))
+    _ = list(chain.run(items.Items([1, 2, 3, 4, 5])))
     calls = list(_GroupedMult._CALLS)
     _GroupedMult._CALLS.clear()
-    assert result == [1000, 2000, 3000, 4000]
-    # Lazy streaming: step2 (group=3) pulls through step1 (group=2),
-    # step3 (group=1) consumes each result immediately.
+    # fmt: off
     assert calls == [
-        [1, 2],
-        [3, 4],  # step1 produces 2 pairs
-        [10, 20, 30],  # step2 pulls 3 (exhausts both step1 groups)
-        [100],
-        [200],
-        [300],  # step3 consumes step2's 3 results
-        [40],  # step2 gets remaining 1 (partial group)
-        [400],  # step3 consumes it
+        [1, 2], [3, 4],       # step1 runs both pairs (step2 needs 3)
+        [10, 20, 30],          # step2 fills its group of 3
+        [100], [200], [300],   # step3 drains immediately
+        [5],                   # step1 partial: 1 left
+        [40, 50],              # step2 partial: only 2 left
+        [400], [500],          # step3 drains
     ]
+    # fmt: on
