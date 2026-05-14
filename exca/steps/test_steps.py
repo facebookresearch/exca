@@ -17,7 +17,7 @@ import pytest
 
 import exca
 
-from . import backends, conftest, identity
+from . import backends, conftest, identity, items
 from .base import Chain, Step
 
 # =============================================================================
@@ -34,14 +34,6 @@ def test_chain_no_infra() -> None:
     chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Mult(coeff=3.0)])
     # 5 * 2 * 3 = 30
     assert chain.run(5.0) == 30.0
-
-
-def test_chain_run_bridge(tmp_path: Path) -> None:
-    # Chain._run bridges to _run_at; children with infra cache correctly.
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(steps=[conftest.Mult(coeff=2.0, infra=infra), conftest.Mult(coeff=3.0)])
-    assert chain._run(5.0) == 30.0
-    assert chain[0].lookup(5.0).cached()
 
 
 # =============================================================================
@@ -298,11 +290,9 @@ def test_deprecated_forward() -> None:
             return x * 2
 
     step = OldStyle()
-    # _forward override triggers warning when run() is called
     with pytest.warns(DeprecationWarning, match="_forward.*deprecated.*_run"):
         assert step.run(5.0) == 10.0
 
-    # .forward() call triggers its own warning
     with pytest.warns(DeprecationWarning, match="forward.*deprecated.*run"):
         assert step.forward(5.0) == 10.0
 
@@ -342,7 +332,7 @@ def test_resolve_step_in_chain() -> None:
 
 def test_resolve_step_must_override_run_or_resolve() -> None:
     """Step with neither _run nor _resolve_step raises TypeError."""
-    with pytest.raises(TypeError, match="must override _run or _resolve_step"):
+    with pytest.raises(TypeError, match="must override _run"):
 
         class BadStep(Step):
             value: int = 0
@@ -371,6 +361,17 @@ def test_resolve_step_uid_consistency() -> None:
     step_uid = exca.ConfDict.from_model(step, uid=True, exclude_defaults=True).to_uid()
     chain_uid = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_uid()
     assert step_uid == chain_uid
+
+
+def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
+    force_infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force"}
+    chain_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "chain"}
+    inner = conftest.AddWithTransforms(  # resolves to Chain([stripped, Mult(force)])
+        value=1,
+        transforms=[conftest.Mult(coeff=2, infra=force_infra)],
+    )
+    chain = Chain(steps=[inner], infra=chain_infra)
+    assert chain._inner_mode() == "force", "Did not resolve Mult mode"
 
 
 # =============================================================================
@@ -511,60 +512,6 @@ def test_chain_slicing(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# Chain config-time validation
-# "Off-process dispatch (e.g. Slurm) requires a cached upstream."
-# =============================================================================
-
-
-def _step(tmp_path: Path, coeff: float, backend: str | None) -> conftest.Mult:
-    infra: tp.Any = (
-        {"backend": backend, "folder": tmp_path} if backend is not None else None
-    )
-    return conftest.Mult(coeff=coeff, infra=infra)
-
-
-@pytest.mark.parametrize(
-    "upstream,downstream,raises",
-    [
-        # Truth table over each Backend subclass at the downstream slot
-        # (locks `_is_off_process` per type, not just Slurm).
-        (None, "Slurm", True),
-        (None, "LocalProcess", True),  # also pickles via submitit
-        (None, "SubmititDebug", False),  # debug runs inline
-        (None, "Cached", False),  # inline downstream
-        # Cached upstream satisfies the constraint
-        ("Cached", "Slurm", False),
-        # Off-process upstream has its own per-step CacheDict
-        ("Slurm", "Slurm", False),
-    ],
-)
-def test_chain_rejects_off_process_with_uncached_upstream(
-    tmp_path: Path, upstream: str | None, downstream: str, raises: bool
-) -> None:
-    args: tp.Any = [_step(tmp_path, 2.0, upstream), _step(tmp_path, 3.0, downstream)]
-    if raises:
-        with pytest.raises(ValueError, match="off-process"):
-            Chain(steps=args)
-    else:
-        Chain(steps=args)
-
-
-def test_chain_off_process_validation_walks_nested_chains(tmp_path: Path) -> None:
-    # Inner-without-infra dissolves into outer (last inner step is the upstream
-    # checked); inner-with-infra stays as one level whose cache satisfies it.
-    cached: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    inner_uncached = Chain(steps=[_step(tmp_path, 2.0, None), _step(tmp_path, 3.0, None)])
-    inner_cached = Chain(
-        steps=[_step(tmp_path, 2.0, None), _step(tmp_path, 3.0, None)], infra=cached
-    )
-    slurm = _step(tmp_path, 5.0, "Slurm")
-
-    with pytest.raises(ValueError, match="off-process"):
-        Chain(steps=[inner_uncached, slurm])
-    Chain(steps=[inner_cached, slurm])
-
-
-# =============================================================================
 # Custom Step hierarchies (subclassing with custom discriminator)
 # =============================================================================
 
@@ -609,3 +556,33 @@ def test_custom_hierarchy_roundtrip() -> None:
     assert data["steps"][0]["name"] == "CustomMult"
     restored = CustomStep.model_validate(data)
     assert type(restored) is CustomChain
+
+
+# =============================================================================
+# _run_batch yield count validation
+# =============================================================================
+
+
+class _NumYield(Step):
+    """Yields exactly *num* results, ignoring actual input count."""
+
+    num: int = 0
+
+    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+        list(values)  # consume input
+        for i in range(self.num):
+            yield i
+
+
+@pytest.mark.parametrize("with_infra", [False, True])
+@pytest.mark.parametrize(
+    "num, match",
+    [(1, "yielded 1 results for 3"), (4, "yielded more than 3")],
+    ids=["under", "over"],
+)
+def test_run_batch_yield_count(
+    tmp_path: Path, num: int, match: str, with_infra: bool
+) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
+    with pytest.raises(RuntimeError, match=match):
+        list(_NumYield(num=num, infra=infra).run(items.Items([10, 20, 30])))

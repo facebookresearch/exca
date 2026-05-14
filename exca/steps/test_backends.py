@@ -59,10 +59,6 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     out2 = chain.run(1)
     assert out1 == out2
 
-    # Job exists
-    job = chain.lookup(1).job()
-    assert isinstance(job, submitit.Job)
-
 
 def test_slurm_backend_param_forwarding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

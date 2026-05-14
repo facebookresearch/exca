@@ -137,6 +137,23 @@ def test_mode_readonly(tmp_path: Path) -> None:
     assert chain.run() == out1
 
 
+def test_readonly_does_not_propagate(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    ro_infra: tp.Any = {**infra, "mode": "read-only"}
+    ro_step = conftest.Mult(coeff=2.0, infra=ro_infra)
+    downstream = conftest.Mult(coeff=3.0, infra=infra)
+    chain = Chain(steps=[ro_step, downstream])
+    # Populate both caches first.
+    warm = Chain(
+        steps=[
+            conftest.Mult(coeff=2.0, infra=infra),
+            conftest.Mult(coeff=3.0, infra=infra),
+        ]
+    )
+    assert warm.run(5.0) == 30.0
+    assert chain.run(5.0) == 30.0
+
+
 def test_mode_retry_short_circuits_on_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -240,15 +257,12 @@ def test_force_nested_chains(tmp_path: Path) -> None:
     out3 = outer.run()
     assert out2 == out3, "force is one-shot"
 
-    # force on inner chain also propagates to downstream
-    outer2 = outer.model_copy(deep=True)
-    outer2._step_sequence()[2].infra.mode = "force"  # type: ignore
-    # gen still has mode="force" but its uid is already recomputed (one-shot)
-    gen = outer._step_sequence()[0]
-    assert gen.infra.mode == "force"  # type: ignore[union-attr]
-    assert identity._NOINPUT_UID in gen.infra._recomputed  # type: ignore[union-attr]
+    # force on inner chain: fresh instance (model_copy copies _recomputed)
+    cfg = outer.model_dump()
+    cfg["steps"][2]["infra"]["mode"] = "force"
+    outer2 = Chain(**cfg)
     out4 = outer2.run()
-    assert out4 != out3  # downstream recomputed
+    assert out4 != out3  # inner forced → downstream recomputed
 
 
 def test_force_deeply_nested(tmp_path: Path) -> None:
@@ -275,9 +289,9 @@ def test_force_deeply_nested(tmp_path: Path) -> None:
     assert out1 != out2  # innermost recomputed
 
     # force on chain itself also propagates to innermost
-    chain = chain.model_copy(deep=True)
-    assert chain.infra is not None
-    chain.infra.mode = "force"
+    cfg = chain.model_dump()
+    cfg["infra"]["mode"] = "force"
+    chain = Chain(**cfg)
     out3 = chain.run(10)
     assert out3 != out2  # innermost recomputed again
 

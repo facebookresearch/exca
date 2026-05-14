@@ -22,9 +22,11 @@ if tp.TYPE_CHECKING:
     from .base import Step
 
 
-# Cache key for the no-input case (generators). Read by `materialize_uid`
-# and re-exported by `backends` for back-compat tests.
+# Cache key for the no-input case (generators). Read by `materialize_uid`.
 _NOINPUT_UID = "__exca_no_input__"
+
+
+ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 
 
 class NoValue:
