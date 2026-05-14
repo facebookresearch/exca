@@ -14,16 +14,20 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
+import random
 import shutil
 import traceback
 import typing as tp
 import warnings
+from concurrent import futures
 from pathlib import Path
 
 import pydantic
 import submitit
 
 import exca
+from exca import utils
 from exca.cachedict import inflight
 
 from . import errors, identity, items
@@ -280,7 +284,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return ["."]  # force ignored in uid
 
     # Used by Backend._run for the inflight registry (concurrent worker safety).
-    _is_off_process: tp.ClassVar[bool] = False
+    _concurrent: tp.ClassVar[bool] = False
 
     folder: Path | None = None
     # deprecated: declare `CACHE_TYPE` on the Step subclass.
@@ -364,7 +368,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         uid: str,
     ) -> None:
         """Drop everything cached for this uid (cd row, error row, job folder)."""
-        if self._is_off_process and paths.cache_folder.exists():
+        if self._concurrent and paths.cache_folder.exists():
             try:
                 reg = inflight.InflightRegistry(paths.cache_folder)
                 info = reg.get([uid])
@@ -421,23 +425,19 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             for uid in to_compute:
                 paths._ensure_folders(uid)
             reg: inflight.InflightRegistry | None = None
-            if self._is_off_process:
+            if self._concurrent:
                 reg = inflight.InflightRegistry(paths.cache_folder)
             with inflight.inflight_session(reg, to_compute):
-                # Re-check after lock (another worker may have finished).
                 recheck = _CachedEntry.lookup_statuses(cd, to_compute)
-                still_uids = [u for u in to_compute if recheck[u] != "success"]
-                if still_uids:
-                    filtered = batch.select(still_uids)
+                pending_uids = [u for u in to_compute if recheck[u] != "success"]
+                if pending_uids:
+                    filtered = batch.select(pending_uids)
                     wrapper = _CachingCall(step, cd, paths.step_uid)
                     try:
-                        job = self._submit(wrapper, filtered, paths=paths)
-                        if reg is not None:
-                            inflight.record_worker_info(reg, still_uids, job)
-                        job.result()
+                        self._execute(wrapper, filtered, paths=paths, reg=reg)
                     finally:
                         if mode in ("force", "retry"):
-                            self._recomputed.update(still_uids)
+                            self._recomputed.update(pending_uids)
                 verify = _CachedEntry.lookup_statuses(cd, to_compute)
                 for uid in to_compute:
                     if verify[uid] != "success":
@@ -452,17 +452,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             mode=mode,
         )
 
-    def _submit(self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths) -> tp.Any:
-        """Submit wrapper for execution. Default: inline execution."""
-        wrapper(*args)
-        return _InlineJob()
-
-
-class _InlineJob:
-    """Completion signal for inline execution; the value lives in cache."""
-
-    def result(self) -> None:
-        return None
+    def _execute(
+        self,
+        wrapper: _CachingCall,
+        pending: items.StepItems,
+        *,
+        paths: StepPaths,
+        reg: inflight.InflightRegistry | None,
+    ) -> None:
+        """Run *wrapper* on *pending* items. Override for chunking/pools/arrays."""
+        wrapper(pending)
 
 
 class Cached(Backend):
@@ -472,9 +471,6 @@ class Cached(Backend):
 class _SubmititBackend(Backend):
     """Base for submitit backends."""
 
-    # Submitit cloud-pickles inputs to a worker (`SubmititDebug` overrides: inline).
-    _is_off_process: tp.ClassVar[bool] = True
-
     job_name: str | None = None
     timeout_min: int | None = None
     nodes: int | None = None
@@ -482,24 +478,51 @@ class _SubmititBackend(Backend):
     cpus_per_task: int | None = None
     gpus_per_node: int | None = None
     mem_gb: float | None = None
+    max_jobs: int = pydantic.Field(128, gt=0)
+    min_items_per_job: int = pydantic.Field(1, gt=0)
 
-    # passed as `cluster=` to submitit.AutoExecutor; subclasses pin it.
-    _CLUSTER: tp.ClassVar[str | None] = None
+    _concurrent: tp.ClassVar[bool] = True
+    _CLUSTER: tp.ClassVar[str | None] = None  # submitit cluster name
 
     def _submitit_params(self) -> dict[str, tp.Any]:
         """Build the kwargs dict forwarded to ``AutoExecutor.update_parameters``."""
         fields = set(type(self).model_fields) - set(Backend.model_fields)
-        params = {k: getattr(self, k) for k in fields if getattr(self, k) is not None}
+        skip = {"max_jobs", "min_items_per_job"}
+        params = {
+            k: getattr(self, k) for k in fields - skip if getattr(self, k) is not None
+        }
         if "job_name" in params:
             params["name"] = params.pop("job_name")
         return params
 
-    def _submit(self, wrapper: _CachingCall, *args: tp.Any, paths: StepPaths) -> tp.Any:
+    def _execute(
+        self,
+        wrapper: _CachingCall,
+        pending: items.StepItems,
+        *,
+        paths: StepPaths,
+        reg: inflight.InflightRegistry | None,
+    ) -> None:
+        uids = list(pending.uids)
+        random.shuffle(uids)
+        chunks = [
+            pending.select(c)
+            for c in utils.to_chunks(
+                uids, max_chunks=self.max_jobs, min_items_per_chunk=self.min_items_per_job
+            )
+        ]
         executor = submitit.AutoExecutor(folder=paths._logs_folder, cluster=self._CLUSTER)
-        executor.update_parameters(**self._submitit_params())
-        with submitit.helpers.clean_env():
-            job = executor.submit(wrapper, *args)
-        return job
+        params = self._submitit_params()
+        if self._CLUSTER in ("slurm", None):
+            params["slurm_array_parallelism"] = len(chunks)
+        executor.update_parameters(**params)
+        with submitit.helpers.clean_env(), executor.batch():
+            jobs = [executor.submit(wrapper, c) for c in chunks]
+        if reg is not None:
+            for c, j in zip(chunks, jobs):
+                inflight.record_worker_info(reg, c.uids, j)
+        for j in jobs:
+            j.result()
 
 
 class LocalProcess(_SubmititBackend):
@@ -512,7 +535,7 @@ class SubmititDebug(_SubmititBackend):
     """Debug executor (inline but simulates submitit)."""
 
     _CLUSTER: tp.ClassVar[str | None] = "debug"
-    _is_off_process: tp.ClassVar[bool] = False
+    _concurrent: tp.ClassVar[bool] = False
 
 
 class Slurm(_SubmititBackend):
@@ -542,3 +565,56 @@ class Auto(Slurm):
     """Auto-detect executor (local or Slurm). Slurm fields only apply on slurm."""
 
     _CLUSTER: tp.ClassVar[str | None] = None
+
+
+class _PoolBackend(Backend):
+    """Base for concurrent.futures pool backends."""
+
+    _concurrent: tp.ClassVar[bool] = True
+    max_jobs: int | None = pydantic.Field(128, gt=0)
+    _POOL_TYPE: tp.ClassVar[str]
+
+    def _execute(
+        self,
+        wrapper: _CachingCall,
+        pending: items.StepItems,
+        *,
+        paths: StepPaths,
+        reg: inflight.InflightRegistry | None,
+    ) -> None:
+        uids = list(pending.uids)
+        if len(uids) <= 1:
+            wrapper(pending)
+            return
+        random.shuffle(uids)
+        cpus = max(1, (os.cpu_count() or 1) - 1)
+        max_workers = min(len(uids), cpus)
+        if self.max_jobs is not None:
+            max_workers = min(max_workers, self.max_jobs)
+        chunks = [
+            pending.select(c) for c in utils.to_chunks(uids, max_chunks=3 * max_workers)
+        ]
+        if reg is not None:
+            for c in chunks:
+                inflight.record_worker_info(reg, c.uids)
+        with utils.make_pool_executor(self._POOL_TYPE, max_workers) as pool:
+            futs = [pool.submit(wrapper, c) for c in chunks]
+            try:
+                for f in futures.as_completed(futs):
+                    f.result()
+            except BaseException:
+                for f in futs:
+                    f.cancel()
+                raise
+
+
+class ProcessPool(_PoolBackend):
+    """Process pool execution + caching."""
+
+    _POOL_TYPE: tp.ClassVar[str] = "processpool"
+
+
+class ThreadPool(_PoolBackend):
+    """Thread pool execution + caching."""
+
+    _POOL_TYPE: tp.ClassVar[str] = "threadpool"

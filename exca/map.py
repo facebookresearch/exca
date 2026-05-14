@@ -18,9 +18,8 @@ from pathlib import Path
 import numpy as np
 import pydantic
 
-from . import base, slurm
+from . import base, slurm, utils
 from .cachedict import CacheDict, inflight
-from .utils import ShortItemUid
 
 
 @dataclasses.dataclass
@@ -68,48 +67,6 @@ class CachedMethod:
 
     def __call__(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
         return self.infra._method_override(items)
-
-
-def _make_pool_executor(pool: str, max_workers: int) -> futures.Executor:
-    """Falls back to ThreadPoolExecutor (with a warning) if ``pool="processpool"``
-    and ``ProcessPoolExecutor`` cannot be created (eg ``sem_open`` EPERM)."""
-    if pool == "processpool":
-        try:
-            return futures.ProcessPoolExecutor(max_workers=max_workers)
-        except PermissionError as e:
-            logger.warning(
-                "ProcessPoolExecutor unavailable (%s); falling back to "
-                "ThreadPoolExecutor. Set cluster='threadpool' or cluster=None "
-                "to silence this warning.",
-                e,
-            )
-    return futures.ThreadPoolExecutor(max_workers=max_workers)
-
-
-def to_chunks(
-    items: list[X], *, max_chunks: int | None, min_items_per_chunk: int = 1
-) -> tp.Iterator[list[X]]:
-    """Split a list of items into several smaller list of items
-
-    Parameters
-    ----------
-    max_chunks: optional int
-        maximum number of chunks to create
-    min_items_per_chunk: int
-        minimum number of items per chunk
-
-    Yields
-    ------
-    list of items
-    """
-    splits = min(
-        len(items) if max_chunks is None else max_chunks,
-        int(np.ceil(len(items) / min_items_per_chunk)),
-    )
-    items_per_chunk = int(np.ceil(len(items) / splits))
-    for k in range(splits):
-        # select a batch/chunk of samples_per_job items to send to a job
-        yield items[k * items_per_chunk : (k + 1) * items_per_chunk]
 
 
 class MapInfra(base.BaseInfra, slurm.SubmititMixin):
@@ -281,7 +238,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         params.pop("self")
         max_length = params.pop("item_uid_max_length")
         if max_length is not None:
-            params["item_uid"] = ShortItemUid(params["item_uid"], max_length=max_length)
+            params["item_uid"] = utils.ShortItemUid(
+                params["item_uid"], max_length=max_length
+            )
         if self._infra_method is not None:
             raise RuntimeError(f"Infra was already applied: {self._infra_method}")
 
@@ -392,7 +351,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 if missing:
                     jobs: list[tp.Any] = []
                     uid_item_chunks = list(
-                        to_chunks(
+                        utils.to_chunks(
                             missing,
                             max_chunks=self.max_jobs,
                             min_items_per_chunk=self.min_samples_per_job,
@@ -455,9 +414,10 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 pool = None
             # avoid processing same files at same time if several jobs overlap
             np.random.shuffle(missing)
-            with inflight.inflight_session(
-                self._inflight_registry(), [k for k, _ in missing], local=True
-            ) as claimed_uids:
+            reg = self._inflight_registry()
+            with inflight.inflight_session(reg, [k for k, _ in missing]) as claimed_uids:
+                if reg is not None:
+                    inflight.record_worker_info(reg, claimed_uids)
                 claimed_set = set(claimed_uids)
                 # Re-check cache after wait: other workers may have completed
                 # items while we were blocked in inflight_session.
@@ -485,9 +445,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     max_workers = min(len(missing), cpus)
                     if self.max_jobs is not None:
                         max_workers = min(max_workers, self.max_jobs)
-                    with _make_pool_executor(pool, max_workers) as ex:
+                    with utils.make_pool_executor(pool, max_workers) as ex:
                         mitems = [ki[1] for ki in missing]
-                        chunks = to_chunks(mitems, max_chunks=3 * max_workers)
+                        chunks = utils.to_chunks(mitems, max_chunks=3 * max_workers)
                         for chunk in chunks:
                             j = ex.submit(
                                 self._call_and_store,

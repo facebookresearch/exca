@@ -6,6 +6,7 @@
 
 """Tests for execution backends (LocalProcess, Slurm, submitit integration)."""
 
+import contextlib
 import typing as tp
 from pathlib import Path
 
@@ -15,19 +16,19 @@ import submitit
 
 import exca
 
-from . import backends, conftest
+from . import backends, conftest, items
 from .base import Chain, Step
 
 
 class _FakeJob:
-    """Fake submitit job for capture tests (pickleable, implements .result())."""
+    """Pickleable stand-in for submitit.Job; used by fake executors below."""
 
     def result(self) -> None:
         return None
 
 
 class _CapturingAutoExecutor:
-    """Fake AutoExecutor; records (ctor_kwargs, update_parameters_kwargs) pairs."""
+    """Records (ctor_kwargs, update_parameters_kwargs) per submit call."""
 
     captured: list = []  # reset by each test before monkeypatching
 
@@ -41,10 +42,8 @@ class _CapturingAutoExecutor:
         func(*args)
         return _FakeJob()
 
-
-# =============================================================================
-# Submitit backend execution
-# =============================================================================
+    def batch(self) -> contextlib.nullcontext[None]:
+        return contextlib.nullcontext()
 
 
 @pytest.mark.parametrize("backend", ("LocalProcess", "SubmititDebug"))
@@ -85,6 +84,7 @@ def test_slurm_backend_param_forwarding(
         "slurm_qos": "h100",
         "slurm_use_srun": False,  # Slurm.use_srun default
         "gpus_per_node": 4,
+        "slurm_array_parallelism": 1,
     }
 
 
@@ -109,11 +109,6 @@ def test_backend_error_caching(tmp_path: Path) -> None:
     # Clear and retry succeeds
     chain2.lookup(2).clear_cache()
     assert chain2.run(2) == 21  # 2 * 10 + 1
-
-
-# =============================================================================
-# Integration with TaskInfra
-# =============================================================================
 
 
 class Experiment(pydantic.BaseModel):
@@ -179,11 +174,6 @@ def test_lookup_layout(tmp_path: Path) -> None:
     assert handle.paths.cache_folder.exists()
 
 
-# =============================================================================
-# Config checking (uid.yaml, full-uid.yaml, config.yaml)
-# =============================================================================
-
-
 def test_config_files_and_consistency(tmp_path: Path) -> None:
     """Config files are created, checked for consistency, and corrupted files are handled."""
     step = conftest.Mult(coeff=3.0, infra=backends.Cached(folder=tmp_path))
@@ -224,3 +214,21 @@ def test_config_consistency_chain_and_step(tmp_path: Path) -> None:
     # Note: coeff=2.0 is the default for Mult, so it's excluded from uid
     expected = "- type: Add\n  value: 1.0\n- type: Mult\n"
     assert uid_files[0].read_text("utf8") == expected
+
+
+@pytest.mark.parametrize("backend", ("ThreadPool", "ProcessPool"))
+def test_pool_backend(tmp_path: Path, backend: str) -> None:
+    infra: tp.Any = {"backend": backend, "folder": tmp_path}
+    step = conftest.Mult(coeff=2.0, infra=infra)
+    result = list(step.run(items.Items([1.0, 2.0, 3.0])))
+    assert result == [2.0, 4.0, 6.0]
+    assert step.lookup(1.0).paths.cache_folder.exists()
+
+
+def test_pool_error_propagation(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path}
+    step = conftest.Add(value=1, error=True, infra=infra)
+    with pytest.raises(ValueError, match="Triggered an error") as exc_info:
+        step.run(items.Items([1.0, 2.0]))
+    notes = exc_info.value.__notes__
+    assert any("Add" in n for n in notes)

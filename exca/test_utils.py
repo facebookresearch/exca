@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import collections
+import concurrent.futures
 import datetime
 import os
 import typing as tp
@@ -581,3 +582,33 @@ def test_short_item_uid_idempotent(length: int) -> None:
     short = ShortItemUid(str, 256)
     once = short("a" * length)
     assert short(once) == once
+
+
+@pytest.mark.parametrize(
+    "num,max_chunks,min_items_per_chunk,expected",
+    [
+        (0, 5, 1, ()),
+        (1, 5, 1, (1,)),
+        (12, 5, 4, (4, 4, 4)),
+        (13, 2, 5, (7, 6)),
+        (13, None, 5, (5, 5, 3)),
+    ],
+)
+def test_to_chunks(
+    num: int, max_chunks: int | None, min_items_per_chunk: int, expected: tuple[int, ...]
+) -> None:
+    data = list(range(num))
+    chunks = utils.to_chunks(
+        data, max_chunks=max_chunks, min_items_per_chunk=min_items_per_chunk
+    )
+    assert tuple(len(c) for c in chunks) == expected
+
+
+def test_pool_executor_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(**_kwargs: tp.Any) -> tp.Any:
+        raise PermissionError("simulated sem_open EPERM")
+
+    monkeypatch.setattr(concurrent.futures, "ProcessPoolExecutor", boom)
+    ex = utils.make_pool_executor("processpool", max_workers=2)
+    assert isinstance(ex, concurrent.futures.ThreadPoolExecutor)
+    ex.shutdown()
