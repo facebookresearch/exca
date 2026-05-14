@@ -160,15 +160,15 @@ class Step(exca.helpers.DiscriminatedModel):
     def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
         super().__pydantic_init_subclass__(**kwargs)
         flags: set[str] = set()
-        has_run = (
-            cls._run is not Step._run
-            or cls._run_batch is not Step._run_batch
-            or cls._forward is not Step._forward
-        )
+        if hasattr(cls, "_forward"):
+            raise TypeError(
+                f"{cls.__name__} overrides _forward which was removed; "
+                "override _run instead"
+            )
+        has_run = cls._run is not Step._run or cls._run_batch is not Step._run_batch
         if has_run:
             flags.add("has_run")
-            method = cls._run if cls._run is not Step._run else cls._forward
-            if _has_all_defaults(method):
+            if _has_all_defaults(cls._run):
                 flags.add("has_generator")
         if cls._resolve_step is not Step._resolve_step:
             flags.add("has_resolve")
@@ -203,17 +203,6 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _run(self, *args: tp.Any) -> tp.Any:
         """Override in subclasses."""
-        if type(self)._forward is not Step._forward:  # deprecated: _forward override
-            warnings.warn(
-                f"{type(self).__name__} overrides _forward which is deprecated, "
-                "override _run instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            return self._forward(*args)
-        raise NotImplementedError
-
-    def _forward(self, *args: tp.Any) -> tp.Any:  # deprecated: override _run instead
         raise NotImplementedError
 
     def _resolve_step(self) -> Step:
@@ -398,15 +387,8 @@ class Step(exca.helpers.DiscriminatedModel):
             return result
         return next(iter(result))
 
-    def forward(
-        self, value: tp.Any = identity.NoValue()
-    ) -> tp.Any:  # deprecated: use run()
-        warnings.warn(
-            "Step.forward() is deprecated, use run() instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.run(value)
+    def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
+        raise AttributeError("Step.forward() was removed; use run() instead")
 
 
 class Chain(Step):
