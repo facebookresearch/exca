@@ -471,9 +471,6 @@ class Cached(Backend):
 class _SubmititBackend(Backend):
     """Base for submitit backends."""
 
-    # Submitit cloud-pickles inputs to a worker (`SubmititDebug` overrides: inline).
-    _concurrent: tp.ClassVar[bool] = True
-
     job_name: str | None = None
     timeout_min: int | None = None
     nodes: int | None = None
@@ -484,8 +481,8 @@ class _SubmititBackend(Backend):
     max_jobs: int = pydantic.Field(128, gt=0)
     min_items_per_job: int = pydantic.Field(1, gt=0)
 
-    # passed as `cluster=` to submitit.AutoExecutor; subclasses pin it.
-    _CLUSTER: tp.ClassVar[str | None] = None
+    _concurrent: tp.ClassVar[bool] = True
+    _CLUSTER: tp.ClassVar[str | None] = None  # submitit cluster name
 
     def _submitit_params(self) -> dict[str, tp.Any]:
         """Build the kwargs dict forwarded to ``AutoExecutor.update_parameters``."""
@@ -573,6 +570,7 @@ class Auto(Slurm):
 class _PoolBackend(Backend):
     """Base for concurrent.futures pool backends."""
 
+    _concurrent: tp.ClassVar[bool] = True
     max_jobs: int | None = pydantic.Field(128, gt=0)
     _POOL_TYPE: tp.ClassVar[str]
 
@@ -614,11 +612,9 @@ class ProcessPool(_PoolBackend):
     """Process pool execution + caching."""
 
     _POOL_TYPE: tp.ClassVar[str] = "processpool"
-    _concurrent: tp.ClassVar[bool] = True
 
 
 class ThreadPool(_PoolBackend):
     """Thread pool execution + caching."""
 
     _POOL_TYPE: tp.ClassVar[str] = "threadpool"
-    _concurrent: tp.ClassVar[bool] = True

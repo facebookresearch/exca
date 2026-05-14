@@ -69,9 +69,6 @@ class CachedMethod:
         return self.infra._method_override(items)
 
 
-_make_pool_executor = utils.make_pool_executor  # deprecated
-
-
 class MapInfra(base.BaseInfra, slurm.SubmititMixin):
     """Processing/caching infrastructure ready to be applied to a pydantic.BaseModel method.
     To use it, the configuration can be set as an attribute of a pydantic BaseModel,
@@ -448,7 +445,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     max_workers = min(len(missing), cpus)
                     if self.max_jobs is not None:
                         max_workers = min(max_workers, self.max_jobs)
-                    with _make_pool_executor(pool, max_workers) as ex:
+                    with utils.make_pool_executor(pool, max_workers) as ex:
                         mitems = [ki[1] for ki in missing]
                         chunks = utils.to_chunks(mitems, max_chunks=3 * max_workers)
                         for chunk in chunks:
