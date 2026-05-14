@@ -582,18 +582,11 @@ class _PairwiseMult(Step):
             yield b * 10
 
 
-def test_batch_error_consumed_uids_inline() -> None:
+@pytest.mark.parametrize("with_infra", [False, True])
+def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
     """_AnnotatedBatch tracks exactly the consumed-but-not-yielded uids."""
-    step = _PairwiseMult(fail_value=3)
-    with pytest.raises(ValueError, match="boom") as exc_info:
-        list(step.run(items.Items([1, 2, 3, 4, 5, 6])))
-    inflight = getattr(exc_info.value, "_inflight_uids", [])
-    assert len(inflight) == 2, f"expected 2 inflight uids, got {inflight}"
-
-
-def test_batch_error_consumed_uids_cached(tmp_path: Path) -> None:
-    """Cached path gets precise inflight uids via _AnnotatedBatch."""
-    step = _PairwiseMult(fail_value=3, infra={"backend": "Cached", "folder": tmp_path})
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
+    step = _PairwiseMult(fail_value=3, infra=infra)
     with pytest.raises(ValueError, match="boom") as exc_info:
         list(step.run(items.Items([1, 2, 3, 4, 5, 6])))
     inflight = getattr(exc_info.value, "_inflight_uids", [])

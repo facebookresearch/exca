@@ -249,16 +249,16 @@ class _CachingCall:
         self.step_uid = step_uid
 
     # Returns None: the driver re-reads from cache, so the result never
-    # round-trips through a job pickle (matters for submitit).
+    # round-trips through a job pickle.
     def __call__(self, batch: items.StepItems) -> None:
         folder = self.cache_dict.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
-        uids = batch.uids
-        annotated = items._AnnotatedBatch(self.step, batch, uids)
+        result_items = self.step._run_items(batch)
         try:
             with self.cache_dict.write():
-                for uid, result in zip(uids, annotated):
+                for i, result in enumerate(result_items):
+                    uid = batch.uids[i]
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
         except Exception as e:
