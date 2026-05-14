@@ -233,7 +233,7 @@ def test_scalar_and_items_share_cache(tmp_path: Path, as_chain: bool) -> None:
     if as_chain:
         step = Chain(steps=[step, conftest.Mult(coeff=2.0)])
     scalar = step.run(10.0)
-    assert list(step.run(items.Items([10.0]))) == [scalar]
+    assert list(step.run(items.Items([10.0]))) == [scalar], "cache not shared"
 
 
 # -----------------------------------------------------------------------------

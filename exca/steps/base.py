@@ -387,7 +387,7 @@ class Step(exca.helpers.DiscriminatedModel):
             raise TypeError("run() expects a plain value or Items, not StepItems")
         is_items = isinstance(value, items.Items)
         inp = value if is_items else items.Items([value])
-        values = list(inp)
+        values = list(inp)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]
         boundary = items.StepItems(
             source=dict(zip(uids, values)),
@@ -396,11 +396,7 @@ class Step(exca.helpers.DiscriminatedModel):
         result = self._dispatch(boundary)
         if is_items:
             return result
-        try:
-            return next(iter(result))
-        except Exception as e:
-            e.add_note(f"  -> while running step {self!r}")
-            raise
+        return next(iter(result))
 
     def forward(
         self, value: tp.Any = identity.NoValue()
