@@ -472,12 +472,19 @@ class Chain(Step):
     def __getitem__(self, index: int) -> Step: ...
 
     @tp.overload
+    def __getitem__(self, index: str) -> Step: ...
+
+    @tp.overload
     def __getitem__(self, index: slice) -> "Chain": ...
 
-    def __getitem__(self, index: int | slice) -> Step | Chain:
+    def __getitem__(self, index: int | str | slice) -> Step | Chain:
         steps = self._step_sequence()
         if isinstance(index, int):
             return steps[index]
+        if isinstance(index, str):
+            if isinstance(self.steps, dict):
+                return self.steps[index]
+            raise TypeError("String indices require Chain.steps to be an OrderedDict")
         if isinstance(index, slice):
             sliced = steps[index]
             if isinstance(self.steps, dict):
