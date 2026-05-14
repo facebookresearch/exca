@@ -6,10 +6,9 @@
 
 """Backend classes with integrated caching.
 
-Backend executes a Step's `_run` and caches the result keyed by a
-`LookupHandle` (paths + CacheDict) constructed caller-side by
-`Step.lookup`. Backend stays Step-agnostic — no back-ref, no value
-inspection, no chain-topology walks.
+Backend is the execution workhorse: it resolves cache paths via Step
+protocols (`_aligned_step`, `_make_paths`, `_inner_mode`), manages
+cache lookup / force / compute, and writes results through CacheDict.
 """
 
 from __future__ import annotations
@@ -229,9 +228,15 @@ class _CachedEntry:
 class _CachingCall:
     """Worker-side wrapper: runs a step's batch function, writes each result to cache."""
 
-    def __init__(self, step: tp.Any, cache_dict: exca.cachedict.CacheDict[tp.Any]):
+    def __init__(
+        self,
+        step: tp.Any,
+        cache_dict: exca.cachedict.CacheDict[tp.Any],
+        step_uid: str,
+    ):
         self.step = step
         self.cache_dict = cache_dict
+        self.step_uid = step_uid
 
     # Returns None: the driver re-reads from cache, so the result never
     # round-trips through a job pickle (matters for submitit).
@@ -243,16 +248,15 @@ class _CachingCall:
         results = items._annotated_batch(self.step, batch, uids=uids)
         try:
             with self.cache_dict.write():
-                for uid, result in zip(uids, results):
+                uid_iter = iter(uids)
+                for result in results:
+                    uid = next(uid_iter)
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
         except Exception as e:
             failed_uid: str | None = getattr(e, "_failed_uid", None)
             if folder is not None and failed_uid is not None:
-                step_uid = identity.step_uid(
-                    tuple(batch._upstream) + tuple(self.step._aligned_step())
-                )
-                e.add_note(f"  -> cached as {step_uid}[{failed_uid}]")
+                e.add_note(f"  -> cached as {self.step_uid}[{failed_uid}]")
                 tb = "".join(traceback.format_exception(e))
                 with errors.ErrorRegistry(folder) as reg:
                     reg.record(failed_uid, e, tb)
@@ -275,6 +279,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     mode: identity.ModeType = "cached"
     keep_in_ram: bool = False
+    # Force/retry: at most once success/error per uid per lifetime; resets on pickle.
     _recomputed: set[str] = pydantic.PrivateAttr(default_factory=set)
 
     def _should_compute(
@@ -386,7 +391,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         mode = effective_mode(step._inner_mode(), batch._mode)
         uids = batch.uids
 
-        # 1. Scan uids: classify each as hit / error / needs-compute.
+        # Scan: classify each uid as hit / error / needs-compute.
         statuses = _CachedEntry.lookup_statuses(cd, uids)
         to_compute: set[str] = set()
         for uid in uids:
@@ -405,21 +410,19 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 self._clear_cache(paths=paths, cd=cd, uid=uid)
             to_compute.add(uid)
 
-        # 2. Compute missing entries as a single batch.
         if to_compute:
-            filtered_uids = [u for u in uids if u in to_compute]
-            for uid in filtered_uids:
+            for uid in to_compute:
                 paths._ensure_folders(uid)
             reg: inflight.InflightRegistry | None = None
             if self._is_off_process:
                 reg = inflight.InflightRegistry(paths.cache_folder)
-            with inflight.inflight_session(reg, filtered_uids):
+            with inflight.inflight_session(reg, to_compute):
                 # Re-check after lock (another worker may have finished).
-                recheck = _CachedEntry.lookup_statuses(cd, filtered_uids)
-                still_uids = [u for u in filtered_uids if recheck[u] != "success"]
+                recheck = _CachedEntry.lookup_statuses(cd, to_compute)
+                still_uids = [u for u in to_compute if recheck[u] != "success"]
                 if still_uids:
                     filtered = batch.select(still_uids)
-                    wrapper = _CachingCall(step, cd)
+                    wrapper = _CachingCall(step, cd, paths.step_uid)
                     try:
                         job = self._submit(wrapper, filtered, paths=paths)
                         if reg is not None:
@@ -428,8 +431,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     finally:
                         if mode in ("force", "retry"):
                             self._recomputed.update(still_uids)
-                verify = _CachedEntry.lookup_statuses(cd, filtered_uids)
-                for uid in filtered_uids:
+                verify = _CachedEntry.lookup_statuses(cd, to_compute)
+                for uid in to_compute:
                     if verify[uid] != "success":
                         raise RuntimeError(
                             f"Worker completed but cache missing: {paths.step_uid}[{uid}]"

@@ -17,7 +17,7 @@ import pytest
 
 import exca
 
-from . import backends, conftest, identity
+from . import backends, conftest, identity, items
 from .base import Chain, Step
 
 # =============================================================================
@@ -290,11 +290,9 @@ def test_deprecated_forward() -> None:
             return x * 2
 
     step = OldStyle()
-    # _forward override triggers warning when run() is called
     with pytest.warns(DeprecationWarning, match="_forward.*deprecated.*_run"):
         assert step.run(5.0) == 10.0
 
-    # .forward() call triggers its own warning
     with pytest.warns(DeprecationWarning, match="forward.*deprecated.*run"):
         assert step.forward(5.0) == 10.0
 
@@ -552,3 +550,33 @@ def test_custom_hierarchy_roundtrip() -> None:
     assert data["steps"][0]["name"] == "CustomMult"
     restored = CustomStep.model_validate(data)
     assert type(restored) is CustomChain
+
+
+# =============================================================================
+# _run_batch yield count validation
+# =============================================================================
+
+
+class _NumYield(Step):
+    """Yields exactly *num* results, ignoring actual input count."""
+
+    num: int = 0
+
+    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+        list(values)  # consume input
+        for i in range(self.num):
+            yield i
+
+
+@pytest.mark.parametrize("with_infra", [False, True])
+@pytest.mark.parametrize(
+    "num, match",
+    [(1, "yielded 1 results for 3"), (4, "yielded more than 3")],
+    ids=["under", "over"],
+)
+def test_run_batch_yield_count(
+    tmp_path: Path, num: int, match: str, with_infra: bool
+) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
+    with pytest.raises(RuntimeError, match=match):
+        list(_NumYield(num=num, infra=infra).run(items.Items([10, 20, 30])))

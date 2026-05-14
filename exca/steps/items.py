@@ -51,8 +51,13 @@ def _annotated_batch(
     uids: tp.Sequence[str] | None = None,
 ) -> tp.Iterator[tp.Any]:
     n_out = 0
+    expected = len(uids) if uids is not None else None
     try:
         for result in step._run_batch(values):
+            if expected is not None and n_out >= expected:
+                raise RuntimeError(
+                    f"{step!r}._run_batch yielded more than {expected} results"
+                )
             n_out += 1
             yield result
     except Exception as e:
@@ -61,9 +66,9 @@ def _annotated_batch(
         if uid is not None:
             e._failed_uid = uid  # type: ignore[attr-defined]
         raise
-    if uids is not None and n_out < len(uids):
+    if expected is not None and n_out < expected:
         raise RuntimeError(
-            f"{step!r}._run_batch yielded {n_out} results for {len(uids)} inputs"
+            f"{step!r}._run_batch yielded {n_out} results for {expected} inputs"
         )
 
 

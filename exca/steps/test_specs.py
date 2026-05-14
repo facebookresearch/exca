@@ -14,6 +14,7 @@ import os
 import typing as tp
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from . import conftest, items
@@ -75,7 +76,7 @@ def test_heterogeneous_items_cache(tmp_path: Path, as_chain: bool) -> None:
         step = Chain(steps=[step, conftest.Mult(coeff=1.0, infra=infra)])
 
     list(step.run(items.Items([1.0, 2.0])))
-    assert calls == [1.0, 2.0]
+    assert set(calls) == {1.0, 2.0}
 
     calls.clear()
     result = list(step.run(items.Items([1.0, 2.0, 3.0])))
@@ -241,7 +242,8 @@ def test_scalar_and_items_share_cache(tmp_path: Path, as_chain: bool) -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_chain_items_per_step_batching(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_infra", [False, True])
+def test_chain_items_per_step_batching(tmp_path: Path, with_infra: bool) -> None:
     calls: list[float] = []
 
     class Track(Step):
@@ -252,12 +254,41 @@ def test_chain_items_per_step_batching(tmp_path: Path) -> None:
             return x * self.coeff
 
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(steps=[Track(infra=infra), Track(), Track(infra=infra)])
+    chain = Chain(
+        steps=[Track(infra=infra), Track(), Track(infra=infra if with_infra else None)]
+    )
     result = list(chain.run(items.Items([1, 2, 3])))
     assert result == [1000, 2000, 3000]
-    expected = (1, 2, 3)  # step1 (cached): batches eagerly
-    expected += (10, 100, 20, 200, 30, 300)  # step2+3 interleave lazily
-    assert tuple(calls) == expected, "wrong computation interleaving"
+    assert set(calls[:3]) == {1, 2, 3}, "step1 (cached): eager, possibly unordered"
+    rest = np.array(calls[3:])
+    assert len(rest) == 6
+    np.testing.assert_array_equal(
+        rest[1::2], 10 * rest[::2], err_msg="step2→step3 interleaving broken"
+    )
+    if not with_infra:
+        np.testing.assert_array_equal(
+            rest, [10, 100, 20, 200, 30, 300], err_msg="inline: input order preserved"
+        )
+
+
+# -----------------------------------------------------------------------------
+# 1:1 item flow with input ordering preserved
+# "Duplicate uids must still return one result per input."
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(reason="dict(zip(uids, values)) drops duplicates", strict=True)
+@pytest.mark.parametrize("with_infra", [False, True])
+@pytest.mark.parametrize("as_chain", [False, True])
+def test_duplicate_uids_preserve_all_results(
+    tmp_path: Path, as_chain: bool, with_infra: bool
+) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step: tp.Any = conftest.Mult(coeff=10.0, infra=infra if with_infra else None)
+    if as_chain:
+        step = Chain(steps=[step, conftest.Mult(coeff=1.0)])
+    result = list(step.run(items.Items([1.0, 1.0, 2.0])))
+    assert result == [10.0, 10.0, 20.0], "one result per input, even with duplicate uids"
 
 
 # -----------------------------------------------------------------------------
@@ -287,12 +318,15 @@ def test_fail_fast_partial_cache(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     with pytest.raises(ValueError):
         list(FailOnValue(fail_value=3, infra=infra).run(items.Items([1, 2, 3, 4, 5])))
+    assert calls[-1] == 3, "fail-fast: nothing should compute after the failure"
+    first_cached = set(calls[:-1])
 
     calls.clear()
     infra["mode"] = "retry"
     result = list(FailOnValue(infra=infra).run(items.Items([1, 2, 3, 4, 5])))
     assert result == [10, 20, 30, 40, 50]
-    assert calls == [3, 4, 5], "items before failure must be cached"
+    assert 3 in calls
+    assert first_cached.isdisjoint(set(calls)), "cached items must not recompute"
 
 
 # -----------------------------------------------------------------------------

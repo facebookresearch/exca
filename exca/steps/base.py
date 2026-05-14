@@ -230,9 +230,9 @@ class Step(exca.helpers.DiscriminatedModel):
         return None
 
     def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
-        """Override for vectorised batch compute (GPU, vector ops).
+        """Override instead of ``_run`` for vectorised batch compute.
 
-        Must yield one result per input value, in order.
+        Must yield exactly one result per input value, in order.
         Default loops ``_run`` over inputs.
         """
         for v in values:
@@ -580,16 +580,6 @@ class Chain(Step):
         if self.infra is None or self.infra.folder is None:
             return self._walk_steps(batch)
         return super()._dispatch(batch)
-
-    def forward(
-        self, value: tp.Any = identity.NoValue()
-    ) -> tp.Any:  # deprecated: use run()
-        warnings.warn(
-            "Chain.forward() is deprecated, use run() instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.run(value)
 
 
 Step._exca_chain_class = Chain
