@@ -277,7 +277,6 @@ def test_chain_items_per_step_batching(tmp_path: Path, with_infra: bool) -> None
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="dict(zip(uids, values)) drops duplicates", strict=True)
 @pytest.mark.parametrize("with_infra", [False, True])
 @pytest.mark.parametrize("as_chain", [False, True])
 def test_duplicate_uids_preserve_all_results(

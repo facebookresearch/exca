@@ -75,8 +75,8 @@ def _annotated_batch(
 class StepItems(Items):
     """Pipeline carrier for inline computation between cached boundaries.
 
-    For dict sources, uids are the dict keys (insertion order).
-    For CacheDict sources, an explicit uid subset is required
+    For dict sources, uids default to the dict keys (insertion order).
+    For CacheDict sources, explicit uids are required
     (the CacheDict may contain keys from other runs).
     """
 
@@ -84,35 +84,31 @@ class StepItems(Items):
         self,
         *,
         source: _Source,
-        subset_uids: tp.Sequence[str] | None = None,
+        uids: tp.Sequence[str] | None = None,
         upstream: tp.Sequence[Step] = (),
         pending: tp.Sequence[Step] = (),
         mode: identity.ModeType = "cached",
     ) -> None:
-        if subset_uids is None and not isinstance(source, dict):
-            raise TypeError("CacheDict source has no guaranteed order; pass subset_uids")
+        if uids is None:
+            if not isinstance(source, dict):
+                raise TypeError("CacheDict source requires explicit uids")
+            uids = list(source)
+        # source holds unique uid→value; uids is the full input sequence
+        # (may contain duplicates for expand-after-dedup)
         self._source = source
-        self._subset_uids: tp.Sequence[str] | None = subset_uids
+        self.uids = list(uids)
         self._upstream = tuple(upstream)
         self._pending = tuple(pending)
         self._mode = mode
 
     def __len__(self) -> int:
-        if self._subset_uids is not None:
-            return len(self._subset_uids)
-        return len(self._source)
-
-    @property
-    def uids(self) -> tp.Sequence[str]:
-        if self._subset_uids is not None:
-            return self._subset_uids
-        return list(self._source)
+        return len(self.uids)
 
     def apply_step(self, step: Step) -> StepItems:
         """Append step's computation and identity."""
         return StepItems(
             source=self._source,
-            subset_uids=self._subset_uids,
+            uids=self.uids,
             upstream=self._upstream + tuple(step._aligned_step()),
             pending=self._pending + (step,),
             mode=self._mode,
@@ -124,16 +120,12 @@ class StepItems(Items):
         Dict source: builds a subset dict (only needed values pickled).
         CacheDict source: just narrows the uid list (folder-path pickle).
         """
-        if isinstance(self._source, dict):
-            return StepItems(
-                source={uid: self._source[uid] for uid in uids},
-                upstream=self._upstream,
-                pending=self._pending,
-                mode=self._mode,
-            )
+        source = self._source
+        if isinstance(source, dict):
+            source = {uid: source[uid] for uid in dict.fromkeys(uids)}
         return StepItems(
-            source=self._source,
-            subset_uids=uids,
+            source=source,
+            uids=uids,
             upstream=self._upstream,
             pending=self._pending,
             mode=self._mode,

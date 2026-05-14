@@ -192,7 +192,7 @@ class _CachedEntry:
     @staticmethod
     def lookup_statuses(
         cd: exca.cachedict.CacheDict[tp.Any],
-        uids: tp.Sequence[str],
+        uids: tp.Iterable[str],
     ) -> dict[str, tp.Literal["success", "error", None]]:
         """Bulk status check — one ErrorRegistry query instead of N."""
         folder = cd.folder
@@ -440,7 +440,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         return items.StepItems(
             source=cd,
-            subset_uids=uids,
+            uids=uids,
             upstream=upstream,
             mode=mode,
         )

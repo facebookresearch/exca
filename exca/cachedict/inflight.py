@@ -355,7 +355,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
 @contextlib.contextmanager
 def inflight_session(
     reg: InflightRegistry | None,
-    item_uids: list[str],
+    item_uids: tp.Collection[str],
     *,
     local: bool = False,
 ) -> tp.Iterator[list[str]]:
@@ -382,6 +382,7 @@ def inflight_session(
     if reg is None:
         yield list(item_uids)
         return
+    item_uids = list(item_uids)
     pid = os.getpid()
     # Track items already owned by this PID before we start, so that
     # the finally block only releases items this session actually inserted

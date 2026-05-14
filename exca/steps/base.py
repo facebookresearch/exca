@@ -391,6 +391,7 @@ class Step(exca.helpers.DiscriminatedModel):
         uids = [identity.materialize_uid(self, v) for v in values]
         boundary = items.StepItems(
             source=dict(zip(uids, values)),
+            uids=uids,
         )
         result = self._dispatch(boundary)
         if is_items:

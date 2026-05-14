@@ -26,12 +26,12 @@ def source_abc(request: pytest.FixtureRequest, tmp_path: Path) -> items.StepItem
     """StepItems with keys a,b,c → 1,2,3 backed by dict or CacheDict."""
     if request.param == "dict":
         return items.StepItems(source={"a": 1, "b": 2, "c": 3})
-    cd = exca.cachedict.CacheDict(tmp_path / "cache")
+    cd: exca.cachedict.CacheDict[int] = exca.cachedict.CacheDict(tmp_path / "cache")
     with cd.write():
         cd["a"] = 1
         cd["b"] = 2
         cd["c"] = 3
-    return items.StepItems(source=cd, subset_uids=["a", "b", "c"])
+    return items.StepItems(source=cd, uids=["a", "b", "c"])
 
 
 def test_step_items_iteration_and_select(source_abc: items.StepItems) -> None:
@@ -48,6 +48,8 @@ def test_step_items_pickle(source_abc: items.StepItems) -> None:
 
 
 def test_step_items_cache_dict_requires_uids() -> None:
-    cd = exca.cachedict.CacheDict(folder=None, keep_in_ram=True)
-    with pytest.raises(TypeError, match="subset_uids"):
+    cd: exca.cachedict.CacheDict[int] = exca.cachedict.CacheDict(
+        folder=None, keep_in_ram=True
+    )
+    with pytest.raises(TypeError, match="explicit uids"):
         items.StepItems(source=cd)
