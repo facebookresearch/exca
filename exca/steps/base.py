@@ -4,13 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Core step classes.
-
-Step holds pydantic config and `_run`; identity (`step_uid`, `uid`)
-is computed by `exca.steps.identity` from `(self, value)` at call time.
-`_dispatch` routes computation inline or via backend; ``_run_batch``
-does the actual work.
-"""
+"""Core step classes: Step and Chain."""
 
 from __future__ import annotations
 
@@ -165,7 +159,11 @@ class Step(exca.helpers.DiscriminatedModel):
                 f"{cls.__name__} overrides _forward which was removed; "
                 "override _run instead"
             )
-        has_run = cls._run is not Step._run or cls._run_batch is not Step._run_batch
+        has_run = (
+            cls._run is not Step._run
+            or cls._run_batch is not Step._run_batch
+            or cls._run_items is not Step._run_items
+        )
         if has_run:
             flags.add("has_run")
             if _has_all_defaults(cls._run):
@@ -238,6 +236,10 @@ class Step(exca.helpers.DiscriminatedModel):
         if resolved is not self:
             return resolved._inner_mode()
         return "cached" if self.infra is None else self.infra.mode
+
+    def _run_items(self, batch: items.StepItems) -> items.StepItems:
+        """Process *batch* and return result as StepItems."""
+        return batch.apply_step(self)
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         """Push *batch* through this step, return result as StepItems."""
@@ -552,9 +554,8 @@ class Chain(Step):
             current = step._dispatch(current)
         return current
 
-    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
-        # values is actually StepItems here (FIX with _run_items?)
-        yield from self._walk_steps(values)  # type: ignore[arg-type]
+    def _run_items(self, batch: items.StepItems) -> items.StepItems:
+        return self._walk_steps(batch)
 
     def _inner_mode(self) -> identity.ModeType:
         own: identity.ModeType = "cached" if self.infra is None else self.infra.mode

@@ -7,6 +7,7 @@
 """Tests for Step and Chain basic functionality (no caching tests here, see test_cache.py)."""
 
 import collections
+import itertools
 import pickle
 import traceback
 import typing as tp
@@ -376,7 +377,7 @@ def test_chain_error_note() -> None:
     with pytest.raises(ValueError) as exc_info:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
-    assert "Add" in formatted and "while running step" in formatted
+    assert "Add" in formatted and "inflight uids" in formatted
 
 
 # =============================================================================
@@ -566,3 +567,48 @@ def test_run_batch_yield_count(
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
     with pytest.raises(RuntimeError, match=match):
         list(_NumYield(num=num, infra=infra).run(items.Items([10, 20, 30])))
+
+
+class _GroupedMult(Step):
+    """Consumes inputs in groups, multiplies by 10."""
+
+    _CALLS: tp.ClassVar[list[list[int]]] = []
+    group_size: int = 2
+    fail_value: int = -1
+
+    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+        it = iter(values)
+        while group := list(itertools.islice(it, self.group_size)):
+            if self.fail_value in group:
+                raise ValueError("boom")
+            self._CALLS.append(group)
+            for v in group:
+                yield v * 10
+
+
+@pytest.mark.parametrize("with_infra", [False, True])
+def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
+    step = _GroupedMult(group_size=2, fail_value=3, infra=infra)
+    with pytest.raises(ValueError, match="boom") as exc_info:
+        list(step.run(items.Items([1, 2, 3, 4, 5, 6])))
+    inflight = getattr(exc_info.value, "_inflight_uids", [])
+    assert len(inflight) == 2, f"expected 2 inflight uids, got {inflight}"
+
+
+def test_chained_group_sizes_call_order() -> None:
+    _GroupedMult._CALLS.clear()
+    chain = Chain(steps=[_GroupedMult(group_size=s) for s in (2, 3, 1)])
+    _ = list(chain.run(items.Items([1, 2, 3, 4, 5])))
+    calls = list(_GroupedMult._CALLS)
+    _GroupedMult._CALLS.clear()
+    # fmt: off
+    assert calls == [
+        [1, 2], [3, 4],       # step1 runs both pairs (step2 needs 3)
+        [10, 20, 30],          # step2 fills its group of 3
+        [100], [200], [300],   # step3 drains immediately
+        [5],                   # step1 partial: 1 left
+        [40, 50],              # step2 partial: only 2 left
+        [400], [500],          # step3 drains
+    ]
+    # fmt: on
