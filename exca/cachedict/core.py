@@ -225,7 +225,7 @@ class CacheDict(tp.Generic[X]):
             if name in referenced or not reader._meta:
                 continue
             if not reader._fp.exists():
-                del self._jsonl_readers[name]
+                self._jsonl_readers.pop(name, None)
                 continue
             # Only clean up if first data line is blanked (see delete_info);
             # valid/partial first lines may indicate a concurrent write.
@@ -237,7 +237,7 @@ class CacheDict(tp.Generic[X]):
                     if not line.startswith(b" "):
                         continue
             except FileNotFoundError:
-                del self._jsonl_readers[name]
+                self._jsonl_readers.pop(name, None)
                 continue
             logger.warning("Cleaning up orphaned files for %s", name)
             prefix = name.removesuffix("-info.jsonl")
@@ -248,7 +248,7 @@ class CacheDict(tp.Generic[X]):
             for path in paths:
                 with utils.fast_unlink(path, missing_ok=True):
                     pass
-            del self._jsonl_readers[name]
+            self._jsonl_readers.pop(name, None)
 
     def values(self) -> tp.Iterable[X]:
         for key in self:
