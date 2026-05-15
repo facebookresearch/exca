@@ -4,6 +4,7 @@
 
 - `exca/steps`: experimental batch execution via `Items`. `step.run(Items([v1, v2, ...]))` processes multiple inputs sharing per-step caches. `_run_batch` hook for vectorised compute. [#248]
 - `exca/steps`: `Step.forward()` and `Step._forward()` removed (were deprecated). Use `run()` and `_run()` instead. [#252]
+- `exca/steps`: `Backend.cache_type` field removed (was deprecated in 0.5.23). Use `CACHE_TYPE` ClassVar on the Step subclass. [#256]
 
 ## 0.5.25 - 26-05-11
 
