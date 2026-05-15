@@ -85,14 +85,13 @@ class LookupHandle:
         cache_dict: exca.cachedict.CacheDict[tp.Any] | None = None,
         backend: Backend | None = None,
         uid: str = "",
-        sub_handles: tuple[LookupHandle, ...] = (),
     ) -> None:
         self._paths = paths
         self._cache_dict = cache_dict
         self._backend = backend
         self.uid = uid
         # Populated by container steps (Chain, etc.) at lookup time.
-        self._sub_handles = sub_handles
+        self._sub_handles: tuple[LookupHandle, ...] = ()
 
     @property
     def paths(self) -> StepPaths:
@@ -211,32 +210,28 @@ class _CachedEntry:
         """Bulk status check — one ErrorRegistry query instead of N."""
         folder = cd.folder
         out: dict[str, tp.Literal["success", "error", None]] = {}
-        misses: list[str] = []
+        errored: set[str] = set()
+        if folder is not None and folder.exists():
+            with errors.ErrorRegistry(folder) as reg:
+                errored = reg.get()  # errors are sparse, get them all
         for uid in uids:
             if uid in cd:
                 out[uid] = "success"
+            elif uid in errored:
+                out[uid] = "error"
             else:
-                misses.append(uid)
-        if misses and folder is not None and folder.exists():
-            with errors.ErrorRegistry(folder) as reg:
-                errored = reg.get(misses)
-            for uid in misses:
-                out[uid] = "error" if uid in errored else None
-        else:
-            for uid in misses:
                 out[uid] = None
         return out
 
     def result(self) -> tp.Any:
-        """Return the cached value, re-raise the cached error, or
-        ``None`` if absent."""
+        """Return the cached value or re-raise the cached error."""
         if self.status == "success":
             return self._cd[self._uid]
         if self.status == "error":
             if self._err is None:  # `lookup` always pre-loads on "error".
                 raise RuntimeError(f"_CachedEntry(error) missing _err for {self._uid}")
             raise self._err
-        return None
+        raise RuntimeError(f"No cached entry for {self._uid}")
 
 
 class _CachingCall:
