@@ -479,14 +479,14 @@ class Chain(Step):
     def _is_generator(self) -> bool:
         """Chain is a generator if its first step is a generator."""
         steps = _resolve_all(self._step_sequence())
-        return steps[0]._is_generator() if steps else True
+        return steps[0]._is_generator()
 
     def _resolve_cache_type(self) -> str | None:
         # Chain shares a cache entry with last step, so formats must agree.
         if self.CACHE_TYPE is not None:
             return self.CACHE_TYPE
         seq = _resolve_all(self._step_sequence())
-        return seq[-1]._resolve_cache_type() if seq else None
+        return seq[-1]._resolve_cache_type()
 
     def _aligned_step(self) -> list[Step]:
         # Flatten to contained steps after `_resolve_step` expansion -
@@ -502,7 +502,7 @@ class Chain(Step):
     def item_uid(self, value: tp.Any) -> str | None:
         """Delegate to first resolved step's item_uid."""
         steps = list(_resolve_all(self._step_sequence()))
-        return steps[0].item_uid(value) if steps else None
+        return steps[0].item_uid(value)
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
         """Flatten chain for UID export (matches old Chain behavior)."""
