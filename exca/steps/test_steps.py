@@ -335,6 +335,35 @@ def test_step_flags() -> None:
         assert cls()._is_generator() is is_gen, cls.__name__
 
 
+def test_resolve_step_transitive() -> None:
+    """Multi-level _resolve_step is supported (resolves to fixed point)."""
+
+    class Wrapper(Step):
+        def _resolve_step(self) -> Step:
+            return conftest.AddWithTransforms(
+                value=1, transforms=[conftest.Mult(coeff=3)]
+            )
+
+    chain = Chain(steps=[Wrapper()])
+    assert chain.run() == 3.0
+
+
+def test_resolve_step_circular() -> None:
+    """Circular _resolve_step raises instead of looping forever."""
+
+    class A(Step):
+        def _resolve_step(self) -> Step:
+            return B()
+
+    class B(Step):
+        def _resolve_step(self) -> Step:
+            return A()
+
+    chain = Chain(steps=[A()])
+    with pytest.raises(RuntimeError, match="did not converge"):
+        chain.run()
+
+
 def test_resolve_step_uid_consistency() -> None:
     """Resolved step and equivalent Chain produce the same UID."""
     step = conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)])
