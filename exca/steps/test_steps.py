@@ -104,7 +104,7 @@ def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
     expected_hash = (
         "type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     )
-    assert identity.step_uid(chain._aligned_step()) == expected_hash
+    assert identity.step_uid(chain._uid_steps()) == expected_hash
 
     # UID export to YAML
     yaml = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_yaml()

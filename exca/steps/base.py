@@ -235,9 +235,9 @@ class Step(exca.helpers.DiscriminatedModel):
     # Identity
     # =========================================================================
 
-    def _aligned_step(self) -> list[Step]:
+    def _uid_steps(self) -> list[Step]:
         """This step's contribution to the cache key chain. ``Chain``
-        flattens to its children — see ``Chain._aligned_step``."""
+        flattens to its children — see ``Chain._uid_steps``."""
         return [self]
 
     def _resolve_cache_type(self) -> str | None:
@@ -293,7 +293,7 @@ class Step(exca.helpers.DiscriminatedModel):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
-        steps = list(_upstream) + list(self._aligned_step())
+        steps = list(_upstream) + list(self._uid_steps())
         paths = backends.StepPaths(
             self.infra.folder,
             identity.step_uid(steps),
@@ -464,12 +464,12 @@ class Chain(Step):
             return self.CACHE_TYPE
         return self._resolved_steps()[-1]._resolve_cache_type()
 
-    def _aligned_step(self) -> list[Step]:
+    def _uid_steps(self) -> list[Step]:
         # Flatten to contained steps after `_resolve_step` expansion -
         # the chain itself contributes nothing. So chain and its last step
         # share the same step_uid (cache folder); combined with the same
         # uid, they share the same cache entry.
-        return [s for step in self._resolved_steps() for s in step._aligned_step()]
+        return [s for step in self._resolved_steps() for s in step._uid_steps()]
 
     def item_uid(self, value: tp.Any) -> str | None:
         """Delegate to first resolved step's item_uid."""
@@ -477,7 +477,7 @@ class Chain(Step):
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
         """Flatten chain for UID export (matches old Chain behavior)."""
-        chain = type(self)(steps=tuple(self._aligned_step()))
+        chain = type(self)(steps=tuple(self._uid_steps()))
         exporter = utils.ConfigExporter(
             uid=True, exclude_defaults=True, ignore_first_override=True
         )
@@ -500,7 +500,7 @@ class Chain(Step):
         handle = super().lookup(_upstream=_upstream, _uid=_uid)
         upstreams: list[list[Step]] = [list(_upstream)]
         for s in steps[:-1]:
-            upstreams.append(upstreams[-1] + s._aligned_step())
+            upstreams.append(upstreams[-1] + s._uid_steps())
         sub = [step.lookup(_upstream=up, _uid=_uid) for step, up in zip(steps, upstreams)]
         # Chain shares identity with last step — if the chain itself has
         # no infra, borrow the last step's handle for user inspection.
