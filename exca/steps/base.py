@@ -36,30 +36,6 @@ def _has_all_defaults(method: tp.Callable[..., tp.Any]) -> bool:
     )
 
 
-def _resolve_all(steps: tp.Iterable[Step]) -> list[Step]:
-    """Resolve steps that define _resolve_step, flattening Chains into sub-steps."""
-    resolved: list[Step] = []
-    for step in steps:
-        built = step._resolve_step()
-        if built is step:
-            resolved.append(step)
-        elif isinstance(built, Chain):
-            resolved.extend(built._step_sequence())
-        else:
-            resolved.append(built)
-    return resolved
-
-
-def _aligned_prefixes(
-    steps: tp.Sequence[Step], prefix: tp.Sequence[Step] = ()
-) -> list[list[Step]]:
-    """Cumulative aligned prefix for each step in *steps*."""
-    result: list[list[Step]] = [list(prefix)]
-    for s in steps[:-1]:
-        result.append(result[-1] + s._aligned_step())
-    return result
-
-
 @pydantic.model_validator(mode="before")
 def _infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
     """Convert backend instances to dicts to prevent sharing."""
@@ -259,9 +235,9 @@ class Step(exca.helpers.DiscriminatedModel):
     # Identity
     # =========================================================================
 
-    def _aligned_step(self) -> list[Step]:
+    def _uid_steps(self) -> list[Step]:
         """This step's contribution to the cache key chain. ``Chain``
-        flattens to its children — see ``Chain._aligned_step``."""
+        flattens to its children — see ``Chain._uid_steps``."""
         return [self]
 
     def _resolve_cache_type(self) -> str | None:
@@ -296,7 +272,7 @@ class Step(exca.helpers.DiscriminatedModel):
         self,
         value: tp.Any = identity.NoValue(),
         *,
-        _aligned_prefix: tp.Sequence[Step] = (),
+        _upstream: tp.Sequence[Step] = (),
         _uid: str | None = None,
     ) -> LookupHandle:
         """Return a :class:`LookupHandle` for inspecting or clearing the cache.
@@ -317,7 +293,7 @@ class Step(exca.helpers.DiscriminatedModel):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
-        steps = list(_aligned_prefix) + list(self._aligned_step())
+        steps = list(_upstream) + list(self._uid_steps())
         paths = backends.StepPaths(
             self.infra.folder,
             identity.step_uid(steps),
@@ -432,6 +408,21 @@ class Chain(Step):
     def _step_sequence(self) -> tuple[Step, ...]:
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
 
+    def _resolved_steps(self) -> list[Step]:
+        out: list[Step] = []
+        for s in self._step_sequence():
+            for _ in range(10):
+                built = s._resolve_step()
+                if built is s:
+                    break
+                s = built
+            else:
+                raise RuntimeError(
+                    f"_resolve_step did not converge on {type(s).__name__}"
+                )
+            out.append(s)
+        return out
+
     def __len__(self) -> int:
         return len(self.steps)
 
@@ -465,35 +456,28 @@ class Chain(Step):
 
     def _is_generator(self) -> bool:
         """Chain is a generator if its first step is a generator."""
-        steps = _resolve_all(self._step_sequence())
-        return steps[0]._is_generator()
+        return self._resolved_steps()[0]._is_generator()
 
     def _resolve_cache_type(self) -> str | None:
         # Chain shares a cache entry with last step, so formats must agree.
         if self.CACHE_TYPE is not None:
             return self.CACHE_TYPE
-        seq = _resolve_all(self._step_sequence())
-        return seq[-1]._resolve_cache_type()
+        return self._resolved_steps()[-1]._resolve_cache_type()
 
-    def _aligned_step(self) -> list[Step]:
+    def _uid_steps(self) -> list[Step]:
         # Flatten to contained steps after `_resolve_step` expansion -
         # the chain itself contributes nothing. So chain and its last step
         # share the same step_uid (cache folder); combined with the same
         # uid, they share the same cache entry.
-        return [
-            s
-            for step in _resolve_all(self._step_sequence())
-            for s in step._aligned_step()
-        ]
+        return [s for step in self._resolved_steps() for s in step._uid_steps()]
 
     def item_uid(self, value: tp.Any) -> str | None:
         """Delegate to first resolved step's item_uid."""
-        steps = list(_resolve_all(self._step_sequence()))
-        return steps[0].item_uid(value)
+        return self._resolved_steps()[0].item_uid(value)
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
         """Flatten chain for UID export (matches old Chain behavior)."""
-        chain = type(self)(steps=tuple(self._aligned_step()))
+        chain = type(self)(steps=tuple(self._uid_steps()))
         exporter = utils.ConfigExporter(
             uid=True, exclude_defaults=True, ignore_first_override=True
         )
@@ -507,18 +491,17 @@ class Chain(Step):
         self,
         value: tp.Any = identity.NoValue(),
         *,
-        _aligned_prefix: tp.Sequence[Step] = (),
+        _upstream: tp.Sequence[Step] = (),
         _uid: str | None = None,
     ) -> LookupHandle:
-        steps = tuple(_resolve_all(self._step_sequence()))
+        steps = self._resolved_steps()
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
-        handle = super().lookup(_aligned_prefix=_aligned_prefix, _uid=_uid)
-        prefixes = _aligned_prefixes(steps, _aligned_prefix)
-        sub = [
-            step.lookup(_aligned_prefix=pfx, _uid=_uid)
-            for step, pfx in zip(steps, prefixes)
-        ]
+        handle = super().lookup(_upstream=_upstream, _uid=_uid)
+        upstreams: list[list[Step]] = [list(_upstream)]
+        for s in steps[:-1]:
+            upstreams.append(upstreams[-1] + s._uid_steps())
+        sub = [step.lookup(_upstream=up, _uid=_uid) for step, up in zip(steps, upstreams)]
         # Chain shares identity with last step — if the chain itself has
         # no infra, borrow the last step's handle for user inspection.
         if handle._paths is None and sub and sub[-1]._paths is not None:
@@ -535,7 +518,7 @@ class Chain(Step):
         values: items.StepItems,
     ) -> items.StepItems:
         """Compose sub-step dispatches sequentially."""
-        steps = tuple(_resolve_all(self._step_sequence()))
+        steps = self._resolved_steps()
         current = values
         for step in steps:
             current = step._dispatch(current)
@@ -547,7 +530,7 @@ class Chain(Step):
     def _inner_mode(self) -> identity.ModeType:
         own: identity.ModeType = "cached" if self.infra is None else self.infra.mode
         return backends.effective_mode(
-            own, *(s._inner_mode() for s in _resolve_all(self._step_sequence()))
+            own, *(s._inner_mode() for s in self._resolved_steps())
         )
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:

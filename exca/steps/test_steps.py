@@ -104,7 +104,7 @@ def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
     expected_hash = (
         "type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     )
-    assert identity.step_uid(chain._aligned_step()) == expected_hash
+    assert identity.step_uid(chain._uid_steps()) == expected_hash
 
     # UID export to YAML
     yaml = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_yaml()
@@ -333,6 +333,35 @@ def test_step_flags() -> None:
     for cls, (flags, is_gen) in expected.items():
         assert cls._step_flags == flags, cls.__name__
         assert cls()._is_generator() is is_gen, cls.__name__
+
+
+def test_resolve_step_transitive() -> None:
+    """Multi-level _resolve_step is supported (resolves to fixed point)."""
+
+    class Wrapper(Step):
+        def _resolve_step(self) -> Step:
+            return conftest.AddWithTransforms(
+                value=1, transforms=[conftest.Mult(coeff=3)]
+            )
+
+    chain = Chain(steps=[Wrapper()])
+    assert chain.run() == 3.0
+
+
+def test_resolve_step_circular() -> None:
+    """Circular _resolve_step raises instead of looping forever."""
+
+    class A(Step):
+        def _resolve_step(self) -> Step:
+            return B()
+
+    class B(Step):
+        def _resolve_step(self) -> Step:
+            return A()
+
+    chain = Chain(steps=[A()])
+    with pytest.raises(RuntimeError, match="did not converge"):
+        chain.run()
 
 
 def test_resolve_step_uid_consistency() -> None:

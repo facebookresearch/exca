@@ -388,7 +388,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         Returns a :class:`~items.StepItems` backed by the cache.
         """
-        upstream = tuple(batch._upstream) + tuple(step._aligned_step())
+        upstream = tuple(batch._upstream) + tuple(step._uid_steps())
         paths = step._make_paths(upstream)
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         mode = effective_mode(step._inner_mode(), batch._mode)

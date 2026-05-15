@@ -126,7 +126,7 @@ class StepItems(Items):
         return StepItems(
             source=self._source,
             uids=self.uids,
-            upstream=self._upstream + tuple(step._aligned_step()),
+            upstream=self._upstream + tuple(step._uid_steps()),
             pending=self._pending + (step,),
             mode=self._mode,
         )
