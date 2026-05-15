@@ -211,19 +211,16 @@ class _CachedEntry:
         """Bulk status check — one ErrorRegistry query instead of N."""
         folder = cd.folder
         out: dict[str, tp.Literal["success", "error", None]] = {}
-        misses: list[str] = []
+        errored: set[str] = set()
+        if folder is not None and folder.exists():
+            with errors.ErrorRegistry(folder) as reg:
+                errored = reg.get()
         for uid in uids:
             if uid in cd:
                 out[uid] = "success"
+            elif uid in errored:
+                out[uid] = "error"
             else:
-                misses.append(uid)
-        if misses and folder is not None and folder.exists():
-            with errors.ErrorRegistry(folder) as reg:
-                errored = reg.get(misses)
-            for uid in misses:
-                out[uid] = "error" if uid in errored else None
-        else:
-            for uid in misses:
                 out[uid] = None
         return out
 
