@@ -94,25 +94,6 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     assert chain_handle.cached()
 
 
-@pytest.mark.parametrize("classvar_name", [None, "CACHE_TYPE", "_DEFAULT_CACHE_TYPE"])
-def test_backend_cache_type_vs_classvar(
-    tmp_path: Path, classvar_name: str | None
-) -> None:
-    """infra.cache_type is silent on match, raises on mismatch.
-
-    ``_DEFAULT_CACHE_TYPE`` is the legacy alias for older neuralset.
-    """
-    attrs = {classvar_name: "Pickle"} if classvar_name else {}
-    cls = type("Gen", (conftest.RandomGenerator,), attrs)
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "cache_type": "Pickle"}
-    step = cls(infra=infra)
-    if classvar_name is None:
-        with pytest.raises(RuntimeError, match="does not match"):
-            step.run()
-    else:
-        step.run()  # silent match
-
-
 # =============================================================================
 # Cache modes
 # =============================================================================

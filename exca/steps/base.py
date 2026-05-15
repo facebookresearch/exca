@@ -243,7 +243,6 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         """Push *batch* through this step, return result as StepItems."""
-        self._check_cache_type()
         if self.infra is None or self.infra.folder is None:
             return batch.apply_step(self)
         return self.infra._run(self, batch)
@@ -326,18 +325,6 @@ class Step(exca.helpers.DiscriminatedModel):
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=cache_type)
         return LookupHandle(paths, cd, backend=self.infra, uid=_uid)
-
-    def _check_cache_type(self) -> None:
-        """Validate the deprecated ``infra.cache_type`` against the Step's
-        declared ``CACHE_TYPE``. Called on the write path only."""
-        if self.infra is None or self.infra.cache_type is None:
-            return
-        declared = self._resolve_cache_type()
-        if self.infra.cache_type != declared:
-            raise RuntimeError(
-                f"infra.cache_type={self.infra.cache_type!r} does not match "
-                f"the Step's declared CACHE_TYPE ({declared!r}); use only CACHE_TYPE."
-            )
 
     def with_input(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # deprecated
         raise AttributeError(

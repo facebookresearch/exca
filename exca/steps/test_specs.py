@@ -95,7 +95,6 @@ def test_heterogeneous_items_cache(tmp_path: Path, as_chain: bool) -> None:
     [
         {"backend": "Cached"},
         {"backend": "LocalProcess", "mode": "force"},
-        {"backend": "Cached", "cache_type": "Pickle"},
     ],
 )
 @pytest.mark.parametrize("as_chain", [False, True])

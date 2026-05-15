@@ -287,8 +287,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     _concurrent: tp.ClassVar[bool] = False
 
     folder: Path | None = None
-    # deprecated: declare `CACHE_TYPE` on the Step subclass.
-    cache_type: str | None = None
 
     mode: identity.ModeType = "cached"
     keep_in_ram: bool = False
