@@ -317,13 +317,13 @@ class Step(exca.helpers.DiscriminatedModel):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
-        cache_type = self._resolve_cache_type()
         steps = list(_aligned_prefix) + list(self._aligned_step())
         paths = backends.StepPaths(
             self.infra.folder,
             identity.step_uid(steps),
+            cache_type=self._resolve_cache_type(),
         )
-        cd = self.infra._cache_dict(paths.cache_folder, cache_type=cache_type)
+        cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         return LookupHandle(paths, cd, backend=self.infra, uid=_uid)
 
     def with_input(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # deprecated
