@@ -131,12 +131,12 @@ class StepItems(Items):
             mode=self._mode,
         )
 
-    def select(self, uids: tp.Sequence[str]) -> StepItems:
-        """Subset to specific uids.
-
-        Dict source: builds a subset dict (only needed values pickled).
-        CacheDict source: just narrows the uid list (folder-path pickle).
-        """
+    def select(
+        self,
+        uids: tp.Sequence[str],
+        mode: identity.ModeType | None = None,
+    ) -> StepItems:
+        """Subset to specific uids, optionally overriding mode."""
         source = self._source
         if isinstance(source, dict):
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
@@ -145,7 +145,7 @@ class StepItems(Items):
             uids=uids,
             upstream=self._upstream,
             pending=self._pending,
-            mode=self._mode,
+            mode=mode if mode is not None else self._mode,
         )
 
     def __iter__(self) -> tp.Iterator[tp.Any]:

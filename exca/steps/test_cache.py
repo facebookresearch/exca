@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from . import conftest, identity
+from . import backends, conftest, identity
 from .base import Chain, Step
 
 # =============================================================================
@@ -99,6 +99,63 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
 # =============================================================================
 
 
+@pytest.mark.parametrize(
+    "modes, expected",
+    [
+        # single mode
+        (("cached",), "cached"),
+        (("read-only",), "read-only"),
+        # non-read-only: most aggressive wins
+        (("cached", "cached"), "cached"),
+        (("cached", "retry"), "retry"),
+        (("cached", "force"), "force"),
+        (("retry", "cached"), "retry"),
+        (("retry", "force"), "force"),
+        (("force", "cached"), "force"),
+        (("force", "retry"), "force"),
+        (("cached", "retry", "force"), "force"),
+        # read-only is local: doesn't persist past next mode
+        (("read-only", "cached"), "cached"),
+        (("read-only", "retry"), "retry"),
+        (("read-only", "force"), "force"),
+        (("cached", "read-only"), "read-only"),
+        (("retry", "read-only"), "read-only"),
+        (("read-only", "read-only"), "read-only"),
+        (("cached", "read-only", "force"), "force"),
+        (("read-only", "cached", "read-only"), "read-only"),
+        # read-only then force: read-only is local, force takes over
+        (("retry", "read-only", "cached"), "cached"),
+        # force then read-only is a contradiction
+        (("force", "read-only"), ValueError),
+        (("cached", "force", "read-only"), ValueError),
+        (("read-only", "force", "read-only"), ValueError),
+        # empty
+        ((), "cached"),
+    ],
+)
+def test_effective_mode(modes: tuple[str, ...], expected: str | type) -> None:
+    if expected is ValueError:
+        with pytest.raises(ValueError, match="read-only mode conflicts"):
+            backends.effective_mode(*modes)  # type: ignore[arg-type]
+    else:
+        assert backends.effective_mode(*modes) == expected  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "chain_mode, child_mode",
+    [("read-only", "force"), ("force", "read-only")],
+)
+def test_readonly_vs_force_raises(
+    tmp_path: Path, chain_mode: str, child_mode: str
+) -> None:
+    """read-only + force in the same chain is contradictory either way."""
+    chain_infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": chain_mode}
+    child_infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": child_mode}
+    chain = Chain(steps=[conftest.Add(value=1, infra=child_infra)], infra=chain_infra)
+    with pytest.raises(ValueError, match="read-only|force"):
+        chain.run()
+
+
 def test_mode_readonly(tmp_path: Path) -> None:
     """Read-only mode: fails without cache, works with cache."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "read-only"}
@@ -174,6 +231,19 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
 
     out3 = step.run()
     assert out2 == out3, "force is one-shot per uid"
+
+
+def test_chain_force_propagates_to_non_final(tmp_path: Path) -> None:
+    """Force on chain must recompute non-final children, not just the last."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(
+        steps=[conftest.Add(randomize=True, infra=infra), conftest.Mult()],
+        infra=infra,
+    )
+    out1 = chain.run()
+    chain.infra.mode = "force"  # type: ignore
+    out2 = chain.run()
+    assert out1 != out2, "non-final Add(randomize) should recompute under chain force"
 
 
 def test_force_propagates_downstream(tmp_path: Path) -> None:

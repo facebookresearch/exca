@@ -158,16 +158,24 @@ class LookupHandle:
         return None
 
 
-def effective_mode(
-    own: identity.ModeType, *propagated: identity.ModeType
-) -> identity.ModeType:
-    """Most aggressive mode wins; ``read-only`` is local-only (does not propagate)."""
-    if own == "read-only":
-        return "read-only"
-    modes = [own]
-    for m in propagated:
-        modes.append("cached" if m == "read-only" else m)
-    return max(modes, key=("cached", "retry", "force").index)
+def effective_mode(*modes: identity.ModeType) -> identity.ModeType:
+    """Fold modes in pipeline order: ``force``/``retry`` persist forward,
+    ``read-only`` is local (resets on next step). ``force`` then ``read-only`` raises.
+    """
+    _rank = ("cached", "retry", "force").index
+    acc: identity.ModeType = "cached"
+    for m in modes:
+        if m == "read-only":
+            if acc == "force":
+                raise ValueError(
+                    "read-only mode conflicts with 'force' — would return stale results"
+                )
+            acc = "read-only"
+        elif acc == "read-only":
+            acc = m  # read-only doesn't persist
+        elif _rank(m) > _rank(acc):
+            acc = m
+    return acc
 
 
 @dataclasses.dataclass
@@ -391,7 +399,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         upstream = tuple(batch._upstream) + tuple(step._uid_steps())
         paths = step._make_paths(upstream)
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        mode = effective_mode(step._inner_mode(), batch._mode)
+        mode = effective_mode(batch._mode, step._inner_mode())
         uids = batch.uids
 
         # Scan: classify each uid as hit / error / needs-compute.
@@ -424,7 +432,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 recheck = _CachedEntry.lookup_statuses(cd, to_compute)
                 pending_uids = [u for u in to_compute if recheck[u] != "success"]
                 if pending_uids:
-                    filtered = batch.select(pending_uids)
+                    filtered = batch.select(pending_uids, mode=mode)
                     wrapper = _CachingCall(step, cd, paths.step_uid)
                     try:
                         self._execute(wrapper, filtered, paths=paths, reg=reg)

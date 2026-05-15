@@ -529,9 +529,9 @@ class Chain(Step):
 
     def _inner_mode(self) -> identity.ModeType:
         own: identity.ModeType = "cached" if self.infra is None else self.infra.mode
-        return backends.effective_mode(
-            own, *(s._inner_mode() for s in self._resolved_steps())
-        )
+        child_modes = [s._inner_mode() for s in self._resolved_steps()]
+        # trailing own: chain reasserts its mode after children
+        return backends.effective_mode(own, *child_modes, own)
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         if self.infra is None or self.infra.folder is None:
