@@ -505,7 +505,7 @@ class _SubmititBackend(Backend):
         reg: inflight.InflightRegistry | None,
     ) -> None:
         uids = list(pending.uids)
-        random.shuffle(uids)
+        random.shuffle(uids)  # avoid collisions on competing runs
         chunks = [
             pending.select(c)
             for c in utils.to_chunks(
@@ -584,14 +584,14 @@ class _PoolBackend(Backend):
         reg: inflight.InflightRegistry | None,
     ) -> None:
         uids = list(pending.uids)
-        if len(uids) <= 1:
-            wrapper(pending)
-            return
-        random.shuffle(uids)
         cpus = max(1, (os.cpu_count() or 1) - 1)
         max_workers = min(len(uids), cpus)
         if self.max_jobs is not None:
             max_workers = min(max_workers, self.max_jobs)
+        if max_workers <= 1:
+            wrapper(pending)
+            return
+        random.shuffle(uids)  # avoid collisions on competing runs
         chunks = [
             pending.select(c) for c in utils.to_chunks(uids, max_chunks=3 * max_workers)
         ]

@@ -14,6 +14,7 @@ import pytest
 
 from . import backends, conftest, identity
 from .base import Chain, Step
+from .items import Items
 
 # =============================================================================
 # Basic caching
@@ -233,17 +234,38 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
     assert out2 == out3, "force is one-shot per uid"
 
 
-def test_chain_force_propagates_to_non_final(tmp_path: Path) -> None:
+@pytest.mark.parametrize("chain_backend", ["Cached", "ThreadPool"])
+def test_chain_force_propagates_to_non_final(tmp_path: Path, chain_backend: str) -> None:
     """Force on chain must recompute non-final children, not just the last."""
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+
+    class Versioned(Step):
+        calls: tp.ClassVar[list[int]] = []
+
+        def _run(self, x: int) -> int:
+            type(self).calls.append(x)
+            return x + 1000 * len(type(self).calls)
+
+    values = [1, 2, 3, 4]
+    child_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain_infra: tp.Any = {"backend": chain_backend, "folder": tmp_path}
+    if chain_backend == "ThreadPool":
+        chain_infra["max_jobs"] = 2
     chain = Chain(
-        steps=[conftest.Add(randomize=True, infra=infra), conftest.Mult()],
-        infra=infra,
+        steps=[Versioned(infra=child_infra), conftest.Mult(coeff=1)],
+        infra=chain_infra,
     )
-    out1 = chain.run()
-    chain.infra.mode = "force"  # type: ignore
-    out2 = chain.run()
-    assert out1 != out2, "non-final Add(randomize) should recompute under chain force"
+
+    out1 = list(chain.run(Items(values)))
+    assert len(Versioned.calls) == len(values)
+
+    chain.infra.mode = "force"  # type: ignore[union-attr]
+    out2 = list(chain.run(Items(values)))
+    assert out2 != out1, "force on chain should reach cached child step"
+    assert len(Versioned.calls) == 2 * len(values)
+
+    out3 = list(chain.run(Items(values)))
+    assert out3 == out2
+    assert len(Versioned.calls) == 2 * len(values), "force is one-shot"
 
 
 def test_force_propagates_downstream(tmp_path: Path) -> None:
