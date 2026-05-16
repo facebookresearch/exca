@@ -221,6 +221,7 @@ class CacheDict(tp.Generic[X]):
         if self.folder is None:
             return
         referenced = {info.jsonl.name for info in self._key_info.values()}
+        # use pop to be robust to concurrent del
         for name, reader in list(self._jsonl_readers.items()):
             if name in referenced or not reader._meta:
                 continue
