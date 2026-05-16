@@ -262,12 +262,19 @@ class _CachingCall:
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
         result_items = self.step._run_items(batch)
+        written_uids: list[str] = []
         try:
             with self.cache_dict.write():
                 for i, result in enumerate(result_items):
                     uid = batch.uids[i]
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
+                        written_uids.append(uid)
+        except items.BatchProtocolError:
+            for uid in written_uids:
+                if uid in self.cache_dict:
+                    del self.cache_dict[uid]
+            raise
         except Exception as e:
             inflight: list[str] = getattr(e, "_inflight_uids", [])
             if folder is not None and inflight:

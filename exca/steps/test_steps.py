@@ -594,8 +594,22 @@ def test_run_batch_yield_count(
     tmp_path: Path, num: int, match: str, with_infra: bool
 ) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
-    with pytest.raises(RuntimeError, match=match):
-        list(_NumYield(num=num, infra=infra).run(items.Items([10, 20, 30])))
+    step = _NumYield(num=num, infra=infra)
+    with pytest.raises(items.BatchProtocolError, match=match):
+        list(step.run(items.Items([10, 20, 30])))
+    assert not any(step.lookup(v).cached() for v in [10, 20, 30])
+
+
+def test_run_batch_cannot_yield_before_consuming() -> None:
+    class EarlyYield(Step):
+        def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+            yield 0
+            yield from values
+
+    with pytest.raises(
+        items.BatchProtocolError, match="yielded before consuming an input"
+    ):
+        list(EarlyYield().run(items.Items([10, 20])))
 
 
 class _GroupedMult(Step):

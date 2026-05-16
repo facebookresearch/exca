@@ -31,6 +31,10 @@ if tp.TYPE_CHECKING:
 _Source = dict[str, tp.Any] | exca.cachedict.CacheDict[tp.Any]
 
 
+class BatchProtocolError(RuntimeError):
+    """Raised when ``_run_batch`` does not yield one result per consumed input."""
+
+
 class Items:
     """User-facing root: wraps an ``Iterable[Any]``.
 
@@ -71,8 +75,12 @@ class _AnnotatedBatch:
         try:
             for result in self.step._run_batch(self._tracked()):
                 if self.n_out >= self._expected:
-                    raise RuntimeError(
+                    raise BatchProtocolError(
                         f"{self.step!r}._run_batch yielded more than {self._expected} results"
+                    )
+                if not self._inflight:
+                    raise BatchProtocolError(
+                        f"{self.step!r}._run_batch yielded before consuming an input"
                     )
                 self._inflight.popleft()
                 self.n_out += 1
@@ -84,7 +92,7 @@ class _AnnotatedBatch:
                 e._inflight_uids = failed  # type: ignore[attr-defined]
             raise
         if self.n_out < self._expected:
-            raise RuntimeError(
+            raise BatchProtocolError(
                 f"{self.step!r}._run_batch yielded {self.n_out} results for {self._expected} inputs"
             )
 
