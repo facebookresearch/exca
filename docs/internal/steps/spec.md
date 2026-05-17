@@ -236,6 +236,10 @@ one sequentially. `StepItems` carries the original item uid sequence plus
 the accumulated upstream identity so downstream cache hits can skip
 upstream execution.
 
+Uid-only or lazy item construction would let cache-only runs avoid
+rebuilding expensive inputs. That is a useful future optimization, but not
+required for MapInfra parity or current step semantics.
+
 ### Safety Measures to Consider (from TaskInfra/MapInfra)
 
 **Implemented:**
@@ -246,3 +250,4 @@ upstream execution.
 **Not yet implemented:**
 - Full status API (`"not submitted"` / `"running"` / `"completed"` / `"failed"`)
 - Concurrent submission detection (recent `job.pkl`)
+- Built-in `item_uid_max_length` support, like MapInfra's `ShortItemUid`

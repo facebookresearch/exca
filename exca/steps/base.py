@@ -132,7 +132,7 @@ class Step(exca.helpers.DiscriminatedModel):
     infra: backends.Backend | None = None
     _step_flags: tp.ClassVar[frozenset[str]] = frozenset()
     _exca_chain_class: tp.ClassVar[type[Step] | None] = None
-    # Cache serialization format; resolved by `_resolve_cache_type`,
+    # Cache serialization format; inferred by `_infer_cache_type`,
     # cascaded by Chain to its last step.
     CACHE_TYPE: tp.ClassVar[str | None] = None  # ``None`` = auto-dispatch.
 
@@ -250,12 +250,9 @@ class Step(exca.helpers.DiscriminatedModel):
         flattens to its children — see ``Chain._uid_steps``."""
         return [self]
 
-    def _resolve_cache_type(self) -> str | None:
-        """Declared cache format; Chain walks to the last step."""
-        # `_DEFAULT_CACHE_TYPE` is a back-compat alias; drop once neuralset migrates.
-        if self.CACHE_TYPE is not None:
-            return self.CACHE_TYPE
-        return getattr(self, "_DEFAULT_CACHE_TYPE", None)
+    def _infer_cache_type(self) -> str | None:
+        """Overridable cache format"""
+        return self.CACHE_TYPE
 
     def _make_paths(self, aligned: tp.Sequence[Step]) -> backends.StepPaths:
         """Build StepPaths, create folder, write configs."""
@@ -264,7 +261,7 @@ class Step(exca.helpers.DiscriminatedModel):
         paths = backends.StepPaths(
             self.infra.folder,
             identity.step_uid(aligned),
-            cache_type=self._resolve_cache_type(),
+            cache_type=self._infer_cache_type(),
         )
         paths.step_folder.mkdir(parents=True, exist_ok=True)
         identity.write_configs(paths.step_folder, aligned)
@@ -307,7 +304,7 @@ class Step(exca.helpers.DiscriminatedModel):
         paths = backends.StepPaths(
             self.infra.folder,
             identity.step_uid(steps),
-            cache_type=self._resolve_cache_type(),
+            cache_type=self._infer_cache_type(),
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         return LookupHandle(paths, cd, backend=self.infra, uid=_uid)
@@ -456,11 +453,11 @@ class Chain(Step):
         """Chain is a generator if its first step is a generator."""
         return self._resolved_steps()[0]._is_generator()
 
-    def _resolve_cache_type(self) -> str | None:
+    def _infer_cache_type(self) -> str | None:
         # Chain shares a cache entry with last step, so formats must agree.
         if self.CACHE_TYPE is not None:
             return self.CACHE_TYPE
-        return self._resolved_steps()[-1]._resolve_cache_type()
+        return self._resolved_steps()[-1]._infer_cache_type()
 
     def _uid_steps(self) -> list[Step]:
         # Flatten to contained steps after `_resolve_step` expansion -
