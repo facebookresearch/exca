@@ -362,6 +362,8 @@ def test_resolve_step_circular() -> None:
     chain = Chain(steps=[A()])
     with pytest.raises(RuntimeError, match="did not converge"):
         chain.run()
+    with pytest.raises(RuntimeError, match="did not converge"):
+        A().run()
 
 
 def test_resolve_step_uid_consistency() -> None:

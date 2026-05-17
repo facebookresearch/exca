@@ -7,6 +7,7 @@
 """Tests for caching behavior (modes, cache paths, intermediate caches)."""
 
 import contextlib
+import pickle
 import typing as tp
 from collections import defaultdict
 from pathlib import Path
@@ -242,6 +243,12 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
 
     out3 = step.run()
     assert out2 == out3, "force is one-shot per uid"
+
+    assert step.infra is not None
+    dumped = pickle.dumps(step)
+
+    restored = pickle.loads(dumped)
+    assert restored.run() != out3, "pickle starts a fresh backend lifetime"
 
 
 def test_force_clears_after_inflight_claim(

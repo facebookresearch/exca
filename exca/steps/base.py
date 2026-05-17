@@ -81,6 +81,16 @@ def _is_step(value: tp.Any, disc_key: str) -> bool:
     return isinstance(value, Step) or (isinstance(value, dict) and disc_key in value)
 
 
+def _resolved_step(step: Step) -> Step:
+    """Resolve one Step to a fixed point, guarding circular decompositions."""
+    for _ in range(10):
+        built = step._resolve_step()
+        if built is step:
+            return step
+        step = built
+    raise RuntimeError(f"_resolve_step did not converge on {type(step).__name__}")
+
+
 class Step(exca.helpers.DiscriminatedModel):
     """
     Base class for pipeline steps.
@@ -208,7 +218,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _inner_mode(self) -> identity.ModeType:
         """Effective mode considering resolved sub-steps."""
-        resolved = self._resolve_step()
+        resolved = _resolved_step(self)
         if resolved is not self:
             return resolved._inner_mode()
         return "cached" if self.infra is None else self.infra.mode
@@ -263,7 +273,7 @@ class Step(exca.helpers.DiscriminatedModel):
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
         if "has_resolve" not in self._step_flags:
             return None
-        built = self._resolve_step()
+        built = _resolved_step(self)
         if built is self:
             return None
         return built._exca_uid_dict_override()
@@ -333,7 +343,7 @@ class Step(exca.helpers.DiscriminatedModel):
         Any
             Cached or freshly computed result.
         """
-        built = self._resolve_step()
+        built = _resolved_step(self)
         if built is not self:
             return built.run(value)
 
@@ -409,19 +419,7 @@ class Chain(Step):
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
 
     def _resolved_steps(self) -> list[Step]:
-        out: list[Step] = []
-        for s in self._step_sequence():
-            for _ in range(10):
-                built = s._resolve_step()
-                if built is s:
-                    break
-                s = built
-            else:
-                raise RuntimeError(
-                    f"_resolve_step did not converge on {type(s).__name__}"
-                )
-            out.append(s)
-        return out
+        return [_resolved_step(step) for step in self._step_sequence()]
 
     def __len__(self) -> int:
         return len(self.steps)

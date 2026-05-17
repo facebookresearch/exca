@@ -309,6 +309,18 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Force/retry: at most once success/error per uid per lifetime; resets on pickle.
     _recomputed: set[str] = pydantic.PrivateAttr(default_factory=set)
 
+    def __getstate__(self) -> dict[str, tp.Any]:
+        recomputed = self._recomputed
+        self._recomputed = set()
+        try:
+            return super().__getstate__()
+        finally:
+            self._recomputed = recomputed
+
+    def __setstate__(self, state: dict[str, tp.Any]) -> None:
+        super().__setstate__(state)
+        self._recomputed = set()
+
     def _pending_statuses(
         self,
         *,

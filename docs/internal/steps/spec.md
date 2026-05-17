@@ -37,9 +37,8 @@ A `Step` is the fundamental unit that:
 ### Backend (Discriminated Model)
 
 `Backend` is a discriminated model with `discriminator_key="backend"`.
-It receives a `QueryHandle` (paths + CacheDict + cache_type)
-constructed caller-side by `Step.query`. Backend never reads from
-a Step — no back-ref, no topology walks.
+It receives `StepItems` batches from `Step._dispatch`, decides which
+item uids need work, and returns `StepItems` backed by CacheDict.
 
 - **Cached**: Inline execution + caching (base class for all)
 - **LocalProcess**: Subprocess execution via submitit
@@ -78,8 +77,8 @@ sequentially. It shares a cache entry with its last step (same
 │  Identity: step_uid + uid computed by `identity` module    │
 │  from (aligned_steps, value) at call time.                 │
 │                                                            │
-│  query(value) → QueryHandle (cache introspection handle)   │
-│  _execute: routes _run inline or to Backend.run via handle │
+│  lookup(value) → LookupHandle (cache introspection handle) │
+│  _dispatch: routes inline or through the configured Backend │
 └────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────┐
@@ -87,7 +86,7 @@ sequentially. It shares a cache entry with its last step (same
 │                                                            │
 │  Backend (base)                                            │
 │  - folder, mode, keep_in_ram                               │
-│  - run(func, args, handle) / clear_cache(handle) / job(handle)│
+│  - _run(step, batch) / _execute(...) / _clear_caches(...)   │
 │        │                                                   │
 │   ┌────┴────┬────────────┬─────────────┐                   │
 │   ▼         ▼            ▼             ▼                   │
@@ -106,15 +105,16 @@ class Step(DiscriminatedModel):
     CACHE_TYPE: ClassVar[str | None] = None
 
     def _run(self, ...) -> Any:          # override: computation
+    def _run_batch(self, values) -> Iterator[Any]:
     def _resolve_step(self) -> "Step":   # override: decompose into chain
     def run(self, value=NoValue()) -> Any:
-    def query(self, value=NoValue()) -> QueryHandle:
+    def lookup(self, value=NoValue()) -> LookupHandle:
 ```
 
-### QueryHandle
+### LookupHandle
 
 ```python
-class QueryHandle:
+class LookupHandle:
     # public properties (raise RuntimeError if unconfigured)
     paths: StepPaths
     cache_dict: CacheDict
@@ -126,8 +126,8 @@ class QueryHandle:
     def job(self) -> submitit.Job | None: ...
 ```
 
-`query()` always returns a `QueryHandle` — null-object when unconfigured.
-`Chain.query()` overrides to populate `_sub_handles` with child
+`lookup()` always returns a `LookupHandle` — null-object when unconfigured.
+`Chain.lookup()` overrides to populate `_sub_handles` with child
 handles (prefix-walked). `clear_cache(recursive=True)` walks
 `_sub_handles` first, so the same method works for Step (leaf) and
 any container (Chain, future Parallel, etc.).
@@ -137,7 +137,7 @@ any container (Chain, future Parallel, etc.).
 ```python
 class Chain(Step):
     steps: Sequence[Step] | OrderedDict[str, Step]
-    def query(...) -> QueryHandle:       # overrides: populates _sub_handles
+    def lookup(...) -> LookupHandle:     # overrides: populates _sub_handles
 ```
 
 ### Step Resolution (`_resolve_step`)
@@ -172,7 +172,7 @@ class Multiply(Step):
 
 step = Multiply(coeff=3.0, infra={"backend": "Cached", "folder": "/tmp/cache"})
 result = step.run(5.0)       # 15.0
-q = step.query(5.0)
+q = step.lookup(5.0)
 assert q.cached()
 q.clear_cache()
 ```
@@ -187,7 +187,7 @@ class LoadData(Step):
 
 step = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
 data = step.run()
-q = step.query()
+q = step.lookup()
 assert q.cached()
 ```
 
@@ -222,32 +222,27 @@ step.run(bad_input)               # clears error, recomputes
 
 When `step.run(value)` is called:
 
-1. `_resolve_step()` — if non-self, delegate to resolved step.
-2. Compute `uid = materialize_uid(value)`, build `QueryHandle`
-   via `query(uid=uid)`.
-3. `_execute(args, handle=handle)` — routes inline or to
-   `Backend.run(func, args, handle=handle)`.
-4. Backend handles cache modes, inflight coordination, and
-   job submission. See `caching.md`.
+1. Resolve via `_resolve_step()` to a fixed point. If non-self,
+   delegate to the resolved step.
+2. Wrap scalar inputs in `Items`, eagerly materialize values and uids,
+   then build the initial `StepItems`.
+3. `_dispatch(batch)` runs inline when no backend folder is configured;
+   otherwise it calls `Backend._run(step, batch)`.
+4. Backend handles cache modes, inflight coordination, and job
+   submission. See `caching.md`.
 
-For chains: `Chain._execute` binds `(uid, aligned_prefix)` into
-`functools.partial(self._run_at, ...)` and dispatches the partial.
-`_run_at` walks children, computing per-child handles and calling
-`step._execute(...)` on each.
-
-## Future Work
-
-See `items-spec.md` (workspace root) for the batch-processing
-extension (`Items`, `_run_batch`, Slurm-array distribution).
+For chains: `Chain._walk_steps` resolves child steps and dispatches each
+one sequentially. `StepItems` carries the original item uid sequence plus
+the accumulated upstream identity so downstream cache hits can skip
+upstream execution.
 
 ### Safety Measures to Consider (from TaskInfra/MapInfra)
 
 **Implemented:**
 - Config consistency checking (`identity.write_configs`)
 - Permissions on CacheDict (`permissions=0o777`)
-- Mode transition (`force` → `cached` after one-shot)
+- Force/retry one-shot tracking per Backend lifetime
 
 **Not yet implemented:**
 - Full status API (`"not submitted"` / `"running"` / `"completed"` / `"failed"`)
 - Concurrent submission detection (recent `job.pkl`)
-- `forbid_single_item_computation` guard
