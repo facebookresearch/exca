@@ -437,35 +437,45 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             to_compute.add(uid)
 
         if to_compute:
-            for uid in to_compute:
-                paths.cache_folder.mkdir(parents=True, exist_ok=True)
+            paths.cache_folder.mkdir(parents=True, exist_ok=True)
             if mode == "force":
+                to_clear = [uid for uid in to_compute if statuses[uid] is not None]
+                if to_clear:
+                    msg = "Clearing %s items for %s (infra.mode=%s)"
+                    logger.warning(msg, len(to_clear), paths.step_uid, mode)
                 self._clear_caches(paths=paths, cd=cd, uids=to_compute)
             reg: inflight.InflightRegistry | None = None
             if self._concurrent:
                 reg = inflight.InflightRegistry(paths.cache_folder)
             with inflight.inflight_session(reg, to_compute) as claim:
                 statuses = _CachedEntry.lookup_statuses(cd, to_compute)  # recheck
-                clear_uids: list[str] = []
-                pending_uids: list[str] = []
+                pending_statuses: dict[str, tp.Literal["success", "error", None]] = {}
                 for uid in to_compute:
                     status = statuses[uid]
                     if not self._should_compute(uid, status, mode):
                         if status == "error":
                             _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
                         continue
-                    if mode == "force" or status == "error":
-                        clear_uids.append(uid)
-                        pending_uids.append(uid)
-                        if mode == "retry" and status == "error":
-                            logger.warning(
-                                "Retrying failed step: %s[%s]", paths.step_uid, uid
-                            )
-                    elif status is None:
-                        pending_uids.append(uid)
+                    pending_statuses[uid] = status
+
+                retry_count = sum(
+                    status == "error" for status in pending_statuses.values()
+                )
+                if retry_count:
+                    logger.warning(
+                        "Retrying %s failed items for %s",
+                        retry_count,
+                        paths.step_uid,
+                    )
+                clear_uids = [
+                    uid
+                    for uid, status in pending_statuses.items()
+                    if mode == "force" or status == "error"
+                ]
                 self._clear_caches(paths=paths, cd=cd, uids=clear_uids)
 
-                if pending_uids:
+                if pending_statuses:
+                    pending_uids = list(pending_statuses)
                     filtered = batch.select(pending_uids, mode=mode)
                     wrapper = _CachingCall(step, cd, paths.step_uid)
                     try:
@@ -555,8 +565,13 @@ class _SubmititBackend(Backend):
             jobs = [executor.submit(wrapper, c) for c in chunks]
         for c, j in zip(chunks, jobs):
             claim.record_worker_info(j, uids=c.uids)
+        msg = "Sent %s items for %s into %s jobs on cluster '%s' (eg: %s)"
+        logger.info(
+            msg, len(uids), paths.step_uid, len(jobs), self._CLUSTER, jobs[0].job_id
+        )
         for j in jobs:
             j.result()
+        logger.info("Finished processing %s items for %s", len(uids), paths.step_uid)
 
 
 class LocalProcess(_SubmititBackend):
@@ -631,6 +646,7 @@ class _PoolBackend(Backend):
         for c in chunks:
             claim.record_worker_info(uids=c.uids)
         with utils.make_pool_executor(self._POOL_TYPE, max_workers) as pool:
+            logger.info("Sent %s items for %s into a %s", len(uids), paths.step_uid, pool)
             futs = [pool.submit(wrapper, c) for c in chunks]
             try:
                 for f in futures.as_completed(futs):
@@ -639,6 +655,7 @@ class _PoolBackend(Backend):
                 for f in futs:
                     f.cancel()
                 raise
+        logger.info("Finished processing %s items for %s", len(uids), paths.step_uid)
 
 
 class ProcessPool(_PoolBackend):
