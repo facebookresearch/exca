@@ -55,8 +55,8 @@ def _has_sacct() -> bool:
     Secondary safety net: on machines without sacct (dev, CI), submitit's
     SlurmJob.done() silently returns False instead of raising, making dead
     jobs appear alive and causing wait_for_inflight to hang. The primary
-    defense is record_worker_info, which stamps non-Slurm jobs with
-    _LOCAL_JOB_ID so is_alive routes them to the PID check.
+    defense is InflightClaim.record_worker_info, which stamps non-Slurm
+    jobs with _LOCAL_JOB_ID so is_alive routes them to the PID check.
     """
     return shutil.which("sacct") is not None
 
@@ -352,34 +352,59 @@ class InflightRegistry(registry.AdvisoryRegistry):
         return reclaimed
 
 
+@dataclasses.dataclass(frozen=True)
+class InflightClaim:
+    """Items owned by an inflight session."""
+
+    uids: list[str]
+    waited: bool = False
+    _reg: InflightRegistry | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
+
+    def record_worker_info(
+        self, job: tp.Any = None, uids: tp.Sequence[str] | None = None
+    ) -> None:
+        """Stamp this claim's worker liveness info in the registry."""
+        if self._reg is None:
+            return
+        item_uids = list(self.uids if uids is None else uids)
+        if isinstance(job, submitit.SlurmJob):
+            self._reg.update_worker_info(
+                item_uids, job_id=str(job.job_id), job_folder=str(job.paths.folder)
+            )
+        else:
+            self._reg.update_worker_info(item_uids, job_id=_LOCAL_JOB_ID)
+
+
 @contextlib.contextmanager
 def inflight_session(
     reg: InflightRegistry | None,
     item_uids: tp.Collection[str],
-) -> tp.Iterator[list[str]]:
+) -> tp.Iterator[InflightClaim]:
     """Wait for in-flight items, claim available ones, release+close on exit.
 
-    When *reg* is ``None`` (no cache folder), yields all *item_uids*
-    unchanged so that callers never need a ``None`` guard.
+    When *reg* is ``None`` (no cache folder), yields an unblocked claim
+    so that callers never need a ``None`` guard.
 
     Self-deadlock is prevented internally: ``wait_for_inflight`` skips items
     owned by the current PID, and ``claim`` treats same-PID rows as already
     ours.
 
-    Callers should call ``record_worker_info`` inside the ``with`` block
-    to stamp claimed items with an appropriate liveness signal.
+    Callers should call ``claim.record_worker_info`` inside the ``with``
+    block to stamp claimed items with a liveness signal.
     """
     if reg is None:
-        yield list(item_uids)
+        yield InflightClaim(list(item_uids))
         return
     item_uids = list(item_uids)
     pid = os.getpid()
+    existing = reg.get(item_uids)
+    waited = any(info.pid != pid for info in existing.values())
     # Track items already owned by this PID before we start, so that
     # the finally block only releases items this session actually inserted
     # (not items inherited from an outer / re-entrant session).
-    pre_owned: set[str] = {
-        uid for uid, info in reg.get(item_uids).items() if info.pid == pid
-    }
+    pre_owned: set[str] = {uid for uid, info in existing.items() if info.pid == pid}
     # Retry loop: wait for inflight items, then claim. claim() uses
     # all-or-nothing semantics (ROLLBACK if any item is held by a live
     # worker), so no partial claims are ever written — no release needed
@@ -393,25 +418,14 @@ def inflight_session(
             break
         # claim() rolled back — some items held by live workers that
         # appeared between wait_for_inflight and claim (lost-claim race).
+        waited = True
         msg = "Claim race: got %d/%d items, re-waiting"
         logger.info(msg, len(claimed), len(item_uids))
         time.sleep(random.uniform(0.5, 2.0))
+    claim = InflightClaim(claimed, waited=waited, _reg=reg)
     try:
-        yield claimed
+        yield claim
     finally:
-        to_release = [uid for uid in claimed if uid not in pre_owned]
+        to_release = [uid for uid in claim.uids if uid not in pre_owned]
         reg.release(to_release)
         reg.close()
-
-
-def record_worker_info(
-    reg: InflightRegistry, item_uids: list[str], job: tp.Any = None
-) -> None:
-    """Stamp worker info on *item_uids*. Slurm jobs get job_id + folder;
-    everything else (including no job) gets the local PID sentinel."""
-    if isinstance(job, submitit.SlurmJob):
-        reg.update_worker_info(
-            item_uids, job_id=str(job.job_id), job_folder=str(job.paths.folder)
-        )
-    else:
-        reg.update_worker_info(item_uids, job_id=_LOCAL_JOB_ID)

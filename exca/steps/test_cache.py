@@ -6,6 +6,7 @@
 
 """Tests for caching behavior (modes, cache paths, intermediate caches)."""
 
+import contextlib
 import typing as tp
 from collections import defaultdict
 from pathlib import Path
@@ -232,6 +233,44 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
 
     out3 = step.run()
     assert out2 == out3, "force is one-shot per uid"
+
+
+def test_force_clears_after_inflight_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Versioned(Step):
+        calls: tp.ClassVar[int] = 0
+
+        def _run(self) -> int:
+            type(self).calls += 1
+            return type(self).calls
+
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 1}
+    assert Versioned(infra=infra).run() == 1
+
+    events: list[str] = []
+    original_clear = backends.Backend._clear_cache
+    original_session = backends.inflight.inflight_session
+
+    def paused_clear(self: backends.Backend, **kwargs: tp.Any) -> None:
+        events.append("clear")
+        original_clear(self, **kwargs)
+
+    @contextlib.contextmanager
+    def paused_session(
+        reg: backends.inflight.InflightRegistry | None, item_uids: tp.Collection[str]
+    ) -> tp.Iterator[backends.inflight.InflightClaim]:
+        events.append("claim")
+        with original_session(reg, item_uids) as claimed:
+            yield claimed
+
+    monkeypatch.setattr(backends.Backend, "_clear_cache", paused_clear)
+    monkeypatch.setattr(backends.inflight, "inflight_session", paused_session)
+    force_infra: tp.Any = {**infra, "mode": "force"}
+
+    assert Versioned(infra=force_infra).run() == 2
+    assert events == ["claim", "clear"]
+    assert Versioned.calls == 2
 
 
 @pytest.mark.parametrize("chain_backend", ["Cached", "ThreadPool"])

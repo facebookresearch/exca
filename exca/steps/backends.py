@@ -425,6 +425,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         statuses = _CachedEntry.lookup_statuses(cd, uids)
         # set: intentionally unordered (no execution-order dependency within a batch)
         to_compute: set[str] = set()
+        to_clear: dict[str, tp.Literal["success", "error"]] = {}
         for uid in uids:
             status = statuses[uid]
             if not self._should_compute(uid, status, mode):
@@ -436,9 +437,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     )
                 continue
             if status is not None:
-                if mode == "retry":
-                    logger.warning("Retrying failed step: %s[%s]", paths.step_uid, uid)
-                self._clear_cache(paths=paths, cd=cd, uid=uid)
+                to_clear[uid] = status
             to_compute.add(uid)
 
         if to_compute:
@@ -447,14 +446,26 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             reg: inflight.InflightRegistry | None = None
             if self._concurrent:
                 reg = inflight.InflightRegistry(paths.cache_folder)
-            with inflight.inflight_session(reg, to_compute):
+            with inflight.inflight_session(reg, to_compute) as claim:
                 recheck = _CachedEntry.lookup_statuses(cd, to_compute)
-                pending_uids = [u for u in to_compute if recheck[u] != "success"]
+                pending_uids = []
+                for uid in to_compute:
+                    status = recheck[uid]
+                    if uid in to_clear:
+                        if self._should_compute(uid, status, mode):
+                            if mode == "retry":
+                                logger.warning(
+                                    "Retrying failed step: %s[%s]", paths.step_uid, uid
+                                )
+                            self._clear_cache(paths=paths, cd=cd, uid=uid)
+                            status = None
+                    if status != "success":
+                        pending_uids.append(uid)
                 if pending_uids:
                     filtered = batch.select(pending_uids, mode=mode)
                     wrapper = _CachingCall(step, cd, paths.step_uid)
                     try:
-                        self._execute(wrapper, filtered, paths=paths, reg=reg)
+                        self._execute(wrapper, filtered, paths=paths, claim=claim)
                     finally:
                         if mode in ("force", "retry"):
                             self._recomputed.update(pending_uids)
@@ -478,7 +489,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         pending: items.StepItems,
         *,
         paths: StepPaths,
-        reg: inflight.InflightRegistry | None,
+        claim: inflight.InflightClaim,
     ) -> None:
         """Run *wrapper* on *pending* items. Override for chunking/pools/arrays."""
         wrapper(pending)
@@ -521,7 +532,7 @@ class _SubmititBackend(Backend):
         pending: items.StepItems,
         *,
         paths: StepPaths,
-        reg: inflight.InflightRegistry | None,
+        claim: inflight.InflightClaim,
     ) -> None:
         uids = list(pending.uids)
         random.shuffle(uids)  # avoid collisions on competing runs
@@ -538,9 +549,8 @@ class _SubmititBackend(Backend):
         executor.update_parameters(**params)
         with submitit.helpers.clean_env(), executor.batch():
             jobs = [executor.submit(wrapper, c) for c in chunks]
-        if reg is not None:
-            for c, j in zip(chunks, jobs):
-                inflight.record_worker_info(reg, c.uids, j)
+        for c, j in zip(chunks, jobs):
+            claim.record_worker_info(j, uids=c.uids)
         for j in jobs:
             j.result()
 
@@ -600,7 +610,7 @@ class _PoolBackend(Backend):
         pending: items.StepItems,
         *,
         paths: StepPaths,
-        reg: inflight.InflightRegistry | None,
+        claim: inflight.InflightClaim,
     ) -> None:
         uids = list(pending.uids)
         cpus = max(1, (os.cpu_count() or 1) - 1)
@@ -614,9 +624,8 @@ class _PoolBackend(Backend):
         chunks = [
             pending.select(c) for c in utils.to_chunks(uids, max_chunks=3 * max_workers)
         ]
-        if reg is not None:
-            for c in chunks:
-                inflight.record_worker_info(reg, c.uids)
+        for c in chunks:
+            claim.record_worker_info(uids=c.uids)
         with utils.make_pool_executor(self._POOL_TYPE, max_workers) as pool:
             futs = [pool.submit(wrapper, c) for c in chunks]
             try:

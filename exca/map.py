@@ -335,8 +335,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             # avoid processing same files at same time if several jobs overlap
             np.random.shuffle(missing)
             reg = self._inflight_registry()
-            with inflight.inflight_session(reg, [k for k, _ in missing]) as claimed_uids:
-                claimed_set = set(claimed_uids)
+            with inflight.inflight_session(reg, [k for k, _ in missing]) as claim:
+                claimed_set = set(claim.uids)
                 # Re-check cache after wait: other workers may have completed
                 # items while we were blocked in inflight_session.
                 if self.folder is not None:
@@ -368,9 +368,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                                 use_cache_dict=True,
                             )
                             jobs.append(j)
-                    if reg is not None:
-                        for chunk, j in zip(uid_item_chunks, jobs):
-                            inflight.record_worker_info(reg, [uid for uid, _ in chunk], j)
+                    for chunk, j in zip(uid_item_chunks, jobs):
+                        claim.record_worker_info(j, uids=[uid for uid, _ in chunk])
                     # pylint: disable=expression-not-assigned
                     uid = self.uid()
                     msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"
@@ -415,10 +414,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             # avoid processing same files at same time if several jobs overlap
             np.random.shuffle(missing)
             reg = self._inflight_registry()
-            with inflight.inflight_session(reg, [k for k, _ in missing]) as claimed_uids:
-                if reg is not None:
-                    inflight.record_worker_info(reg, claimed_uids)
-                claimed_set = set(claimed_uids)
+            with inflight.inflight_session(reg, [k for k, _ in missing]) as claim:
+                claim.record_worker_info()
+                claimed_set = set(claim.uids)
                 # Re-check cache after wait: other workers may have completed
                 # items while we were blocked in inflight_session.
                 if self.folder is not None:
