@@ -317,10 +317,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         finally:
             self._recomputed = recomputed
 
-    def __setstate__(self, state: dict[str, tp.Any]) -> None:
-        super().__setstate__(state)
-        self._recomputed = set()
-
     def _pending_statuses(
         self,
         *,
