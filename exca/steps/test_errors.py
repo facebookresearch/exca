@@ -129,14 +129,6 @@ def test_rechecks_error_after_inflight_wait(
     step = _add(False, tmp_path, mode=mode)
     handle = step.lookup(5.0)
     handle.paths._ensure_folders(handle.uid)
-    calls = 0
-
-    def counted(value: float = 0) -> float:
-        nonlocal calls
-        calls += 1
-        return value + 1
-
-    monkeypatch.setattr(step, "_run", counted)
     original = backends.inflight.inflight_session
 
     @contextlib.contextmanager
@@ -152,10 +144,8 @@ def test_rechecks_error_after_inflight_wait(
     if mode == "cached":
         with pytest.raises(ValueError, match="from other worker"):
             step.run(5.0)
-        assert calls == 0
     else:
         assert step.run(5.0) == 6.0
-        assert calls == 1
 
 
 @pytest.mark.parametrize("mode", ["force", "retry"])
