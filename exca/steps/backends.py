@@ -36,6 +36,8 @@ if tp.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+CacheStatus = tp.Literal["success", "error", None]
+
 
 @dataclasses.dataclass(frozen=True)
 class StepPaths:
@@ -99,7 +101,7 @@ class LookupHandle:
         return self._cache_dict
 
     @property
-    def status(self) -> tp.Literal["success", "error", None]:
+    def status(self) -> CacheStatus:
         """Cache status: ``"success"``, ``"error"``, or ``None``."""
         if self._cache_dict is None or self._paths is None:
             return None
@@ -175,7 +177,7 @@ class _CachedEntry:
     """Result of looking up an item in the cache: a ``status`` plus a
     ``result()`` to materialise the cached value or re-raise the cached error."""
 
-    status: tp.Literal["success", "error", None]
+    status: CacheStatus
     _cd: exca.cachedict.CacheDict[tp.Any]
     _uid: str
     _err: BaseException | None = None  # pre-loaded; see `lookup`.
@@ -206,11 +208,11 @@ class _CachedEntry:
     def lookup_statuses(
         cd: exca.cachedict.CacheDict[tp.Any],
         uids: tp.Iterable[str],
-    ) -> dict[str, tp.Literal["success", "error", None]]:
+    ) -> dict[str, CacheStatus]:
         """Bulk status check — one ErrorRegistry query instead of N."""
         uids = list(dict.fromkeys(uids))  # dedup with order
         folder = cd.folder
-        out: dict[str, tp.Literal["success", "error", None]] = {}
+        out: dict[str, CacheStatus] = {}
         errored: set[str] = set()
         if folder is not None and folder.exists():
             with errors.ErrorRegistry(folder) as reg:
@@ -307,27 +309,33 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Force/retry: at most once success/error per uid per lifetime; resets on pickle.
     _recomputed: set[str] = pydantic.PrivateAttr(default_factory=set)
 
-    def _should_compute(
+    def _pending_statuses(
         self,
-        uid: str,
-        cached_status: tp.Literal["success", "error", None],
-        mode: identity.ModeType | None = None,
-    ) -> bool:
-        """True if this uid needs (re)computation under *mode*.
-
-        *mode* defaults to ``self.mode``; callers pass an explicit value
-        when upstream propagation raises the effective mode.
-        """
-        mode = mode or self.mode
-        if cached_status is None:
-            return mode != "read-only"
-        if uid in self._recomputed:
-            return False
-        if mode == "force":
-            return True
-        if mode == "retry" and cached_status == "error":
-            return True
-        return False
+        *,
+        paths: StepPaths,
+        uids: tp.Iterable[str],
+        mode: identity.ModeType,
+    ) -> dict[str, CacheStatus]:
+        """Return cache statuses for uids that should run under *mode*."""
+        cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
+        statuses = _CachedEntry.lookup_statuses(cd, uids)
+        pending: dict[str, CacheStatus] = {}
+        for uid, status in statuses.items():
+            if status is None:
+                if mode == "read-only":
+                    raise RuntimeError(
+                        f"No cache in read-only mode: {paths.step_uid}[{uid}]"
+                    )
+                pending[uid] = status
+            elif uid in self._recomputed:
+                if status == "error":
+                    _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
+                continue
+            elif mode == "force" or (mode == "retry" and status == "error"):
+                pending[uid] = status
+            elif status == "error":
+                _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
+        return pending
 
     @pydantic.field_validator("mode", mode="before")
     @classmethod
@@ -420,26 +428,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         mode = effective_mode(batch._mode, step._inner_mode())
         uids = batch.uids
 
-        # Scan: classify each uid as hit / error / needs-compute.
-        statuses = _CachedEntry.lookup_statuses(cd, uids)
+        pending_statuses = self._pending_statuses(paths=paths, uids=uids, mode=mode)
         # set: intentionally unordered (no execution-order dependency within a batch)
-        to_compute: set[str] = set()
-        for uid in uids:
-            status = statuses[uid]
-            if not self._should_compute(uid, status, mode):
-                if status == "error":
-                    _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
-                if status is None:
-                    raise RuntimeError(
-                        f"No cache in read-only mode: {paths.step_uid}[{uid}]"
-                    )
-                continue
-            to_compute.add(uid)
+        to_compute = set(pending_statuses)
 
         if to_compute:
             paths.cache_folder.mkdir(parents=True, exist_ok=True)
             if mode == "force":
-                to_clear = [uid for uid in to_compute if statuses[uid] is not None]
+                to_clear = [
+                    uid for uid, status in pending_statuses.items() if status is not None
+                ]
                 if to_clear:
                     msg = "Clearing %s items for %s (infra.mode=%s)"
                     logger.warning(msg, len(to_clear), paths.step_uid, mode)
@@ -448,16 +446,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             if self._concurrent:
                 reg = inflight.InflightRegistry(paths.cache_folder)
             with inflight.inflight_session(reg, to_compute) as claim:
-                statuses = _CachedEntry.lookup_statuses(cd, to_compute)  # recheck
-                pending_statuses: dict[str, tp.Literal["success", "error", None]] = {}
-                for uid in to_compute:
-                    status = statuses[uid]
-                    if not self._should_compute(uid, status, mode):
-                        if status == "error":
-                            _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
-                        continue
-                    pending_statuses[uid] = status
-
+                pending_statuses = self._pending_statuses(  # recheck once claimed
+                    paths=paths, uids=to_compute, mode=mode
+                )
                 retry_count = sum(
                     status == "error" for status in pending_statuses.values()
                 )
