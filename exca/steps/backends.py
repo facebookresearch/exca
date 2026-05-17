@@ -30,6 +30,7 @@ from exca import utils
 from exca.cachedict import inflight
 
 from . import errors, identity, items
+from . import jobs as job_registry
 
 if tp.TYPE_CHECKING:
     from .base import Step
@@ -139,7 +140,7 @@ class LookupHandle:
             )
 
     def job(self) -> submitit.Job[tp.Any] | None:
-        """Get the submitit job from the inflight registry, or ``None``."""
+        """Get the live or latest recorded submitit job, or ``None``."""
         if self._backend is None or not self.paths.step_folder.exists():
             return None
         try:
@@ -147,6 +148,12 @@ class LookupHandle:
                 info = reg.get([self.uid])
             if self.uid in info:
                 return info[self.uid]._job  # type: ignore[attr-defined]
+            with job_registry.JobRegistry(self.paths.step_folder) as reg:
+                job = reg.get([self.uid]).get(self.uid)
+            if job is not None:
+                return submitit.SlurmJob(
+                    folder=self.paths._logs_folder, job_id=job.job_id
+                )
         except Exception:
             pass
         return None
@@ -556,6 +563,10 @@ class _SubmititBackend(Backend):
             jobs = [executor.submit(wrapper, c) for c in chunks]
         for c, j in zip(chunks, jobs):
             claim.record_worker_info(j, uids=c.uids)
+        if executor.cluster == "slurm":
+            with job_registry.JobRegistry(paths.step_folder) as reg:
+                for c, j in zip(chunks, jobs):
+                    reg.record(c.uids, j.job_id)
         msg = "Sent %s items for %s into %s jobs on cluster '%s' (eg: %s)"
         logger.info(
             msg, len(uids), paths.step_uid, len(jobs), self._CLUSTER, jobs[0].job_id

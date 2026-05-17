@@ -7,6 +7,7 @@
 """Tests for execution backends (LocalProcess, Slurm, submitit integration)."""
 
 import contextlib
+import time
 import typing as tp
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import submitit
 
 import exca
 
-from . import backends, conftest, items
+from . import backends, conftest, items, jobs
 from .base import Chain, Step
 
 
@@ -35,6 +36,7 @@ class _CapturingAutoExecutor:
     captured: list = []  # reset by each test before monkeypatching
 
     def __init__(self, folder: tp.Any, cluster: str | None = None, **kw: tp.Any) -> None:
+        self.cluster = cluster
         self._ctor = {"folder": folder, "cluster": cluster, **kw}
 
     def update_parameters(self, **kw: tp.Any) -> None:
@@ -88,6 +90,20 @@ def test_slurm_backend_param_forwarding(
         "gpus_per_node": 4,
         "slurm_array_parallelism": 1,
     }
+    handle = step.lookup()
+    job = handle.job()
+    assert job is not None
+    assert job.job_id == "fake-job"
+    with jobs.JobRegistry(handle.paths.step_folder) as registry:
+        created_at = registry.get([handle.uid])[handle.uid].created_at
+
+    time.sleep(0.001)
+    handle.clear_cache()
+    assert step.run() == 1
+    with jobs.JobRegistry(handle.paths.step_folder) as registry:
+        info = registry.get([handle.uid])
+    assert info[handle.uid].created_at == created_at
+    assert info[handle.uid].updated_at > created_at
 
 
 def test_backend_error_caching(tmp_path: Path) -> None:
