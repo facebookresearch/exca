@@ -249,7 +249,7 @@ def test_force_clears_after_inflight_claim(
     assert Versioned(infra=infra).run() == 1
 
     events: list[str] = []
-    original_clear = backends.Backend._clear_cache
+    original_clear = backends.Backend._clear_caches
     original_session = backends.inflight.inflight_session
 
     def paused_clear(self: backends.Backend, **kwargs: tp.Any) -> None:
@@ -264,7 +264,7 @@ def test_force_clears_after_inflight_claim(
         with original_session(reg, item_uids) as claimed:
             yield claimed
 
-    monkeypatch.setattr(backends.Backend, "_clear_cache", paused_clear)
+    monkeypatch.setattr(backends.Backend, "_clear_caches", paused_clear)
     monkeypatch.setattr(backends.inflight, "inflight_session", paused_session)
     force_infra: tp.Any = {**infra, "mode": "force"}
 

@@ -141,7 +141,9 @@ class LookupHandle:
             for sub in self._sub_handles:
                 sub.clear_cache()
         if self._backend is not None:
-            self._backend._clear_cache(paths=self.paths, cd=self.cache_dict, uid=self.uid)
+            self._backend._clear_caches(
+                paths=self.paths, cd=self.cache_dict, uids=[self.uid]
+            )
 
     def job(self) -> submitit.Job[tp.Any] | None:
         """Get the submitit job from the inflight registry, or ``None``."""
@@ -271,6 +273,8 @@ class _CachingCall:
             with self.cache_dict.write():
                 for i, result in enumerate(result_items):
                     uid = batch.uids[i]
+                    if batch._mode == "force" and uid in self.cache_dict:
+                        del self.cache_dict[uid]
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
                         written_uids.append(uid)
@@ -380,35 +384,52 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             self._cds[cache_folder] = cd
         return cd
 
-    def _clear_cache(
+    def _cancel_inflight(self, *, paths: StepPaths, uids: tp.Iterable[str]) -> None:
+        uids = list(dict.fromkeys(uids))
+        # Other backends may have left inflight rows for this cache folder.
+        if not (uids and paths.cache_folder.exists()):
+            return
+        try:
+            reg = inflight.InflightRegistry(paths.cache_folder)
+            info = reg.get(uids)
+            jobs: dict[str, str] = {}
+            for uid, worker in info.items():
+                if worker.job_id is None or worker.job_folder is None:
+                    continue  # not submitit
+                # Slurm array tasks share a scheduler job; avoid per-task cancels.
+                job_id = worker.job_id.split("_", 1)[0]
+                jobs[job_id] = worker.job_folder
+            for job_id, folder in jobs.items():
+                submitit.SlurmJob(job_id=job_id, folder=folder).cancel()
+            reg.close()
+        except Exception as e:
+            logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
+
+    def _clear_caches(
         self,
         *,
         paths: StepPaths,
         cd: exca.cachedict.CacheDict[tp.Any],
-        uid: str,
+        uids: tp.Iterable[str],
     ) -> None:
-        """Drop everything cached for this uid (cd row, error row, job folder)."""
-        if self._concurrent and paths.cache_folder.exists():
-            try:
-                reg = inflight.InflightRegistry(paths.cache_folder)
-                info = reg.get([uid])
-                if uid in info:
-                    wi = info[uid]
-                    if wi._job is not None and not wi._job.done():  # type: ignore[attr-defined]
-                        wi._job.cancel()  # type: ignore[attr-defined]
-                reg.close()
-            except Exception as e:
-                logger.warning("Failed to cancel %s[%s]: %s", paths.step_uid, uid, e)
+        """Drop everything cached for these uids (cd rows, error rows, job folders)."""
+        uids = list(dict.fromkeys(uids))
+        if not uids:
+            return
+        self._cancel_inflight(paths=paths, uids=uids)
         # Success first → a mid-clear crash leaves a recoverable cached
         # error rather than a stale success (fail closed).
-        if uid in cd:
-            del cd[uid]
+        with cd.frozen_cache_folder():
+            for uid in uids:
+                if uid in cd:
+                    del cd[uid]
         if paths.cache_folder.exists():
             with errors.ErrorRegistry(paths.cache_folder) as ereg:
-                ereg.clear([uid])
-        job_folder = paths.job_folder(uid)
-        if job_folder.exists():
-            shutil.rmtree(job_folder)
+                ereg.clear(uids)
+        for uid in uids:
+            job_folder = paths.job_folder(uid)
+            if job_folder.exists():
+                shutil.rmtree(job_folder)
 
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid.
@@ -443,26 +464,30 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if to_compute:
             for uid in to_compute:
                 paths._ensure_folders(uid)
+            if mode == "force":
+                self._cancel_inflight(paths=paths, uids=to_compute)
             reg: inflight.InflightRegistry | None = None
             if self._concurrent:
                 reg = inflight.InflightRegistry(paths.cache_folder)
             with inflight.inflight_session(reg, to_compute) as claim:
                 recheck = _CachedEntry.lookup_statuses(cd, to_compute)
                 pending_uids = []
+                clear_uids = []
                 for uid in to_compute:
                     status = recheck[uid]
-                    if uid in to_clear:
+                    if uid in to_clear or (mode == "force" and status is not None):
                         if self._should_compute(uid, status, mode):
                             if mode == "retry":
                                 logger.warning(
                                     "Retrying failed step: %s[%s]", paths.step_uid, uid
                                 )
-                            self._clear_cache(paths=paths, cd=cd, uid=uid)
+                            clear_uids.append(uid)
                             status = None
                     elif status == "error":
                         _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
                     if status != "success":
                         pending_uids.append(uid)
+                self._clear_caches(paths=paths, cd=cd, uids=clear_uids)
                 if pending_uids:
                     filtered = batch.select(pending_uids, mode=mode)
                     wrapper = _CachingCall(step, cd, paths.step_uid)
