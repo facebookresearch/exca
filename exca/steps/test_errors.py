@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextlib
 import sqlite3
 import typing as tp
 from pathlib import Path
@@ -121,6 +122,32 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
         assert reg.get([handle.uid]) == set()
 
 
+@pytest.mark.parametrize("mode", ["cached", "retry"])
+def test_rechecks_error_after_inflight_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    step = _add(False, tmp_path, mode=mode)
+    handle = step.lookup(5.0)
+    handle.paths.cache_folder.mkdir(parents=True, exist_ok=True)
+    original = backends.inflight.inflight_session
+
+    @contextlib.contextmanager
+    def record_error_after_claim(
+        reg: backends.inflight.InflightRegistry | None, item_uids: tp.Collection[str]
+    ) -> tp.Iterator[backends.inflight.InflightClaim]:
+        with original(reg, item_uids) as claim:
+            with errors.ErrorRegistry(handle.paths.cache_folder) as ereg:
+                ereg.record(handle.uid, ValueError("from other worker"), "tb")
+            yield claim
+
+    monkeypatch.setattr(backends.inflight, "inflight_session", record_error_after_claim)
+    if mode == "cached":
+        with pytest.raises(ValueError, match="from other worker"):
+            step.run(5.0)
+    else:
+        assert step.run(5.0) == 6.0
+
+
 @pytest.mark.parametrize("mode", ["force", "retry"])
 def test_recompute_one_shot_on_error(tmp_path: Path, mode: str) -> None:
     step = _add(True, tmp_path)
@@ -183,7 +210,7 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     cleanup that wiped the CacheDict but left the DB) is wiped + recomputed
     on `mode='retry'` — no traps."""
     handle = _add(True, tmp_path).lookup(5.0)
-    handle.paths._ensure_folders(handle.uid)
+    handle.paths.cache_folder.mkdir(parents=True, exist_ok=True)
     with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
         reg.record(handle.uid, RuntimeError("stale"), "tb")
         assert handle.uid in reg.get([handle.uid])

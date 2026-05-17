@@ -64,33 +64,36 @@ def test_inflight_session(tmp_path: Path) -> None:
 
     # None: yields uids unchanged.
     with inflight.inflight_session(None, ["a", "b"]) as claimed:
-        assert claimed == ["a", "b"]
+        assert claimed.uids == ("a", "b")
+        assert not claimed.waited
 
     # Normal: claims visible during session, released after.
     with inflight.inflight_session(fresh(), ["x", "y"]) as claimed:
-        assert set(claimed) == {"x", "y"}
+        assert set(claimed.uids) == {"x", "y"}
+        assert not claimed.waited
         assert set(seen(["x", "y"])) == {"x", "y"}
     assert seen(["x", "y"]) == {}
 
     # Exception: items still released in finally.
     with pytest.raises(ValueError, match="boom"):
         with inflight.inflight_session(fresh(), ["a"]) as claimed:
-            assert claimed == ["a"]
+            assert claimed.uids == ("a",)
             raise ValueError("boom")
     assert seen(["a"]) == {}
 
     # Local: record_worker_info without job stamps _LOCAL_JOB_ID.
     reg = fresh()
     with inflight.inflight_session(reg, ["loc"]) as claimed:
-        assert claimed == ["loc"]
-        inflight.record_worker_info(reg, claimed)
+        assert claimed.uids == ("loc",)
+        claimed.record_worker_info()
         assert seen(["loc"])["loc"].job_id == inflight._LOCAL_JOB_ID
 
     # Nested: inner session must NOT release outer's claim.
     with inflight.inflight_session(fresh(), ["z"]) as outer:
-        assert outer == ["z"]
+        assert outer.uids == ("z",)
         with inflight.inflight_session(fresh(), ["z"]) as inner:
-            assert inner == ["z"]
+            assert inner.uids == ("z",)
+            assert not inner.waited
         assert "z" in seen(["z"]), "inner released outer's claim"
     assert seen(["z"]) == {}
 
@@ -256,7 +259,8 @@ def test_inflight_session_retries_lost_claim(
 
     reg = inflight.InflightRegistry(tmp_path)
     with inflight.inflight_session(reg, ["x"]) as claimed:
-        assert claimed == ["x"]
+        assert claimed.uids == ("x",)
+        assert claimed.waited
     assert wait_calls >= 2, f"expected retry, got {wait_calls} wait calls"
 
 
@@ -266,11 +270,10 @@ def test_record_worker_info_dispatch(tmp_path: Path) -> None:
     local = submitit.LocalJob[None](folder=tmp_path, job_id="ignored")
 
     reg = inflight.InflightRegistry(tmp_path)
-    reg.claim(["s", "l"])
-    inflight.record_worker_info(reg, ["s"], slurm)
-    inflight.record_worker_info(reg, ["l"], local)
+    with inflight.inflight_session(reg, ["s", "l"]) as claim:
+        claim.record_worker_info(slurm, uids=["s"])
+        claim.record_worker_info(local, uids=["l"])
+        info = reg.get(["s", "l"])
 
-    info = reg.get(["s", "l"])
     assert (info["s"].job_id, info["s"].job_folder) == ("42", str(slurm.paths.folder))
     assert (info["l"].job_id, info["l"].job_folder) == (inflight._LOCAL_JOB_ID, None)
-    reg.close()
