@@ -44,7 +44,7 @@ def test_error_registry_lifecycle(tmp_path: Path) -> None:
 
 
 def test_cached_entry_lookup_success_shadows_error(tmp_path: Path) -> None:
-    cd: cachedict.CacheDict[int] = cachedict.CacheDict(folder=tmp_path)
+    cd: cachedict.CacheDict[int] = cachedict.CacheDict(folder=tmp_path / "cache")
     with cd.write():
         cd["uid"] = 7
     with errors.ErrorRegistry(tmp_path) as reg:
@@ -56,7 +56,7 @@ def test_cached_entry_lookup_success_shadows_error(tmp_path: Path) -> None:
 
 
 def test_lookup_statuses_batch(tmp_path: Path) -> None:
-    cd: cachedict.CacheDict[int] = cachedict.CacheDict(folder=tmp_path)
+    cd: cachedict.CacheDict[int] = cachedict.CacheDict(folder=tmp_path / "cache")
     with cd.write():
         cd["ok"] = 1
     with errors.ErrorRegistry(tmp_path) as reg:
@@ -105,10 +105,12 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         _add(True, tmp_path).run(5.0)
 
-    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+    with errors.ErrorRegistry(handle.paths.step_folder) as reg:
         assert reg.get(None) == {handle.uid}
         loaded = reg.load(handle.uid)
     assert isinstance(loaded, ValueError)
+    assert (handle.paths.step_folder / "errors.db").exists()
+    assert not (handle.paths.cache_folder / "errors.db").exists()
 
     # Cached and read-only both re-raise.
     with pytest.raises(ValueError):
@@ -118,7 +120,7 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
 
     # Retry: clear + recompute.
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
-    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+    with errors.ErrorRegistry(handle.paths.step_folder) as reg:
         assert reg.get([handle.uid]) == set()
 
 
@@ -136,7 +138,7 @@ def test_rechecks_error_after_inflight_wait(
         reg: backends.inflight.InflightRegistry | None, item_uids: tp.Collection[str]
     ) -> tp.Iterator[backends.inflight.InflightClaim]:
         with original(reg, item_uids) as claim:
-            with errors.ErrorRegistry(handle.paths.cache_folder) as ereg:
+            with errors.ErrorRegistry(handle.paths.step_folder) as ereg:
                 ereg.record(handle.uid, ValueError("from other worker"), "tb")
             yield claim
 
@@ -173,7 +175,7 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
     step = _add(False, tmp_path)
     assert step.run(5.0) == 6.0
     handle = step.lookup(5.0)
-    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+    with errors.ErrorRegistry(handle.paths.step_folder) as reg:
         reg.record(handle.uid, ValueError("stale"), "tb")
 
     def boom(self: tp.Any, item_uids: list[str]) -> None:
@@ -185,7 +187,7 @@ def test_clear_cache_partial_failure_leaves_recoverable_error(
     monkeypatch.undo()
 
     # cd entry is gone, errors row remains → cached error on next read.
-    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+    with errors.ErrorRegistry(handle.paths.step_folder) as reg:
         assert handle.uid in reg.get([handle.uid])
     with pytest.raises(ValueError):
         _add(False, tmp_path).run(5.0)
@@ -211,10 +213,10 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     on `mode='retry'` — no traps."""
     handle = _add(True, tmp_path).lookup(5.0)
     handle.paths.cache_folder.mkdir(parents=True, exist_ok=True)
-    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+    with errors.ErrorRegistry(handle.paths.step_folder) as reg:
         reg.record(handle.uid, RuntimeError("stale"), "tb")
         assert handle.uid in reg.get([handle.uid])
 
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
-    with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
+    with errors.ErrorRegistry(handle.paths.step_folder) as reg:
         assert handle.uid not in reg.get([handle.uid])

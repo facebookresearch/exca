@@ -14,7 +14,7 @@ we fall back to current behavior (no coordination).
 
 ## Chosen Approach: SQLite with Graceful Fallback
 
-SQLite (`journal_mode=DELETE` for NFS safety) stored in the cache folder. stdlib
+SQLite (`journal_mode=DELETE` for NFS safety) stored in the step folder. stdlib
 dependency, atomic transactions, queryable for debugging.
 
 **NFS risk mitigation**: SQLite on NFS can theoretically corrupt the DB under broken
@@ -144,8 +144,8 @@ Located in `exca/cachedict/inflight.py`.
 class InflightRegistry:
     """Advisory SQLite registry of in-flight cache items."""
 
-    def __init__(self, cache_folder: Path, permissions: int | None = 0o777) -> None:
-        # DB at <cache_folder>/inflight.db
+    def __init__(self, folder: Path, permissions: int | None = 0o777) -> None:
+        # DB at <folder>/inflight.db
         ...
 
     def claim(self, item_uids: list[str],
@@ -281,8 +281,8 @@ a fresh DB. This ensures the registry never blocks or breaks actual computation.
 
 ## Scope
 
-One `inflight.db` per **cache folder** (not per executor folder). This is the correct
-scope because different experiments sharing the same cache folder is exactly the case
+One `inflight.db` per **step folder** (not per executor folder). This is the correct
+scope because different experiments sharing the same step cache is exactly the case
 where coordination matters — which is what `docs/internal/debug/concurrent-writes.md`
 identified as the core problem.
 

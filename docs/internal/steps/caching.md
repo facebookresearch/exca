@@ -7,11 +7,11 @@ How a step's results, errors, and in-flight state are stored and how
 
 ```
 {base_folder}/{step_uid}/
-├── cache/                   # CacheDict folder + advisory DBs
+├── cache/                   # CacheDict folder
 │   ├── *.jsonl              # CacheDict index
-│   ├── *.pkl|*.npy|...      # CacheDict value payloads
-│   ├── inflight.db          # claim/release registry
-│   └── errors.db            # cached exception per errored uid
+│   └── *.pkl|*.npy|...      # CacheDict value payloads
+├── inflight.db              # claim/release registry
+├── errors.db                # cached exception per errored uid
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```
@@ -108,6 +108,6 @@ Submitit writes its own pickles under `logs/<job_id>/`
 (`<job_id>_0_result.pkl` = `("success", value)` or `("error",
 traceback_string)`). These are submitit-owned and not read by exca after
 the job completes — exca reads from CacheDict (success) or `errors.db`
-(failure). Running job handles are tracked in `cache/inflight.db` with
+(failure). Running job handles are tracked in `inflight.db` with
 the submitit job id and folder, so `Backend.job()` can reattach and
 `force` / `retry` can detect prior work.

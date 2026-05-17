@@ -140,10 +140,10 @@ class LookupHandle:
 
     def job(self) -> submitit.Job[tp.Any] | None:
         """Get the submitit job from the inflight registry, or ``None``."""
-        if self._backend is None or not self.paths.cache_folder.exists():
+        if self._backend is None or not self.paths.step_folder.exists():
             return None
         try:
-            with inflight.InflightRegistry(self.paths.cache_folder) as reg:
+            with inflight.InflightRegistry(self.paths.step_folder) as reg:
                 info = reg.get([self.uid])
             if self.uid in info:
                 return info[self.uid]._job  # type: ignore[attr-defined]
@@ -195,7 +195,7 @@ class _CachedEntry:
             return cls(status, cd, uid)
         if cd.folder is None:
             return cls(None, cd, uid)
-        with errors.ErrorRegistry(cd.folder) as reg:
+        with errors.ErrorRegistry(cd.folder.parent) as reg:
             err = reg.load(uid)
         if err is None:
             return cls(None, cd, uid)
@@ -215,7 +215,7 @@ class _CachedEntry:
         out: dict[str, CacheStatus] = {}
         errored: set[str] = set()
         if folder is not None and folder.exists():
-            with errors.ErrorRegistry(folder) as reg:
+            with errors.ErrorRegistry(folder.parent) as reg:
                 # Cached errors raise on first hit, so they usually stay
                 # sparser than the queried uids.
                 errored = reg.get()
@@ -286,7 +286,7 @@ class _CachingCall:
             if folder is not None and inflight:
                 e.add_note(f"  -> error recorded at {self.step_uid}{inflight}")
                 tb = "".join(traceback.format_exception(e))
-                with errors.ErrorRegistry(folder) as reg:
+                with errors.ErrorRegistry(folder.parent) as reg:
                     for uid in inflight:
                         reg.record(uid, e, tb)
             raise
@@ -391,10 +391,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         uids = list(dict.fromkeys(uids))
         if not uids:
             return
-        # Other backends may have left inflight rows for this cache folder.
-        if paths.cache_folder.exists():
+        # Other backends may have left inflight rows for this step folder.
+        if paths.step_folder.exists():
             try:
-                with inflight.InflightRegistry(paths.cache_folder) as reg:
+                with inflight.InflightRegistry(paths.step_folder) as reg:
                     info = reg.get(uids)
                     jobs: dict[str, str] = {}
                     for uid, worker in info.items():
@@ -413,8 +413,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             for uid in uids:
                 if uid in cd:
                     del cd[uid]
-        if paths.cache_folder.exists():
-            with errors.ErrorRegistry(paths.cache_folder) as ereg:
+        if paths.step_folder.exists():
+            with errors.ErrorRegistry(paths.step_folder) as ereg:
                 ereg.clear(uids)
 
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
@@ -444,7 +444,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 self._clear_caches(paths=paths, cd=cd, uids=to_compute)
             reg: inflight.InflightRegistry | None = None
             if self._concurrent:
-                reg = inflight.InflightRegistry(paths.cache_folder)
+                reg = inflight.InflightRegistry(paths.step_folder)
             with inflight.inflight_session(reg, to_compute) as claim:
                 pending_statuses = self._pending_statuses(  # recheck once claimed
                     paths=paths, uids=to_compute, mode=mode
