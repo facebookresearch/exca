@@ -150,9 +150,8 @@ class LookupHandle:
         if self._backend is None or not self.paths.cache_folder.exists():
             return None
         try:
-            reg = inflight.InflightRegistry(self.paths.cache_folder)
-            info = reg.get([self.uid])
-            reg.close()
+            with inflight.InflightRegistry(self.paths.cache_folder) as reg:
+                info = reg.get([self.uid])
             if self.uid in info:
                 return info[self.uid]._job  # type: ignore[attr-defined]
         except Exception:
@@ -438,7 +437,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         statuses = _CachedEntry.lookup_statuses(cd, uids)
         # set: intentionally unordered (no execution-order dependency within a batch)
         to_compute: set[str] = set()
-        to_clear: set[str] = set()
         for uid in uids:
             status = statuses[uid]
             if not self._should_compute(uid, status, mode):
@@ -449,8 +447,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                         f"No cache in read-only mode: {paths.step_uid}[{uid}]"
                     )
                 continue
-            if status is not None:
-                to_clear.add(uid)
             to_compute.add(uid)
 
         if to_compute:
@@ -463,28 +459,25 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 reg = inflight.InflightRegistry(paths.cache_folder)
             with inflight.inflight_session(reg, to_compute) as claim:
                 statuses = _CachedEntry.lookup_statuses(cd, to_compute)  # recheck
-                clear_uids = [
-                    uid
-                    for uid, status in statuses.items()
-                    if (uid in to_clear or mode in ("force", "retry"))
-                    and self._should_compute(uid, status, mode)
-                ]
-                for uid in clear_uids:
-                    if mode == "retry":
-                        logger.warning(
-                            "Retrying failed step: %s[%s]", paths.step_uid, uid
-                        )
-                self._clear_caches(paths=paths, cd=cd, uids=clear_uids)
-
-                pending_uids = list(clear_uids)
+                clear_uids: list[str] = []
+                pending_uids: list[str] = []
                 for uid in to_compute:
                     status = statuses[uid]
-                    if uid in clear_uids:
+                    if not self._should_compute(uid, status, mode):
+                        if status == "error":
+                            _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
                         continue
-                    if status == "error":
-                        _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
-                    if status is None:
+                    if mode == "force" or status == "error":
+                        clear_uids.append(uid)
                         pending_uids.append(uid)
+                        if mode == "retry" and status == "error":
+                            logger.warning(
+                                "Retrying failed step: %s[%s]", paths.step_uid, uid
+                            )
+                    elif status is None:
+                        pending_uids.append(uid)
+                self._clear_caches(paths=paths, cd=cd, uids=clear_uids)
+
                 if pending_uids:
                     filtered = batch.select(pending_uids, mode=mode)
                     wrapper = _CachingCall(step, cd, paths.step_uid)
