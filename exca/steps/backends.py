@@ -270,10 +270,17 @@ class _CachingCall:
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
                         written_uids.append(uid)
-        except items.BatchProtocolError:
+        except items.BatchProtocolError as e:
+            if written_uids:
+                logger.warning(
+                    "Clearing partial results after invalid _run_batch output: %s",
+                    self.step_uid,
+                )
             for uid in written_uids:
                 if uid in self.cache_dict:
                     del self.cache_dict[uid]
+            if folder is not None:
+                e.add_note(f"  -> cache may be invalid: {folder}")
             raise
         except Exception as e:
             inflight: list[str] = getattr(e, "_inflight_uids", [])

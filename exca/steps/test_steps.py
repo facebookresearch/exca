@@ -595,9 +595,12 @@ def test_run_batch_yield_count(
 ) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
     step = _NumYield(num=num, infra=infra)
-    with pytest.raises(items.BatchProtocolError, match=match):
+    with pytest.raises(items.BatchProtocolError, match=match) as exc_info:
         list(step.run(items.Items([10, 20, 30])))
     assert not any(step.lookup(v).cached() for v in [10, 20, 30])
+    if with_infra:
+        notes = getattr(exc_info.value, "__notes__", [])
+        assert any(str(step.lookup(10).paths.cache_folder) in n for n in notes)
 
 
 def test_run_batch_cannot_yield_before_consuming() -> None:
