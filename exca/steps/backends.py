@@ -216,19 +216,23 @@ class _CachedEntry:
         uids: tp.Iterable[str],
     ) -> dict[str, tp.Literal["success", "error", None]]:
         """Bulk status check — one ErrorRegistry query instead of N."""
+        uids = list(dict.fromkeys(uids))  # dedup with order
         folder = cd.folder
         out: dict[str, tp.Literal["success", "error", None]] = {}
         errored: set[str] = set()
         if folder is not None and folder.exists():
             with errors.ErrorRegistry(folder) as reg:
-                errored = reg.get()  # errors are sparse, get them all
-        for uid in uids:
-            if uid in cd:
-                out[uid] = "success"
-            elif uid in errored:
-                out[uid] = "error"
-            else:
-                out[uid] = None
+                # Cached errors raise on first hit, so they usually stay
+                # sparser than the queried uids.
+                errored = reg.get()
+        with cd.frozen_cache_folder():
+            for uid in uids:
+                if uid in cd:
+                    out[uid] = "success"
+                elif uid in errored:
+                    out[uid] = "error"
+                else:
+                    out[uid] = None
         return out
 
     def result(self) -> tp.Any:
@@ -262,12 +266,27 @@ class _CachingCall:
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
         result_items = self.step._run_items(batch)
+        written_uids: list[str] = []
         try:
             with self.cache_dict.write():
                 for i, result in enumerate(result_items):
                     uid = batch.uids[i]
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
+                        written_uids.append(uid)
+        except items.BatchProtocolError as e:
+            if written_uids:
+                logger.warning(
+                    "Clearing partial results after invalid _run_batch output: %s",
+                    self.step_uid,
+                )
+            with self.cache_dict.frozen_cache_folder():
+                for uid in written_uids:
+                    if uid in self.cache_dict:
+                        del self.cache_dict[uid]
+            if folder is not None:
+                e.add_note(f"  -> cache may be invalid: {folder}")
+            raise
         except Exception as e:
             inflight: list[str] = getattr(e, "_inflight_uids", [])
             if folder is not None and inflight:

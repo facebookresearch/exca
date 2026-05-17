@@ -40,6 +40,10 @@ class DumpInfo:
     jsonl: Path
     byte_range: tuple[int, int]
     content: dict[str, tp.Any]
+    # CacheDict.__delitem__ uses this to blank duplicate JSONL entries.
+    _duplicates: tuple["DumpInfo", ...] = dataclasses.field(
+        default=(), repr=False, compare=False
+    )
 
     def delete_info(self, *, ignore_errors: bool = False) -> None:
         """Overwrite this entry's JSONL bytes with spaces (keep newline).
@@ -187,8 +191,8 @@ class CacheDict(tp.Generic[X]):
         Each writer appends to its own JSONL file, so concurrent writes
         of the same key produce duplicate entries across files.  For
         duplicates, whichever file comes last in iterdir() order wins
-        (non-deterministic); duplicates waste disk but are not cleaned up
-        automatically — see docs/internal/debug/concurrent-writes.md."""
+        (non-deterministic); duplicates are kept so explicit deletion
+        clears every known copy."""
         if self.folder is None or not self.folder.exists():
             return
         readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
@@ -213,7 +217,11 @@ class CacheDict(tp.Generic[X]):
                 reader = self._jsonl_readers.setdefault(fp.name, JsonlReader(fp))
                 futures.append(executor.submit(reader.read))
             for future in futures:
-                self._key_info.update(future.result())
+                for key, info in future.result().items():
+                    previous = self._key_info.get(key)
+                    if previous is not None and previous != info:
+                        info._duplicates = (*previous._duplicates, previous)
+                    self._key_info[key] = info
         self._cleanup_orphaned_jsonl_files()
 
     def _cleanup_orphaned_jsonl_files(self) -> None:
@@ -356,8 +364,9 @@ class CacheDict(tp.Generic[X]):
             _ = key in self  # populate _key_info from disk
         self._ram_data.pop(key, None)
         dinfo = self._key_info.pop(key)
-        dinfo.delete_info(ignore_errors=True)
-        self._dumper.delete(dinfo.content)
+        for info in (dinfo, *dinfo._duplicates):
+            info.delete_info(ignore_errors=True)
+            self._dumper.delete(info.content)
 
     def __contains__(self, key: str) -> bool:
         # in-memory cache
