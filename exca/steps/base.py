@@ -81,6 +81,16 @@ def _is_step(value: tp.Any, disc_key: str) -> bool:
     return isinstance(value, Step) or (isinstance(value, dict) and disc_key in value)
 
 
+def _resolved_step(step: Step) -> Step:
+    """Resolve one Step to a fixed point, guarding circular decompositions."""
+    for _ in range(10):
+        built = step._resolve_step()
+        if built is step:
+            return step
+        step = built
+    raise RuntimeError(f"_resolve_step did not converge on {type(step).__name__}")
+
+
 class Step(exca.helpers.DiscriminatedModel):
     """
     Base class for pipeline steps.
@@ -122,7 +132,7 @@ class Step(exca.helpers.DiscriminatedModel):
     infra: backends.Backend | None = None
     _step_flags: tp.ClassVar[frozenset[str]] = frozenset()
     _exca_chain_class: tp.ClassVar[type[Step] | None] = None
-    # Cache serialization format; resolved by `_resolve_cache_type`,
+    # Cache serialization format; inferred by `_infer_cache_type`,
     # cascaded by Chain to its last step.
     CACHE_TYPE: tp.ClassVar[str | None] = None  # ``None`` = auto-dispatch.
 
@@ -208,7 +218,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _inner_mode(self) -> identity.ModeType:
         """Effective mode considering resolved sub-steps."""
-        resolved = self._resolve_step()
+        resolved = _resolved_step(self)
         if resolved is not self:
             return resolved._inner_mode()
         return "cached" if self.infra is None else self.infra.mode
@@ -240,12 +250,9 @@ class Step(exca.helpers.DiscriminatedModel):
         flattens to its children — see ``Chain._uid_steps``."""
         return [self]
 
-    def _resolve_cache_type(self) -> str | None:
-        """Declared cache format; Chain walks to the last step."""
-        # `_DEFAULT_CACHE_TYPE` is a back-compat alias; drop once neuralset migrates.
-        if self.CACHE_TYPE is not None:
-            return self.CACHE_TYPE
-        return getattr(self, "_DEFAULT_CACHE_TYPE", None)
+    def _infer_cache_type(self) -> str | None:
+        """Overridable cache format"""
+        return self.CACHE_TYPE
 
     def _make_paths(self, aligned: tp.Sequence[Step]) -> backends.StepPaths:
         """Build StepPaths, create folder, write configs."""
@@ -254,7 +261,7 @@ class Step(exca.helpers.DiscriminatedModel):
         paths = backends.StepPaths(
             self.infra.folder,
             identity.step_uid(aligned),
-            cache_type=self._resolve_cache_type(),
+            cache_type=self._infer_cache_type(),
         )
         paths.step_folder.mkdir(parents=True, exist_ok=True)
         identity.write_configs(paths.step_folder, aligned)
@@ -263,7 +270,7 @@ class Step(exca.helpers.DiscriminatedModel):
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
         if "has_resolve" not in self._step_flags:
             return None
-        built = self._resolve_step()
+        built = _resolved_step(self)
         if built is self:
             return None
         return built._exca_uid_dict_override()
@@ -297,7 +304,7 @@ class Step(exca.helpers.DiscriminatedModel):
         paths = backends.StepPaths(
             self.infra.folder,
             identity.step_uid(steps),
-            cache_type=self._resolve_cache_type(),
+            cache_type=self._infer_cache_type(),
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         return LookupHandle(paths, cd, backend=self.infra, uid=_uid)
@@ -333,7 +340,7 @@ class Step(exca.helpers.DiscriminatedModel):
         Any
             Cached or freshly computed result.
         """
-        built = self._resolve_step()
+        built = _resolved_step(self)
         if built is not self:
             return built.run(value)
 
@@ -409,19 +416,7 @@ class Chain(Step):
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
 
     def _resolved_steps(self) -> list[Step]:
-        out: list[Step] = []
-        for s in self._step_sequence():
-            for _ in range(10):
-                built = s._resolve_step()
-                if built is s:
-                    break
-                s = built
-            else:
-                raise RuntimeError(
-                    f"_resolve_step did not converge on {type(s).__name__}"
-                )
-            out.append(s)
-        return out
+        return [_resolved_step(step) for step in self._step_sequence()]
 
     def __len__(self) -> int:
         return len(self.steps)
@@ -458,11 +453,11 @@ class Chain(Step):
         """Chain is a generator if its first step is a generator."""
         return self._resolved_steps()[0]._is_generator()
 
-    def _resolve_cache_type(self) -> str | None:
+    def _infer_cache_type(self) -> str | None:
         # Chain shares a cache entry with last step, so formats must agree.
         if self.CACHE_TYPE is not None:
             return self.CACHE_TYPE
-        return self._resolved_steps()[-1]._resolve_cache_type()
+        return self._resolved_steps()[-1]._infer_cache_type()
 
     def _uid_steps(self) -> list[Step]:
         # Flatten to contained steps after `_resolve_step` expansion -

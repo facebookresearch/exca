@@ -348,7 +348,8 @@ def test_resolve_step_transitive() -> None:
     assert chain.run() == 3.0
 
 
-def test_resolve_step_circular() -> None:
+@pytest.mark.parametrize("in_chain", [False, True])
+def test_resolve_step_circular(in_chain: bool) -> None:
     """Circular _resolve_step raises instead of looping forever."""
 
     class A(Step):
@@ -359,9 +360,9 @@ def test_resolve_step_circular() -> None:
         def _resolve_step(self) -> Step:
             return A()
 
-    chain = Chain(steps=[A()])
+    step: Step = Chain(steps=[A()]) if in_chain else A()
     with pytest.raises(RuntimeError, match="did not converge"):
-        chain.run()
+        step.run()
 
 
 def test_resolve_step_uid_consistency() -> None:
