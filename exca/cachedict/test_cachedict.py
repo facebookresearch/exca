@@ -206,6 +206,21 @@ def test_info_jsonl_deletion(tmp_path: Path) -> None:
     assert len(cache) == 2
 
 
+def test_info_jsonl_deletion_removes_duplicate_entries(tmp_path: Path) -> None:
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    with cache.write():
+        cache["x"] = 12
+    info_path = next(tmp_path.glob("*-info.jsonl"))
+    (tmp_path / "duplicate-info.jsonl").write_bytes(info_path.read_bytes())
+
+    cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert cache["x"] == 12
+    del cache["x"]
+
+    cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert "x" not in cache
+
+
 def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     with cache.write():
