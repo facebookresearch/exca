@@ -23,6 +23,8 @@ from .base import Chain, Step
 class _FakeJob:
     """Pickleable stand-in for submitit.Job; used by fake executors below."""
 
+    job_id = "fake-job"
+
     def result(self) -> None:
         return None
 
