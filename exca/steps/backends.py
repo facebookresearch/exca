@@ -42,7 +42,7 @@ CacheStatus = tp.Literal["success", "error", None]
 
 @dataclasses.dataclass(frozen=True)
 class StepPaths:
-    """On-disk path layout for a step: ``base_folder / step_uid / {cache,logs}``.
+    """On-disk path layout for a step rooted at ``base_folder / step_uid``.
 
     See `docs/internal/steps/caching.md` for the full tree.
     """
@@ -140,7 +140,7 @@ class LookupHandle:
             )
 
     def job(self) -> submitit.Job[tp.Any] | None:
-        """Get the live or latest recorded submitit job, or ``None``."""
+        """Return the live inflight job, or latest Slurm job recorded for logs."""
         if self._backend is None or not self.paths.step_folder.exists():
             return None
         try:
