@@ -128,7 +128,7 @@ def test_rechecks_error_after_inflight_wait(
 ) -> None:
     step = _add(False, tmp_path, mode=mode)
     handle = step.lookup(5.0)
-    handle.paths._ensure_folders(handle.uid)
+    handle.paths.cache_folder.mkdir(parents=True, exist_ok=True)
     original = backends.inflight.inflight_session
 
     @contextlib.contextmanager
@@ -210,7 +210,7 @@ def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:
     cleanup that wiped the CacheDict but left the DB) is wiped + recomputed
     on `mode='retry'` — no traps."""
     handle = _add(True, tmp_path).lookup(5.0)
-    handle.paths._ensure_folders(handle.uid)
+    handle.paths.cache_folder.mkdir(parents=True, exist_ok=True)
     with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
         reg.record(handle.uid, RuntimeError("stale"), "tb")
         assert handle.uid in reg.get([handle.uid])

@@ -16,7 +16,6 @@ import dataclasses
 import logging
 import os
 import random
-import shutil
 import traceback
 import typing as tp
 import warnings
@@ -40,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass(frozen=True)
 class StepPaths:
-    """On-disk path layout for a step: ``base_folder / step_uid / {cache,jobs,logs}``.
+    """On-disk path layout for a step: ``base_folder / step_uid / {cache,logs}``.
 
     See `docs/internal/steps/caching.md` for the full tree.
     """
@@ -51,7 +50,7 @@ class StepPaths:
 
     @property
     def step_folder(self) -> Path:
-        """Base folder for this step (contains cache/, jobs/, logs/)."""
+        """Base folder for this step (contains cache/ and logs/)."""
         return self.base_folder / self.step_uid
 
     @property
@@ -62,14 +61,6 @@ class StepPaths:
     @property
     def _logs_folder(self) -> str:
         return str(self.step_folder / "logs" / "%j")
-
-    def job_folder(self, uid: str) -> Path:
-        """Job folder for a specific uid."""
-        return self.step_folder / "jobs" / uid
-
-    def _ensure_folders(self, uid: str) -> None:
-        self.cache_folder.mkdir(parents=True, exist_ok=True)
-        self.job_folder(uid).mkdir(parents=True, exist_ok=True)
 
 
 class LookupHandle:
@@ -388,7 +379,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         cd: exca.cachedict.CacheDict[tp.Any],
         uids: tp.Iterable[str],
     ) -> None:
-        """Drop everything cached for these uids (cd rows, error rows, job folders)."""
+        """Drop everything cached for these uids (cd rows and error rows)."""
         uids = list(dict.fromkeys(uids))
         if not uids:
             return
@@ -417,10 +408,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if paths.cache_folder.exists():
             with errors.ErrorRegistry(paths.cache_folder) as ereg:
                 ereg.clear(uids)
-        for uid in uids:
-            job_folder = paths.job_folder(uid)
-            if job_folder.exists():
-                shutil.rmtree(job_folder)
 
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid.
@@ -451,7 +438,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
         if to_compute:
             for uid in to_compute:
-                paths._ensure_folders(uid)
+                paths.cache_folder.mkdir(parents=True, exist_ok=True)
             if mode == "force":
                 self._clear_caches(paths=paths, cd=cd, uids=to_compute)
             reg: inflight.InflightRegistry | None = None

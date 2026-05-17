@@ -12,8 +12,6 @@ How a step's results, errors, and in-flight state are stored and how
 │   ├── *.pkl|*.npy|...      # CacheDict value payloads
 │   ├── inflight.db          # claim/release registry
 │   └── errors.db            # cached exception per errored uid
-├── jobs/{uid}/              # submitit backends only
-│   └── job.pkl              # pickled submitit Job (see "Submitit interaction")
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```
@@ -50,9 +48,9 @@ cross-venv).
 
 `LookupHandle.clear_cache()` delegates to `Backend._clear_caches()`: it
 cancels any running submitit job for the requested uids, then deletes
-CacheDict entries, `errors.db` rows, and `jobs/<uid>` folders. A
-partial mid-clear (success gone, error row still there) surfaces as a
-recoverable cached error — fail closed, not open.
+CacheDict entries and `errors.db` rows. A partial mid-clear (success
+gone, error row still there) surfaces as a recoverable cached error —
+fail closed, not open.
 
 ## RAM caching and the per-Backend CacheDict
 
@@ -110,6 +108,6 @@ Submitit writes its own pickles under `logs/<job_id>/`
 (`<job_id>_0_result.pkl` = `("success", value)` or `("error",
 traceback_string)`). These are submitit-owned and not read by exca after
 the job completes — exca reads from CacheDict (success) or `errors.db`
-(failure). `job.pkl` is exca's persistent handle so `Backend.job()` can
-reattach across driver restarts and `force` / `retry` can detect a
-running prior job.
+(failure). Running job handles are tracked in `cache/inflight.db` with
+the submitit job id and folder, so `Backend.job()` can reattach and
+`force` / `retry` can detect prior work.
