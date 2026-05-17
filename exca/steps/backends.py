@@ -151,9 +151,8 @@ class LookupHandle:
             with job_registry.JobRegistry(self.paths.step_folder) as reg:
                 job = reg.get([self.uid]).get(self.uid)
             if job is not None:
-                return submitit.SlurmJob(
-                    folder=self.paths._logs_folder, job_id=job.job_id
-                )
+                cls = submitit.SlurmJob if job.cluster == "slurm" else submitit.LocalJob
+                return cls(folder=self.paths._logs_folder, job_id=job.job_id)
         except Exception:
             pass
         return None
@@ -563,10 +562,9 @@ class _SubmititBackend(Backend):
             jobs = [executor.submit(wrapper, c) for c in chunks]
         for c, j in zip(chunks, jobs):
             claim.record_worker_info(j, uids=c.uids)
-        if executor.cluster == "slurm":
-            with job_registry.JobRegistry(paths.step_folder) as reg:
-                for c, j in zip(chunks, jobs):
-                    reg.record(c.uids, j.job_id)
+        with job_registry.JobRegistry(paths.step_folder) as reg:
+            for c, j in zip(chunks, jobs):
+                reg.record(c.uids, cluster=executor.cluster, job_id=j.job_id)
         msg = "Sent %s items for %s into %s jobs on cluster '%s' (eg: %s)"
         logger.info(
             msg, len(uids), paths.step_uid, len(jobs), self._CLUSTER, jobs[0].job_id

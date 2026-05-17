@@ -12,7 +12,7 @@ How a step's results, errors, and in-flight state are stored and how
 │   └── *.pkl|*.npy|...      # CacheDict value payloads
 ├── inflight.db              # claim/release registry
 ├── errors.db                # cached exception per errored uid
-├── jobs.db                  # latest submitit job id per uid
+├── jobs.db                  # latest submitit cluster/job id per uid
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```
@@ -113,6 +113,6 @@ the job completes — exca reads from CacheDict (success) or `errors.db`
 the submitit job id and folder, so `Backend.job()` can reattach and
 `force` / `retry` can detect prior work.
 
-For Slurm/Auto submissions, `jobs.db` records the latest `job_id` per
+For submitit submissions, `jobs.db` records the latest cluster/job id per
 item uid after submission. This is advisory log-discovery metadata only:
 cache correctness depends on CacheDict / `errors.db`, not on `jobs.db`.

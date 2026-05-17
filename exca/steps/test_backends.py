@@ -61,6 +61,7 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     out1 = chain.run(1)
     out2 = chain.run(1)
     assert out1 == out2
+    assert chain.lookup(1).job() is not None
 
 
 def test_slurm_backend_param_forwarding(
@@ -95,7 +96,9 @@ def test_slurm_backend_param_forwarding(
     assert job is not None
     assert job.job_id == "fake-job"
     with jobs.JobRegistry(handle.paths.step_folder) as registry:
-        created_at = registry.get([handle.uid])[handle.uid].created_at
+        info = registry.get([handle.uid])
+        assert info[handle.uid].cluster == "slurm"
+        created_at = info[handle.uid].created_at
 
     time.sleep(0.001)
     handle.clear_cache()
