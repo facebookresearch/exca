@@ -459,6 +459,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                                 )
                             self._clear_cache(paths=paths, cd=cd, uid=uid)
                             status = None
+                    elif status == "error":
+                        _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
                     if status != "success":
                         pending_uids.append(uid)
                 if pending_uids:

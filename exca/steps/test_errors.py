@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import contextlib
 import sqlite3
 import typing as tp
 from pathlib import Path
@@ -119,6 +120,28 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
     assert _add(False, tmp_path, mode="retry").run(5.0) == 6.0
     with errors.ErrorRegistry(handle.paths.cache_folder) as reg:
         assert reg.get([handle.uid]) == set()
+
+
+def test_cached_rechecks_error_after_inflight_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    step = _add(False, tmp_path)
+    handle = step.lookup(5.0)
+    handle.paths._ensure_folders(handle.uid)
+    original = backends.inflight.inflight_session
+
+    @contextlib.contextmanager
+    def record_error_after_claim(
+        reg: backends.inflight.InflightRegistry | None, item_uids: tp.Collection[str]
+    ) -> tp.Iterator[backends.inflight.InflightClaim]:
+        with original(reg, item_uids) as claim:
+            with errors.ErrorRegistry(handle.paths.cache_folder) as ereg:
+                ereg.record(handle.uid, ValueError("from other worker"), "tb")
+            yield claim
+
+    monkeypatch.setattr(backends.inflight, "inflight_session", record_error_after_claim)
+    with pytest.raises(ValueError, match="from other worker"):
+        step.run(5.0)
 
 
 @pytest.mark.parametrize("mode", ["force", "retry"])
