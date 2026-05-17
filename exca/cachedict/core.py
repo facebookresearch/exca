@@ -421,7 +421,11 @@ class JsonlReader:
             self._last = 0
             self._meta = {}
         self._stamp = stamp
-        with self._fp.open("rb") as f:
+        try:
+            f = self._fp.open("rb")
+        except FileNotFoundError:
+            return out
+        with f:
             if not self._meta:
                 first = f.readline()
                 if not first:

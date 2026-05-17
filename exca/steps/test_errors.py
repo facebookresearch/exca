@@ -122,12 +122,21 @@ def test_step_error_caching_and_retry(tmp_path: Path) -> None:
         assert reg.get([handle.uid]) == set()
 
 
-def test_cached_rechecks_error_after_inflight_wait(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("mode", ["cached", "retry"])
+def test_rechecks_error_after_inflight_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
-    step = _add(False, tmp_path)
+    step = _add(False, tmp_path, mode=mode)
     handle = step.lookup(5.0)
     handle.paths._ensure_folders(handle.uid)
+    calls = 0
+
+    def counted(value: float = 0) -> float:
+        nonlocal calls
+        calls += 1
+        return value + 1
+
+    monkeypatch.setattr(step, "_run", counted)
     original = backends.inflight.inflight_session
 
     @contextlib.contextmanager
@@ -140,8 +149,13 @@ def test_cached_rechecks_error_after_inflight_wait(
             yield claim
 
     monkeypatch.setattr(backends.inflight, "inflight_session", record_error_after_claim)
-    with pytest.raises(ValueError, match="from other worker"):
-        step.run(5.0)
+    if mode == "cached":
+        with pytest.raises(ValueError, match="from other worker"):
+            step.run(5.0)
+        assert calls == 0
+    else:
+        assert step.run(5.0) == 6.0
+        assert calls == 1
 
 
 @pytest.mark.parametrize("mode", ["force", "retry"])

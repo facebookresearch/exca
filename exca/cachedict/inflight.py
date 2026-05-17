@@ -356,7 +356,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
 class InflightClaim:
     """Items owned by an inflight session."""
 
-    uids: list[str]
+    uids: tuple[str, ...]
     waited: bool = False
     _reg: InflightRegistry | None = dataclasses.field(
         default=None, repr=False, compare=False
@@ -395,7 +395,7 @@ def inflight_session(
     block to stamp claimed items with a liveness signal.
     """
     if reg is None:
-        yield InflightClaim(list(item_uids))
+        yield InflightClaim(tuple(item_uids))
         return
     item_uids = list(item_uids)
     pid = os.getpid()
@@ -422,7 +422,7 @@ def inflight_session(
         msg = "Claim race: got %d/%d items, re-waiting"
         logger.info(msg, len(claimed), len(item_uids))
         time.sleep(random.uniform(0.5, 2.0))
-    claim = InflightClaim(claimed, waited=waited, _reg=reg)
+    claim = InflightClaim(tuple(claimed), waited=waited, _reg=reg)
     try:
         yield claim
     finally:

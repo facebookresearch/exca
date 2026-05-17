@@ -64,7 +64,7 @@ def test_inflight_session(tmp_path: Path) -> None:
 
     # None: yields uids unchanged.
     with inflight.inflight_session(None, ["a", "b"]) as claimed:
-        assert claimed.uids == ["a", "b"]
+        assert claimed.uids == ("a", "b")
         assert not claimed.waited
 
     # Normal: claims visible during session, released after.
@@ -77,22 +77,22 @@ def test_inflight_session(tmp_path: Path) -> None:
     # Exception: items still released in finally.
     with pytest.raises(ValueError, match="boom"):
         with inflight.inflight_session(fresh(), ["a"]) as claimed:
-            assert claimed.uids == ["a"]
+            assert claimed.uids == ("a",)
             raise ValueError("boom")
     assert seen(["a"]) == {}
 
     # Local: record_worker_info without job stamps _LOCAL_JOB_ID.
     reg = fresh()
     with inflight.inflight_session(reg, ["loc"]) as claimed:
-        assert claimed.uids == ["loc"]
+        assert claimed.uids == ("loc",)
         claimed.record_worker_info()
         assert seen(["loc"])["loc"].job_id == inflight._LOCAL_JOB_ID
 
     # Nested: inner session must NOT release outer's claim.
     with inflight.inflight_session(fresh(), ["z"]) as outer:
-        assert outer.uids == ["z"]
+        assert outer.uids == ("z",)
         with inflight.inflight_session(fresh(), ["z"]) as inner:
-            assert inner.uids == ["z"]
+            assert inner.uids == ("z",)
             assert not inner.waited
         assert "z" in seen(["z"]), "inner released outer's claim"
     assert seen(["z"]) == {}
@@ -259,7 +259,7 @@ def test_inflight_session_retries_lost_claim(
 
     reg = inflight.InflightRegistry(tmp_path)
     with inflight.inflight_session(reg, ["x"]) as claimed:
-        assert claimed.uids == ["x"]
+        assert claimed.uids == ("x",)
         assert claimed.waited
     assert wait_calls >= 2, f"expected retry, got {wait_calls} wait calls"
 

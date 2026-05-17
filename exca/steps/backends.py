@@ -273,8 +273,6 @@ class _CachingCall:
             with self.cache_dict.write():
                 for i, result in enumerate(result_items):
                     uid = batch.uids[i]
-                    if batch._mode == "force" and uid in self.cache_dict:
-                        del self.cache_dict[uid]
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
                         written_uids.append(uid)
@@ -384,27 +382,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             self._cds[cache_folder] = cd
         return cd
 
-    def _cancel_inflight(self, *, paths: StepPaths, uids: tp.Iterable[str]) -> None:
-        uids = list(dict.fromkeys(uids))
-        # Other backends may have left inflight rows for this cache folder.
-        if not (uids and paths.cache_folder.exists()):
-            return
-        try:
-            reg = inflight.InflightRegistry(paths.cache_folder)
-            info = reg.get(uids)
-            jobs: dict[str, str] = {}
-            for uid, worker in info.items():
-                if worker.job_id is None or worker.job_folder is None:
-                    continue  # not submitit
-                # Slurm array tasks share a scheduler job; avoid per-task cancels.
-                job_id = worker.job_id.split("_", 1)[0]
-                jobs[job_id] = worker.job_folder
-            for job_id, folder in jobs.items():
-                submitit.SlurmJob(job_id=job_id, folder=folder).cancel()
-            reg.close()
-        except Exception as e:
-            logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
-
     def _clear_caches(
         self,
         *,
@@ -416,7 +393,22 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         uids = list(dict.fromkeys(uids))
         if not uids:
             return
-        self._cancel_inflight(paths=paths, uids=uids)
+        # Other backends may have left inflight rows for this cache folder.
+        if paths.cache_folder.exists():
+            try:
+                with inflight.InflightRegistry(paths.cache_folder) as reg:
+                    info = reg.get(uids)
+                    jobs: dict[str, str] = {}
+                    for uid, worker in info.items():
+                        if worker.job_id is None or worker.job_folder is None:
+                            continue  # not submitit
+                        # Slurm array tasks share a scheduler job; avoid per-task cancels.
+                        job_id = worker.job_id.split("_", 1)[0]
+                        jobs[job_id] = worker.job_folder
+                    for job_id, folder in jobs.items():
+                        submitit.SlurmJob(job_id=job_id, folder=folder).cancel()
+            except Exception as e:
+                logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
         # Success first → a mid-clear crash leaves a recoverable cached
         # error rather than a stale success (fail closed).
         with cd.frozen_cache_folder():
@@ -446,7 +438,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         statuses = _CachedEntry.lookup_statuses(cd, uids)
         # set: intentionally unordered (no execution-order dependency within a batch)
         to_compute: set[str] = set()
-        to_clear: dict[str, tp.Literal["success", "error"]] = {}
+        to_clear: set[str] = set()
         for uid in uids:
             status = statuses[uid]
             if not self._should_compute(uid, status, mode):
@@ -458,36 +450,41 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     )
                 continue
             if status is not None:
-                to_clear[uid] = status
+                to_clear.add(uid)
             to_compute.add(uid)
 
         if to_compute:
             for uid in to_compute:
                 paths._ensure_folders(uid)
             if mode == "force":
-                self._cancel_inflight(paths=paths, uids=to_compute)
+                self._clear_caches(paths=paths, cd=cd, uids=to_compute)
             reg: inflight.InflightRegistry | None = None
             if self._concurrent:
                 reg = inflight.InflightRegistry(paths.cache_folder)
             with inflight.inflight_session(reg, to_compute) as claim:
-                recheck = _CachedEntry.lookup_statuses(cd, to_compute)
-                pending_uids = []
-                clear_uids = []
-                for uid in to_compute:
-                    status = recheck[uid]
-                    if uid in to_clear or (mode == "force" and status is not None):
-                        if self._should_compute(uid, status, mode):
-                            if mode == "retry":
-                                logger.warning(
-                                    "Retrying failed step: %s[%s]", paths.step_uid, uid
-                                )
-                            clear_uids.append(uid)
-                            status = None
-                    elif status == "error":
-                        _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
-                    if status != "success":
-                        pending_uids.append(uid)
+                statuses = _CachedEntry.lookup_statuses(cd, to_compute)  # recheck
+                clear_uids = [
+                    uid
+                    for uid, status in statuses.items()
+                    if (uid in to_clear or mode in ("force", "retry"))
+                    and self._should_compute(uid, status, mode)
+                ]
+                for uid in clear_uids:
+                    if mode == "retry":
+                        logger.warning(
+                            "Retrying failed step: %s[%s]", paths.step_uid, uid
+                        )
                 self._clear_caches(paths=paths, cd=cd, uids=clear_uids)
+
+                pending_uids = list(clear_uids)
+                for uid in to_compute:
+                    status = statuses[uid]
+                    if uid in clear_uids:
+                        continue
+                    if status == "error":
+                        _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
+                    if status is None:
+                        pending_uids.append(uid)
                 if pending_uids:
                     filtered = batch.select(pending_uids, mode=mode)
                     wrapper = _CachingCall(step, cd, paths.step_uid)

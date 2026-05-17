@@ -48,10 +48,11 @@ substitute `RuntimeError(text)` when the exception isn't picklable /
 loadable in this process (locally-defined class, class missing
 cross-venv).
 
-`Backend.clear_cache()` cancels any running job for the uid, then
-deletes the CacheDict entry, the `errors.db` row, and `rmtree(jobs/<uid>)`
-in that order. A partial mid-clear (success gone, error row still
-there) surfaces as a recoverable cached error — fail closed, not open.
+`LookupHandle.clear_cache()` delegates to `Backend._clear_caches()`: it
+cancels any running submitit job for the requested uids, then deletes
+CacheDict entries, `errors.db` rows, and `jobs/<uid>` folders. A
+partial mid-clear (success gone, error row still there) surfaces as a
+recoverable cached error — fail closed, not open.
 
 ## RAM caching and the per-Backend CacheDict
 
@@ -64,9 +65,10 @@ handle persists across `run()` calls on the same Backend, so
 
 With `keep_in_ram=True`, `__contains__` and `__getitem__` consult
 `_ram_data` before disk, so repeat reads don't re-decode. RAM is wiped
-in lockstep with disk by `Backend.clear_cache` (and by `force`, which
-calls it); external rmtrees that don't go through Backend leave stale
-RAM. Cross-process workers get a fresh view via `CacheDict.__reduce__`.
+in lockstep with disk by `Backend._clear_caches` (used by
+`LookupHandle.clear_cache()` and `force`); external rmtrees that don't
+go through Backend leave stale RAM. Cross-process workers get a fresh
+view via `CacheDict.__reduce__`.
 `_CachingCall` writes via the Backend's CacheDict; cross-process
 workers get a reduced copy and the driver picks up new entries via
 folder-mtime invalidation in `_read_info_files`.
@@ -74,24 +76,25 @@ folder-mtime invalidation in `_read_info_files`.
 ## Concurrency
 
 Two callers hitting the same `(step_uid, uid)` would race. The
-`inflight_session` context manager wraps submit-and-wait: `claim([uid])`
-returns the subset this caller now owns; non-claimers wait via
-`wait_for_inflight` (polls the DB; reclaims dead PIDs); the session
-releases on exit.
+`inflight_session` context manager wraps submit-and-wait: it waits for
+other owners, claims all requested uids, yields an `InflightClaim`, then
+releases on exit. Waits go through `wait_for_inflight` (polls the DB;
+reclaims dead PIDs).
 
-`Backend.run` runs **all mutators inside the inflight session** —
-`clear_cache`, job recovery, and `_submit` — so concurrent `force` /
-`retry` callers serialise on the claim. The pre-lock cache check is a
-fast path only; it's re-checked under the lock before deciding to
-clear or re-submit. `force` always calls `clear_cache` under the lock,
-even on an empty cache, so a competitor that populated mid-wait doesn't
-hand its value back to the forcer.
+`Backend.run` serialises the final compute decision inside the inflight
+session: it re-checks cache state under the claim, clears any entries it
+will recompute, then calls `_submit`. The pre-lock cache check is a fast
+path only. `force` additionally runs `_clear_caches()` before the
+session to cancel/clear stale work promptly, then runs it again under
+the claim so a competitor that populated mid-wait doesn't hand its value
+back to the forcer. `retry` uses the same under-claim recheck to
+recompute cached errors.
 
 The session locks `inflight.db` only — direct user calls to
-`Backend.clear_cache` outside `Backend.run` race against in-flight
-workers. The worker writes to cache before returning; `Backend.run`
-re-reads from disk and raises if missing — results are not round-tripped
-through the job pickle (would be wasteful under submitit).
+`LookupHandle.clear_cache()` outside `Backend.run` race against
+in-flight workers. The worker writes to cache before returning;
+`Backend.run` re-reads from disk and raises if missing — results are not
+round-tripped through the job pickle (would be wasteful under submitit).
 
 Both registries inherit from `AdvisoryRegistry` (`exca/cachedict/registry.py`)
 which provides `journal_mode=DELETE` (avoids WAL — WAL actively breaks

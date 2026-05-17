@@ -100,7 +100,7 @@ full lifecycle:
     │  │    └─ Live blocker      │ │
     │  │       → ROLLBACK, retry │ │
     │  └─────────────────────────┘ │
-    │  3. yield all claimed_uids   │
+    │  3. yield InflightClaim      │
     └──────────┬───────────────────┘
                │
                ▼
@@ -110,17 +110,17 @@ full lifecycle:
     │     after wait avoids re-    │
     │     submitting done items)   │
     │  2. executor.submit()        │
-    │  3. update_worker_info()     │
-    │     (Slurm jobs only —       │
-    │      records job_id + folder │
-    │      for Slurm liveness)     │
+    │  3. claim.record_worker_info │
+    │     (Slurm jobs record       │
+    │      job_id + folder for     │
+    │      Slurm liveness)         │
     │  4. job.result() / wait      │
     └──────────┬───────────────────┘
                │
                ▼
     ┌──────────────────────────────┐
     │  finally (session exit)      │
-    │  1. release(claimed_uids)    │
+    │  1. release(claim.uids)      │
     │  2. close()                  │
     └──────────────────────────────┘
 ```
@@ -172,14 +172,22 @@ class InflightRegistry:
 
     def close(self) -> None: ...
 
+@dataclasses.dataclass(frozen=True)
+class InflightClaim:
+    """Items owned by an inflight session."""
 
-def record_worker_info(
-    reg: InflightRegistry, item_uids: list[str], job: submitit.Job,
-) -> None:
-    """Stamp a submitit *job*'s worker info on *item_uids*. Slurm jobs
-    get job_id + folder; other backends get the local sentinel
-    (``_LOCAL_JOB_ID``) so liveness can distinguish them from the
-    pre-update_worker_info window where ``job_id IS NULL``."""
+    uids: tuple[str, ...]
+    waited: bool = False
+
+    def record_worker_info(
+        self, job: submitit.Job | None = None, uids: tp.Sequence[str] | None = None
+    ) -> None:
+        """Stamp worker liveness info for this claim or a claimed subset.
+
+        Slurm jobs get job_id + folder; other backends get the local sentinel
+        (``_LOCAL_JOB_ID``) so liveness can distinguish them from the
+        pre-record_worker_info window where ``job_id IS NULL``.
+        """
 ```
 
 ### inflight_session() context manager
@@ -188,17 +196,11 @@ def record_worker_info(
 @contextlib.contextmanager
 def inflight_session(
     reg: InflightRegistry | None,
-    item_uids: list[str],
-    *,
-    local: bool = False,
-) -> tp.Iterator[list[str]]:
+    item_uids: tp.Collection[str],
+) -> tp.Iterator[InflightClaim]:
     """Wait → claim → yield claimed → release + close.
     When reg is None, yields all item_uids (no-op).
-    With local=True, marks claims with _LOCAL_JOB_ID so wait_for_inflight
-    can tell "local work in progress" from "Slurm submission whose
-    update_worker_info hasn't landed yet".
-    The registry connection is closed on exit; callers must call
-    record_worker_info() inside the with block."""
+    Callers should call claim.record_worker_info() inside the with block."""
 ```
 
 ## Integration Points
@@ -208,7 +210,7 @@ def inflight_session(
 - `_method_override()`: wraps the submit+wait block in `inflight_session`.
 - After the session wait, re-checks `cache_dict` to skip items completed by others
   during the wait (avoids needless re-submission).
-- After `executor.submit()`: `inflight.record_worker_info(reg, uids, j)` per chunk
+- After `executor.submit()`: `claim.record_worker_info(j, uids=uids)` per chunk
   (Slurm jobs get job_id + folder; other backends get `_LOCAL_JOB_ID`).
 - Release happens in `inflight_session`'s finally block.
 
@@ -219,11 +221,13 @@ def inflight_session(
 
 ### Steps Backend
 
-- `Backend.run()`: wraps compute in `inflight_session` with single-item granularity.
+- `Backend.run()`: wraps compute for pending uids in `inflight_session`.
 - Registry is only created for backends with `_REQUIRES_INFLIGHT = True`
   (defaults to True; `Cached` overrides to False — inline work needs no claim).
-- After `_submit()`: `inflight.record_worker_info(reg, [uid], job)` (handles
-  Slurm vs non-Slurm internally).
+- Submitit backends record each submitted chunk with
+  `claim.record_worker_info(job, uids=chunk.uids)`.
+- Pool backends record local liveness per chunk with
+  `claim.record_worker_info(uids=chunk.uids)`.
 
 ## All-or-Nothing Claim
 
