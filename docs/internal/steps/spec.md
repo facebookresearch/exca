@@ -53,10 +53,11 @@ All backends have:
 
 ### Cache Status
 
-Cache can be in three states:
+Lookup status can be in four states:
 - `"success"`: Result cached successfully
 - `"error"`: Error cached (will be re-raised on load)
-- `None`: No cache exists
+- `"running"`: No cached result/error, but a live worker owns the item
+- `None`: No cache exists and no live worker owns the item
 
 ### Chain
 
@@ -118,7 +119,7 @@ class LookupHandle:
     # public properties (raise RuntimeError if unconfigured)
     paths: StepPaths
     cache_dict: CacheDict
-    status: Literal["success", "error", None]
+    status: Literal["success", "error", "running", None]
 
     def cached(self) -> bool: ...        # success or error present
     def result(self) -> Any: ...         # return cached value or re-raise error
@@ -248,6 +249,6 @@ required for MapInfra parity or current step semantics.
 - Force/retry one-shot tracking per Backend lifetime
 
 **Not yet implemented:**
-- Full status API (`"not submitted"` / `"running"` / `"completed"` / `"failed"`)
+- Job lifecycle status API (`"not submitted"` / `"completed"` / `"failed"`)
 - Concurrent submission detection (recent `job.pkl`)
 - Built-in `item_uid_max_length` support, like MapInfra's `ShortItemUid`

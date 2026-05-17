@@ -37,6 +37,7 @@ if tp.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CacheStatus = tp.Literal["success", "error", None]
+LookupStatus = tp.Literal["success", "error", "running", None]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -101,17 +102,24 @@ class LookupHandle:
         return self._cache_dict
 
     @property
-    def status(self) -> CacheStatus:
-        """Cache status: ``"success"``, ``"error"``, or ``None``."""
+    def status(self) -> LookupStatus:
+        """Entry status: ``"success"``, ``"error"``, ``"running"``, or ``None``."""
         if self._cache_dict is None or self._paths is None:
             return None
         if not self.uid:
             raise RuntimeError("LookupHandle has no uid")
-        return _CachedEntry.lookup(self._cache_dict, self.uid).status
+        status = _CachedEntry.lookup(self._cache_dict, self.uid).status
+        if status is not None or not self.paths.cache_folder.exists():
+            return status
+        with inflight.InflightRegistry(self.paths.cache_folder) as reg:
+            info = reg.get([self.uid]).get(self.uid)
+        if info is not None and info.is_alive():
+            return "running"
+        return None
 
     def cached(self) -> bool:
         """True iff there is a cached success or error."""
-        return self.status is not None
+        return self.status in ("success", "error")
 
     def result(self) -> tp.Any:
         """Return the cached value, or re-raise a cached error."""
