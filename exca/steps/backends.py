@@ -308,6 +308,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     keep_in_ram: bool = False
     # Force/retry: at most once success/error per uid per lifetime; resets on pickle.
     _recomputed: set[str] = pydantic.PrivateAttr(default_factory=set)
+    _checked_configs: set[Path] = pydantic.PrivateAttr(default_factory=set)
 
     def _pending_statuses(
         self,
@@ -416,6 +417,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if paths.cache_folder.exists():
             with errors.ErrorRegistry(paths.cache_folder) as ereg:
                 ereg.clear(uids)
+        self._checked_configs.discard(paths.step_folder)
 
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid.
@@ -424,6 +426,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """
         upstream = tuple(batch._upstream) + tuple(step._uid_steps())
         paths = step._make_paths(upstream)
+        if paths.step_folder not in self._checked_configs:
+            identity.write_configs(paths.step_folder, upstream)
+            self._checked_configs.add(paths.step_folder)
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         mode = effective_mode(batch._mode, step._inner_mode())
         uids = batch.uids
