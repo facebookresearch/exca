@@ -552,13 +552,14 @@ def test_taskinfra_auto_pulls_on_local_miss(tmp_path: Path) -> None:
             return self.x * 100
 
     # 1. produce a remote cache by computing once with no remote_cache
-    producer = MyTask(x=3, infra={"folder": str(tmp_path / "producer")})
+    producer = MyTask(x=3, infra={"folder": str(tmp_path / "producer")})  # type: ignore[arg-type]
     assert producer.compute() == 300
 
     # 2. seed _FakeRemoteCache from the producer's uid folder
     fake = _FakeRemoteCache()
     uid = producer.infra.uid()
     src_uid_folder = producer.infra.uid_folder()
+    assert src_uid_folder is not None
     for name in ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl"):
         fp = src_uid_folder / name
         if fp.exists():
@@ -579,12 +580,14 @@ def test_taskinfra_auto_pulls_on_local_miss(tmp_path: Path) -> None:
     consumer_folder.mkdir()
     consumer = MyTask(
         x=3,
-        infra={"folder": str(consumer_folder), "remote_cache": fake},
+        infra={"folder": str(consumer_folder), "remote_cache": fake},  # type: ignore[arg-type]
     )
     # consumer's compute returns x*100 = 300 — same as the pulled result
     assert consumer.compute() == 300
     # local cache now contains the pulled job.pkl
-    assert (consumer.infra.uid_folder() / "job.pkl").exists()
+    consumer_uid_folder = consumer.infra.uid_folder()
+    assert consumer_uid_folder is not None
+    assert (consumer_uid_folder / "job.pkl").exists()
     assert download_calls == [uid]  # the pull was triggered for the correct uid
 
 
@@ -603,13 +606,15 @@ def test_taskinfra_force_mode_skips_pull(tmp_path: Path) -> None:
             return self.x * 100
 
     # seed remote with a stale result
-    producer = MyTask(x=5, infra={"folder": str(tmp_path / "producer")})
+    producer = MyTask(x=5, infra={"folder": str(tmp_path / "producer")})  # type: ignore[arg-type]
     assert producer.compute() == 500
 
     fake = _FakeRemoteCache()
     uid = producer.infra.uid()
+    producer_uid_folder = producer.infra.uid_folder()
+    assert producer_uid_folder is not None
     for name in ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl"):
-        fp = producer.infra.uid_folder() / name
+        fp = producer_uid_folder / name
         if fp.exists():
             fake.store[f"{uid}/{name}"] = fp.read_bytes()
 
@@ -619,7 +624,7 @@ def test_taskinfra_force_mode_skips_pull(tmp_path: Path) -> None:
     consumer_folder.mkdir()
     consumer = MyTask(
         x=5,
-        infra={
+        infra={  # type: ignore[arg-type]
             "folder": str(consumer_folder),
             "remote_cache": fake,
             "mode": "force",
@@ -652,7 +657,7 @@ def test_taskinfra_read_only_raises_when_remote_and_local_both_empty(
 
     task = MyTask(
         x=7,
-        infra={
+        infra={  # type: ignore[arg-type]
             "folder": str(tmp_path),
             "remote_cache": _FakeRemoteCache(),  # empty
             "mode": "read-only",
@@ -677,7 +682,7 @@ def test_upload_result_pushes_to_remote(tmp_path: Path) -> None:
             return self.x * 10
 
     fake = _FakeRemoteCache()
-    task = MyTask(x=4, infra={"folder": str(tmp_path), "remote_cache": fake})
+    task = MyTask(x=4, infra={"folder": str(tmp_path), "remote_cache": fake})  # type: ignore[arg-type]
     assert task.compute() == 40
 
     task.infra.upload_result()
@@ -699,7 +704,7 @@ def test_upload_result_errors_when_no_remote(tmp_path: Path) -> None:
         def compute(self) -> int:
             return self.x
 
-    task = MyTask(x=1, infra={"folder": str(tmp_path)})
+    task = MyTask(x=1, infra={"folder": str(tmp_path)})  # type: ignore[arg-type]
     task.compute()
     with pytest.raises(RuntimeError, match="No remote cache configured"):
         task.infra.upload_result()
@@ -721,7 +726,7 @@ def test_upload_result_errors_when_no_local_cache(tmp_path: Path) -> None:
 
     task = MyTask(
         x=2,
-        infra={"folder": str(tmp_path), "remote_cache": _FakeRemoteCache()},
+        infra={"folder": str(tmp_path), "remote_cache": _FakeRemoteCache()},  # type: ignore[arg-type]
     )
     with pytest.raises(RuntimeError, match="No local cache"):
         task.infra.upload_result()
@@ -741,7 +746,7 @@ def test_upload_result_errors_when_status_failed(tmp_path: Path) -> None:
             raise ValueError("boom")
 
     task = FailingTask(
-        infra={"folder": str(tmp_path), "remote_cache": _FakeRemoteCache()},
+        infra={"folder": str(tmp_path), "remote_cache": _FakeRemoteCache()},  # type: ignore[arg-type]
     )
     with pytest.raises(ValueError):
         task.compute()
@@ -765,7 +770,7 @@ def test_upload_result_refuses_existing_without_overwrite(tmp_path: Path) -> Non
             return self.x
 
     fake = _FakeRemoteCache()
-    task = MyTask(x=3, infra={"folder": str(tmp_path), "remote_cache": fake})
+    task = MyTask(x=3, infra={"folder": str(tmp_path), "remote_cache": fake})  # type: ignore[arg-type]
     task.compute()
     task.infra.upload_result()
     with pytest.raises(RuntimeError, match="already contains uid"):

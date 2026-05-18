@@ -632,10 +632,10 @@ def test_base_infra_has_remote_cache_field_excluded_from_uid(tmp_path: Path) -> 
             return self.x
 
     # uid should be identical whether remote_cache is set or not
-    t1 = MyTask(x=2, infra={"folder": str(tmp_path)})
+    t1 = MyTask(x=2, infra={"folder": str(tmp_path)})  # type: ignore[arg-type]
     t2 = MyTask(
         x=2,
-        infra={
+        infra={  # type: ignore[arg-type]
             "folder": str(tmp_path),
             "remote_cache": _FakeRemoteCache(),
         },
@@ -660,7 +660,7 @@ def test_base_infra_remote_cache_accepts_dict(tmp_path: Path) -> None:
 
     task = MyTask(
         x=2,
-        infra={
+        infra={  # type: ignore[arg-type]
             "folder": str(tmp_path),
             "remote_cache": {"type": "_FakeRemoteCache"},
         },
@@ -686,5 +686,5 @@ def test_base_infra_remote_cache_rejects_garbage(tmp_path: Path) -> None:
     ):
         MyTask(
             x=2,
-            infra={"folder": str(tmp_path), "remote_cache": 42},
+            infra={"folder": str(tmp_path), "remote_cache": 42},  # type: ignore[arg-type]
         )
