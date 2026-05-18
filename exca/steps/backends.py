@@ -29,8 +29,7 @@ import exca
 from exca import utils
 from exca.cachedict import inflight
 
-from . import errors, identity, items
-from . import jobs as job_registry
+from . import errors, identity, items, jobregistry
 
 if tp.TYPE_CHECKING:
     from .base import Step
@@ -140,7 +139,7 @@ class LookupHandle:
             )
 
     def job(self) -> submitit.Job[tp.Any] | None:
-        """Return the live inflight job, or latest Slurm job recorded for logs."""
+        """Return the live inflight job, or latest submitit job recorded for logs."""
         if self._backend is None or not self.paths.step_folder.exists():
             return None
         try:
@@ -148,13 +147,18 @@ class LookupHandle:
                 info = reg.get([self.uid])
             if self.uid in info:
                 return info[self.uid]._job  # type: ignore[attr-defined]
-            with job_registry.JobRegistry(self.paths.step_folder) as reg:
+            with jobregistry.JobRegistry(self.paths.step_folder) as reg:
                 job = reg.get([self.uid]).get(self.uid)
             if job is not None:
                 cls = submitit.SlurmJob if job.cluster == "slurm" else submitit.LocalJob
                 return cls(folder=self.paths._logs_folder, job_id=job.job_id)
         except Exception:
-            pass
+            logger.debug(
+                "Failed to recover job for %s[%s]",
+                self.paths.step_uid,
+                self.uid,
+                exc_info=True,
+            )
         return None
 
 
@@ -562,7 +566,7 @@ class _SubmititBackend(Backend):
             jobs = [executor.submit(wrapper, c) for c in chunks]
         for c, j in zip(chunks, jobs):
             claim.record_worker_info(j, uids=c.uids)
-        with job_registry.JobRegistry(paths.step_folder) as reg:
+        with jobregistry.JobRegistry(paths.step_folder) as reg:
             for c, j in zip(chunks, jobs):
                 reg.record(c.uids, cluster=executor.cluster, job_id=j.job_id)
         msg = "Sent %s items for %s into %s jobs on cluster '%s' (eg: %s)"

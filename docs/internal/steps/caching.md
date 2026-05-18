@@ -12,7 +12,7 @@ How a step's results, errors, and in-flight state are stored and how
 │   └── *.pkl|*.npy|...      # CacheDict value payloads
 ├── inflight.db              # claim/release registry
 ├── errors.db                # cached exception per errored uid
-├── jobs.db                  # latest submitit cluster/job id per uid
+├── jobs.db                  # latest submitit cluster/job/submission time per uid
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```
@@ -116,3 +116,6 @@ the submitit job id and folder, so `Backend.job()` can reattach and
 For submitit submissions, `jobs.db` records the latest cluster/job id per
 item uid after submission. This is advisory log-discovery metadata only:
 cache correctness depends on CacheDict / `errors.db`, not on `jobs.db`.
+`LookupHandle.job()` first consults `inflight.db`, then falls back to
+`jobs.db`; the latter can point to a completed or stale submission whose
+logs may still be useful.

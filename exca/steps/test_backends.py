@@ -17,7 +17,7 @@ import submitit
 
 import exca
 
-from . import backends, conftest, items, jobs
+from . import backends, conftest, items, jobregistry
 from .base import Chain, Step
 
 
@@ -95,18 +95,17 @@ def test_slurm_backend_param_forwarding(
     job = handle.job()
     assert job is not None
     assert job.job_id == "fake-job"
-    with jobs.JobRegistry(handle.paths.step_folder) as registry:
+    with jobregistry.JobRegistry(handle.paths.step_folder) as registry:
         info = registry.get([handle.uid])
         assert info[handle.uid].cluster == "slurm"
-        created_at = info[handle.uid].created_at
+        submitted_at = info[handle.uid].submitted_at
 
-    time.sleep(0.001)
+    time.sleep(0.01)
     handle.clear_cache()
     assert step.run() == 1
-    with jobs.JobRegistry(handle.paths.step_folder) as registry:
+    with jobregistry.JobRegistry(handle.paths.step_folder) as registry:
         info = registry.get([handle.uid])
-    assert info[handle.uid].created_at == created_at
-    assert info[handle.uid].updated_at > created_at
+    assert info[handle.uid].submitted_at > submitted_at
 
 
 def test_backend_error_caching(tmp_path: Path) -> None:

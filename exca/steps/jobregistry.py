@@ -24,8 +24,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     item_uid     TEXT PRIMARY KEY,
     cluster      TEXT NOT NULL,
     job_id       TEXT NOT NULL,
-    created_at   REAL NOT NULL,
-    updated_at   REAL NOT NULL
+    submitted_at REAL NOT NULL
 );
 """
 
@@ -36,15 +35,7 @@ class JobInfo:
 
     cluster: str
     job_id: str
-    created_at: float
-    updated_at: float
-
-    @classmethod
-    def _from_row(cls, row: tuple[str, str, float, float]) -> "JobInfo":
-        cluster, job_id, created_at, updated_at = row
-        return cls(
-            cluster=cluster, job_id=job_id, created_at=created_at, updated_at=updated_at
-        )
+    submitted_at: float
 
 
 class JobRegistry(registry.AdvisoryRegistry):
@@ -62,15 +53,17 @@ class JobRegistry(registry.AdvisoryRegistry):
         now = time.time()
 
         def _do(conn: sqlite3.Connection) -> None:
+            conn.execute("BEGIN")
             conn.executemany(
-                "INSERT INTO jobs (item_uid, cluster, job_id, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?) "
+                "INSERT INTO jobs (item_uid, cluster, job_id, submitted_at) "
+                "VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(item_uid) DO UPDATE SET "
                 "cluster = excluded.cluster, "
                 "job_id = excluded.job_id, "
-                "updated_at = excluded.updated_at",
-                [(uid, cluster, job_id, now, now) for uid in item_uids],
+                "submitted_at = excluded.submitted_at",
+                [(uid, cluster, job_id, now) for uid in item_uids],
             )
+            conn.execute("COMMIT")
 
         self._safe_execute("record", None, _do, create=True)
 
@@ -83,13 +76,17 @@ class JobRegistry(registry.AdvisoryRegistry):
             rows = registry.select_in_chunks(
                 conn,
                 "jobs",
-                ["item_uid", "cluster", "job_id", "created_at", "updated_at"],
+                ["item_uid", "cluster", "job_id", "submitted_at"],
                 "item_uid",
                 item_uids,
             )
             return {
-                uid: JobInfo._from_row((cluster, job_id, created_at, updated_at))
-                for uid, cluster, job_id, created_at, updated_at in rows
+                uid: JobInfo(
+                    cluster=cluster,
+                    job_id=job_id,
+                    submitted_at=submitted_at,
+                )
+                for uid, cluster, job_id, submitted_at in rows
             }
 
         return self._safe_execute("query", {}, _do)
