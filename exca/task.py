@@ -186,6 +186,38 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             else:
                 path.unlink(missing_ok=True)
 
+    def upload_result(
+        self,
+        *,
+        token: str | None = None,
+        overwrite: bool = False,
+    ) -> None:
+        """Push the local cache of this instance to the configured remote.
+
+        Parameters
+        ----------
+        token: optional str
+            Backend-specific auth token (e.g. Hugging Face token). When
+            ``None``, the backend uses its native auth resolution.
+        overwrite: bool
+            If ``False`` (default), raises ``RuntimeError`` when the uid is
+            already present on the remote. If ``True``, the push proceeds.
+        """
+        if self.remote_cache is None:
+            raise RuntimeError("No remote cache configured")
+        folder = self.uid_folder()
+        if folder is None or not (folder / "job.pkl").exists():
+            raise RuntimeError("No local cache to upload")
+        status = self.status()
+        if status != "completed":
+            raise RuntimeError(f"Cannot upload failed cache: status={status}")
+        self.remote_cache.upload(
+            self.uid(),
+            Path(self.folder),  # type: ignore[arg-type]
+            overwrite=overwrite,
+            token=token,
+        )
+
     @contextlib.contextmanager
     def job_array(
         self,

@@ -657,3 +657,115 @@ def test_taskinfra_read_only_raises_when_remote_and_local_both_empty(
     )
     with pytest.raises(RuntimeError, match="not computed|read-only"):
         task.compute()
+
+
+def test_upload_result_pushes_to_remote(tmp_path: Path) -> None:
+    import pydantic
+
+    import exca as xk
+    from exca.remote_cache._fakes import _FakeRemoteCache
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x * 10
+
+    fake = _FakeRemoteCache()
+    task = MyTask(x=4, infra={"folder": str(tmp_path), "remote_cache": fake})
+    assert task.compute() == 40
+
+    task.infra.upload_result()
+    uid = task.infra.uid()
+    assert f"{uid}/job.pkl" in fake.store
+    assert f"{uid}/uid.yaml" in fake.store
+
+
+def test_upload_result_errors_when_no_remote(tmp_path: Path) -> None:
+    import pydantic
+
+    import exca as xk
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x
+
+    task = MyTask(x=1, infra={"folder": str(tmp_path)})
+    task.compute()
+    with pytest.raises(RuntimeError, match="No remote cache configured"):
+        task.infra.upload_result()
+
+
+def test_upload_result_errors_when_no_local_cache(tmp_path: Path) -> None:
+    import pydantic
+
+    import exca as xk
+    from exca.remote_cache._fakes import _FakeRemoteCache
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x
+
+    task = MyTask(
+        x=2,
+        infra={"folder": str(tmp_path), "remote_cache": _FakeRemoteCache()},
+    )
+    with pytest.raises(RuntimeError, match="No local cache"):
+        task.infra.upload_result()
+
+
+def test_upload_result_errors_when_status_failed(tmp_path: Path) -> None:
+    import pydantic
+
+    import exca as xk
+    from exca.remote_cache._fakes import _FakeRemoteCache
+
+    class FailingTask(pydantic.BaseModel):
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            raise ValueError("boom")
+
+    task = FailingTask(
+        infra={"folder": str(tmp_path), "remote_cache": _FakeRemoteCache()},
+    )
+    with pytest.raises(ValueError):
+        task.compute()
+    assert task.infra.status() == "failed"
+    with pytest.raises(RuntimeError, match="Cannot upload failed cache"):
+        task.infra.upload_result()
+
+
+def test_upload_result_refuses_existing_without_overwrite(tmp_path: Path) -> None:
+    import pydantic
+
+    import exca as xk
+    from exca.remote_cache._fakes import _FakeRemoteCache
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x
+
+    fake = _FakeRemoteCache()
+    task = MyTask(x=3, infra={"folder": str(tmp_path), "remote_cache": fake})
+    task.compute()
+    task.infra.upload_result()
+    with pytest.raises(RuntimeError, match="already contains uid"):
+        task.infra.upload_result()
+
+    task.infra.upload_result(overwrite=True)
