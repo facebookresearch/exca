@@ -6,6 +6,7 @@
 
 import logging
 from pathlib import Path
+from typing import ClassVar
 
 from exca.helpers import DiscriminatedModel
 
@@ -59,7 +60,12 @@ class RemoteCache(DiscriminatedModel):
             return False
         return (local_uid_folder / "job.pkl").exists()
 
-    _PUSH_FILES = ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl")
+    _PUSH_FILES: ClassVar[tuple[str, ...]] = (
+        "uid.yaml",
+        "full-uid.yaml",
+        "config.yaml",
+        "job.pkl",
+    )
 
     def upload(
         self,
