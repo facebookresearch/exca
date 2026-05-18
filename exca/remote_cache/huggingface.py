@@ -21,7 +21,7 @@ try:
 
     _HAS_HF = True
 except ImportError:
-    HfApi = None  # type: ignore[assignment]
+    HfApi = None  # type: ignore[assignment,misc]
     snapshot_download = None  # type: ignore[assignment]
     _HAS_HF = False
 

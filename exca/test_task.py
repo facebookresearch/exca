@@ -807,7 +807,7 @@ class _Multiplier(pydantic.BaseModel):
 
 
 def test_cached_mode_local_success_does_not_pull(tmp_path: Path) -> None:
-    producer = _Multiplier(x=2, infra={"folder": str(tmp_path / "p")})
+    producer = _Multiplier(x=2, infra={"folder": str(tmp_path / "p")})  # type: ignore[arg-type]
     producer.compute()
     fake = _seed_remote_from(producer.infra)
 
@@ -815,7 +815,10 @@ def test_cached_mode_local_success_does_not_pull(tmp_path: Path) -> None:
     shutil.copytree(tmp_path / "p", consumer_folder)
     consumer = _Multiplier(
         x=2,
-        infra={"folder": str(consumer_folder), "remote_cache": fake},
+        infra={  # type: ignore[arg-type]
+            "folder": str(consumer_folder),
+            "remote_cache": fake,
+        },
     )
 
     calls: list[str] = []
@@ -825,19 +828,33 @@ def test_cached_mode_local_success_does_not_pull(tmp_path: Path) -> None:
 
 
 def test_cached_mode_local_miss_pulls(tmp_path: Path) -> None:
-    producer = _Multiplier(x=3, infra={"folder": str(tmp_path / "p")})
+    producer = _Multiplier(x=3, infra={"folder": str(tmp_path / "p")})  # type: ignore[arg-type]
     producer.compute()
     fake = _seed_remote_from(producer.infra)
     cons = tmp_path / "c"
     cons.mkdir()
-    consumer = _Multiplier(x=3, infra={"folder": str(cons), "remote_cache": fake})
+    consumer = _Multiplier(
+        x=3,
+        infra={  # type: ignore[arg-type]
+            "folder": str(cons),
+            "remote_cache": fake,
+        },
+    )
     assert consumer.compute() == 30
-    assert (consumer.infra.uid_folder() / "job.pkl").exists()
+    uid_folder = consumer.infra.uid_folder()
+    assert uid_folder is not None
+    assert (uid_folder / "job.pkl").exists()
 
 
 def test_cached_mode_local_and_remote_miss_computes(tmp_path: Path) -> None:
     fake = _FakeRemoteCache()  # empty
-    task = _Multiplier(x=4, infra={"folder": str(tmp_path), "remote_cache": fake})
+    task = _Multiplier(
+        x=4,
+        infra={  # type: ignore[arg-type]
+            "folder": str(tmp_path),
+            "remote_cache": fake,
+        },
+    )
     assert task.compute() == 40
 
 
@@ -854,14 +871,19 @@ def test_retry_mode_local_failed_recomputes_no_pull(tmp_path: Path) -> None:
             return 99
 
     fake = _FakeRemoteCache()
-    task = _Flaky(infra={"folder": str(tmp_path), "remote_cache": fake})
+    task = _Flaky(
+        infra={  # type: ignore[arg-type]
+            "folder": str(tmp_path),
+            "remote_cache": fake,
+        },
+    )
     with pytest.raises(ValueError):
         task.compute()  # caches the failure
     assert task.infra.status() == "failed"
 
     state["errors"] = False
     task2 = _Flaky(
-        infra={
+        infra={  # type: ignore[arg-type]
             "folder": str(tmp_path),
             "remote_cache": fake,
             "mode": "retry",
@@ -874,13 +896,13 @@ def test_retry_mode_local_failed_recomputes_no_pull(tmp_path: Path) -> None:
 
 
 def test_read_only_mode_local_hit_uses_local(tmp_path: Path) -> None:
-    producer = _Multiplier(x=5, infra={"folder": str(tmp_path)})
+    producer = _Multiplier(x=5, infra={"folder": str(tmp_path)})  # type: ignore[arg-type]
     producer.compute()
 
     fake = _FakeRemoteCache()  # empty
     task = _Multiplier(
         x=5,
-        infra={
+        infra={  # type: ignore[arg-type]
             "folder": str(tmp_path),
             "remote_cache": fake,
             "mode": "read-only",
@@ -890,14 +912,14 @@ def test_read_only_mode_local_hit_uses_local(tmp_path: Path) -> None:
 
 
 def test_read_only_mode_pulls_when_local_missing(tmp_path: Path) -> None:
-    producer = _Multiplier(x=6, infra={"folder": str(tmp_path / "p")})
+    producer = _Multiplier(x=6, infra={"folder": str(tmp_path / "p")})  # type: ignore[arg-type]
     producer.compute()
     fake = _seed_remote_from(producer.infra)
     cons = tmp_path / "c"
     cons.mkdir()
     task = _Multiplier(
         x=6,
-        infra={
+        infra={  # type: ignore[arg-type]
             "folder": str(cons),
             "remote_cache": fake,
             "mode": "read-only",
