@@ -641,3 +641,48 @@ def test_base_infra_has_remote_cache_field_excluded_from_uid(tmp_path: Path) -> 
         },
     )
     assert t1.infra.uid() == t2.infra.uid()
+
+
+def test_base_infra_remote_cache_accepts_dict(tmp_path: Path) -> None:
+    """Passing a dict (discriminator) must dispatch to the right RemoteCache subclass."""
+    import pydantic
+
+    import exca as xk
+    from exca.remote_cache._fakes import _FakeRemoteCache
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x
+
+    task = MyTask(
+        x=2,
+        infra={
+            "folder": str(tmp_path),
+            "remote_cache": {"type": "_FakeRemoteCache"},
+        },
+    )
+    assert isinstance(task.infra.remote_cache, _FakeRemoteCache)
+
+
+def test_base_infra_remote_cache_rejects_garbage(tmp_path: Path) -> None:
+    import pydantic
+
+    import exca as xk
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x
+
+    with pytest.raises(Exception, match="RemoteCache instance, dict, or None"):
+        MyTask(
+            x=2,
+            infra={"folder": str(tmp_path), "remote_cache": 42},
+        )

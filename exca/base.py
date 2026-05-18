@@ -202,6 +202,27 @@ class BaseInfra(pydantic.BaseModel):
             return ["."]  # compatibility -> avoid uid change
         return list(set(type(self).model_fields) - {"version"})
 
+    @pydantic.field_validator("remote_cache", mode="before")
+    @classmethod
+    def _validate_remote_cache(cls, v: tp.Any) -> tp.Any:
+        """Dispatch dicts to the correct RemoteCache subclass via discriminator.
+
+        Lazy import of RemoteCache avoids the helpers.py -> task.py -> base.py
+        circular import that prevents a direct module-level import.
+        """
+        if v is None:
+            return v
+        from .remote_cache import RemoteCache as _RemoteCache
+
+        if isinstance(v, _RemoteCache):
+            return v
+        if isinstance(v, dict):
+            return _RemoteCache(**v)
+        raise TypeError(
+            "remote_cache must be a RemoteCache instance, dict, or None; "
+            f"got {type(v).__name__}"
+        )
+
     def model_post_init(self, log__: tp.Any) -> None:
         super().model_post_init(log__)
         self._set_permissions(None)  # set compatibility for permissions as string
