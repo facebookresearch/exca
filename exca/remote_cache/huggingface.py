@@ -12,6 +12,7 @@ instantiation time if the dependency is missing.
 """
 
 import typing as tp
+from pathlib import Path
 
 from .base import RemoteCache
 
@@ -50,3 +51,39 @@ class HFRemoteCache(RemoteCache):
                 "HFRemoteCache requires huggingface_hub. "
                 "Install with: pip install huggingface_hub"
             )
+
+    # ---- transport implementation ----------------------------------------
+
+    def _file_exists(self, remote_path: str) -> bool:
+        return HfApi().file_exists(
+            repo_id=self.repo_id,
+            filename=remote_path,
+            repo_type=self.repo_type,
+            revision=self.revision,
+        )
+
+    def _download(self, uid: str, root_dir: Path) -> None:
+        snapshot_download(
+            repo_id=self.repo_id,
+            repo_type=self.repo_type,
+            revision=self.revision,
+            allow_patterns=[f"{uid}/*"],
+            local_dir=root_dir,
+        )
+
+    def _upload(
+        self,
+        uid: str,
+        root_dir: Path,
+        files: list[str],
+        token: str | None,
+    ) -> None:
+        api = HfApi(token=token)
+        api.upload_folder(
+            repo_id=self.repo_id,
+            repo_type=self.repo_type,
+            revision=self.revision,
+            folder_path=root_dir / uid,
+            path_in_repo=uid,
+            allow_patterns=files,
+        )
