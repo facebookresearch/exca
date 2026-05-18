@@ -58,3 +58,25 @@ class RemoteCache(DiscriminatedModel):
             logger.warning("Pull failed for uid %r: %s", uid, e)
             return False
         return (local_uid_folder / "job.pkl").exists()
+
+    _PUSH_FILES = ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl")
+
+    def upload(
+        self,
+        uid: str,
+        root_dir: Path,
+        *,
+        overwrite: bool,
+        token: str | None,
+    ) -> None:
+        """Push ``root_dir / uid / *`` to the remote.
+
+        Raises ``RuntimeError`` if the remote already has this uid and
+        ``overwrite`` is ``False``. Transport errors propagate.
+        """
+        if not overwrite and self._file_exists(f"{uid}/uid.yaml"):
+            raise RuntimeError(
+                f"Remote already contains uid={uid!r}; "
+                "pass overwrite=True to push anyway."
+            )
+        self._upload(uid, root_dir, files=list(self._PUSH_FILES), token=token)

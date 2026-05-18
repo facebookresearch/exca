@@ -90,3 +90,41 @@ def test_download_swallows_transport_errors(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(cache, "_download", boom)
     ok = cache.download("any_uid", tmp_path)
     assert ok is False
+
+
+def _make_local_cache(folder: Path, uid: str) -> None:
+    """Helper: write the 4 expected cache files for *uid* under *folder*."""
+    d = folder / uid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "uid.yaml").write_bytes(b"uid: ok\n")
+    (d / "full-uid.yaml").write_bytes(b"full: ok\n")
+    (d / "config.yaml").write_bytes(b"config: ok\n")
+    (d / "job.pkl").write_bytes(b"<pickled>")
+
+
+def test_upload_happy_path(tmp_path: Path) -> None:
+    cache = _FakeRemoteCache()
+    _make_local_cache(tmp_path, "my_uid")
+
+    cache.upload("my_uid", tmp_path, overwrite=False, token=None)
+
+    assert cache.store["my_uid/uid.yaml"] == b"uid: ok\n"
+    assert cache.store["my_uid/job.pkl"] == b"<pickled>"
+
+
+def test_upload_refuses_when_remote_already_has_uid(tmp_path: Path) -> None:
+    cache = _FakeRemoteCache()
+    cache.store["my_uid/uid.yaml"] = b"existing\n"
+    _make_local_cache(tmp_path, "my_uid")
+
+    with pytest.raises(RuntimeError, match="already contains uid"):
+        cache.upload("my_uid", tmp_path, overwrite=False, token=None)
+
+
+def test_upload_with_overwrite_replaces_existing(tmp_path: Path) -> None:
+    cache = _FakeRemoteCache()
+    cache.store["my_uid/uid.yaml"] = b"old\n"
+    _make_local_cache(tmp_path, "my_uid")
+
+    cache.upload("my_uid", tmp_path, overwrite=True, token=None)
+    assert cache.store["my_uid/uid.yaml"] == b"uid: ok\n"
