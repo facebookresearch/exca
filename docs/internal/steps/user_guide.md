@@ -189,19 +189,23 @@ step = Train(
 ## Cache Operations
 
 ```python
-step.has_cache()      # Check if result is cached
-step.clear_cache()    # Delete cached result
-step.job()            # Get submitit job (for async monitoring)
+handle = step.lookup()
+handle.cached()       # Check if result is cached
+handle.clear_cache()  # Delete cached result
+handle.job()          # Live job, or latest reconstructable job for logs
 ```
 
-For transformer steps (those with input), use `with_input()` for cache queries:
+`handle.job()` can return a stale submitit job after completion or
+`clear_cache()`. It is for monitoring/log discovery, not cache correctness.
+
+For transformer steps (those with input), pass the input to `lookup()`:
 
 ```python
 step = Multiply(coeff=3.0, infra={"backend": "Cached", "folder": "/cache"})
 
 # Check cache for specific input
-step.with_input(5.0).has_cache()
-step.with_input(5.0).clear_cache()
+step.lookup(5.0).cached()
+step.lookup(5.0).clear_cache()
 ```
 
 ---

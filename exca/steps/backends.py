@@ -29,7 +29,7 @@ import exca
 from exca import utils
 from exca.cachedict import inflight
 
-from . import errors, identity, items
+from . import errors, identity, items, jobregistry
 
 if tp.TYPE_CHECKING:
     from .base import Step
@@ -42,7 +42,7 @@ LookupStatus = tp.Literal["success", "error", "running", None]
 
 @dataclasses.dataclass(frozen=True)
 class StepPaths:
-    """On-disk path layout for a step: ``base_folder / step_uid / {cache,logs}``.
+    """On-disk path layout for a step rooted at ``base_folder / step_uid``.
 
     See `docs/internal/steps/caching.md` for the full tree.
     """
@@ -147,16 +147,30 @@ class LookupHandle:
             )
 
     def job(self) -> submitit.Job[tp.Any] | None:
-        """Get the submitit job from the inflight registry, or ``None``."""
-        if self._backend is None or not self.paths.cache_folder.exists():
+        """Return the live inflight job, or latest submitit job recorded for logs."""
+        if self._backend is None or not self.paths.step_folder.exists():
             return None
         try:
-            with inflight.InflightRegistry(self.paths.cache_folder) as reg:
+            with inflight.InflightRegistry(self.paths.step_folder) as reg:
                 info = reg.get([self.uid])
             if self.uid in info:
                 return info[self.uid]._job  # type: ignore[attr-defined]
+            with jobregistry.JobRegistry(self.paths.step_folder) as reg:
+                job = reg.get([self.uid]).get(self.uid)
+            if job is not None:
+                # DebugJob needs the original submission, so only classes
+                # reconstructable from folder + job_id are available here.
+                classes = {"local": submitit.LocalJob, "slurm": submitit.SlurmJob}
+                cls = classes.get(job.cluster)
+                if cls is not None:
+                    return cls(folder=self.paths._logs_folder, job_id=job.job_id)
         except Exception:
-            pass
+            logger.debug(
+                "Failed to recover job for %s[%s]",
+                self.paths.step_uid,
+                self.uid,
+                exc_info=True,
+            )
         return None
 
 
@@ -203,7 +217,8 @@ class _CachedEntry:
             return cls(status, cd, uid)
         if cd.folder is None:
             return cls(None, cd, uid)
-        with errors.ErrorRegistry(cd.folder) as reg:
+        # Ugly but convenient: CacheDict folder is <step>/cache.
+        with errors.ErrorRegistry(cd.folder.parent) as reg:
             err = reg.load(uid)
         if err is None:
             return cls(None, cd, uid)
@@ -223,7 +238,8 @@ class _CachedEntry:
         out: dict[str, CacheStatus] = {}
         errored: set[str] = set()
         if folder is not None and folder.exists():
-            with errors.ErrorRegistry(folder) as reg:
+            # Ugly but convenient: CacheDict folder is <step>/cache.
+            with errors.ErrorRegistry(folder.parent) as reg:
                 # Cached errors raise on first hit, so they usually stay
                 # sparser than the queried uids.
                 errored = reg.get()
@@ -294,7 +310,7 @@ class _CachingCall:
             if folder is not None and inflight:
                 e.add_note(f"  -> error recorded at {self.step_uid}{inflight}")
                 tb = "".join(traceback.format_exception(e))
-                with errors.ErrorRegistry(folder) as reg:
+                with errors.ErrorRegistry(folder.parent) as reg:
                     for uid in inflight:
                         reg.record(uid, e, tb)
             raise
@@ -408,10 +424,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         uids = list(dict.fromkeys(uids))
         if not uids:
             return
-        # Other backends may have left inflight rows for this cache folder.
-        if paths.cache_folder.exists():
+        # Other backends may have left inflight rows for this step folder.
+        if paths.step_folder.exists():
             try:
-                with inflight.InflightRegistry(paths.cache_folder) as reg:
+                with inflight.InflightRegistry(paths.step_folder) as reg:
                     info = reg.get(uids)
                     jobs: dict[str, str] = {}
                     for uid, worker in info.items():
@@ -430,8 +446,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             for uid in uids:
                 if uid in cd:
                     del cd[uid]
-        if paths.cache_folder.exists():
-            with errors.ErrorRegistry(paths.cache_folder) as ereg:
+        if paths.step_folder.exists():
+            with errors.ErrorRegistry(paths.step_folder) as ereg:
                 ereg.clear(uids)
         self._checked_configs.discard(paths.step_folder)
 
@@ -465,7 +481,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 self._clear_caches(paths=paths, cd=cd, uids=to_compute)
             reg: inflight.InflightRegistry | None = None
             if self._concurrent:
-                reg = inflight.InflightRegistry(paths.cache_folder)
+                reg = inflight.InflightRegistry(paths.step_folder)
             with inflight.inflight_session(reg, to_compute) as claim:
                 pending_statuses = self._pending_statuses(  # recheck once claimed
                     paths=paths, uids=to_compute, mode=mode
@@ -577,6 +593,11 @@ class _SubmititBackend(Backend):
             jobs = [executor.submit(wrapper, c) for c in chunks]
         for c, j in zip(chunks, jobs):
             claim.record_worker_info(j, uids=c.uids)
+        with jobregistry.JobRegistry(paths.step_folder) as reg:
+            reg.record(
+                {j.job_id: c.uids for c, j in zip(chunks, jobs)},
+                cluster=executor.cluster,
+            )
         msg = "Sent %s items for %s into %s jobs on cluster '%s' (eg: %s)"
         logger.info(
             msg, len(uids), paths.step_uid, len(jobs), self._CLUSTER, jobs[0].job_id

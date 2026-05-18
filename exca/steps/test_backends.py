@@ -7,6 +7,7 @@
 """Tests for execution backends (LocalProcess, Slurm, submitit integration)."""
 
 import contextlib
+import time
 import typing as tp
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import submitit
 
 import exca
 
-from . import backends, conftest, items
+from . import backends, conftest, items, jobregistry
 from .base import Chain, Step
 
 
@@ -35,6 +36,7 @@ class _CapturingAutoExecutor:
     captured: list = []  # reset by each test before monkeypatching
 
     def __init__(self, folder: tp.Any, cluster: str | None = None, **kw: tp.Any) -> None:
+        self.cluster = cluster
         self._ctor = {"folder": folder, "cluster": cluster, **kw}
 
     def update_parameters(self, **kw: tp.Any) -> None:
@@ -59,6 +61,8 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     out1 = chain.run(1)
     out2 = chain.run(1)
     assert out1 == out2
+    job = chain.lookup(1).job()
+    assert (job is not None) == (backend == "LocalProcess")
 
 
 def test_slurm_backend_param_forwarding(
@@ -88,6 +92,21 @@ def test_slurm_backend_param_forwarding(
         "gpus_per_node": 4,
         "slurm_array_parallelism": 1,
     }
+    handle = step.lookup()
+    job = handle.job()
+    assert job is not None
+    assert job.job_id == "fake-job"
+    with jobregistry.JobRegistry(handle.paths.step_folder) as registry:
+        info = registry.get([handle.uid])
+        assert info[handle.uid].cluster == "slurm"
+        submitted_at = info[handle.uid].submitted_at
+
+    time.sleep(0.01)
+    handle.clear_cache()
+    assert step.run() == 1
+    with jobregistry.JobRegistry(handle.paths.step_folder) as registry:
+        info = registry.get([handle.uid])
+    assert info[handle.uid].submitted_at > submitted_at
 
 
 def test_backend_error_caching(tmp_path: Path) -> None:

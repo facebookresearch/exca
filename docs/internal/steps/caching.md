@@ -7,11 +7,12 @@ How a step's results, errors, and in-flight state are stored and how
 
 ```
 {base_folder}/{step_uid}/
-├── cache/                   # CacheDict folder + advisory DBs
+├── cache/                   # CacheDict folder
 │   ├── *.jsonl              # CacheDict index
-│   ├── *.pkl|*.npy|...      # CacheDict value payloads
-│   ├── inflight.db          # claim/release registry
-│   └── errors.db            # cached exception per errored uid
+│   └── *.pkl|*.npy|...      # CacheDict value payloads
+├── inflight.db              # claim/release registry
+├── errors.db                # cached exception per errored uid
+├── jobs.db                  # latest submitit cluster/job/submission time per uid
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```
@@ -108,6 +109,13 @@ Submitit writes its own pickles under `logs/<job_id>/`
 (`<job_id>_0_result.pkl` = `("success", value)` or `("error",
 traceback_string)`). These are submitit-owned and not read by exca after
 the job completes — exca reads from CacheDict (success) or `errors.db`
-(failure). Running job handles are tracked in `cache/inflight.db` with
+(failure). Running job handles are tracked in `inflight.db` with
 the submitit job id and folder, so `Backend.job()` can reattach and
 `force` / `retry` can detect prior work.
+
+For submitit submissions, `jobs.db` records the latest cluster/job id per
+item uid after submission. This is advisory log-discovery metadata only:
+cache correctness depends on CacheDict / `errors.db`, not on `jobs.db`.
+`LookupHandle.job()` first consults `inflight.db`, then falls back to
+`jobs.db` for reconstructable jobs (`slurm` / `local`). The fallback can
+point to a completed or stale submission whose logs may still be useful.
