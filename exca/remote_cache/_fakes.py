@@ -21,7 +21,9 @@ class _FakeRemoteCache(RemoteCache):
     """
 
     # Each instance gets its own dict via default_factory.
-    store: dict[str, bytes] = pydantic.Field(default_factory=dict)
+    # Excluded from model_dump / JSON serialisation because bytes are not
+    # JSON-serialisable and the store content is ephemeral test state.
+    store: dict[str, bytes] = pydantic.Field(default_factory=dict, exclude=True)
 
     def _file_exists(self, remote_path: str) -> bool:
         return remote_path in self.store

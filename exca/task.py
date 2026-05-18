@@ -339,6 +339,25 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             self.clear_job()
         if folder is not None:
             job_path = folder / "job.pkl"
+            # ---- auto-pull from remote on local miss (skipped in force) ----
+            if (
+                not job_path.exists()
+                and self.remote_cache is not None
+                and self._effective_mode != "force"
+            ):
+                root_dir = Path(self.folder)  # type: ignore[arg-type]
+                if self.remote_cache.download(self.uid(), root_dir):
+                    # sanity-check the pulled yaml against the local config;
+                    # raises RuntimeError on uid collision (different config,
+                    # same uid hash).
+                    self._check_configs(write=False)
+                    # set permissions on pulled files (we are on a shared FS).
+                    for fp in folder.iterdir():
+                        try:
+                            self._set_permissions(fp)
+                        except (OSError, FileNotFoundError):
+                            pass
+            # ---- end pull hook ----
             if job_path.exists():
                 logger.debug("Reloading job from '%s'", job_path)
                 with job_path.open("rb") as f:

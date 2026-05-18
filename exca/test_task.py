@@ -532,3 +532,117 @@ def test_autoreload(tmp_path: Path) -> None:
     w3 = test_compat.Whatever(taski={"folder": tmp_path / "2"})  # type: ignore
     out3 = w3.process_task()
     assert out3 == 144  # new code
+
+
+def test_taskinfra_auto_pulls_on_local_miss(tmp_path: Path) -> None:
+    import pydantic
+
+    import exca as xk
+    from exca.remote_cache._fakes import _FakeRemoteCache
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x * 100
+
+    # 1. produce a remote cache by computing once with no remote_cache
+    producer = MyTask(x=3, infra={"folder": str(tmp_path / "producer")})
+    assert producer.compute() == 300
+
+    # 2. seed _FakeRemoteCache from the producer's uid folder
+    fake = _FakeRemoteCache()
+    uid = producer.infra.uid()
+    src_uid_folder = producer.infra.uid_folder()
+    for name in ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl"):
+        fp = src_uid_folder / name
+        if fp.exists():
+            fake.store[f"{uid}/{name}"] = fp.read_bytes()
+
+    # 3. consumer with empty local cache + remote_cache=fake
+    consumer_folder = tmp_path / "consumer"
+    consumer_folder.mkdir()
+    consumer = MyTask(
+        x=3,
+        infra={"folder": str(consumer_folder), "remote_cache": fake},
+    )
+    # consumer's compute returns x*100 = 300 — same as the pulled result
+    assert consumer.compute() == 300
+    # local cache now contains the pulled job.pkl
+    assert (consumer.infra.uid_folder() / "job.pkl").exists()
+
+
+def test_taskinfra_force_mode_skips_pull(tmp_path: Path) -> None:
+    import pydantic
+
+    import exca as xk
+    from exca.remote_cache._fakes import _FakeRemoteCache
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x * 100
+
+    # seed remote with a stale result
+    producer = MyTask(x=5, infra={"folder": str(tmp_path / "producer")})
+    assert producer.compute() == 500
+
+    fake = _FakeRemoteCache()
+    uid = producer.infra.uid()
+    for name in ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl"):
+        fp = producer.infra.uid_folder() / name
+        if fp.exists():
+            fake.store[f"{uid}/{name}"] = fp.read_bytes()
+
+    # consumer in force mode with empty local cache — must compute locally,
+    # must NOT pull from remote.
+    consumer_folder = tmp_path / "consumer"
+    consumer_folder.mkdir()
+    consumer = MyTask(
+        x=5,
+        infra={
+            "folder": str(consumer_folder),
+            "remote_cache": fake,
+            "mode": "force",
+        },
+    )
+
+    # Spy on _download to detect any pull attempt.
+    calls: list[str] = []
+    fake._download = lambda uid, root: calls.append(uid)  # type: ignore[assignment]
+
+    assert consumer.compute() == 500
+    assert calls == []  # _download was NEVER called in force mode
+
+
+def test_taskinfra_read_only_raises_when_remote_and_local_both_empty(
+    tmp_path: Path,
+) -> None:
+    import pydantic
+
+    import exca as xk
+    from exca.remote_cache._fakes import _FakeRemoteCache
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x
+
+    task = MyTask(
+        x=7,
+        infra={
+            "folder": str(tmp_path),
+            "remote_cache": _FakeRemoteCache(),  # empty
+            "mode": "read-only",
+        },
+    )
+    with pytest.raises(RuntimeError, match="not computed|read-only"):
+        task.compute()
