@@ -11,6 +11,7 @@ from importlib import metadata as _metadata
 from . import helpers as helpers
 from .confdict import ConfDict as ConfDict
 from .map import MapInfra as MapInfra
+from .remote_cache import HFRemoteCache as HFRemoteCache
 from .remote_cache import RemoteCache as RemoteCache
 from .task import SubmitInfra as SubmitInfra
 from .task import TaskInfra as TaskInfra

@@ -128,3 +128,10 @@ def test_upload_with_overwrite_replaces_existing(tmp_path: Path) -> None:
 
     cache.upload("my_uid", tmp_path, overwrite=True, token=None)
     assert cache.store["my_uid/uid.yaml"] == b"uid: ok\n"
+
+
+def test_top_level_reexports() -> None:
+    import exca
+
+    assert hasattr(exca, "RemoteCache")
+    assert hasattr(exca, "HFRemoteCache")
