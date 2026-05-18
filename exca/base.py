@@ -218,7 +218,7 @@ class BaseInfra(pydantic.BaseModel):
             return v
         if isinstance(v, dict):
             return _RemoteCache(**v)
-        raise TypeError(
+        raise ValueError(
             "remote_cache must be a RemoteCache instance, dict, or None; "
             f"got {type(v).__name__}"
         )

@@ -681,7 +681,9 @@ def test_base_infra_remote_cache_rejects_garbage(tmp_path: Path) -> None:
         def compute(self) -> int:
             return self.x
 
-    with pytest.raises(Exception, match="RemoteCache instance, dict, or None"):
+    with pytest.raises(
+        pydantic.ValidationError, match="RemoteCache instance, dict, or None"
+    ):
         MyTask(
             x=2,
             infra={"folder": str(tmp_path), "remote_cache": 42},
