@@ -18,17 +18,16 @@ import numpy as np
 import pydantic
 import pytest
 
-from exca.map import MapInfra
+import exca
 
-from . import backends, items
-from .base import Chain, Step
+from . import backends, base, items
 
 
-def _make_array(item: int, shape: tuple[int, int]) -> np.ndarray:
+def _make_array(item: int, shape: tuple[int, ...]) -> np.ndarray:
     return np.random.default_rng(item).random(shape, dtype=np.float32)
 
 
-class MakeArray(Step):
+class MakeArray(base.Step):
     CACHE_TYPE: tp.ClassVar[str | None] = "MemmapArrayFile"
 
     shape: tuple[int, ...] = (32, 32)
@@ -37,7 +36,7 @@ class MakeArray(Step):
         return _make_array(value, self.shape)
 
 
-class ArrayOp(Step):
+class ArrayOp(base.Step):
     CACHE_TYPE: tp.ClassVar[str | None] = "MemmapArrayFile"
 
     add: float = 0
@@ -51,7 +50,7 @@ class MapArray(pydantic.BaseModel):
     shape: tuple[int, ...] = (32, 32)
     add: float = 1.5
     scale: float = 3.0
-    infra: MapInfra = MapInfra(keep_in_ram=False)
+    infra: exca.MapInfra = exca.MapInfra(keep_in_ram=False)
 
     @infra.apply(
         item_uid=str,
@@ -71,12 +70,13 @@ class PerfWorkload:
     shape: tuple[int, ...] = (32, 32)
     batched: bool = False
 
-    def build(self, folder: Path | None = None) -> MapArray | Step:
+    def build(self, folder: Path | None = None) -> MapArray | base.Step:
         folder = self.folder if folder is None else folder
         if self.name == "map":
+            infra: tp.Any = {"folder": folder, "cluster": None, "keep_in_ram": False}
             return MapArray(
                 shape=self.shape,
-                infra={"folder": folder, "cluster": None, "keep_in_ram": False},
+                infra=infra,
             )
         infra = backends.Cached(folder=folder, keep_in_ram=False)
         first = MakeArray(shape=self.shape)
@@ -84,13 +84,13 @@ class PerfWorkload:
             first = MakeArray(shape=self.shape, infra=infra)
         elif self.name != "one-cache":
             raise ValueError(f"Unknown perf workload: {self.name}")
-        return Chain(
+        return base.Chain(
             steps=[first, ArrayOp(add=1.5), ArrayOp(scale=3.0)],
             infra=infra,
         )
 
     def run(
-        self, obj: MapArray | Step, *, batched: bool | None = None
+        self, obj: MapArray | base.Step, *, batched: bool | None = None
     ) -> list[np.ndarray]:
         batched = self.batched if batched is None else batched
         if isinstance(obj, MapArray):
