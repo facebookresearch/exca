@@ -19,8 +19,11 @@ import pydantic
 import pytest
 import submitit
 
+import exca as xk
+
 from . import base, helpers, test_compat, utils
 from .confdict import ConfDict
+from .remote_cache._fakes import _FakeRemoteCache
 from .task import LocalJob, TaskInfra
 
 PACKAGE = TaskInfra.__module__.split(".", maxsplit=1)[0]
@@ -769,3 +772,130 @@ def test_upload_result_refuses_existing_without_overwrite(tmp_path: Path) -> Non
         task.infra.upload_result()
 
     task.infra.upload_result(overwrite=True)
+
+
+# ============================================================================
+# Mode × remote behaviour table tests (see spec § "Mode × remote behaviour")
+# ============================================================================
+
+
+def _seed_remote_from(local_infra) -> _FakeRemoteCache:
+    """Helper: build a fake remote populated from a local cache."""
+    fake = _FakeRemoteCache()
+    uid = local_infra.uid()
+    for name in ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl"):
+        fp = local_infra.uid_folder() / name
+        if fp.exists():
+            fake.store[f"{uid}/{name}"] = fp.read_bytes()
+    return fake
+
+
+class _Multiplier(pydantic.BaseModel):
+    """Used by the table tests below."""
+
+    x: int = 1
+    infra: xk.TaskInfra = xk.TaskInfra()
+
+    @infra.apply
+    def compute(self) -> int:
+        return self.x * 10
+
+
+def test_cached_mode_local_success_does_not_pull(tmp_path: Path) -> None:
+    producer = _Multiplier(x=2, infra={"folder": str(tmp_path / "p")})
+    producer.compute()
+    fake = _seed_remote_from(producer.infra)
+
+    consumer_folder = tmp_path / "c"
+    shutil.copytree(tmp_path / "p", consumer_folder)
+    consumer = _Multiplier(
+        x=2,
+        infra={"folder": str(consumer_folder), "remote_cache": fake},
+    )
+
+    calls: list[str] = []
+    fake._download = lambda uid, root: calls.append(uid)  # type: ignore[assignment]
+    assert consumer.compute() == 20
+    assert calls == []  # no pull because local cache exists
+
+
+def test_cached_mode_local_miss_pulls(tmp_path: Path) -> None:
+    producer = _Multiplier(x=3, infra={"folder": str(tmp_path / "p")})
+    producer.compute()
+    fake = _seed_remote_from(producer.infra)
+    cons = tmp_path / "c"
+    cons.mkdir()
+    consumer = _Multiplier(x=3, infra={"folder": str(cons), "remote_cache": fake})
+    assert consumer.compute() == 30
+    assert (consumer.infra.uid_folder() / "job.pkl").exists()
+
+
+def test_cached_mode_local_and_remote_miss_computes(tmp_path: Path) -> None:
+    fake = _FakeRemoteCache()  # empty
+    task = _Multiplier(x=4, infra={"folder": str(tmp_path), "remote_cache": fake})
+    assert task.compute() == 40
+
+
+def test_retry_mode_local_failed_recomputes_no_pull(tmp_path: Path) -> None:
+    state = {"errors": True}
+
+    class _Flaky(pydantic.BaseModel):
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            if state["errors"]:
+                raise ValueError("flaky")
+            return 99
+
+    fake = _FakeRemoteCache()
+    task = _Flaky(infra={"folder": str(tmp_path), "remote_cache": fake})
+    with pytest.raises(ValueError):
+        task.compute()  # caches the failure
+    assert task.infra.status() == "failed"
+
+    state["errors"] = False
+    task2 = _Flaky(
+        infra={
+            "folder": str(tmp_path),
+            "remote_cache": fake,
+            "mode": "retry",
+        }
+    )
+    calls: list[str] = []
+    fake._download = lambda uid, root: calls.append(uid)  # type: ignore[assignment]
+    assert task2.compute() == 99  # recomputed
+    assert calls == []  # no pull (local present)
+
+
+def test_read_only_mode_local_hit_uses_local(tmp_path: Path) -> None:
+    producer = _Multiplier(x=5, infra={"folder": str(tmp_path)})
+    producer.compute()
+
+    fake = _FakeRemoteCache()  # empty
+    task = _Multiplier(
+        x=5,
+        infra={
+            "folder": str(tmp_path),
+            "remote_cache": fake,
+            "mode": "read-only",
+        },
+    )
+    assert task.compute() == 50
+
+
+def test_read_only_mode_pulls_when_local_missing(tmp_path: Path) -> None:
+    producer = _Multiplier(x=6, infra={"folder": str(tmp_path / "p")})
+    producer.compute()
+    fake = _seed_remote_from(producer.infra)
+    cons = tmp_path / "c"
+    cons.mkdir()
+    task = _Multiplier(
+        x=6,
+        infra={
+            "folder": str(cons),
+            "remote_cache": fake,
+            "mode": "read-only",
+        },
+    )
+    assert task.compute() == 60
