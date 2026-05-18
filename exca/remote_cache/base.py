@@ -51,10 +51,10 @@ class RemoteCache(DiscriminatedModel):
         ``self._check_configs(write=False)`` after a successful pull.
         """
         local_uid_folder = root_dir / uid
+        local_uid_folder.mkdir(parents=True, exist_ok=True)
         try:
-            local_uid_folder.mkdir(parents=True, exist_ok=True)
             self._download(uid, root_dir)
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.warning("Pull failed for uid %r: %s", uid, e)
             return False
         return (local_uid_folder / "job.pkl").exists()
