@@ -5,3 +5,4 @@
 # LICENSE file in the root directory of this source tree.
 
 from .base import RemoteCache as RemoteCache
+from .huggingface import HFRemoteCache as HFRemoteCache
