@@ -255,7 +255,7 @@ class Step(exca.helpers.DiscriminatedModel):
         return self.CACHE_TYPE
 
     def _make_paths(self, aligned: tp.Sequence[Step]) -> backends.StepPaths:
-        """Build StepPaths, create folder, write configs."""
+        """Build StepPaths and create the step folder."""
         if self.infra is None or self.infra.folder is None:
             raise RuntimeError("_make_paths requires a configured infra with a folder")
         paths = backends.StepPaths(
@@ -264,7 +264,6 @@ class Step(exca.helpers.DiscriminatedModel):
             cache_type=self._infer_cache_type(),
         )
         paths.step_folder.mkdir(parents=True, exist_ok=True)
-        identity.write_configs(paths.step_folder, aligned)
         return paths
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
