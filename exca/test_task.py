@@ -561,6 +561,16 @@ def test_taskinfra_auto_pulls_on_local_miss(tmp_path: Path) -> None:
         if fp.exists():
             fake.store[f"{uid}/{name}"] = fp.read_bytes()
 
+    # Spy: assert the pull actually happens.
+    download_calls: list[str] = []
+    original_download = fake._download
+
+    def _spy(uid_arg: str, root: Path) -> None:
+        download_calls.append(uid_arg)
+        return original_download(uid_arg, root)
+
+    fake._download = _spy  # type: ignore[assignment]
+
     # 3. consumer with empty local cache + remote_cache=fake
     consumer_folder = tmp_path / "consumer"
     consumer_folder.mkdir()
@@ -572,6 +582,7 @@ def test_taskinfra_auto_pulls_on_local_miss(tmp_path: Path) -> None:
     assert consumer.compute() == 300
     # local cache now contains the pulled job.pkl
     assert (consumer.infra.uid_folder() / "job.pkl").exists()
+    assert download_calls == [uid]  # the pull was triggered for the correct uid
 
 
 def test_taskinfra_force_mode_skips_pull(tmp_path: Path) -> None:
