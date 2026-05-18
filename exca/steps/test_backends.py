@@ -61,7 +61,8 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     out1 = chain.run(1)
     out2 = chain.run(1)
     assert out1 == out2
-    assert chain.lookup(1).job() is not None
+    job = chain.lookup(1).job()
+    assert (job is not None) == (backend == "LocalProcess")
 
 
 def test_slurm_backend_param_forwarding(

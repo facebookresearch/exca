@@ -150,8 +150,12 @@ class LookupHandle:
             with jobregistry.JobRegistry(self.paths.step_folder) as reg:
                 job = reg.get([self.uid]).get(self.uid)
             if job is not None:
-                cls = submitit.SlurmJob if job.cluster == "slurm" else submitit.LocalJob
-                return cls(folder=self.paths._logs_folder, job_id=job.job_id)
+                # DebugJob needs the original submission, so only classes
+                # reconstructable from folder + job_id are available here.
+                classes = {"local": submitit.LocalJob, "slurm": submitit.SlurmJob}
+                cls = classes.get(job.cluster)
+                if cls is not None:
+                    return cls(folder=self.paths._logs_folder, job_id=job.job_id)
         except Exception:
             logger.debug(
                 "Failed to recover job for %s[%s]",
@@ -205,6 +209,7 @@ class _CachedEntry:
             return cls(status, cd, uid)
         if cd.folder is None:
             return cls(None, cd, uid)
+        # Ugly but convenient: CacheDict folder is <step>/cache.
         with errors.ErrorRegistry(cd.folder.parent) as reg:
             err = reg.load(uid)
         if err is None:
@@ -225,6 +230,7 @@ class _CachedEntry:
         out: dict[str, CacheStatus] = {}
         errored: set[str] = set()
         if folder is not None and folder.exists():
+            # Ugly but convenient: CacheDict folder is <step>/cache.
             with errors.ErrorRegistry(folder.parent) as reg:
                 # Cached errors raise on first hit, so they usually stay
                 # sparser than the queried uids.
@@ -567,8 +573,10 @@ class _SubmititBackend(Backend):
         for c, j in zip(chunks, jobs):
             claim.record_worker_info(j, uids=c.uids)
         with jobregistry.JobRegistry(paths.step_folder) as reg:
-            for c, j in zip(chunks, jobs):
-                reg.record(c.uids, cluster=executor.cluster, job_id=j.job_id)
+            reg.record(
+                {j.job_id: c.uids for c, j in zip(chunks, jobs)},
+                cluster=executor.cluster,
+            )
         msg = "Sent %s items for %s into %s jobs on cluster '%s' (eg: %s)"
         logger.info(
             msg, len(uids), paths.step_uid, len(jobs), self._CLUSTER, jobs[0].job_id

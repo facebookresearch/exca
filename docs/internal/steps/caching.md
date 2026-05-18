@@ -117,5 +117,5 @@ For submitit submissions, `jobs.db` records the latest cluster/job id per
 item uid after submission. This is advisory log-discovery metadata only:
 cache correctness depends on CacheDict / `errors.db`, not on `jobs.db`.
 `LookupHandle.job()` first consults `inflight.db`, then falls back to
-`jobs.db`; the latter can point to a completed or stale submission whose
-logs may still be useful.
+`jobs.db` for reconstructable jobs (`slurm` / `local`). The fallback can
+point to a completed or stale submission whose logs may still be useful.

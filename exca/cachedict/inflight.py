@@ -147,7 +147,10 @@ class WorkerInfo:
 
 class InflightRegistry(registry.AdvisoryRegistry):
     """Registry of in-flight cache items, with claim/release/wait
-    machinery and submitit-aware liveness on top of the base."""
+    machinery and submitit-aware liveness on top of the base.
+
+    This is on the submission hot path: keep rows small and transactions short.
+    """
 
     _DB_NAME: tp.ClassVar[str] = "inflight.db"
     _SCHEMA: tp.ClassVar[str] = _SCHEMA

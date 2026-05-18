@@ -192,8 +192,11 @@ step = Train(
 handle = step.lookup()
 handle.cached()       # Check if result is cached
 handle.clear_cache()  # Delete cached result
-handle.job()          # Live or latest submitit job for monitoring/logs
+handle.job()          # Live job, or latest reconstructable job for logs
 ```
+
+`handle.job()` can return a stale submitit job after completion or
+`clear_cache()`. It is for monitoring/log discovery, not cache correctness.
 
 For transformer steps (those with input), pass the input to `lookup()`:
 
