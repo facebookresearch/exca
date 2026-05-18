@@ -36,3 +36,25 @@ class RemoteCache(DiscriminatedModel):
         token: str | None,
     ) -> None:
         raise NotImplementedError
+
+    # ---- shared logic ----------------------------------------------------
+
+    def download(self, uid: str, root_dir: Path) -> bool:
+        """Pull the cache for *uid* into ``root_dir / uid /``.
+
+        Returns ``True`` iff ``job.pkl`` is now present locally for *uid*.
+        Transport errors (network/auth/missing/partial) are caught and logged;
+        the method returns ``False`` so callers can fall through to compute.
+
+        The yaml sanity check is intentionally **not** performed here — the
+        caller (``TaskInfra.job``) owns the pydantic model and should call
+        ``self._check_configs(write=False)`` after a successful pull.
+        """
+        local_uid_folder = root_dir / uid
+        try:
+            local_uid_folder.mkdir(parents=True, exist_ok=True)
+            self._download(uid, root_dir)
+        except Exception as e:
+            logger.warning("Pull failed for uid %r: %s", uid, e)
+            return False
+        return (local_uid_folder / "job.pkl").exists()
