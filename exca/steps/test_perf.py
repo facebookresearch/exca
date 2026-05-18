@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import pydantic
+import pytest
 
 from exca.map import MapInfra
 
@@ -66,8 +67,9 @@ class MapArray(pydantic.BaseModel):
 class PerfWorkload:
     name: str
     folder: Path = field(default_factory=lambda: Path(tempfile.mkdtemp()))
-    prefill: bool = False
+    state: tp.Literal["cold", "populated", "warm"] = "cold"
     shape: tuple[int, ...] = (32, 32)
+    batched: bool = False
 
     def build(self, folder: Path | None = None) -> MapArray | Step:
         folder = self.folder if folder is None else folder
@@ -87,24 +89,35 @@ class PerfWorkload:
             infra=infra,
         )
 
-    def run(self, obj: MapArray | Step) -> list[np.ndarray]:
+    def run(
+        self, obj: MapArray | Step, *, batched: bool | None = None
+    ) -> list[np.ndarray]:
+        batched = self.batched if batched is None else batched
         if isinstance(obj, MapArray):
-            return list(obj.compute(range(100)))
-        return list(obj.run(items.Items(range(100))))
+            if batched:
+                return list(obj.compute(range(100)))
+            return [next(obj.compute([value])) for value in range(100)]
+        if batched:
+            return list(obj.run(items.Items(range(100))))
+        return [obj.run(value) for value in range(100)]
 
     def profile(self) -> list[np.ndarray]:
         self.folder.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=self.folder) as cache_folder:
             obj = self.build(Path(cache_folder))
-            if self.prefill:
-                self.run(obj)
+            if self.state in ("populated", "warm"):
+                self.run(obj, batched=True)
+            if self.state == "populated":
                 obj = self.build(Path(cache_folder))
             profiler = cProfile.Profile()
             profiler.enable()
             result = self.run(obj)
             profiler.disable()
-        warm = "warm" if self.prefill else "cold"
-        profile_path = self.folder / f"{self.name}-{warm}.profile.txt"
+        shape = "x".join(str(x) for x in self.shape)
+        mode = "batched" if self.batched else "single"
+        profile_path = (
+            self.folder / f"{self.name}-{self.state}-{mode}-{shape}.profile.txt"
+        )
         with profile_path.open("w", encoding="utf8") as stream:
             pstats.Stats(profiler, stream=stream).strip_dirs().sort_stats(
                 "cumtime"
@@ -112,17 +125,25 @@ class PerfWorkload:
         return result
 
 
-def test_perf_workloads_are_equivalent(tmp_path: Path) -> None:
+@pytest.mark.parametrize("batched", [False, True])
+def test_perf_workloads_are_equivalent(tmp_path: Path, batched: bool) -> None:
     workloads = [
-        PerfWorkload(name, tmp_path / name) for name in ("map", "one-cache", "two-caches")
+        PerfWorkload(name, tmp_path / name, batched=batched)
+        for name in ("map", "one-cache", "two-caches")
     ]
-    out = [np.stack(workload.run(workload.build())) for workload in workloads]
+    out = [
+        np.stack(workload.run(workload.build(), batched=True)) for workload in workloads
+    ]
     np.testing.assert_allclose(out[1:], [out[0]] * (len(out) - 1))
 
 
 if __name__ == "__main__":
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("perf-profiles")
     for name in ("map", "one-cache", "two-caches"):
-        for prefill in (False, True):
-            PerfWorkload(name, folder=folder, prefill=prefill).profile()
+        for state in ("cold", "populated", "warm"):
+            for shape in ((32, 32), (512, 512)):
+                for batched in (False, True):
+                    PerfWorkload(
+                        name, folder=folder, state=state, shape=shape, batched=batched
+                    ).profile()
     print(f"Wrote profiles to {folder.resolve()}")
