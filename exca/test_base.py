@@ -615,3 +615,29 @@ def test_fast_state_no_fallback() -> None:
     private = model.infra.__pydantic_private__
     assert isinstance(private, dict)
     assert "_state" in private
+
+
+def test_base_infra_has_remote_cache_field_excluded_from_uid(tmp_path: Path) -> None:
+    import pydantic
+
+    import exca as xk
+    from exca.remote_cache._fakes import _FakeRemoteCache
+
+    class MyTask(pydantic.BaseModel):
+        x: int = 1
+        infra: xk.TaskInfra = xk.TaskInfra()
+
+        @infra.apply
+        def compute(self) -> int:
+            return self.x
+
+    # uid should be identical whether remote_cache is set or not
+    t1 = MyTask(x=2, infra={"folder": str(tmp_path)})
+    t2 = MyTask(
+        x=2,
+        infra={
+            "folder": str(tmp_path),
+            "remote_cache": _FakeRemoteCache(),
+        },
+    )
+    assert t1.infra.uid() == t2.infra.uid()

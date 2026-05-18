@@ -23,6 +23,9 @@ from . import utils
 from .confdict import ConfDict as ConfDict
 from .workdir import WorkDir
 
+if tp.TYPE_CHECKING:
+    from .remote_cache import RemoteCache as RemoteCache
+
 # pylint: disable=too-many-instance-attributes
 logger = logging.getLogger(__name__)
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
@@ -137,6 +140,11 @@ class BaseInfra(pydantic.BaseModel):
     logs: Path | str = "{folder}/logs/{user}/%j"
     # cache versioning
     version: str = "0"
+    # optional remote cache (e.g. Hugging Face Hub) — see exca/remote_cache/.
+    # Excluded from the cache uid (not part of computation identity).
+    # Annotated as tp.Any to avoid a circular-import with exca.helpers;
+    # the actual expected type is RemoteCache | None (see TYPE_CHECKING block above).
+    remote_cache: tp.Any = None
 
     model_config = pydantic.ConfigDict(extra="forbid")
     # {factory} will be replaced by method name and version tag
