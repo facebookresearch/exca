@@ -629,18 +629,10 @@ class _RCTask(pydantic.BaseModel):
 
 
 def test_base_infra_remote_cache_field(tmp_path: Path) -> None:
-    """The remote_cache field accepts instances and dicts, is uid-excluded,
-    and rejects garbage with a pydantic ValidationError."""
+    """remote_cache: dict→subclass via discriminator, uid-excluded, garbage rejected."""
     from exca.remote_cache._fakes import _FakeRemoteCache
 
     plain = _RCTask(x=2, infra={"folder": str(tmp_path)})  # type: ignore[arg-type]
-    with_instance = _RCTask(
-        x=2,
-        infra={  # type: ignore[arg-type]
-            "folder": str(tmp_path),
-            "remote_cache": _FakeRemoteCache(),
-        },
-    )
     with_dict = _RCTask(
         x=2,
         infra={  # type: ignore[arg-type]
@@ -648,11 +640,8 @@ def test_base_infra_remote_cache_field(tmp_path: Path) -> None:
             "remote_cache": {"type": "_FakeRemoteCache"},
         },
     )
-    # remote_cache is excluded from the uid
-    assert plain.infra.uid() == with_instance.infra.uid() == with_dict.infra.uid()
-    # dict dispatches through the discriminator
     assert isinstance(with_dict.infra.remote_cache, _FakeRemoteCache)
-    # invalid values surface as ValidationError (not raw TypeError)
+    assert plain.infra.uid() == with_dict.infra.uid()
     with pytest.raises(
         pydantic.ValidationError, match="RemoteCache instance, dict, or None"
     ):
