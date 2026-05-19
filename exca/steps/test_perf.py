@@ -128,7 +128,7 @@ class PerfWorkload:
 @pytest.mark.parametrize("batched", [False, True])
 def test_perf_workloads_are_equivalent(tmp_path: Path, batched: bool) -> None:
     workloads = [
-        PerfWorkload(name, tmp_path / name, batched=batched)
+        PerfWorkload(name, tmp_path, batched=batched)
         for name in ("map", "one-cache", "two-caches")
     ]
     out = [
