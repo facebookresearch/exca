@@ -135,6 +135,8 @@ class Step(exca.helpers.DiscriminatedModel):
     # Cache serialization format; inferred by `_infer_cache_type`,
     # cascaded by Chain to its last step.
     CACHE_TYPE: tp.ClassVar[str | None] = None  # ``None`` = auto-dispatch.
+    # in ``materialize_uid``, avoids large keys cluttering the cache.
+    _ITEM_UID_MAX_LENGTH: tp.ClassVar[int] = 256
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:

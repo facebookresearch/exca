@@ -45,7 +45,8 @@ def materialize_uid(step: Step, value: tp.Any) -> str:
         return _NOINPUT_UID
     custom = step.item_uid(value)
     if custom is not None:
-        return custom
+        # avoid cluttering cache
+        return utils.ShortItemUid._shorten(custom, step._ITEM_UID_MAX_LENGTH)
     return exca.ConfDict(value=value).to_uid()
 
 
