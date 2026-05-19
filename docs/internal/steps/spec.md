@@ -48,8 +48,11 @@ item uids need work, and returns `StepItems` backed by CacheDict.
 
 All backends have:
 - `folder`: Path for cache storage (optional, can be propagated from Chain)
-- `cache_type`: Serialization format (deprecated — use `Step.CACHE_TYPE`)
 - `mode`: Execution mode (cached/force/read-only/retry)
+- `keep_in_ram`: keep cached values in a per-Backend RAM dict
+
+Cache serialization format comes from `Step.CACHE_TYPE` (class-level),
+not from the backend.
 
 ### Cache Status
 
@@ -241,14 +244,16 @@ Uid-only or lazy item construction would let cache-only runs avoid
 rebuilding expensive inputs. That is a useful future optimization, but not
 required for MapInfra parity or current step semantics.
 
-### Safety Measures to Consider (from TaskInfra/MapInfra)
+### Safety Measures (from TaskInfra/MapInfra)
 
-**Implemented:**
 - Config consistency checking (`identity.write_configs`)
 - Permissions on CacheDict (`permissions=0o777`)
 - Force/retry one-shot tracking per Backend lifetime
-
-**Not yet implemented:**
-- Job lifecycle status API (`"not submitted"` / `"completed"` / `"failed"`)
-- Concurrent submission detection (recent `job.pkl`)
-- Built-in `item_uid_max_length` support, like MapInfra's `ShortItemUid`
+- Job lifecycle status — `LookupHandle.status` returns `"success"` /
+  `"error"` / `"running"` / `None`
+- Concurrent submission detection — `JobRegistry` / `jobs.db`
+  records the latest submitit job per uid (advisory; see
+  `caching.md`)
+- Short item uids — `Step._ITEM_UID_MAX_LENGTH` (default 256)
+  truncates oversize `item_uid()` returns via
+  `ShortItemUid._shorten` (prefix..N..suffix-md5)

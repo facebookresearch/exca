@@ -376,7 +376,7 @@ def test_resolve_step_uid_consistency() -> None:
 
 def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
     force_infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force"}
-    chain_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "chain"}
+    chain_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     inner = conftest.AddWithTransforms(  # resolves to Chain([stripped, Mult(force)])
         value=1,
         transforms=[conftest.Mult(coeff=2, infra=force_infra)],

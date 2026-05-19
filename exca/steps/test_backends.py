@@ -146,10 +146,10 @@ class Experiment(pydantic.BaseModel):
 def test_step_in_taskinfra(tmp_path: Path) -> None:
     """Step integrates with TaskInfra for experiment tracking."""
     steps: tp.Any = [{"type": "Mult", "coeff": 3}, {"type": "Add", "value": 12}]
-    step_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "steps"}
+    step_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain: tp.Any = {"type": "Chain", "steps": steps, "infra": step_infra}
 
-    xp = Experiment(steps=chain, infra={"folder": tmp_path / "cache"})  # type: ignore
+    xp = Experiment(steps=chain, infra={"folder": tmp_path})  # type: ignore
 
     uid = xp.infra.uid()
     expected = "exca.steps.test_backends.Experiment.run,0/steps.steps=({coeff=3,type=Mult},{type=Add,value=12})-2f739f76"
@@ -162,12 +162,12 @@ def test_force_with_taskinfra(tmp_path: Path) -> None:
     in particular, config freeze in TaskInfra prevents mode from
     being modified through simple assignation
     """
-    step_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "steps"}
+    step_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(
         steps=[conftest.Add(randomize=True, infra=step_infra), conftest.Mult(coeff=10)],
         infra=step_infra,
     )
-    infra: tp.Any = {"folder": tmp_path / "cache"}
+    infra: tp.Any = {"folder": tmp_path}
     xp = Experiment(steps=chain, infra=infra)
 
     out1 = xp.run()

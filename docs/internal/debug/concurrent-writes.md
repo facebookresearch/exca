@@ -129,3 +129,13 @@ non-mutating and safe.
 - [ ] **Cache-folder-level JobChecker** — store pending job IDs in the
   cache folder (not the executor folder) so different experiments can
   see each other's in-flight work.
+
+## Resolution
+
+The TOCTOU race in question 1 and the cross-experiment coordination
+gap in question 3 are addressed by the SQLite-backed inflight
+registry: see `docs/internal/proposals/inflight-registry.md` for the
+design and `docs/internal/steps/caching.md` for how `inflight.db` /
+`errors.db` / `jobs.db` fit into a step's folder. Question 2's
+read-time dedup stays rejected; the manual shell loop above remains
+the fallback for old duplicated caches.

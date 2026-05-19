@@ -119,6 +119,52 @@ preprocessing = Chain(steps=[Normalize(), Augment()])
 training = Chain(steps=[preprocessing, Train(epochs=50)])
 ```
 
+### Batched Execution with `Items`
+
+For data parallelism (one config, many inputs), wrap inputs in
+`Items(...)`:
+
+```python
+from exca.steps import Items
+
+step = Multiply(coeff=2.0, infra={"backend": "Cached", "folder": "/cache"})
+result = step.run(Items([1.0, 2.0, 3.0]))   # returns a StepItems iterator
+list(result)                                  # [2.0, 4.0, 6.0]
+```
+
+Each input gets its own cache entry keyed by `(step_uid, item_uid)`,
+so re-running with overlapping inputs reuses cached values. Backends
+distribute items across workers per their executor config.
+
+For vectorised compute, override `_run_batch` instead of `_run` —
+useful when the per-input cost is dominated by setup that should be
+amortised across the batch (model load, GPU transfer, etc.):
+
+```python
+import itertools
+
+class Embed(Step):
+    model_path: str
+    batch_size: int = 32
+
+    def _run_batch(self, values: Iterable[np.ndarray]) -> Iterator[np.ndarray]:
+        model = load_model(self.model_path)            # loaded once
+        for chunk in itertools.batched(values, self.batch_size):
+            yield from model(np.stack(chunk))          # streamed in mini-batches
+```
+
+`_run_batch` must yield exactly one result per input, in order.
+
+Single-value calls and batched calls share cache entries:
+`step.run(v)` and `list(step.run(Items([v])))[0]` produce the same
+on-disk entry.
+
+For inputs that don't ConfDict-dump cleanly (e.g. large arrays,
+opaque objects), override `item_uid(value) -> str` to return a stable
+key derived from the meaningful identity of the input.
+
+---
+
 ### Per-Step Infrastructure
 
 Each step can have its own execution backend - run some steps inline, others on Slurm:
