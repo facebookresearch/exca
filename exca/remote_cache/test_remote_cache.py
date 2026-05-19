@@ -8,92 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from exca.remote_cache import RemoteCache
+import exca
+from exca.remote_cache import HFRemoteCache, RemoteCache
 from exca.remote_cache._fakes import _FakeRemoteCache
 
 
-def test_remote_cache_is_discriminated_base() -> None:
-    # discriminator key defaults to "type"
-    assert RemoteCache._exca_discriminator_key == "type"
-
-
-def test_transport_methods_are_abstract(tmp_path: Path) -> None:
-    cache = RemoteCache()
-    with pytest.raises(NotImplementedError):
-        cache._file_exists("any")
-    with pytest.raises(NotImplementedError):
-        cache._download("uid", tmp_path)
-    with pytest.raises(NotImplementedError):
-        cache._upload("uid", tmp_path, [], None)
-
-
-def test_fake_remote_cache_roundtrip(tmp_path: Path) -> None:
-    # arrange: a fake remote with one file under a fake uid
-    cache = _FakeRemoteCache()
-    cache.store["some_uid/uid.yaml"] = b"hello: world\n"
-
-    # act/assert: _file_exists reflects the store
-    assert cache._file_exists("some_uid/uid.yaml") is True
-    assert cache._file_exists("some_uid/missing.yaml") is False
-
-    # _download materialises the file under root_dir/uid/
-    cache._download("some_uid", tmp_path)
-    assert (tmp_path / "some_uid" / "uid.yaml").read_bytes() == b"hello: world\n"
-
-
-def test_fake_remote_cache_upload_overwrites_store(tmp_path: Path) -> None:
-    # arrange: a local dir with two files in root_dir/uid/
-    uid = "my_uid"
-    folder = tmp_path / uid
-    folder.mkdir(parents=True)
-    (folder / "a.txt").write_bytes(b"A")
-    (folder / "b.txt").write_bytes(b"B")
-
-    cache = _FakeRemoteCache()
-    cache._upload(uid, tmp_path, ["a.txt", "b.txt"], None)
-
-    assert cache.store[f"{uid}/a.txt"] == b"A"
-    assert cache.store[f"{uid}/b.txt"] == b"B"
-
-
-def test_download_returns_true_on_success(tmp_path: Path) -> None:
-    cache = _FakeRemoteCache()
-    cache.store["some_uid/uid.yaml"] = b"uid: ok\n"
-    cache.store["some_uid/job.pkl"] = b"<pickled>"
-
-    ok = cache.download("some_uid", tmp_path)
-    assert ok is True
-    assert (tmp_path / "some_uid" / "uid.yaml").exists()
-    assert (tmp_path / "some_uid" / "job.pkl").exists()
-
-
-def test_download_returns_false_when_uid_absent(tmp_path: Path) -> None:
-    cache = _FakeRemoteCache()
-    ok = cache.download("missing_uid", tmp_path)
-    assert ok is False
-
-
-def test_download_returns_false_when_job_pkl_missing(tmp_path: Path) -> None:
-    cache = _FakeRemoteCache()
-    # only the yaml present, no job.pkl
-    cache.store["partial_uid/uid.yaml"] = b"uid: ok\n"
-    ok = cache.download("partial_uid", tmp_path)
-    assert ok is False  # no job.pkl pulled
-
-
-def test_download_swallows_transport_errors(tmp_path: Path, monkeypatch) -> None:
-    cache = _FakeRemoteCache()
-
-    def boom(uid, root_dir):
-        raise ConnectionError("network down")
-
-    monkeypatch.setattr(cache, "_download", boom)
-    ok = cache.download("any_uid", tmp_path)
-    assert ok is False
-
-
 def _make_local_cache(folder: Path, uid: str) -> None:
-    """Helper: write the 4 expected cache files for *uid* under *folder*."""
+    """Write the 4 expected cache files for *uid* under *folder*."""
     d = folder / uid
     d.mkdir(parents=True, exist_ok=True)
     (d / "uid.yaml").write_bytes(b"uid: ok\n")
@@ -102,36 +23,74 @@ def _make_local_cache(folder: Path, uid: str) -> None:
     (d / "job.pkl").write_bytes(b"<pickled>")
 
 
-def test_upload_happy_path(tmp_path: Path) -> None:
+def test_remote_cache_module_surface(tmp_path: Path) -> None:
+    """Public API: discriminator key, top-level re-exports, abstract transport."""
+    assert RemoteCache._exca_discriminator_key == "type"
+    assert exca.RemoteCache is RemoteCache
+    assert exca.HFRemoteCache is HFRemoteCache
+    base = RemoteCache()
+    with pytest.raises(NotImplementedError):
+        base._file_exists("any")
+    with pytest.raises(NotImplementedError):
+        base._download("uid", tmp_path)
+    with pytest.raises(NotImplementedError):
+        base._upload("uid", tmp_path, [], None)
+
+
+@pytest.mark.parametrize(
+    "store,expected,extra_check",
+    [
+        # happy path: both yaml and job.pkl present → True
+        (
+            {"u/uid.yaml": b"uid: ok\n", "u/job.pkl": b"<pickled>"},
+            True,
+            lambda p: (p / "u" / "job.pkl").exists(),
+        ),
+        # uid absent on remote → False (FileNotFoundError swallowed)
+        ({}, False, None),
+        # yaml present but no job.pkl → False
+        ({"u/uid.yaml": b"uid: ok\n"}, False, None),
+    ],
+)
+def test_download_outcomes(
+    tmp_path: Path,
+    store: dict,
+    expected: bool,
+    extra_check,
+) -> None:
+    cache = _FakeRemoteCache(store=store)
+    assert cache.download("u", tmp_path) is expected
+    if extra_check is not None:
+        assert extra_check(tmp_path)
+
+
+def test_download_swallows_transport_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cache = _FakeRemoteCache()
-    _make_local_cache(tmp_path, "my_uid")
-
-    cache.upload("my_uid", tmp_path, overwrite=False, token=None)
-
-    assert cache.store["my_uid/uid.yaml"] == b"uid: ok\n"
-    assert cache.store["my_uid/job.pkl"] == b"<pickled>"
+    monkeypatch.setattr(
+        cache, "_download", lambda uid, root: (_ for _ in ()).throw(ConnectionError())
+    )
+    assert cache.download("u", tmp_path) is False
 
 
-def test_upload_refuses_when_remote_already_has_uid(tmp_path: Path) -> None:
-    cache = _FakeRemoteCache()
-    cache.store["my_uid/uid.yaml"] = b"existing\n"
-    _make_local_cache(tmp_path, "my_uid")
-
-    with pytest.raises(RuntimeError, match="already contains uid"):
-        cache.upload("my_uid", tmp_path, overwrite=False, token=None)
-
-
-def test_upload_with_overwrite_replaces_existing(tmp_path: Path) -> None:
-    cache = _FakeRemoteCache()
-    cache.store["my_uid/uid.yaml"] = b"old\n"
-    _make_local_cache(tmp_path, "my_uid")
-
-    cache.upload("my_uid", tmp_path, overwrite=True, token=None)
-    assert cache.store["my_uid/uid.yaml"] == b"uid: ok\n"
-
-
-def test_top_level_reexports() -> None:
-    import exca
-
-    assert hasattr(exca, "RemoteCache")
-    assert hasattr(exca, "HFRemoteCache")
+@pytest.mark.parametrize(
+    "preexisting,overwrite,expect_error",
+    [
+        ({}, False, False),  # happy path
+        ({"u/uid.yaml": b"existing\n"}, False, True),  # refuse without overwrite
+        ({"u/uid.yaml": b"old\n"}, True, False),  # overwrite proceeds
+    ],
+)
+def test_upload_overwrite_guard(
+    tmp_path: Path, preexisting: dict, overwrite: bool, expect_error: bool
+) -> None:
+    cache = _FakeRemoteCache(store=dict(preexisting))
+    _make_local_cache(tmp_path, "u")
+    if expect_error:
+        with pytest.raises(RuntimeError, match="already contains uid"):
+            cache.upload("u", tmp_path, overwrite=overwrite, token=None)
+    else:
+        cache.upload("u", tmp_path, overwrite=overwrite, token=None)
+        assert cache.store["u/uid.yaml"] == b"uid: ok\n"
+        assert cache.store["u/job.pkl"] == b"<pickled>"

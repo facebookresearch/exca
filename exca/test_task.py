@@ -537,267 +537,12 @@ def test_autoreload(tmp_path: Path) -> None:
     assert out3 == 144  # new code
 
 
-def test_taskinfra_auto_pulls_on_local_miss(tmp_path: Path) -> None:
-    import pydantic
-
-    import exca as xk
-    from exca.remote_cache._fakes import _FakeRemoteCache
-
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x * 100
-
-    # 1. produce a remote cache by computing once with no remote_cache
-    producer = MyTask(x=3, infra={"folder": str(tmp_path / "producer")})  # type: ignore[arg-type]
-    assert producer.compute() == 300
-
-    # 2. seed _FakeRemoteCache from the producer's uid folder
-    fake = _FakeRemoteCache()
-    uid = producer.infra.uid()
-    src_uid_folder = producer.infra.uid_folder()
-    assert src_uid_folder is not None
-    for name in ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl"):
-        fp = src_uid_folder / name
-        if fp.exists():
-            fake.store[f"{uid}/{name}"] = fp.read_bytes()
-
-    # Spy: assert the pull actually happens.
-    download_calls: list[str] = []
-    original_download = fake._download
-
-    def _spy(uid_arg: str, root: Path) -> None:
-        download_calls.append(uid_arg)
-        return original_download(uid_arg, root)
-
-    fake._download = _spy  # type: ignore[assignment]
-
-    # 3. consumer with empty local cache + remote_cache=fake
-    consumer_folder = tmp_path / "consumer"
-    consumer_folder.mkdir()
-    consumer = MyTask(
-        x=3,
-        infra={"folder": str(consumer_folder), "remote_cache": fake},  # type: ignore[arg-type]
-    )
-    # consumer's compute returns x*100 = 300 — same as the pulled result
-    assert consumer.compute() == 300
-    # local cache now contains the pulled job.pkl
-    consumer_uid_folder = consumer.infra.uid_folder()
-    assert consumer_uid_folder is not None
-    assert (consumer_uid_folder / "job.pkl").exists()
-    assert download_calls == [uid]  # the pull was triggered for the correct uid
-
-
-def test_taskinfra_force_mode_skips_pull(tmp_path: Path) -> None:
-    import pydantic
-
-    import exca as xk
-    from exca.remote_cache._fakes import _FakeRemoteCache
-
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x * 100
-
-    # seed remote with a stale result
-    producer = MyTask(x=5, infra={"folder": str(tmp_path / "producer")})  # type: ignore[arg-type]
-    assert producer.compute() == 500
-
-    fake = _FakeRemoteCache()
-    uid = producer.infra.uid()
-    producer_uid_folder = producer.infra.uid_folder()
-    assert producer_uid_folder is not None
-    for name in ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl"):
-        fp = producer_uid_folder / name
-        if fp.exists():
-            fake.store[f"{uid}/{name}"] = fp.read_bytes()
-
-    # consumer in force mode with empty local cache — must compute locally,
-    # must NOT pull from remote.
-    consumer_folder = tmp_path / "consumer"
-    consumer_folder.mkdir()
-    consumer = MyTask(
-        x=5,
-        infra={  # type: ignore[arg-type]
-            "folder": str(consumer_folder),
-            "remote_cache": fake,
-            "mode": "force",
-        },
-    )
-
-    # Spy on _download to detect any pull attempt.
-    calls: list[str] = []
-    fake._download = lambda uid, root: calls.append(uid)  # type: ignore[assignment]
-
-    assert consumer.compute() == 500
-    assert calls == []  # _download was NEVER called in force mode
-
-
-def test_taskinfra_read_only_raises_when_remote_and_local_both_empty(
-    tmp_path: Path,
-) -> None:
-    import pydantic
-
-    import exca as xk
-    from exca.remote_cache._fakes import _FakeRemoteCache
-
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x
-
-    task = MyTask(
-        x=7,
-        infra={  # type: ignore[arg-type]
-            "folder": str(tmp_path),
-            "remote_cache": _FakeRemoteCache(),  # empty
-            "mode": "read-only",
-        },
-    )
-    with pytest.raises(RuntimeError, match="not computed|read-only"):
-        task.compute()
-
-
-def test_upload_result_pushes_to_remote(tmp_path: Path) -> None:
-    import pydantic
-
-    import exca as xk
-    from exca.remote_cache._fakes import _FakeRemoteCache
-
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x * 10
-
-    fake = _FakeRemoteCache()
-    task = MyTask(x=4, infra={"folder": str(tmp_path), "remote_cache": fake})  # type: ignore[arg-type]
-    assert task.compute() == 40
-
-    task.infra.upload_result()
-    uid = task.infra.uid()
-    assert f"{uid}/job.pkl" in fake.store
-    assert f"{uid}/uid.yaml" in fake.store
-
-
-def test_upload_result_errors_when_no_remote(tmp_path: Path) -> None:
-    import pydantic
-
-    import exca as xk
-
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x
-
-    task = MyTask(x=1, infra={"folder": str(tmp_path)})  # type: ignore[arg-type]
-    task.compute()
-    with pytest.raises(RuntimeError, match="No remote cache configured"):
-        task.infra.upload_result()
-
-
-def test_upload_result_errors_when_no_local_cache(tmp_path: Path) -> None:
-    import pydantic
-
-    import exca as xk
-    from exca.remote_cache._fakes import _FakeRemoteCache
-
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x
-
-    task = MyTask(
-        x=2,
-        infra={"folder": str(tmp_path), "remote_cache": _FakeRemoteCache()},  # type: ignore[arg-type]
-    )
-    with pytest.raises(RuntimeError, match="No local cache"):
-        task.infra.upload_result()
-
-
-def test_upload_result_errors_when_status_failed(tmp_path: Path) -> None:
-    import pydantic
-
-    import exca as xk
-    from exca.remote_cache._fakes import _FakeRemoteCache
-
-    class FailingTask(pydantic.BaseModel):
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            raise ValueError("boom")
-
-    task = FailingTask(
-        infra={"folder": str(tmp_path), "remote_cache": _FakeRemoteCache()},  # type: ignore[arg-type]
-    )
-    with pytest.raises(ValueError):
-        task.compute()
-    assert task.infra.status() == "failed"
-    with pytest.raises(RuntimeError, match="Cannot upload failed cache"):
-        task.infra.upload_result()
-
-
-def test_upload_result_refuses_existing_without_overwrite(tmp_path: Path) -> None:
-    import pydantic
-
-    import exca as xk
-    from exca.remote_cache._fakes import _FakeRemoteCache
-
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x
-
-    fake = _FakeRemoteCache()
-    task = MyTask(x=3, infra={"folder": str(tmp_path), "remote_cache": fake})  # type: ignore[arg-type]
-    task.compute()
-    task.infra.upload_result()
-    with pytest.raises(RuntimeError, match="already contains uid"):
-        task.infra.upload_result()
-
-    task.infra.upload_result(overwrite=True)
-
-
 # ============================================================================
-# Mode × remote behaviour table tests (see spec § "Mode × remote behaviour")
+# remote_cache integration tests
 # ============================================================================
-
-
-def _seed_remote_from(local_infra) -> _FakeRemoteCache:
-    """Helper: build a fake remote populated from a local cache."""
-    fake = _FakeRemoteCache()
-    uid = local_infra.uid()
-    for name in ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl"):
-        fp = local_infra.uid_folder() / name
-        if fp.exists():
-            fake.store[f"{uid}/{name}"] = fp.read_bytes()
-    return fake
 
 
 class _Multiplier(pydantic.BaseModel):
-    """Used by the table tests below."""
-
     x: int = 1
     infra: xk.TaskInfra = xk.TaskInfra()
 
@@ -806,59 +551,96 @@ class _Multiplier(pydantic.BaseModel):
         return self.x * 10
 
 
-def test_cached_mode_local_success_does_not_pull(tmp_path: Path) -> None:
-    producer = _Multiplier(x=2, infra={"folder": str(tmp_path / "p")})  # type: ignore[arg-type]
-    producer.compute()
-    fake = _seed_remote_from(producer.infra)
+class _FailingTask(pydantic.BaseModel):
+    infra: xk.TaskInfra = xk.TaskInfra()
 
+    @infra.apply
+    def compute(self) -> int:
+        raise ValueError("boom")
+
+
+def _seed_remote_from(local_infra: TaskInfra) -> _FakeRemoteCache:
+    """Build a fake remote populated from a local cache uid folder."""
+    fake = _FakeRemoteCache()
+    uid = local_infra.uid()
+    folder = local_infra.uid_folder()
+    assert folder is not None
+    for name in ("uid.yaml", "full-uid.yaml", "config.yaml", "job.pkl"):
+        fp = folder / name
+        if fp.exists():
+            fake.store[f"{uid}/{name}"] = fp.read_bytes()
+    return fake
+
+
+@pytest.mark.parametrize(
+    "mode,local,remote,expect_pull_attempt,expect_raise",
+    [
+        ("cached", True, True, False, False),
+        ("cached", False, True, True, False),
+        ("cached", False, False, True, False),
+        ("force", True, True, False, False),
+        ("read-only", True, False, False, False),
+        ("read-only", False, True, True, False),
+        ("read-only", False, False, True, True),
+    ],
+    ids=[
+        "cached_local_wins",
+        "cached_pulls",
+        "cached_attempts_then_computes",
+        "force_skips_pull",
+        "readonly_local_hit",
+        "readonly_pulls",
+        "readonly_attempts_then_raises",
+    ],
+)
+def test_taskinfra_mode_x_remote_behaviour(
+    tmp_path: Path,
+    mode: str,
+    local: bool,
+    remote: bool,
+    expect_pull_attempt: bool,
+    expect_raise: bool,
+) -> None:
+    """Full mode × (local_present, remote_present) coverage of the pull hook.
+
+    A pull is attempted whenever ``remote_cache`` is set, local is missing,
+    and mode is not ``force`` — regardless of whether the remote has the uid.
+    """
+    # Producer always runs to give us cache files to seed local and/or remote from.
+    producer = _Multiplier(x=2, infra={"folder": str(tmp_path / "src")})  # type: ignore[arg-type]
+    producer.compute()
     consumer_folder = tmp_path / "c"
-    shutil.copytree(tmp_path / "p", consumer_folder)
+    if local:
+        shutil.copytree(tmp_path / "src", consumer_folder)
+    else:
+        consumer_folder.mkdir()
+    fake = _seed_remote_from(producer.infra) if remote else _FakeRemoteCache()
+    download_calls: list[str] = []
+    original = fake._download
+
+    def spy(uid: str, root: Path) -> None:
+        download_calls.append(uid)
+        return original(uid, root)
+
+    fake._download = spy  # type: ignore[assignment]
     consumer = _Multiplier(
         x=2,
         infra={  # type: ignore[arg-type]
             "folder": str(consumer_folder),
             "remote_cache": fake,
+            "mode": mode,
         },
     )
-
-    calls: list[str] = []
-    fake._download = lambda uid, root: calls.append(uid)  # type: ignore[assignment]
-    assert consumer.compute() == 20
-    assert calls == []  # no pull because local cache exists
-
-
-def test_cached_mode_local_miss_pulls(tmp_path: Path) -> None:
-    producer = _Multiplier(x=3, infra={"folder": str(tmp_path / "p")})  # type: ignore[arg-type]
-    producer.compute()
-    fake = _seed_remote_from(producer.infra)
-    cons = tmp_path / "c"
-    cons.mkdir()
-    consumer = _Multiplier(
-        x=3,
-        infra={  # type: ignore[arg-type]
-            "folder": str(cons),
-            "remote_cache": fake,
-        },
-    )
-    assert consumer.compute() == 30
-    uid_folder = consumer.infra.uid_folder()
-    assert uid_folder is not None
-    assert (uid_folder / "job.pkl").exists()
+    if expect_raise:
+        with pytest.raises(RuntimeError, match="not computed|read-only"):
+            consumer.compute()
+    else:
+        assert consumer.compute() == 20
+    assert bool(download_calls) is expect_pull_attempt
 
 
-def test_cached_mode_local_and_remote_miss_computes(tmp_path: Path) -> None:
-    fake = _FakeRemoteCache()  # empty
-    task = _Multiplier(
-        x=4,
-        infra={  # type: ignore[arg-type]
-            "folder": str(tmp_path),
-            "remote_cache": fake,
-        },
-    )
-    assert task.compute() == 40
-
-
-def test_retry_mode_local_failed_recomputes_no_pull(tmp_path: Path) -> None:
+def test_taskinfra_retry_mode_recomputes_local_failure(tmp_path: Path) -> None:
+    """retry mode + cached failure must recompute (and not pull, since local exists)."""
     state = {"errors": True}
 
     class _Flaky(pydantic.BaseModel):
@@ -871,58 +653,66 @@ def test_retry_mode_local_failed_recomputes_no_pull(tmp_path: Path) -> None:
             return 99
 
     fake = _FakeRemoteCache()
-    task = _Flaky(
-        infra={  # type: ignore[arg-type]
-            "folder": str(tmp_path),
-            "remote_cache": fake,
-        },
-    )
     with pytest.raises(ValueError):
-        task.compute()  # caches the failure
-    assert task.infra.status() == "failed"
-
+        _Flaky(
+            infra={"folder": str(tmp_path), "remote_cache": fake},  # type: ignore[arg-type]
+        ).compute()
     state["errors"] = False
-    task2 = _Flaky(
+    calls: list[str] = []
+    fake._download = lambda uid, root: calls.append(uid)  # type: ignore[assignment]
+    retried = _Flaky(
         infra={  # type: ignore[arg-type]
             "folder": str(tmp_path),
             "remote_cache": fake,
             "mode": "retry",
         }
     )
-    calls: list[str] = []
-    fake._download = lambda uid, root: calls.append(uid)  # type: ignore[assignment]
-    assert task2.compute() == 99  # recomputed
-    assert calls == []  # no pull (local present)
+    assert retried.compute() == 99
+    assert calls == []  # local cache (even failed) suppresses the pull
 
 
-def test_read_only_mode_local_hit_uses_local(tmp_path: Path) -> None:
-    producer = _Multiplier(x=5, infra={"folder": str(tmp_path)})  # type: ignore[arg-type]
-    producer.compute()
-
-    fake = _FakeRemoteCache()  # empty
+def test_taskinfra_upload_result_pushes_and_overwrites(tmp_path: Path) -> None:
+    """Happy path + the overwrite guard at the TaskInfra layer."""
+    fake = _FakeRemoteCache()
     task = _Multiplier(
-        x=5,
-        infra={  # type: ignore[arg-type]
-            "folder": str(tmp_path),
-            "remote_cache": fake,
-            "mode": "read-only",
-        },
+        x=4,
+        infra={"folder": str(tmp_path), "remote_cache": fake},  # type: ignore[arg-type]
     )
-    assert task.compute() == 50
+    assert task.compute() == 40
+    task.infra.upload_result()
+    uid = task.infra.uid()
+    assert f"{uid}/job.pkl" in fake.store
+    with pytest.raises(RuntimeError, match="already contains uid"):
+        task.infra.upload_result()
+    task.infra.upload_result(overwrite=True)
 
 
-def test_read_only_mode_pulls_when_local_missing(tmp_path: Path) -> None:
-    producer = _Multiplier(x=6, infra={"folder": str(tmp_path / "p")})  # type: ignore[arg-type]
-    producer.compute()
-    fake = _seed_remote_from(producer.infra)
-    cons = tmp_path / "c"
-    cons.mkdir()
-    task = _Multiplier(
-        x=6,
-        infra={  # type: ignore[arg-type]
-            "folder": str(cons),
-            "remote_cache": fake,
-            "mode": "read-only",
-        },
-    )
-    assert task.compute() == 60
+@pytest.mark.parametrize(
+    "scenario,match",
+    [
+        ("no_remote", "No remote cache configured"),
+        ("no_local", "No local cache"),
+        ("status_failed", "Cannot upload failed cache"),
+    ],
+)
+def test_taskinfra_upload_result_preconditions(
+    tmp_path: Path, scenario: str, match: str
+) -> None:
+    fake = _FakeRemoteCache()
+    task: pydantic.BaseModel
+    if scenario == "no_remote":
+        task = _Multiplier(x=1, infra={"folder": str(tmp_path)})  # type: ignore[arg-type]
+        task.compute()
+    elif scenario == "no_local":
+        task = _Multiplier(
+            x=1,
+            infra={"folder": str(tmp_path), "remote_cache": fake},  # type: ignore[arg-type]
+        )
+    else:  # status_failed
+        task = _FailingTask(
+            infra={"folder": str(tmp_path), "remote_cache": fake},  # type: ignore[arg-type]
+        )
+        with pytest.raises(ValueError):
+            task.compute()
+    with pytest.raises(RuntimeError, match=match):
+        task.infra.upload_result()

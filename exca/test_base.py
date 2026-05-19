@@ -617,74 +617,46 @@ def test_fast_state_no_fallback() -> None:
     assert "_state" in private
 
 
-def test_base_infra_has_remote_cache_field_excluded_from_uid(tmp_path: Path) -> None:
-    import pydantic
+class _RCTask(pydantic.BaseModel):
+    """Minimal task used by remote_cache field tests below."""
 
-    import exca as xk
+    x: int = 1
+    infra: TaskInfra = TaskInfra()
+
+    @infra.apply
+    def compute(self) -> int:
+        return self.x
+
+
+def test_base_infra_remote_cache_field(tmp_path: Path) -> None:
+    """The remote_cache field accepts instances and dicts, is uid-excluded,
+    and rejects garbage with a pydantic ValidationError."""
     from exca.remote_cache._fakes import _FakeRemoteCache
 
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x
-
-    # uid should be identical whether remote_cache is set or not
-    t1 = MyTask(x=2, infra={"folder": str(tmp_path)})  # type: ignore[arg-type]
-    t2 = MyTask(
+    plain = _RCTask(x=2, infra={"folder": str(tmp_path)})  # type: ignore[arg-type]
+    with_instance = _RCTask(
         x=2,
         infra={  # type: ignore[arg-type]
             "folder": str(tmp_path),
             "remote_cache": _FakeRemoteCache(),
         },
     )
-    assert t1.infra.uid() == t2.infra.uid()
-
-
-def test_base_infra_remote_cache_accepts_dict(tmp_path: Path) -> None:
-    """Passing a dict (discriminator) must dispatch to the right RemoteCache subclass."""
-    import pydantic
-
-    import exca as xk
-    from exca.remote_cache._fakes import _FakeRemoteCache
-
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x
-
-    task = MyTask(
+    with_dict = _RCTask(
         x=2,
         infra={  # type: ignore[arg-type]
             "folder": str(tmp_path),
             "remote_cache": {"type": "_FakeRemoteCache"},
         },
     )
-    assert isinstance(task.infra.remote_cache, _FakeRemoteCache)
-
-
-def test_base_infra_remote_cache_rejects_garbage(tmp_path: Path) -> None:
-    import pydantic
-
-    import exca as xk
-
-    class MyTask(pydantic.BaseModel):
-        x: int = 1
-        infra: xk.TaskInfra = xk.TaskInfra()
-
-        @infra.apply
-        def compute(self) -> int:
-            return self.x
-
+    # remote_cache is excluded from the uid
+    assert plain.infra.uid() == with_instance.infra.uid() == with_dict.infra.uid()
+    # dict dispatches through the discriminator
+    assert isinstance(with_dict.infra.remote_cache, _FakeRemoteCache)
+    # invalid values surface as ValidationError (not raw TypeError)
     with pytest.raises(
         pydantic.ValidationError, match="RemoteCache instance, dict, or None"
     ):
-        MyTask(
+        _RCTask(
             x=2,
             infra={"folder": str(tmp_path), "remote_cache": 42},  # type: ignore[arg-type]
         )
