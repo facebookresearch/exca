@@ -587,7 +587,7 @@ def test_item_uid_is_shortened(tmp_path: Path) -> None:
     assert step.lookup("a").uid == "a"
     long_input = "/very/long/path/" + "x" * 500
     long_uid = step.lookup(long_input).uid
-    assert len(long_uid) <= 128
+    assert len(long_uid) == 256
     # shared-prefix inputs collide on truncation alone; trailing hash separates them
     assert step.lookup(long_input + "different").uid != long_uid
     step.run(long_input)
