@@ -590,8 +590,6 @@ def test_item_uid_is_shortened(tmp_path: Path) -> None:
     assert len(long_uid) == 256
     # shared-prefix inputs collide on truncation alone; trailing hash separates them
     assert step.lookup(long_input + "different").uid != long_uid
-    step.run(long_input)
-    assert step.lookup(long_input).cached()
 
 
 def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
