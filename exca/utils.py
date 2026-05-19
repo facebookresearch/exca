@@ -597,10 +597,14 @@ class ShortItemUid:
             )
 
     def __call__(self, item: tp.Any) -> str:
-        uid = self.item_uid(item)
-        if len(uid) <= self.max_length:  # idempotent
+        return self._shorten(self.item_uid(item), self.max_length)
+
+    @staticmethod
+    def _shorten(uid: str, max_length: int) -> str:
+        """Truncate *uid* to ``max_length`` chars via prefix..N..suffix-md5."""
+        if len(uid) <= max_length:  # idempotent
             return uid
-        cut = (self.max_length - 13 - len(str(len(uid)))) // 2
+        cut = (max_length - 13 - len(str(len(uid)))) // 2
         sub = f"{uid[:cut]}..{len(uid) - 2 * cut}..{uid[-cut:]}"
         sub += "-" + hashlib.md5(uid.encode("utf8")).hexdigest()[:8]
         if len(uid) < len(sub):

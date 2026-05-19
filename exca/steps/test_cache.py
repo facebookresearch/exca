@@ -574,6 +574,24 @@ def test_item_uid_override_in_chain(tmp_path: Path) -> None:
     assert chain.lookup(1).uid == "custom", "chain should use first step's item_uid"
 
 
+def test_item_uid_is_shortened(tmp_path: Path) -> None:
+    class LongUid(Step):
+        def item_uid(self, value: tp.Any) -> str:
+            return str(value)
+
+        def _run(self, x: tp.Any) -> tp.Any:
+            return x
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = LongUid(infra=infra)
+    assert step.lookup("a").uid == "a"
+    long_input = "/very/long/path/" + "x" * 500
+    long_uid = step.lookup(long_input).uid
+    assert len(long_uid) == 256
+    # shared-prefix inputs collide on truncation alone; trailing hash separates them
+    assert step.lookup(long_input + "different").uid != long_uid
+
+
 def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     """Force mode step should not prevent using earlier caches."""
     call_counts: dict[str, int] = defaultdict(int)
