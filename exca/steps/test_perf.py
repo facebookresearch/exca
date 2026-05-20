@@ -6,10 +6,15 @@
 
 """Small perf scaffold comparing MapInfra with Step Items."""
 
+# Rough warm scalar cache hits, 32x32 arrays:
+# - MapInfra: ~10 us/item
+# - Step: ~15 us/item
+
 import cProfile
 import pstats
 import sys
 import tempfile
+import time
 import typing as tp
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,8 +75,7 @@ class PerfWorkload:
     shape: tuple[int, ...] = (32, 32)
     batched: bool = False
 
-    def build(self, folder: Path | None = None) -> MapArray | base.Step:
-        folder = self.folder if folder is None else folder
+    def _make_obj(self, folder: Path) -> MapArray | base.Step:
         if self.name == "map":
             infra: tp.Any = {"folder": folder, "cluster": None, "keep_in_ram": False}
             return MapArray(
@@ -89,6 +93,15 @@ class PerfWorkload:
             infra=infra,
         )
 
+    def build(self, folder: Path | None = None) -> MapArray | base.Step:
+        folder = self.folder if folder is None else folder
+        obj = self._make_obj(folder)
+        if self.state in ("populated", "warm"):
+            self.run(obj, batched=True)
+        if self.state == "populated":
+            obj = self._make_obj(folder)
+        return obj
+
     def run(
         self, obj: MapArray | base.Step, *, batched: bool | None = None
     ) -> list[np.ndarray]:
@@ -105,10 +118,6 @@ class PerfWorkload:
         self.folder.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=self.folder) as cache_folder:
             obj = self.build(Path(cache_folder))
-            if self.state in ("populated", "warm"):
-                self.run(obj, batched=True)
-            if self.state == "populated":
-                obj = self.build(Path(cache_folder))
             profiler = cProfile.Profile()
             profiler.enable()
             result = self.run(obj)
@@ -135,6 +144,20 @@ def test_perf_workloads_are_equivalent(tmp_path: Path, batched: bool) -> None:
         np.stack(workload.run(workload.build(), batched=True)) for workload in workloads
     ]
     np.testing.assert_allclose(out[1:], [out[0]] * (len(out) - 1))
+
+
+def test_warm_scalar_step_cache_is_close_to_mapinfra(tmp_path: Path) -> None:
+    times: dict[str, float] = {}
+
+    for name in ("map", "one-cache"):
+        workload = PerfWorkload(name, tmp_path / name, state="warm")
+        obj = workload.build()
+        workload.run(obj)
+        start = time.perf_counter()
+        workload.run(obj)
+        times[name] = (time.perf_counter() - start) / 100
+
+    assert times["one-cache"] < 2 * times["map"], times
 
 
 if __name__ == "__main__":

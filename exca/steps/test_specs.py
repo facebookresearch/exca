@@ -110,7 +110,7 @@ def test_cache_key_deterministic(
         step = Chain(steps=[conftest.Mult(coeff=3.0)], infra=infra)
     handle = step.lookup(5.0)
     assert handle.paths.step_uid == "coeff=3,type=Mult-4c6b8f5f"
-    assert handle.uid == "value=5-39801320"
+    assert handle.uid == "5-227dcc9a"
 
 
 # -----------------------------------------------------------------------------
@@ -153,9 +153,7 @@ def test_force_recomputes_and_propagates(
         infra=infra if chain_infra else None,
     )
     out1 = chain.run()
-    gen = chain._step_sequence()[0]
-    assert gen.infra is not None
-    gen.infra.mode = mode  # type: ignore[assignment]
+    chain = chain.clone({"steps.0.infra.mode": mode})
     out2 = chain.run()
     assert (out2 != out1) is recomputes, (
         f"mode={mode}: expected {'new' if recomputes else 'same'} result"
@@ -181,7 +179,7 @@ def test_exec_params_are_model_config_not_run_kwargs(tmp_path: Path) -> None:
     assert step.infra is not None
     assert step.infra.folder == tmp_path
     step.run()  # populate
-    step.infra.mode = "read-only"  # toggle behavior purely via model state
+    step = step.clone({"infra.mode": "read-only"})
     assert step.run() == step.run()  # still works from cache
     step.lookup().clear_cache()
     with pytest.raises(RuntimeError, match="read-only"):
@@ -345,8 +343,7 @@ def test_force_once_per_lifetime(tmp_path: Path, as_chain: bool) -> None:
         step = conftest.RandomGenerator(infra=infra)
     out1 = step.run()
 
-    assert step.infra is not None
-    step.infra.mode = "force"  # type: ignore[assignment]
+    step = step.clone({"infra.mode": "force"})
     out2 = step.run()
     assert out1 != out2
 

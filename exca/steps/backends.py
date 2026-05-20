@@ -236,21 +236,21 @@ class _CachedEntry:
         uids = list(dict.fromkeys(uids))  # dedup with order
         folder = cd.folder
         out: dict[str, CacheStatus] = {}
-        errored: set[str] = set()
-        if folder is not None and folder.exists():
-            # Ugly but convenient: CacheDict folder is <step>/cache.
-            with errors.ErrorRegistry(folder.parent) as reg:
-                # Cached errors raise on first hit, so they usually stay
-                # sparser than the queried uids.
-                errored = reg.get()
+        missing: list[str] = []
         with cd.frozen_cache_folder():
             for uid in uids:
                 if uid in cd:
                     out[uid] = "success"
-                elif uid in errored:
-                    out[uid] = "error"
                 else:
                     out[uid] = None
+                    missing.append(uid)
+        if missing and folder is not None and folder.exists():
+            # Ugly but convenient: CacheDict folder is <step>/cache.
+            with errors.ErrorRegistry(folder.parent) as reg:
+                # Cached errors raise on first hit, so they usually stay
+                # sparser than the queried uids.
+                for uid in reg.get(missing):
+                    out[uid] = "error"
         return out
 
     def result(self) -> tp.Any:

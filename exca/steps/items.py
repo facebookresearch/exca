@@ -156,8 +156,12 @@ class StepItems(Items):
             mode=mode if mode is not None else self._mode,
         )
 
-    def __iter__(self) -> tp.Iterator[tp.Any]:
-        current: tp.Iterable[tp.Any] = (self._source[uid] for uid in self.uids)
+    def read(self, uids: tp.Sequence[str]) -> tp.Iterator[tp.Any]:
+        """Read these uids through the carrier's pending steps."""
+        current: tp.Iterable[tp.Any] = (self._source[uid] for uid in uids)
         for step in self._pending:
-            current = _AnnotatedBatch(step, current, self.uids)
+            current = _AnnotatedBatch(step, current, uids)
         return iter(current)
+
+    def __iter__(self) -> tp.Iterator[tp.Any]:
+        return self.read(self.uids)

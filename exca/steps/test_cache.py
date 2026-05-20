@@ -97,6 +97,19 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     assert chain_handle.cached()
 
 
+def test_cached_run_freezes_config_and_clone_resets(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(value=1.0, infra=infra)
+    assert step.run(1.0) == 2.0
+
+    with pytest.raises(RuntimeError, match="instance was frozen"):
+        step.value = 2.0
+
+    cloned = step.clone(value=2.0)
+    cloned.value = 3.0
+    assert cloned.run(1.0) == 4.0
+
+
 # =============================================================================
 # Cache modes
 # =============================================================================
@@ -179,12 +192,14 @@ def test_mode_readonly(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="read-only"):
         chain.run()
 
-    # Populate cache, then read-only works
-    assert chain.infra is not None
-    chain.infra.mode = "cached"
-    out1 = chain.run()
-    chain.infra.mode = "read-only"
-    assert chain.run() == out1
+    # Populate cache, then read-only works from a fresh config.
+    cached_infra: tp.Any = {**infra, "mode": "cached"}
+    cached = Chain(
+        steps=[conftest.RandomGenerator(), conftest.Mult(coeff=10)],
+        infra=cached_infra,
+    )
+    out1 = cached.run()
+    assert cached.clone({"infra.mode": "read-only"}).run() == out1
 
 
 def test_readonly_does_not_propagate(tmp_path: Path) -> None:
@@ -221,7 +236,7 @@ def test_mode_retry_short_circuits_on_success(
         return original(self)
 
     monkeypatch.setattr(conftest.RandomGenerator, "_run", counted)
-    step.infra.mode = "retry"  # type: ignore
+    step = step.clone({"infra.mode": "retry"})
     assert step.run() == out
     assert calls["n"] == 0
 
@@ -237,7 +252,7 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
         step = conftest.RandomGenerator(infra=infra)
     out1 = step.run()  # populate cache
 
-    step.infra.mode = "force"  # type: ignore
+    step = step.clone({"infra.mode": "force"})
     out2 = step.run()  # forces recompute
     assert out1 != out2
 
@@ -301,7 +316,7 @@ def test_chain_force_propagates_to_non_final(tmp_path: Path, chain_backend: str)
     out1 = list(chain.run(Items(values)))
     assert len(Versioned.calls) == len(values)
 
-    chain.infra.mode = "force"  # type: ignore[union-attr]
+    chain = chain.clone({"infra.mode": "force"})
     out2 = list(chain.run(Items(values)))
     assert out2 != out1, "force on chain should reach cached child step"
     assert len(Versioned.calls) == 2 * len(values)
@@ -326,8 +341,7 @@ def test_force_propagates_downstream(tmp_path: Path) -> None:
     out1 = chain.run()  # populate caches
 
     # force on intermediate: that step AND downstream recompute
-    chain2 = chain.model_copy(deep=True)
-    chain2._step_sequence()[1].infra.mode = "force"  # type: ignore
+    chain2 = chain.clone({"steps.1.infra.mode": "force"})
     out2 = chain2.run()
     assert out2 != out1  # add recomputed due to force propagation
 
@@ -366,17 +380,15 @@ def test_force_nested_chains(tmp_path: Path) -> None:
     out1 = outer.run()
 
     # force on gen propagates through inner chain
-    outer._step_sequence()[0].infra.mode = "force"  # type: ignore
-    out2 = outer.run()
+    outer2 = outer.clone({"steps.0.infra.mode": "force"})
+    out2 = outer2.run()
     assert out1 != out2  # inner's add_random recomputed
 
-    out3 = outer.run()
+    out3 = outer2.run()
     assert out2 == out3, "force is one-shot"
 
-    # force on inner chain: fresh instance (model_copy copies _recomputed)
-    cfg = outer.model_dump()
-    cfg["steps"][2]["infra"]["mode"] = "force"
-    outer2 = Chain(**cfg)
+    # force on inner chain from a fresh config
+    outer2 = outer.clone({"steps.2.infra.mode": "force"})
     out4 = outer2.run()
     assert out4 != out3  # inner forced → downstream recomputed
 
@@ -398,16 +410,12 @@ def test_force_deeply_nested(tmp_path: Path) -> None:
     out1 = chain.run(10)
 
     # force on internal step propagates to innermost
-    first_step = chain._step_sequence()[0]
-    assert first_step.infra is not None
-    first_step.infra.mode = "force"
-    out2 = chain.run(10)
+    chain2 = chain.clone({"steps.0.infra.mode": "force"})
+    out2 = chain2.run(10)
     assert out1 != out2  # innermost recomputed
 
     # force on chain itself also propagates to innermost
-    cfg = chain.model_dump()
-    cfg["infra"]["mode"] = "force"
-    chain = Chain(**cfg)
+    chain = chain.clone({"infra.mode": "force"})
     out3 = chain.run(10)
     assert out3 != out2  # innermost recomputed again
 
@@ -418,8 +426,7 @@ def test_force_on_grandchild(tmp_path: Path) -> None:
     inner = Chain(steps=[gen, conftest.Mult(coeff=10)], infra=infra)
     outer = Chain(steps=[inner, conftest.Add(value=1)], infra=infra)
     out1 = outer.run()
-    gen.infra.mode = "force"  # type: ignore
-    assert outer.run() != out1
+    assert outer.clone({"steps.0.steps.0.infra.mode": "force"}).run() != out1
 
 
 def test_retry_on_grandchild(tmp_path: Path) -> None:
@@ -527,7 +534,7 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     out2 = step.run()
     assert out2 != out1
 
-    step.infra.mode = "force"  # type: ignore[union-attr]
+    step = step.clone({"infra.mode": "force"})
     out3 = step.run()
     assert out3 != out2
 
@@ -556,7 +563,24 @@ def test_complex_input_caching(tmp_path: Path) -> None:
 
     # Check the uid is deterministic
     handle = step.lookup(data)
-    assert handle.uid == "value=(1,{a=12})-240df6f3", handle.uid
+    assert handle.uid == "1,{a=12}-1e2345af", handle.uid
+
+
+def test_reused_cached_output_keeps_pending_steps(tmp_path: Path) -> None:
+    calls = 0
+
+    class CountedMult(Step):
+        def _run(self, value: int) -> int:
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=[conftest.Add(value=1, infra=infra), CountedMult()])
+
+    assert chain.run(1) == 4
+    assert chain.run(1) == 4
+    assert calls == 2
 
 
 def test_item_uid_override_in_chain(tmp_path: Path) -> None:
@@ -620,9 +644,7 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
             assert identity._NOINPUT_UID in chain[: i + 1].lookup().cache_dict
 
     call_counts.clear()
-    step_b = chain._step_sequence()[1]
-    assert step_b.infra is not None
-    step_b.infra.mode = "force"
+    chain = chain.clone({"steps.1.infra.mode": "force"})
 
     # Second run: A cached, B recomputes (force), C runs
     assert chain.run() == 3
