@@ -387,7 +387,7 @@ def test_force_nested_chains(tmp_path: Path) -> None:
     out3 = outer2.run()
     assert out2 == out3, "force is one-shot"
 
-    # force on inner chain: fresh instance (model_copy copies _recomputed)
+    # force on inner chain from a fresh config
     outer2 = outer.clone({"steps.2.infra.mode": "force"})
     out4 = outer2.run()
     assert out4 != out3  # inner forced → downstream recomputed
