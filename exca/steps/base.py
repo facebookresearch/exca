@@ -137,6 +137,34 @@ class Step(exca.helpers.DiscriminatedModel):
     CACHE_TYPE: tp.ClassVar[str | None] = None  # ``None`` = auto-dispatch.
     # in ``materialize_uid``, avoids large keys cluttering the cache.
     _ITEM_UID_MAX_LENGTH: tp.ClassVar[int] = 256
+    # Final cache-backed carrier reused by `run` when all requested uids exist.
+    _output_items: items.StepItems | None = pydantic.PrivateAttr(None)
+
+    def __getstate__(self) -> dict[str, tp.Any]:
+        out = super().__getstate__()
+        private = out.get("__pydantic_private__", {})
+        private["_output_items"] = None
+        return out
+
+    def model_copy(
+        self, *, update: tp.Mapping[str, tp.Any] | None = None, deep: bool = False
+    ) -> tp.Self:
+        copied = super().model_copy(update=update, deep=deep)
+        copied._output_items = None
+        return copied
+
+    def clone(self, *args: dict[str, tp.Any], **kwargs: tp.Any) -> tp.Self:
+        """Create a fresh Step config, optionally updated with params."""
+        if args:
+            if len(args) > 1:
+                raise ValueError(f"Only one positional argument allowed, got {args}")
+            if kwargs:
+                msg = f"Provide either args or kwargs, not both, got {args=} {kwargs=}"
+                raise ValueError(msg)
+            kwargs = args[0]
+        cdict = exca.ConfDict(self.model_dump())
+        cdict.update(kwargs)
+        return type(self).model_validate(cdict)
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
@@ -351,11 +379,29 @@ class Step(exca.helpers.DiscriminatedModel):
         inp = value if is_items else items.Items([value])
         values = list(inp)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]
+
+        cached = self._output_items
+        if cached is not None and isinstance(cached._source, exca.cachedict.CacheDict):
+            # try fast path: no need to rebuild iterator from scratch
+            remembered = cached._mode != "force" or all(
+                uid in cached.uids for uid in uids
+            )
+            if remembered:
+                with cached._source.frozen_cache_folder():
+                    remembered = all(uid in cached._source for uid in uids)
+                if remembered:
+                    if is_items:
+                        return cached.select(uids)
+                    return next(cached.read(uids))
+
         boundary = items.StepItems(
             source=dict(zip(uids, values)),
             uids=uids,
         )
         result = self._dispatch(boundary)
+        if isinstance(result._source, exca.cachedict.CacheDict):
+            self._output_items = result
+            utils.recursive_freeze(self)
         if is_items:
             return result
         return next(iter(result))

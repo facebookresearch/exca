@@ -55,7 +55,7 @@ def test_cached_entry_lookup_success_shadows_error(tmp_path: Path) -> None:
     assert entry.result() == 7
 
 
-def test_lookup_statuses_batch(tmp_path: Path) -> None:
+def test_lookup_statuses_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cd: cachedict.CacheDict[int] = cachedict.CacheDict(folder=tmp_path / "cache")
     with cd.write():
         cd["ok"] = 1
@@ -63,6 +63,13 @@ def test_lookup_statuses_batch(tmp_path: Path) -> None:
         reg.record("err", ValueError("boom"), "tb")
     statuses = backends._CachedEntry.lookup_statuses(cd, ["ok", "err", "miss"])
     assert statuses == {"ok": "success", "err": "error", "miss": None}
+
+    def fail_registry(*args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:
+        raise AssertionError("success-only lookup should not open ErrorRegistry")
+
+    monkeypatch.setattr(errors, "ErrorRegistry", fail_registry)
+    statuses = backends._CachedEntry.lookup_statuses(cd, ["ok"])
+    assert statuses == {"ok": "success"}
 
 
 def test_unpicklable_exception_falls_back_to_runtime_error(tmp_path: Path) -> None:

@@ -40,14 +40,14 @@ def step_uid(steps: tp.Sequence[Step]) -> str:
 
 
 def materialize_uid(step: Step, value: tp.Any) -> str:
-    """Per-value uid: calls ``step.item_uid``, falls back to ConfDict."""
+    """Per-value uid: calls ``step.item_uid``, falls back to UidMaker."""
     if isinstance(value, NoValue):
         return _NOINPUT_UID
     custom = step.item_uid(value)
     if custom is not None:
         # avoid cluttering cache
         return utils.ShortItemUid._shorten(custom, step._ITEM_UID_MAX_LENGTH)
-    return exca.ConfDict(value=value).to_uid()
+    return exca.confdict.UidMaker(value).format()
 
 
 def write_configs(

@@ -6,6 +6,10 @@
 
 """Small perf scaffold comparing MapInfra with Step Items."""
 
+# Rough warm scalar cache hits, 32x32 arrays:
+# - MapInfra: ~10 us/item
+# - Step: ~15 us/item
+
 import cProfile
 import pstats
 import sys

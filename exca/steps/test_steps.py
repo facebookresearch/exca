@@ -37,6 +37,29 @@ def test_chain_no_infra() -> None:
     assert chain.run(5.0) == 30.0
 
 
+def test_clone_rejects_ambiguous_updates() -> None:
+    step = conftest.Mult()
+    with pytest.raises(ValueError, match="Only one positional argument"):
+        step.clone({"coeff": 2}, {"coeff": 3})
+    with pytest.raises(ValueError, match="Provide either args or kwargs"):
+        step.clone({"coeff": 2}, coeff=3)
+
+
+def test_clone_updates_nested_named_steps() -> None:
+    chain = Chain(
+        steps=collections.OrderedDict(
+            [
+                ("add", conftest.Add(value=1.0)),
+                ("mult", conftest.Mult(coeff=2.0)),
+            ]
+        )
+    )
+
+    cloned = chain.clone({"steps.add.value": 5.0, "steps.mult.coeff": 3.0})
+    assert chain.run(1.0) == 4.0
+    assert cloned.run(1.0) == 18.0
+
+
 # =============================================================================
 # Generator vs Transformer detection
 # =============================================================================
