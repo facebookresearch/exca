@@ -19,6 +19,9 @@ dependencies = [
   Tracker = "https://github.com/facebookresearch/exca/issues"
 
 [project.optional-dependencies]
+    huggingface = [
+        "huggingface_hub>=0.23",
+    ]
     dev = [
         # optional features
         "pandas>=2.2.2",
@@ -27,7 +30,6 @@ dependencies = [
         "pybv>=0.7.6",
         "nibabel>=5.1.0",
         "pyarrow>=17.0.0",
-        "huggingface_hub>=0.23",
         # Test
         "pytest>=7.4.0",
         "pytest-markdown-docs>=0.5.0",
