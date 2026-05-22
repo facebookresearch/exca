@@ -36,9 +36,21 @@ class BatchProtocolError(RuntimeError):
 
 
 class Items:
-    """User-facing root: wraps an ``Iterable[Any]``.
+    """Batch wrapper: run the same step over many inputs.
 
-    ``Items()`` with no arguments represents the no-input case.
+    ``step.run(Items([v1, v2, ...]))`` produces a streaming iterator
+    yielding one result per input, in order, with one cache entry per
+    ``(step, input)`` pair. ``Items()`` with no arguments is the
+    no-input form for generator steps.
+
+    Example::
+
+        step = Multiply(coeff=2.0, infra={"backend": "Cached", "folder": cache})
+        for r in step.run(Items([1.0, 2.0, 3.0])):
+            print(r)                                    # 2.0, then 4.0, then 6.0
+
+    See :doc:`items` for batched semantics, custom ``item_uid``, and
+    ``_run_batch``.
     """
 
     def __init__(self, values: tp.Iterable[tp.Any] | None = None) -> None:

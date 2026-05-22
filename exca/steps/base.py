@@ -92,26 +92,29 @@ def _resolved_step(step: Step) -> Step:
 
 
 class Step(exca.helpers.DiscriminatedModel):
-    """
-    Base class for pipeline steps.
+    """Base class for pipeline steps.
 
-    Override _run() to implement computation:
+    Override ``_run()`` to implement computation::
 
         class Generator(Step):
             def _run(self):
                 return load_data()
 
+
         class Transformer(Step):
             coeff: float = 1.0
+
             def _run(self, data):
                 return data * self.coeff
 
-    Override _resolve_step() to decompose into a chain of steps:
+    Override ``_resolve_step()`` to decompose into a chain of steps::
 
         class Pipeline(Step):
             transforms: list[Step] = []
+
             def _run(self, data):
                 return expensive_computation(data)
+
             def _resolve_step(self):
                 if not self.transforms:
                     return self
@@ -120,9 +123,18 @@ class Step(exca.helpers.DiscriminatedModel):
 
     Note
     ----
-    A list/tuple of steps is automatically converted to a Chain:
+    When ``Step`` is used as a pydantic field type, a list/tuple is
+    auto-converted to a ``Chain`` (and a dict is dispatched on the
+    discriminator key, ``"type"`` by default). Configs typically pass
+    dicts rather than instances so they round-trip through YAML/JSON::
 
-        step: Step = [Mult(coeff=2), Mult(coeff=3)]  # -> Chain(steps=[...])
+        class Config(pydantic.BaseModel):
+            pipeline: Step
+
+        Config(pipeline=[
+            {"type": "Mult", "coeff": 2},
+            {"type": "Mult", "coeff": 3},
+        ])  # pipeline is a Chain
     """
 
     # Validators for infra handling (prevent sharing, propagate defaults)
@@ -411,10 +423,10 @@ class Step(exca.helpers.DiscriminatedModel):
 
 
 class Chain(Step):
-    """
-    Composes multiple steps sequentially.
+    """Compose multiple steps sequentially.
 
-    Example:
+    Example::
+
         chain = Chain(
             steps=[LoadData(path="x.csv"), Train(epochs=10)],
             infra={"backend": "Cached", "folder": "/cache"},
