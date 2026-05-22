@@ -215,6 +215,28 @@ html[data-theme="dark"] .quick-links a {
     border-color: rgba(255, 255, 255, 0.1);
 }
 
+/* ---------- In-development teaser on landing page ---------- */
+.dev-preview-note {
+    margin: 2rem auto 0;
+    padding: 0.85rem 1.1rem;
+    max-width: 760px;
+    border-left: 3px solid var(--exca-primary-light);
+    background: rgba(67, 97, 238, 0.05);
+    border-radius: 6px;
+    font-size: 0.92rem;
+    color: var(--pst-color-text-base, inherit);
+}
+
+html[data-theme="dark"] .dev-preview-note {
+    background: rgba(123, 143, 245, 0.08);
+    border-left-color: var(--exca-primary);
+}
+
+.dev-preview-note a {
+    color: var(--exca-primary);
+    font-weight: 500;
+}
+
 /* ---------- Misc polish ---------- */
 .bd-main .bd-content .bd-article-container {
     max-width: 960px;

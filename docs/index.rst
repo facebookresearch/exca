@@ -119,6 +119,13 @@
       **Modular pipelines** — Discriminated unions, composable sub-configs,
       and job arrays for grid-search with ease.
 
+.. raw:: html
+
+   <p class="dev-preview-note">
+     <strong>Work in progress / unstable:</strong>
+     <a href="steps/index.html"><code>Step</code></a> —
+     composable, per-node cached pipelines. Feedback welcome.
+   </p>
 
 .. raw:: html
 
@@ -205,3 +212,10 @@ Also check-out Meta Open Source `Terms of Use <https://opensource.fb.com/legal/t
    infra/getting-started
    infra/user-guide
    infra/reference
+
+.. toctree::
+   :maxdepth: 2
+   :hidden:
+   :caption: In development
+
+   steps/index

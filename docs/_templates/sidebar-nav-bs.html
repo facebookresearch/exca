@@ -1,0 +1,31 @@
+{# Section nav with the section root prepended (overrides pydata-sphinx-theme default).
+   `parents` is the immediate-parent chain (excluding the global root). For pages
+   inside a section subdirectory it contains exactly the section root, which is
+   what we want to surface as the first sidebar entry. #}
+{% set show_nav_level = meta['html_theme.show_nav_level'] if (meta is defined and meta is not none and 'html_theme.show_nav_level' in meta) else theme_show_nav_level %}
+<nav class="bd-docs-nav bd-links"
+     aria-label="{{ _('Section Navigation') }}">
+  <p class="bd-links__title" role="heading" aria-level="1">{{ _("Section Navigation") }}</p>
+  <div class="bd-toc-item navbar-nav">
+    {%- if parents -%}
+    {%- set section_root = parents[-1] -%}
+    <ul class="nav bd-sidenav">
+      <li class="toctree-l1"><a class="reference internal" href="{{ section_root.link|e }}">{{ section_root.title }}</a></li>
+    </ul>
+    {%- else -%}
+    {# Section root itself — mark as current so the section header is always visible. #}
+    <ul class="nav bd-sidenav">
+      <li class="toctree-l1 current active"><a class="current reference internal" href="#">{{ title }}</a></li>
+    </ul>
+    {%- endif -%}
+    {{- generate_toctree_html(
+      "sidebar",
+      show_nav_level=show_nav_level | int,
+      maxdepth=theme_navigation_depth | int,
+      collapse=theme_collapse_navigation | tobool,
+      includehidden=theme_sidebar_includehidden | tobool,
+      titles_only=True
+      )
+    -}}
+  </div>
+</nav>

@@ -2,13 +2,28 @@
 import sys
 from pathlib import Path
 
-# Make sure exca is importable for autodoc
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import exca.steps  # noqa: E402 — after sys.path bootstrap above
+
+# Resolve forward refs so autodoc reads real fields, not pydantic mocks.
+for cls in (
+    exca.steps.Chain,
+    exca.steps.helpers.Func,
+    exca.steps.backends.Cached,
+    exca.steps.backends.LocalProcess,
+    exca.steps.backends.SubmititDebug,
+    exca.steps.backends.Slurm,
+    exca.steps.backends.Auto,
+    exca.steps.backends.ProcessPool,
+    exca.steps.backends.ThreadPool,
+):
+    cls.model_rebuild()
 
 project = "Exca"
 copyright = "Meta Platforms, Inc"
 author = "FAIR"
-release = "0.5.15"
+release = exca.__version__
 
 # -- General configuration ---------------------------------------------------
 
@@ -40,6 +55,30 @@ exclude_patterns = [
 # Prefix document path to section labels, to use:
 # `path/to/file:heading` instead of just `heading`
 autosectionlabel_prefix_document = True
+
+# Hide pydantic BaseModel boilerplate from every autoclass.
+autodoc_default_options = {
+    "exclude-members": ", ".join(
+        [
+            "model_post_init",
+            "model_fields",
+            "model_computed_fields",
+            "model_config",
+            "model_construct",
+            "model_copy",
+            "model_dump",
+            "model_dump_json",
+            "model_extra",
+            "model_fields_set",
+            "model_json_schema",
+            "model_parametrized_name",
+            "model_rebuild",
+            "model_validate",
+            "model_validate_json",
+            "model_validate_strings",
+        ]
+    ),
+}
 
 # -- Options for HTML output -------------------------------------------------
 
@@ -74,6 +113,7 @@ html_theme_options = {
     "footer_start": ["copyright"],
     "footer_end": ["last-updated"],
     "secondary_sidebar_items": ["page-toc", "edit-this-page"],
+    "article_header_start": ["breadcrumbs"],
     "pygments_light_style": "friendly",
     "pygments_dark_style": "monokai",
     "announcement": None,
