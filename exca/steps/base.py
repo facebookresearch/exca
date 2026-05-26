@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import collections
 import copy
-import inspect
 import logging
 import typing as tp
 import warnings
@@ -19,76 +18,15 @@ from pathlib import Path
 import pydantic
 
 import exca
-from exca import utils
 
-from . import backends, identity, items
-from .backends import LookupHandle
+from . import backends, identity, items, utils
 
 logger = logging.getLogger(__name__)
-
-
-def _has_all_defaults(method: tp.Callable[..., tp.Any]) -> bool:
-    """Check if all parameters (except self) have defaults."""
-    return all(
-        p.default is not inspect.Parameter.empty
-        for name, p in inspect.signature(method).parameters.items()
-        if name != "self"
-    )
-
-
-@pydantic.model_validator(mode="before")
-def _infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
-    """Convert backend instances to dicts to prevent sharing."""
-    if not isinstance(obj, dict):
-        return obj
-    infra = obj.get("infra")
-    if infra is None:
-        return obj
-
-    # Convert backend instance to dict (prevents sharing)
-    if isinstance(infra, backends.Backend):
-        data = {k: getattr(infra, k) for k in infra.model_fields_set}
-        data[type(infra)._exca_discriminator_key] = type(infra).__name__
-        obj["infra"] = data
-
-    return obj
-
-
-@pydantic.model_validator(mode="after")
-def _infra_validator_after(self: tp.Any) -> tp.Any:
-    """Propagate default infra fields that exist on the target type."""
-    infra = getattr(self, "infra", None)
-    if infra is None:
-        return self
-
-    default_field = type(self).model_fields.get("infra")
-    if default_field is None or not isinstance(default_field.default, backends.Backend):
-        return self
-
-    default_infra = default_field.default
-    target_fields = set(type(infra).model_fields.keys())
-
-    # Propagate fields that exist on target and were set on default (but not overridden)
-    for field in default_infra.model_fields_set & target_fields:
-        if field not in infra.model_fields_set:
-            setattr(infra, field, getattr(default_infra, field))
-
-    return self
 
 
 def _is_step(value: tp.Any, disc_key: str) -> bool:
     """True if value is a Step instance or a dict containing the discriminator key."""
     return isinstance(value, Step) or (isinstance(value, dict) and disc_key in value)
-
-
-def _resolved_step(step: Step) -> Step:
-    """Resolve one Step to a fixed point, guarding circular decompositions."""
-    for _ in range(10):
-        built = step._resolve_step()
-        if built is step:
-            return step
-        step = built
-    raise RuntimeError(f"_resolve_step did not converge on {type(step).__name__}")
 
 
 class Step(exca.helpers.DiscriminatedModel):
@@ -138,8 +76,8 @@ class Step(exca.helpers.DiscriminatedModel):
     """
 
     # Validators for infra handling (prevent sharing, propagate defaults)
-    _infra_validator_before = _infra_validator_before
-    _infra_validator_after = _infra_validator_after
+    _infra_validator_before = utils.infra_validator_before
+    _infra_validator_after = utils.infra_validator_after
 
     infra: backends.Backend | None = None
     _step_flags: tp.ClassVar[frozenset[str]] = frozenset()
@@ -178,6 +116,11 @@ class Step(exca.helpers.DiscriminatedModel):
         cdict.update(kwargs)
         return type(self).model_validate(cdict)
 
+    def show(self) -> str:
+        """Best-effort human-readable tree of the step/chain configuration.
+        Not stable nor foolproof."""
+        return "\n".join(utils.step_lines(self))
+
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: tp.Any) -> None:
         super().__pydantic_init_subclass__(**kwargs)
@@ -194,7 +137,7 @@ class Step(exca.helpers.DiscriminatedModel):
         )
         if has_run:
             flags.add("has_run")
-            if _has_all_defaults(cls._run):
+            if utils.has_all_defaults(cls._run):
                 flags.add("has_generator")
         if cls._resolve_step is not Step._resolve_step:
             flags.add("has_resolve")
@@ -260,7 +203,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _inner_mode(self) -> identity.ModeType:
         """Effective mode considering resolved sub-steps."""
-        resolved = _resolved_step(self)
+        resolved = utils.resolved_step(self)
         if resolved is not self:
             return resolved._inner_mode()
         return "cached" if self.infra is None else self.infra.mode
@@ -311,7 +254,7 @@ class Step(exca.helpers.DiscriminatedModel):
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
         if "has_resolve" not in self._step_flags:
             return None
-        built = _resolved_step(self)
+        built = utils.resolved_step(self)
         if built is self:
             return None
         return built._exca_uid_dict_override()
@@ -322,8 +265,8 @@ class Step(exca.helpers.DiscriminatedModel):
         *,
         _upstream: tp.Sequence[Step] = (),
         _uid: str | None = None,
-    ) -> LookupHandle:
-        """Return a :class:`LookupHandle` for inspecting or clearing the cache.
+    ) -> backends.LookupHandle:
+        """Return a :class:`~backends.LookupHandle` for inspecting or clearing the cache.
 
         Parameters
         ----------
@@ -332,11 +275,11 @@ class Step(exca.helpers.DiscriminatedModel):
 
         Returns
         -------
-        LookupHandle
+        backends.LookupHandle
             Handle to inspect, retrieve, or clear the cached result.
         """
         if self.infra is None or self.infra.folder is None:
-            return LookupHandle()
+            return backends.LookupHandle()
         if _uid is not None and not isinstance(value, identity.NoValue):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
@@ -348,7 +291,7 @@ class Step(exca.helpers.DiscriminatedModel):
             cache_type=self._infer_cache_type(),
         )
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        return LookupHandle(paths, cd, backend=self.infra, uid=_uid)
+        return backends.LookupHandle(paths, cd, backend=self.infra, uid=_uid)
 
     def with_input(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # deprecated
         raise AttributeError(
@@ -381,7 +324,7 @@ class Step(exca.helpers.DiscriminatedModel):
         Any
             Cached or freshly computed result.
         """
-        built = _resolved_step(self)
+        built = utils.resolved_step(self)
         if built is not self:
             return built.run(value)
 
@@ -413,7 +356,7 @@ class Step(exca.helpers.DiscriminatedModel):
         result = self._dispatch(boundary)
         if isinstance(result._source, exca.cachedict.CacheDict):
             self._output_items = result
-            utils.recursive_freeze(self)
+            exca.utils.recursive_freeze(self)
         if is_items:
             return result
         return next(iter(result))
@@ -475,7 +418,7 @@ class Chain(Step):
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
 
     def _resolved_steps(self) -> list[Step]:
-        return [_resolved_step(step) for step in self._step_sequence()]
+        return [utils.resolved_step(step) for step in self._step_sequence()]
 
     def __len__(self) -> int:
         return len(self.steps)
@@ -532,7 +475,7 @@ class Chain(Step):
     def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
         """Flatten chain for UID export (matches old Chain behavior)."""
         chain = type(self)(steps=tuple(self._uid_steps()))
-        exporter = utils.ConfigExporter(
+        exporter = exca.utils.ConfigExporter(
             uid=True, exclude_defaults=True, ignore_first_override=True
         )
         return {"steps": exporter.apply(chain)["steps"]}
@@ -547,7 +490,7 @@ class Chain(Step):
         *,
         _upstream: tp.Sequence[Step] = (),
         _uid: str | None = None,
-    ) -> LookupHandle:
+    ) -> backends.LookupHandle:
         steps = self._resolved_steps()
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
