@@ -21,7 +21,6 @@ def _scale(x: float, factor: float = 2.0, src: Path = Path(".")) -> float:
 
 
 def test_show_named_chain_with_resolution() -> None:
-    # named dict chain; defaults hidden, non-defaults shown; PureResolver resolves to Chain
     steps: tp.Any = {
         "load": conftest.PureResolver(step_b=conftest.Mult(coeff=5.0)),
         "scale": conftest.Add(value=4.0),
@@ -37,8 +36,6 @@ Chain
 
 
 def test_show_seq_chain_with_infra() -> None:
-    # sequential chain; Func extra fields (float + Path), infra on chain and sub-step,
-    # _resolve_step expansion via AddWithTransforms
     infra: tp.Any = {"backend": "Cached", "folder": "/tmp/x"}
     chain = Chain(
         steps=[
@@ -62,7 +59,6 @@ Chain  [Cached, /tmp/x]
 
 
 def test_show_non_chain_composite() -> None:
-    # any Step-valued field tree-renders, not just Chain.steps
     class Branch(Step):
         left: Step
         right: Step
@@ -92,9 +88,7 @@ def test_resolved_step_convergence_error() -> None:
     [
         ("short", "short"),
         ("x" * 40, "x" * 40),
-        # middle-truncate: keep both ends, total length stays at max_len
         ("a" * 41, "a" * 18 + "..." + "a" * 19),
-        # preserves the tail of dotted paths (the distinctive part)
         (
             "'foo.bar.baz.deeply_nested_function_name'",
             "'foo.bar.baz.deepl...sted_function_name'",

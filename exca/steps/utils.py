@@ -104,8 +104,6 @@ def _step_children(
     consumed: set[str] = set()
     children: list[tuple[str | None, base.Step]] = []
     for k, v in all_vals.items():
-        # Normalize any container shape to (label, value) pairs; the all-Step
-        # check then filters in one place rather than per shape.
         if isinstance(v, dict):
             pairs = list(v.items())
         elif isinstance(v, (list, tuple)):
