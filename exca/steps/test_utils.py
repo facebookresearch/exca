@@ -61,6 +61,23 @@ Chain  [Cached, /tmp/x]
     assert chain.show() == expected
 
 
+def test_show_non_chain_composite() -> None:
+    # any Step-valued field tree-renders, not just Chain.steps
+    class Branch(Step):
+        left: Step
+        right: Step
+
+        def _run(self, x: float) -> float:
+            return x
+
+    b = Branch(left=conftest.Mult(coeff=2.0), right=conftest.Add(value=5.0))
+    expected = """\
+Branch
+├── left: Mult
+└── right: Add  value=5.0"""
+    assert b.show() == expected
+
+
 def test_resolved_step_convergence_error() -> None:
     class BadStep(Step):
         def _resolve_step(self) -> Step:
@@ -68,3 +85,21 @@ def test_resolved_step_convergence_error() -> None:
 
     with pytest.raises(RuntimeError, match="did not converge"):
         utils.resolved_step(BadStep())
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("short", "short"),
+        ("x" * 40, "x" * 40),
+        # middle-truncate: keep both ends, total length stays at max_len
+        ("a" * 41, "a" * 18 + "..." + "a" * 19),
+        # preserves the tail of dotted paths (the distinctive part)
+        (
+            "'foo.bar.baz.deeply_nested_function_name'",
+            "'foo.bar.baz.deepl...sted_function_name'",
+        ),
+    ],
+)
+def test_truncate(raw: str, expected: str) -> None:
+    assert utils._truncate(raw) == expected

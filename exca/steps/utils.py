@@ -40,7 +40,7 @@ def infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
     if isinstance(infra, backends.Backend):
         data = {k: getattr(infra, k) for k in infra.model_fields_set}
         data[type(infra)._exca_discriminator_key] = type(infra).__name__
-        return {**obj, "infra": data}
+        obj["infra"] = data
 
     return obj
 
@@ -81,26 +81,58 @@ def resolved_step(step: base.Step) -> base.Step:
 # ---------------------------------------------------------------------------
 
 
+def _truncate(s: str, max_len: int = 40) -> str:
+    """Middle-truncate; preserves the distinctive tail of dotted paths and
+    keeps repr() quotes balanced."""
+    if len(s) <= max_len:
+        return s
+    keep = max_len - 3
+    head = keep // 2
+    return f"{s[:head]}...{s[head - keep :]}"
+
+
+def _step_children(
+    all_vals: dict[str, tp.Any],
+) -> tuple[set[str], list[tuple[str | None, "base.Step"]]]:
+    """Field-driven children for tree rendering: any field whose value is a
+    Step, non-empty list/tuple[Step], or non-empty dict[str, Step]. List/tuple
+    entries render unlabeled (matches sequential Chain); single Step and dict
+    entries render labeled by key. Returns (consumed_keys, [(label, step)...])
+    — consumed_keys are field names step_label should drop from inline rendering."""
+    from . import base  # lazy — avoids circular import at module level
+
+    consumed: set[str] = set()
+    children: list[tuple[str | None, base.Step]] = []
+    for k, v in all_vals.items():
+        # Normalize any container shape to (label, value) pairs; the all-Step
+        # check then filters in one place rather than per shape.
+        if isinstance(v, dict):
+            pairs = list(v.items())
+        elif isinstance(v, (list, tuple)):
+            pairs = [(None, x) for x in v]
+        else:
+            pairs = [(k, v)]
+        if pairs and all(isinstance(x, base.Step) for _, x in pairs):
+            consumed.add(k)
+            children.extend(pairs)
+    return consumed, children
+
+
 def step_label(step: base.Step) -> str:
     """One-line label: ClassName  key=val ...  [Backend, folder]"""
-    from . import base as _base  # lazy — avoids circular import at module level
-
     parts = [type(step).__name__]
     disc = type(step)._exca_discriminator_key
-    # skip "steps" only for Chain — a non-Chain step could legitimately have a "steps" field
-    skip = {"infra", disc} | ({"steps"} if isinstance(step, _base.Chain) else set())
-    # vars() + __pydantic_extra__ covers extra='allow' fields (stored outside __dict__);
-    # json dump fires field serializers (e.g. ImportString → dotted import path).
-    non_defaults = [k for k in step.model_dump(exclude_defaults=True) if k not in skip]
+    # vars() + __pydantic_extra__ covers extra='allow' fields (stored outside __dict__).
     all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
-    js = step.model_dump(mode="json", include=set(non_defaults)) if non_defaults else {}
-    for k in non_defaults:
-        val = all_vals[k]
-        if isinstance(val, _base.Step):
-            parts.append(f"{k}={step_label(val)}")
-        else:
-            s = repr(js[k])
-            parts.append(f"{k}={s if len(s) <= 40 else s[:37] + '...'}")
+    consumed, _ = _step_children(all_vals)
+    # Step-valued fields are rendered as a tree by step_lines; drop from inline.
+    skip = {"infra", disc} | consumed
+    # mode='json' fires field serializers (e.g. ImportString → dotted path).
+    js = step.model_dump(mode="json", exclude_defaults=True)
+    for k, v in js.items():
+        if k in skip:
+            continue
+        parts.append(f"{k}={_truncate(repr(v))}")
     if step.infra is not None:
         iname = type(step.infra).__name__
         tag = (
@@ -113,23 +145,15 @@ def step_label(step: base.Step) -> str:
 
 
 def step_lines(step: base.Step) -> list[str]:
-    """Render step as tree lines; follows _resolve_step and recurses into chains."""
-    from . import base as _base  # lazy — avoids circular import at module level
-
+    """Render step as tree lines; follows _resolve_step and recurses into Step-valued fields."""
     r = resolved_step(step)
     if r is not step:
         return step_lines(r)
     lines = [step_label(step)]
-    if not isinstance(step, _base.Chain):
-        return lines
-    named: tp.Iterable[tuple[str | None, base.Step]] = (
-        step.steps.items()
-        if isinstance(step.steps, dict)
-        else ((None, s) for s in step._step_sequence())
-    )
-    named_list = list(named)
-    for i, (key, sub) in enumerate(named_list):
-        is_last = i == len(named_list) - 1
+    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
+    _, children = _step_children(all_vals)
+    for i, (key, sub) in enumerate(children):
+        is_last = i == len(children) - 1
         connector = "└── " if is_last else "├── "
         cont = "    " if is_last else "│   "
         label_prefix = f"{key}: " if key is not None else ""
