@@ -263,9 +263,6 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
 
 
 def test_dispatch_batches_recomputed_per_batch(tmp_path: Path) -> None:
-    """_recomputed is updated per batch, only for batches that ran. A batch
-    that a sibling's failure prevents from running stays unmarked.
-    """
     backend = backends.Cached(folder=tmp_path)
 
     def prepare(step: Step, value: float) -> backends.ComputeBatch:
@@ -288,17 +285,21 @@ def test_dispatch_batches_recomputed_per_batch(tmp_path: Path) -> None:
 
 
 def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
-    """One Backend serving two step_uids that share an item uid: forcing one
-    must not suppress the other's force (_recomputed is keyed by step folder).
-    """
-    backend = backends.Cached(folder=tmp_path, mode="force")
-    steps = [conftest.Add(value=1, infra=backend), conftest.Mult(coeff=3, infra=backend)]
-    # item uid depends only on the input value, so both steps share it
-    item_uid = backends.identity.materialize_uid(steps[0], 2.0)
-    for step in steps:
-        backend._run(step, items.StepItems(source={item_uid: 2.0}, uids=[item_uid]))
+    backend = backends.Cached(folder=tmp_path)
+    # two distinct steps (distinct value → distinct folder), same input → same uid
+    item_uid = backends.identity.materialize_uid(conftest.Add(value=1), 2.0)
+    batch = items.StepItems(source={item_uid: 2.0}, uids=[item_uid])
 
-    folders = {step.lookup(2.0).paths.step_folder for step in steps}
-    assert len(folders) == 2, "steps must use distinct folders"
-    marked = all((folder, item_uid) in backend._recomputed for folder in folders)
-    assert marked, "both steps must be marked recomputed under their own folder"
+    def run(value: float, error: bool, mode: str) -> float:
+        infra = backend.model_copy(update={"mode": mode})
+        step = conftest.Add(value=value, error=error, infra=infra)
+        return next(iter(backend._run(step, batch)))
+
+    # seed a cached error under each step's folder
+    for value in (1.0, 5.0):
+        with pytest.raises(ValueError, match="Triggered an error"):
+            run(value, error=True, mode="cached")
+
+    # retry both; a uid-only _recomputed would make the 2nd re-raise the 1st's error
+    assert run(1.0, error=False, mode="retry") == 3.0  # 2 + 1
+    assert run(5.0, error=False, mode="retry") == 7.0  # 2 + 5
