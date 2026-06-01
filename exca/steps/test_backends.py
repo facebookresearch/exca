@@ -275,15 +275,30 @@ def test_dispatch_batches_recomputed_per_batch(tmp_path: Path) -> None:
         uid = backends.identity.materialize_uid(forced, value)
         return backend._prepare(forced, items.StepItems(source={uid: value}, uids=[uid]))
 
-    # distinct input values → distinct item uids (else they'd share _recomputed)
     cb_fail = prepare(conftest.Add(error=True), 1.0)
-    cb_ok = prepare(conftest.Add(value=1, error=False), 2.0)
-    assert cb_fail.items.uids[0] != cb_ok.items.uids[0], "item uids must not collide"
+    cb_ok = prepare(conftest.Add(value=1, error=False), 1.0)
     # _dispatch_batches runs sorted by step_uid, so cb_fail must raise first
     assert cb_fail.paths.step_uid < cb_ok.paths.step_uid, "cb_fail must sort first"
 
     with pytest.raises(ValueError, match="Triggered an error"):
         backend._dispatch_batches([cb_fail, cb_ok])
 
-    msg = "cb_ok never ran, so its uid must not be marked recomputed"
-    assert cb_ok.items.uids[0] not in backend._recomputed, msg
+    key = (cb_ok.paths.step_folder, cb_ok.items.uids[0])
+    assert key not in backend._recomputed, "cb_ok never ran, so it must be unmarked"
+
+
+def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
+    """One Backend serving two step_uids that share an item uid: forcing one
+    must not suppress the other's force (_recomputed is keyed by step folder).
+    """
+    backend = backends.Cached(folder=tmp_path, mode="force")
+    steps = [conftest.Add(value=1, infra=backend), conftest.Mult(coeff=3, infra=backend)]
+    # item uid depends only on the input value, so both steps share it
+    item_uid = backends.identity.materialize_uid(steps[0], 2.0)
+    for step in steps:
+        backend._run(step, items.StepItems(source={item_uid: 2.0}, uids=[item_uid]))
+
+    folders = {step.lookup(2.0).paths.step_folder for step in steps}
+    assert len(folders) == 2, "steps must use distinct folders"
+    marked = all((folder, item_uid) in backend._recomputed for folder in folders)
+    assert marked, "both steps must be marked recomputed under their own folder"

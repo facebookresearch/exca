@@ -353,8 +353,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     mode: identity.ModeType = "cached"
     keep_in_ram: bool = False
-    # Force/retry: at most once success/error per uid per lifetime; resets on pickle.
-    _recomputed: set[str] = pydantic.PrivateAttr(default_factory=set)
+    # Force/retry: recompute each (step_folder, uid) at most once per lifetime
+    _recomputed: set[tuple[Path, str]] = pydantic.PrivateAttr(default_factory=set)
     _checked_configs: set[Path] = pydantic.PrivateAttr(default_factory=set)
 
     def __getstate__(self) -> dict[str, tp.Any]:
@@ -383,7 +383,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                         f"No cache in read-only mode: {paths.step_uid}[{uid}]"
                     )
                 pending[uid] = status
-            elif uid in self._recomputed:
+            elif (paths.step_folder, uid) in self._recomputed:
                 if status == "error":
                     _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
                 continue
@@ -587,10 +587,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         try:
             self._execute(cbatch.select(list(pending_statuses)), claim=claim)
         finally:
-            # Mark attempted uids so force/retry recompute at most once per
-            # lifetime; only this batch's uids, only if it actually ran.
+            # in finally so a failed _execute still marks what it attempted
             if cbatch.mode in ("force", "retry"):
-                self._recomputed.update(pending_statuses)
+                folder = cbatch.paths.step_folder
+                self._recomputed.update((folder, uid) for uid in pending_statuses)
 
     def _execute(
         self,
