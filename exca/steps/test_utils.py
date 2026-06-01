@@ -4,8 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for exca.steps.utils (show helpers, resolved_step)."""
-
 import typing as tp
 from pathlib import Path
 

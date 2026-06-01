@@ -59,6 +59,7 @@ def infra_validator_after(self: tp.Any) -> tp.Any:
     default_infra = default_field.default
     target_fields = set(type(infra).model_fields.keys())
 
+    # Propagate fields that exist on target and were set on default (but not overridden)
     for field in default_infra.model_fields_set & target_fields:
         if field not in infra.model_fields_set:
             setattr(infra, field, getattr(default_infra, field))
@@ -88,17 +89,17 @@ def _truncate(s: str, max_len: int = 40) -> str:
         return s
     keep = max_len - 3
     head = keep // 2
-    return f"{s[:head]}...{s[head - keep :]}"
+    tail = keep - head
+    return f"{s[:head]}...{s[-tail:]}"
 
 
 def _step_children(
     all_vals: dict[str, tp.Any],
 ) -> tuple[set[str], list[tuple[str | None, "base.Step"]]]:
-    """Field-driven children for tree rendering: any field whose value is a
-    Step, non-empty list/tuple[Step], or non-empty dict[str, Step]. List/tuple
-    entries render unlabeled (matches sequential Chain); single Step and dict
-    entries render labeled by key. Returns (consumed_keys, [(label, step)...])
-    — consumed_keys are field names step_label should drop from inline rendering."""
+    """Field-driven children for tree rendering: any field holding a Step,
+    non-empty list/tuple[Step], or non-empty dict[str, Step]. List/tuple
+    entries unlabeled (matches sequential Chain); single Step and dict
+    entries labeled. Returns (consumed_field_names, [(label, step), ...])."""
     from . import base  # lazy — avoids circular import at module level
 
     consumed: set[str] = set()

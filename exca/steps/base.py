@@ -75,7 +75,6 @@ class Step(exca.helpers.DiscriminatedModel):
         ])  # pipeline is a Chain
     """
 
-    # Validators for infra handling (prevent sharing, propagate defaults)
     _infra_validator_before = utils.infra_validator_before
     _infra_validator_after = utils.infra_validator_after
 
@@ -117,8 +116,7 @@ class Step(exca.helpers.DiscriminatedModel):
         return type(self).model_validate(cdict)
 
     def show(self) -> str:
-        """Best-effort human-readable tree of the step/chain configuration.
-        Not stable nor foolproof."""
+        """Human-readable tree of the step/chain config. Output format not stable; for debugging."""
         return "\n".join(utils.step_lines(self))
 
     @classmethod
