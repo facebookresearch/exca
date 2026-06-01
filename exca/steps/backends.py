@@ -632,7 +632,8 @@ class _SubmititBackend(Backend):
 
     def _execute(self, cbatch: ComputeBatch) -> None:
         claim = cbatch.info.claim
-        assert claim is not None
+        if claim is None:
+            raise RuntimeError("_execute runs only on a claimed batch")
         paths = cbatch.paths
         uids = list(cbatch.items.uids)
         random.shuffle(uids)  # avoid collisions on competing runs
@@ -716,7 +717,8 @@ class _PoolBackend(Backend):
 
     def _execute(self, cbatch: ComputeBatch) -> None:
         claim = cbatch.info.claim
-        assert claim is not None
+        if claim is None:
+            raise RuntimeError("_execute runs only on a claimed batch")
         paths = cbatch.paths
         uids = list(cbatch.items.uids)
         cpus = max(1, (os.cpu_count() or 1) - 1)
