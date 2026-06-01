@@ -276,7 +276,7 @@ class ComputeBatch:
     """
 
     step: Step
-    paths: "StepPaths"
+    paths: StepPaths
     cache_dict: exca.cachedict.CacheDict[tp.Any]
     items: items.StepItems
     # driver-side only (Backend._dispatch_batches, cached_items); run_and_cache
@@ -284,11 +284,11 @@ class ComputeBatch:
     mode: identity.ModeType = "cached"
     upstream: tuple[Step, ...] = ()
 
-    def select(self, uids: tp.Sequence[str]) -> "ComputeBatch":
+    def select(self, uids: tp.Sequence[str]) -> ComputeBatch:
         """Sub-batch over *uids*, sharing step/paths/cache (for chunking)."""
         return dataclasses.replace(self, items=self.items.select(uids, mode=self.mode))
 
-    def cached_items(self) -> "StepItems":
+    def cached_items(self) -> StepItems:
         """Lazy cache-backed handle to this batch's results.
 
         Call on a top-level batch (full uid set), not a chunked sub-batch.
@@ -300,7 +300,7 @@ class ComputeBatch:
             mode=self.mode,
         )
 
-    # No return: the driver re-reads from cache rather than unpickle a result.
+    # No return: the driver re-reads from cache rather than unpickle a (heavy) result.
     def run_and_cache(self) -> None:
         folder = self.cache_dict.folder
         if folder is not None:
