@@ -204,13 +204,15 @@ class DumpContext:
     def __exit__(self, *exc: tp.Any) -> None:
         if self.permissions is not None:
             for fp in self._created_files:
-                try:
-                    fp.chmod(self.permissions)
-                    if fp.is_dir():
-                        for child in fp.rglob("*"):
-                            child.chmod(self.permissions)
-                except Exception:
-                    logger.warning("Failed to set permissions on %s", fp, exc_info=True)
+                paths = [fp, *(fp.rglob("*") if fp.is_dir() else [])]
+                for path in paths:
+                    try:
+                        path.chmod(self.permissions)
+                    except FileNotFoundError:
+                        pass  # deleted mid-walk — nothing to fix
+                    except Exception:
+                        msg = "Failed to set permissions on %s"
+                        logger.warning(msg, path, exc_info=True)
         if self._stack is None:
             raise RuntimeError("DumpContext.__exit__ called without __enter__")
         try:

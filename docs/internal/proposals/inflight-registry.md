@@ -256,9 +256,9 @@ before (accepted failure mode).
 
 Designed for 100+ simultaneous callers (e.g., Slurm array jobs) hitting the same DB:
 
-- **Busy timeout: 60 s** — SQLite retries lock acquisition internally. Zero overhead
-  when uncontested; only blocks when another writer holds the lock. 60 s accommodates
-  NFS lock latency (10–100 ms per operation) × 100+ callers.
+- **Busy timeout: 20 s** — SQLite retries lock acquisition internally; zero overhead
+  when uncontested. A userspace wait, so it helps a held lock but not a wedged NFS
+  mount (the syscall never returns).
 - **Transient retry with backoff**: `_safe_execute()` distinguishes between transient
   lock errors (`sqlite3.OperationalError` with "locked" / "busy") and permanent errors
   (corruption, schema issues). Transient errors are retried up to 3 times with random
