@@ -268,37 +268,31 @@ class _CachedEntry:
 
 @dataclasses.dataclass
 class ComputeBatch:
-    """One concrete step's cohesive slice of work: its identity (``paths``),
-    cache target (``cache_dict``), and the items destined for it (``items``).
+    """One step's items, run and cached together as one ``_run_batch``.
 
-    The compute workhorse — ``compute()`` runs exactly one ``ComputeBatch``
-    through one ``_run_batch`` (one ``step_uid``), writing successes to its
-    own cache and recording failures under its own folder. Self-describing
-    and picklable: it is the worker payload (replaced the old worker
-    wrapper). A worker may run several ``ComputeBatch`` instances; each keeps
-    its own write target, so cohesion and per-step clearing hold.
+    The picklable payload sent to a worker: ``compute()`` runs ``items``
+    through ``step``, writing results to ``cache_dict`` and errors under
+    ``paths``. ``mode`` and ``upstream`` are driver-only (see fields).
     """
 
     step: Step
     paths: "StepPaths"
     cache_dict: exca.cachedict.CacheDict[tp.Any]
     items: items.StepItems
-    # Effective cache mode; read by Backend._dispatch (recheck/clear) and by
-    # cached_items(). Cheap to carry; workers ignore it.
+    # mode/upstream are read by the driver (Backend._dispatch_batches,
+    # cached_items), never by compute(); they ride the worker pickle unused.
     mode: identity.ModeType = "cached"
-    # Upstream identity (this step + everything before it), for the
-    # cached_items() handle. Bounded by pipeline depth; workers ignore it.
     upstream: tuple[Step, ...] = ()
 
     def select(self, uids: tp.Sequence[str]) -> "ComputeBatch":
-        """Sub-batch over *uids*, sharing step/paths/cache (for chunking).
-        Propagates the effective ``mode`` onto the inner items."""
+        """Sub-batch over *uids*, sharing step/paths/cache (for chunking)."""
         return dataclasses.replace(self, items=self.items.select(uids, mode=self.mode))
 
     def cached_items(self) -> "StepItems":
-        """Cache-backed handle over this batch's full uid set — the items to
-        read back (lazily; values may not be present yet). Call on a
-        top-level batch (full uids), not a worker slice."""
+        """Lazy cache-backed handle to this batch's results.
+
+        Call on a top-level batch (full uid set), not a chunked sub-batch.
+        """
         return items.StepItems(
             source=self.cache_dict,
             uids=self.items.uids,
@@ -306,8 +300,8 @@ class ComputeBatch:
             mode=self.mode,
         )
 
-    # Returns None: the driver re-reads from cache, so the result never
-    # round-trips through a job pickle.
+    # compute() returns None: the driver re-reads from cache, so results
+    # never round-trip through the job pickle.
     def compute(self) -> None:
         folder = self.cache_dict.folder
         if folder is not None:
@@ -486,15 +480,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         Returns a :class:`~items.StepItems` backed by the cache.
         """
         cbatch = self._prepare(step, batch)
-        self._dispatch([cbatch])
+        self._dispatch_batches([cbatch])
         return cbatch.cached_items()
 
     def _prepare(self, step: Step, batch: items.StepItems) -> ComputeBatch:
-        """Per-step, no concurrency: resolve paths/cache/mode and do the
-        pre-session force-clear. Returns the full-batch ``ComputeBatch``
-        (``items`` = the whole input set); ``_dispatch`` filters it to the
-        pending subset under the inflight claim, and ``cached_items()`` reads
-        the full set back from cache. Fully-cached is just an empty pending set.
+        """Resolve paths/cache/mode and force-clear before any claim is held.
+
+        Returns the full-input ``ComputeBatch``; the pending subset is decided
+        later under the inflight claim. No concurrency here.
         """
         upstream = tuple(batch._upstream) + tuple(step._uid_steps())
         paths = step._make_paths(upstream)
@@ -524,16 +517,21 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             upstream=upstream,
         )
 
-    def _dispatch(self, cbatches: list[ComputeBatch]) -> None:
-        """Run all *cbatches* under one coordinated execution. Each keeps its
-        own inflight session (per ``step_folder``); all are entered together
-        so the actual compute spans a single ``_execute`` pass. Sorted by
-        ``step_uid`` for deterministic lock order (deadlock-safe). Recheck,
-        ``_execute``, and verify all run inside the held claims.
+    def _dispatch_batches(self, cbatches: list[ComputeBatch]) -> None:
+        """Compute all *cbatches* under one set of simultaneously-held claims.
+
+        Each batch holds its own inflight session (one per ``step_folder``);
+        entering them together lets the compute span a single ``_execute``
+        pass. Claims are taken in ``step_uid`` order so concurrent dispatches
+        agree on lock order (deadlock-safe). Recheck, execute, and verify all
+        run while the claims are held.
         """
+        step_uids = [cb.paths.step_uid for cb in cbatches]
+        if len(set(step_uids)) != len(step_uids):
+            raise ValueError(f"one batch per step_uid required, got {step_uids}")
         cbatches = sorted(cbatches, key=lambda cb: cb.paths.step_uid)
         with contextlib.ExitStack() as stack:
-            # (batch, claim, uids the claim guards) for recheck/execute/verify.
+            # (batch, claim, uids the claim guards), for execute + verify.
             claimed: list[tuple[ComputeBatch, inflight.InflightClaim, set[str]]] = []
             for cb in cbatches:
                 pending = self._pending_statuses(
@@ -546,13 +544,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     reg = inflight.InflightRegistry(cb.paths.step_folder)
                 claim = stack.enter_context(inflight.inflight_session(reg, set(pending)))
                 claimed.append((cb, claim, set(pending)))
-            try:
-                for cb, claim, to_compute in claimed:
-                    self._execute_claimed(cb, claim, to_compute)
-            finally:
-                for cb, claim, to_compute in claimed:
-                    if cb.mode in ("force", "retry"):
-                        self._recomputed.update(to_compute)
+            for cb, claim, to_compute in claimed:
+                self._execute_claimed(cb, claim, to_compute)
             for cb, claim, to_compute in claimed:
                 verify = _CachedEntry.lookup_statuses(cb.cache_dict, to_compute)
                 for uid in to_compute:
@@ -568,9 +561,13 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         claim: inflight.InflightClaim,
         to_compute: set[str],
     ) -> None:
-        """Under-claim recheck + clear, then ``_execute`` the pending subset.
-        Caller (``_dispatch``) holds the inflight *claim* for *to_compute*.
+        """Recheck under the held *claim*, clear stale entries, then execute.
+
+        Caller (``_dispatch_batches``) holds the inflight *claim* for
+        *to_compute*.
         """
+        # Recheck under the claim: a competitor may have completed some uids
+        # between the claim-time check and now.
         pending_statuses = self._pending_statuses(
             paths=cbatch.paths, uids=to_compute, mode=cbatch.mode
         )
@@ -585,8 +582,15 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             if cbatch.mode == "force" or status == "error"
         ]
         self._clear_caches(paths=cbatch.paths, cd=cbatch.cache_dict, uids=clear_uids)
-        if pending_statuses:
+        if not pending_statuses:
+            return
+        try:
             self._execute(cbatch.select(list(pending_statuses)), claim=claim)
+        finally:
+            # Mark attempted uids so force/retry recompute at most once per
+            # lifetime; only this batch's uids, only if it actually ran.
+            if cbatch.mode in ("force", "retry"):
+                self._recomputed.update(pending_statuses)
 
     def _execute(
         self,

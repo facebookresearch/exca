@@ -260,3 +260,30 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
         step.run(items.Items([1.0, 2.0]))
     notes = exc_info.value.__notes__
     assert any("Add" in n for n in notes)
+
+
+def test_dispatch_batches_recomputed_per_batch(tmp_path: Path) -> None:
+    """_recomputed is updated per batch, only for batches that ran. A batch
+    that a sibling's failure prevents from running stays unmarked.
+    """
+    backend = backends.Cached(folder=tmp_path)
+
+    def prepare(step: Step, value: float) -> backends.ComputeBatch:
+        # force mode → _execute_claimed marks attempted uids as recomputed
+        infra = backend.model_copy(update={"mode": "force"})
+        forced = step.model_copy(update={"infra": infra})
+        uid = backends.identity.materialize_uid(forced, value)
+        return backend._prepare(forced, items.StepItems(source={uid: value}, uids=[uid]))
+
+    # distinct input values → distinct item uids (else they'd share _recomputed)
+    cb_fail = prepare(conftest.Add(error=True), 1.0)
+    cb_ok = prepare(conftest.Add(value=1, error=False), 2.0)
+    assert cb_fail.items.uids[0] != cb_ok.items.uids[0], "item uids must not collide"
+    # _dispatch_batches runs sorted by step_uid, so cb_fail must raise first
+    assert cb_fail.paths.step_uid < cb_ok.paths.step_uid, "cb_fail must sort first"
+
+    with pytest.raises(ValueError, match="Triggered an error"):
+        backend._dispatch_batches([cb_fail, cb_ok])
+
+    msg = "cb_ok never ran, so its uid must not be marked recomputed"
+    assert cb_ok.items.uids[0] not in backend._recomputed, msg
