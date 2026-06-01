@@ -270,7 +270,7 @@ class _CachedEntry:
 class ComputeBatch:
     """One step's items, run and cached together as one ``_run_batch``.
 
-    The picklable payload sent to a worker: ``compute()`` runs ``items``
+    The picklable payload sent to a worker: ``run_and_cache()`` runs ``items``
     through ``step``, writing results to ``cache_dict`` and errors under
     ``paths``. ``mode`` and ``upstream`` are driver-only (see fields).
     """
@@ -279,8 +279,8 @@ class ComputeBatch:
     paths: "StepPaths"
     cache_dict: exca.cachedict.CacheDict[tp.Any]
     items: items.StepItems
-    # mode/upstream are read by the driver (Backend._dispatch_batches,
-    # cached_items), never by compute(); they ride the worker pickle unused.
+    # driver-side only (Backend._dispatch_batches, cached_items); run_and_cache
+    # ignores them
     mode: identity.ModeType = "cached"
     upstream: tuple[Step, ...] = ()
 
@@ -300,9 +300,8 @@ class ComputeBatch:
             mode=self.mode,
         )
 
-    # compute() returns None: the driver re-reads from cache, so results
-    # never round-trip through the job pickle.
-    def compute(self) -> None:
+    # No return: the driver re-reads from cache rather than unpickle a result.
+    def run_and_cache(self) -> None:
         folder = self.cache_dict.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
@@ -599,7 +598,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         claim: inflight.InflightClaim,
     ) -> None:
         """Run *cbatch*. Override for chunking/pools/arrays."""
-        cbatch.compute()
+        cbatch.run_and_cache()
 
 
 class Cached(Backend):
@@ -654,7 +653,7 @@ class _SubmititBackend(Backend):
             params["slurm_array_parallelism"] = len(chunks)
         executor.update_parameters(**params)
         with submitit.helpers.clean_env(), executor.batch():
-            jobs = [executor.submit(c.compute) for c in chunks]
+            jobs = [executor.submit(c.run_and_cache) for c in chunks]
         for c, j in zip(chunks, jobs):
             claim.record_worker_info(j, uids=c.items.uids)
         with jobregistry.JobRegistry(paths.step_folder) as reg:
@@ -733,7 +732,7 @@ class _PoolBackend(Backend):
         if self.max_jobs is not None:
             max_workers = min(max_workers, self.max_jobs)
         if max_workers <= 1:
-            cbatch.compute()
+            cbatch.run_and_cache()
             return
         random.shuffle(uids)  # avoid collisions on competing runs
         chunks = [
@@ -743,7 +742,7 @@ class _PoolBackend(Backend):
             claim.record_worker_info(uids=c.items.uids)
         with utils.make_pool_executor(self._POOL_TYPE, max_workers) as pool:
             logger.info("Sent %s items for %s into a %s", len(uids), paths.step_uid, pool)
-            futs = [pool.submit(c.compute) for c in chunks]
+            futs = [pool.submit(c.run_and_cache) for c in chunks]
             try:
                 for f in futures.as_completed(futs):
                     f.result()

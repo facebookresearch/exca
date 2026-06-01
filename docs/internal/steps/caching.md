@@ -31,7 +31,7 @@ to wrong results.
 
 ## Writer / reader / cleaner
 
-`ComputeBatch.compute()` runs the user function on the worker:
+`ComputeBatch.run_and_cache()` runs the user function on the worker:
 
 - **Success**: `cd[uid] = result` (no-op if another worker already
   wrote it — handles inflight reclaim).
@@ -68,7 +68,7 @@ in lockstep with disk by `Backend._clear_caches` (used by
 `LookupHandle.clear_cache()` and `force`); external rmtrees that don't
 go through Backend leave stale RAM. Cross-process workers get a fresh
 view via `CacheDict.__reduce__`.
-`ComputeBatch.compute()` writes via the Backend's CacheDict; cross-process
+`ComputeBatch.run_and_cache()` writes via the Backend's CacheDict; cross-process
 workers get a reduced copy and the driver picks up new entries via
 folder-mtime invalidation in `_read_info_files`.
 
