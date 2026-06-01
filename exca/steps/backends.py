@@ -267,26 +267,45 @@ class _CachedEntry:
 
 
 @dataclasses.dataclass
+class CoordinationInfo:
+    """Per-run state the driver uses to coordinate a ``ComputeBatch``.
+
+    Stripped before the worker pickle (see ``ComputeBatch.__getstate__``): the
+    worker computes from identity alone and never reads these.
+    """
+
+    mode: identity.ModeType = "cached"
+    upstream: tuple[Step, ...] = ()  # this step + everything before it
+    claim: inflight.InflightClaim | None = None  # set in _dispatch_batches
+
+
+@dataclasses.dataclass
 class ComputeBatch:
     """One step's items, run and cached together as one ``_run_batch``.
 
     The picklable payload sent to a worker: ``run_and_cache()`` runs ``items``
     through ``step``, writing results to ``cache_dict`` and errors under
-    ``paths``. ``mode`` and ``upstream`` are driver-only (see fields).
+    ``paths``. ``info`` is driver-only and dropped from the worker pickle.
     """
 
     step: Step
     paths: StepPaths
     cache_dict: exca.cachedict.CacheDict[tp.Any]
     items: items.StepItems
-    # driver-side only (Backend._dispatch_batches, cached_items); run_and_cache
-    # ignores them
-    mode: identity.ModeType = "cached"
-    upstream: tuple[Step, ...] = ()
+    info: CoordinationInfo = dataclasses.field(default_factory=CoordinationInfo)
+
+    def __getstate__(self) -> dict[str, tp.Any]:
+        #  CoordinationInfo holds all (and only) non-worker state
+        return {**self.__dict__, "info": CoordinationInfo()}
 
     def select(self, uids: tp.Sequence[str]) -> ComputeBatch:
-        """Sub-batch over *uids*, sharing step/paths/cache (for chunking)."""
-        return dataclasses.replace(self, items=self.items.select(uids, mode=self.mode))
+        """Sub-batch over *uids*, sharing step/paths/cache (for chunking).
+
+        Copies ``info`` so a sub-batch doesn't alias the parent's claim.
+        """
+        info = dataclasses.replace(self.info)
+        items_ = self.items.select(uids, mode=self.info.mode)
+        return dataclasses.replace(self, items=items_, info=info)
 
     def cached_items(self) -> StepItems:
         """Lazy cache-backed handle to this batch's results.
@@ -296,8 +315,8 @@ class ComputeBatch:
         return items.StepItems(
             source=self.cache_dict,
             uids=self.items.uids,
-            upstream=self.upstream,
-            mode=self.mode,
+            upstream=self.info.upstream,
+            mode=self.info.mode,
         )
 
     # No return: the driver re-reads from cache rather than unpickle a (heavy) result.
@@ -504,14 +523,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     logger.warning(msg, len(to_clear), paths.step_uid, mode)
                 self._clear_caches(paths=paths, cd=cd, uids=set(pending_statuses))
         # carries the full input set; _dispatch_batches filters to pending
-        return ComputeBatch(
-            step=step,
-            paths=paths,
-            cache_dict=cd,
-            items=batch,
-            mode=mode,
-            upstream=upstream,
-        )
+        info = CoordinationInfo(mode=mode, upstream=upstream)
+        return ComputeBatch(step=step, paths=paths, cache_dict=cd, items=batch, info=info)
 
     def _dispatch_batches(self, cbatches: list[ComputeBatch]) -> None:
         """Compute all *cbatches*."""
@@ -524,11 +537,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         # them together lets a future backend pack them into one submission.
         cbatches = sorted(cbatches, key=lambda cb: cb.paths.step_uid)
         with contextlib.ExitStack() as stack:
-            # (batch, claim, uids the claim guards), for execute + verify.
-            claimed: list[tuple[ComputeBatch, inflight.InflightClaim, set[str]]] = []
+            claimed: list[ComputeBatch] = []  # filtered to pending, claim set on .info
             for cb in cbatches:
                 pending = self._pending_statuses(
-                    paths=cb.paths, uids=cb.items.uids, mode=cb.mode
+                    paths=cb.paths, uids=cb.items.uids, mode=cb.info.mode
                 )
                 if not pending:
                     continue
@@ -536,29 +548,27 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 if self._concurrent:
                     reg = inflight.InflightRegistry(cb.paths.step_folder)
                 claim = stack.enter_context(inflight.inflight_session(reg, set(pending)))
-                claimed.append((cb, claim, set(pending)))
-            for cb, claim, to_compute in claimed:
-                self._execute_claimed(cb, claim, to_compute)
-            for cb, claim, to_compute in claimed:
-                verify = _CachedEntry.lookup_statuses(cb.cache_dict, to_compute)
-                for uid in to_compute:
+                cb = cb.select(list(pending))
+                cb.info.claim = claim
+                claimed.append(cb)
+            for cb in claimed:
+                self._execute_claimed(cb)
+            for cb in claimed:
+                verify = _CachedEntry.lookup_statuses(cb.cache_dict, cb.items.uids)
+                for uid in cb.items.uids:
                     if verify[uid] != "success":
                         raise RuntimeError(
                             f"Worker completed but cache missing: "
                             f"{cb.paths.step_uid}[{uid}]"
                         )
 
-    def _execute_claimed(
-        self,
-        cbatch: ComputeBatch,
-        claim: inflight.InflightClaim,
-        to_compute: set[str],
-    ) -> None:
-        """Clear stale entries and execute *cbatch*; caller holds *claim*."""
+    def _execute_claimed(self, cbatch: ComputeBatch) -> None:
+        """Clear stale entries and execute *cbatch* (already filtered, claimed)."""
+        mode = cbatch.info.mode
         # recheck under the claim: a competitor may have completed some uids
         # between the claim-time check and now
         pending_statuses = self._pending_statuses(
-            paths=cbatch.paths, uids=to_compute, mode=cbatch.mode
+            paths=cbatch.paths, uids=cbatch.items.uids, mode=mode
         )
         retry_count = sum(status == "error" for status in pending_statuses.values())
         if retry_count:
@@ -568,26 +578,24 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         clear_uids = [
             uid
             for uid, status in pending_statuses.items()
-            if cbatch.mode == "force" or status == "error"
+            if mode == "force" or status == "error"
         ]
         self._clear_caches(paths=cbatch.paths, cd=cbatch.cache_dict, uids=clear_uids)
         if not pending_statuses:
             return
         try:
-            self._execute(cbatch.select(list(pending_statuses)), claim=claim)
+            self._execute(cbatch.select(list(pending_statuses)))
         finally:
             # in finally so a failed _execute still marks what it attempted
-            if cbatch.mode in ("force", "retry"):
+            if mode in ("force", "retry"):
                 folder = cbatch.paths.step_folder
                 self._recomputed.update((folder, uid) for uid in pending_statuses)
 
-    def _execute(
-        self,
-        cbatch: ComputeBatch,
-        *,
-        claim: inflight.InflightClaim,
-    ) -> None:
-        """Run *cbatch*. Override for chunking/pools/arrays."""
+    def _execute(self, cbatch: ComputeBatch) -> None:
+        """Run *cbatch*. Override for chunking/pools/arrays.
+
+        The inflight claim, when needed, is on ``cbatch.info.claim``.
+        """
         cbatch.run_and_cache()
 
 
@@ -622,12 +630,9 @@ class _SubmititBackend(Backend):
             params["name"] = params.pop("job_name")
         return params
 
-    def _execute(
-        self,
-        cbatch: ComputeBatch,
-        *,
-        claim: inflight.InflightClaim,
-    ) -> None:
+    def _execute(self, cbatch: ComputeBatch) -> None:
+        claim = cbatch.info.claim
+        assert claim is not None
         paths = cbatch.paths
         uids = list(cbatch.items.uids)
         random.shuffle(uids)  # avoid collisions on competing runs
@@ -709,12 +714,9 @@ class _PoolBackend(Backend):
     max_jobs: int | None = pydantic.Field(128, gt=0)
     _POOL_TYPE: tp.ClassVar[str]
 
-    def _execute(
-        self,
-        cbatch: ComputeBatch,
-        *,
-        claim: inflight.InflightClaim,
-    ) -> None:
+    def _execute(self, cbatch: ComputeBatch) -> None:
+        claim = cbatch.info.claim
+        assert claim is not None
         paths = cbatch.paths
         uids = list(cbatch.items.uids)
         cpus = max(1, (os.cpu_count() or 1) - 1)
