@@ -264,31 +264,40 @@ class _CachedEntry:
         raise RuntimeError(f"No cached entry for {self._uid}")
 
 
-class _CachingCall:
-    """Worker-side wrapper: runs a step's batch function, writes each result to cache."""
+@dataclasses.dataclass
+class ComputeBatch:
+    """One concrete step's cohesive slice of work: its identity (``paths``),
+    cache target (``cache_dict``), and the items destined for it (``items``).
 
-    def __init__(
-        self,
-        step: Step,
-        cache_dict: exca.cachedict.CacheDict[tp.Any],
-        step_uid: str,
-    ):
-        self.step = step
-        self.cache_dict = cache_dict
-        self.step_uid = step_uid
+    The compute workhorse — ``compute()`` runs exactly one ``ComputeBatch``
+    through one ``_run_batch`` (one ``step_uid``), writing successes to its
+    own cache and recording failures under its own folder. Self-describing
+    and picklable: it is the worker payload (replaced the old worker
+    wrapper). A worker may run several ``ComputeBatch`` instances; each keeps
+    its own write target, so cohesion and per-step clearing hold.
+    """
+
+    step: Step
+    paths: "StepPaths"
+    cache_dict: exca.cachedict.CacheDict[tp.Any]
+    items: items.StepItems
+
+    def select(self, uids: tp.Sequence[str]) -> "ComputeBatch":
+        """Sub-batch over *uids*, sharing step/paths/cache (for chunking)."""
+        return dataclasses.replace(self, items=self.items.select(uids))
 
     # Returns None: the driver re-reads from cache, so the result never
     # round-trips through a job pickle.
-    def __call__(self, batch: items.StepItems) -> None:
+    def compute(self) -> None:
         folder = self.cache_dict.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
-        result_items = self.step._run_items(batch)
+        result_items = self.step._run_items(self.items)
         written_uids: list[str] = []
         try:
             with self.cache_dict.write():
                 for i, result in enumerate(result_items):
-                    uid = batch.uids[i]
+                    uid = self.items.uids[i]
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
                         written_uids.append(uid)
@@ -296,7 +305,7 @@ class _CachingCall:
             if written_uids:
                 logger.warning(
                     "Clearing partial results after invalid _run_batch output: %s",
-                    self.step_uid,
+                    self.paths.step_uid,
                 )
             with self.cache_dict.frozen_cache_folder():
                 for uid in written_uids:
@@ -308,7 +317,7 @@ class _CachingCall:
         except Exception as e:
             inflight: list[str] = getattr(e, "_inflight_uids", [])
             if folder is not None and inflight:
-                e.add_note(f"  -> error recorded at {self.step_uid}{inflight}")
+                e.add_note(f"  -> error recorded at {self.paths.step_uid}{inflight}")
                 tb = "".join(traceback.format_exception(e))
                 with errors.ErrorRegistry(folder.parent) as reg:
                     for uid in inflight:
@@ -505,9 +514,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 if pending_statuses:
                     pending_uids = list(pending_statuses)
                     filtered = batch.select(pending_uids, mode=mode)
-                    wrapper = _CachingCall(step, cd, paths.step_uid)
+                    cbatch = ComputeBatch(
+                        step=step, paths=paths, cache_dict=cd, items=filtered
+                    )
                     try:
-                        self._execute(wrapper, filtered, paths=paths, claim=claim)
+                        self._execute(cbatch, claim=claim)
                     finally:
                         if mode in ("force", "retry"):
                             self._recomputed.update(pending_uids)
@@ -527,14 +538,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _execute(
         self,
-        wrapper: _CachingCall,
-        pending: items.StepItems,
+        cbatch: ComputeBatch,
         *,
-        paths: StepPaths,
         claim: inflight.InflightClaim,
     ) -> None:
-        """Run *wrapper* on *pending* items. Override for chunking/pools/arrays."""
-        wrapper(pending)
+        """Run *cbatch*. Override for chunking/pools/arrays."""
+        cbatch.compute()
 
 
 class Cached(Backend):
@@ -570,16 +579,15 @@ class _SubmititBackend(Backend):
 
     def _execute(
         self,
-        wrapper: _CachingCall,
-        pending: items.StepItems,
+        cbatch: ComputeBatch,
         *,
-        paths: StepPaths,
         claim: inflight.InflightClaim,
     ) -> None:
-        uids = list(pending.uids)
+        paths = cbatch.paths
+        uids = list(cbatch.items.uids)
         random.shuffle(uids)  # avoid collisions on competing runs
         chunks = [
-            pending.select(c)
+            cbatch.select(c)
             for c in utils.to_chunks(
                 uids, max_chunks=self.max_jobs, min_items_per_chunk=self.min_items_per_job
             )
@@ -590,12 +598,12 @@ class _SubmititBackend(Backend):
             params["slurm_array_parallelism"] = len(chunks)
         executor.update_parameters(**params)
         with submitit.helpers.clean_env(), executor.batch():
-            jobs = [executor.submit(wrapper, c) for c in chunks]
+            jobs = [executor.submit(c.compute) for c in chunks]
         for c, j in zip(chunks, jobs):
-            claim.record_worker_info(j, uids=c.uids)
+            claim.record_worker_info(j, uids=c.items.uids)
         with jobregistry.JobRegistry(paths.step_folder) as reg:
             reg.record(
-                {j.job_id: c.uids for c, j in zip(chunks, jobs)},
+                {j.job_id: c.items.uids for c, j in zip(chunks, jobs)},
                 cluster=executor.cluster,
             )
         msg = "Sent %s items for %s into %s jobs on cluster '%s' (eg: %s)"
@@ -658,29 +666,28 @@ class _PoolBackend(Backend):
 
     def _execute(
         self,
-        wrapper: _CachingCall,
-        pending: items.StepItems,
+        cbatch: ComputeBatch,
         *,
-        paths: StepPaths,
         claim: inflight.InflightClaim,
     ) -> None:
-        uids = list(pending.uids)
+        paths = cbatch.paths
+        uids = list(cbatch.items.uids)
         cpus = max(1, (os.cpu_count() or 1) - 1)
         max_workers = min(len(uids), cpus)
         if self.max_jobs is not None:
             max_workers = min(max_workers, self.max_jobs)
         if max_workers <= 1:
-            wrapper(pending)
+            cbatch.compute()
             return
         random.shuffle(uids)  # avoid collisions on competing runs
         chunks = [
-            pending.select(c) for c in utils.to_chunks(uids, max_chunks=3 * max_workers)
+            cbatch.select(c) for c in utils.to_chunks(uids, max_chunks=3 * max_workers)
         ]
         for c in chunks:
-            claim.record_worker_info(uids=c.uids)
+            claim.record_worker_info(uids=c.items.uids)
         with utils.make_pool_executor(self._POOL_TYPE, max_workers) as pool:
             logger.info("Sent %s items for %s into a %s", len(uids), paths.step_uid, pool)
-            futs = [pool.submit(wrapper, c) for c in chunks]
+            futs = [pool.submit(c.compute) for c in chunks]
             try:
                 for f in futures.as_completed(futs):
                     f.result()
