@@ -260,3 +260,46 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
         step.run(items.Items([1.0, 2.0]))
     notes = exc_info.value.__notes__
     assert any("Add" in n for n in notes)
+
+
+def test_dispatch_batches_recomputed_per_batch(tmp_path: Path) -> None:
+    backend = backends.Cached(folder=tmp_path)
+
+    def prepare(step: Step, value: float) -> backends.ComputeBatch:
+        # force mode → _execute_claimed marks attempted uids as recomputed
+        infra = backend.model_copy(update={"mode": "force"})
+        forced = step.model_copy(update={"infra": infra})
+        uid = backends.identity.materialize_uid(forced, value)
+        return backend._prepare(forced, items.StepItems(source={uid: value}, uids=[uid]))
+
+    cb_fail = prepare(conftest.Add(error=True), 1.0)
+    cb_ok = prepare(conftest.Add(value=1, error=False), 1.0)
+    # _dispatch_batches runs sorted by step_uid, so cb_fail must raise first
+    assert cb_fail.paths.step_uid < cb_ok.paths.step_uid, "cb_fail must sort first"
+
+    with pytest.raises(ValueError, match="Triggered an error"):
+        backend._dispatch_batches([cb_fail, cb_ok])
+
+    key = (cb_ok.paths.step_folder, cb_ok.items.uids[0])
+    assert key not in backend._recomputed, "cb_ok never ran, so it must be unmarked"
+
+
+def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
+    backend = backends.Cached(folder=tmp_path)
+    # two distinct steps (distinct value → distinct folder), same input → same uid
+    item_uid = backends.identity.materialize_uid(conftest.Add(value=1), 2.0)
+    batch = items.StepItems(source={item_uid: 2.0}, uids=[item_uid])
+
+    def run(value: float, error: bool, mode: str) -> float:
+        infra = backend.model_copy(update={"mode": mode})
+        step = conftest.Add(value=value, error=error, infra=infra)
+        return next(iter(backend._run(step, batch)))
+
+    # seed a cached error under each step's folder
+    for value in (1.0, 5.0):
+        with pytest.raises(ValueError, match="Triggered an error"):
+            run(value, error=True, mode="cached")
+
+    # retry both; a uid-only _recomputed would make the 2nd re-raise the 1st's error
+    assert run(1.0, error=False, mode="retry") == 3.0  # 2 + 1
+    assert run(5.0, error=False, mode="retry") == 7.0  # 2 + 5
