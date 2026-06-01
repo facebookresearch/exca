@@ -116,7 +116,8 @@ class Step(exca.helpers.DiscriminatedModel):
         return type(self).model_validate(cdict)
 
     def show(self) -> str:
-        """Human-readable tree of the step/chain config. Output format not stable; for debugging."""
+        """Human-readable tree of the step/chain (composite steps shown expanded).
+        Output format not stable; for debugging."""
         return "\n".join(utils.step_lines(self))
 
     @classmethod
