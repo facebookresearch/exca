@@ -483,11 +483,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return cbatch.cached_items()
 
     def _prepare(self, step: Step, batch: items.StepItems) -> ComputeBatch:
-        """Resolve paths/cache/mode and force-clear before any claim is held.
-
-        Returns the full-input ``ComputeBatch``; the pending subset is decided
-        later under the inflight claim. No concurrency here.
-        """
+        """Resolve paths/cache/mode and force-clear before any claim is held."""
         upstream = tuple(batch._upstream) + tuple(step._uid_steps())
         paths = step._make_paths(upstream)
         if paths.step_folder not in self._checked_configs:
@@ -507,6 +503,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     msg = "Clearing %s items for %s (infra.mode=%s)"
                     logger.warning(msg, len(to_clear), paths.step_uid, mode)
                 self._clear_caches(paths=paths, cd=cd, uids=set(pending_statuses))
+        # carries the full input set; _dispatch_batches filters to pending
         return ComputeBatch(
             step=step,
             paths=paths,
@@ -517,17 +514,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         )
 
     def _dispatch_batches(self, cbatches: list[ComputeBatch]) -> None:
-        """Compute all *cbatches* under one set of simultaneously-held claims.
-
-        Each batch holds its own inflight session (one per ``step_folder``);
-        entering them together lets the compute span a single ``_execute``
-        pass. Claims are taken in ``step_uid`` order so concurrent dispatches
-        agree on lock order (deadlock-safe). Recheck, execute, and verify all
-        run while the claims are held.
-        """
+        """Compute all *cbatches*."""
         step_uids = [cb.paths.step_uid for cb in cbatches]
         if len(set(step_uids)) != len(step_uids):
             raise ValueError(f"one batch per step_uid required, got {step_uids}")
+        # Sort by step_uid so concurrent dispatches claim in the same order
+        # (deadlock-safe). The ExitStack holds every claim until all batches
+        # finish — recheck/execute/verify run under the claims, and holding
+        # them together lets a future backend pack them into one submission.
         cbatches = sorted(cbatches, key=lambda cb: cb.paths.step_uid)
         with contextlib.ExitStack() as stack:
             # (batch, claim, uids the claim guards), for execute + verify.
@@ -560,13 +554,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         claim: inflight.InflightClaim,
         to_compute: set[str],
     ) -> None:
-        """Recheck under the held *claim*, clear stale entries, then execute.
-
-        Caller (``_dispatch_batches``) holds the inflight *claim* for
-        *to_compute*.
-        """
-        # Recheck under the claim: a competitor may have completed some uids
-        # between the claim-time check and now.
+        """Clear stale entries and execute *cbatch*; caller holds *claim*."""
+        # recheck under the claim: a competitor may have completed some uids
+        # between the claim-time check and now
         pending_statuses = self._pending_statuses(
             paths=cbatch.paths, uids=to_compute, mode=cbatch.mode
         )
