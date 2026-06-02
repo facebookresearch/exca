@@ -451,6 +451,7 @@ def find_models(
     Type: type[T],
     include_private: bool = True,
     stop_on_find: bool = False,
+    _ancestors: set[int] | None = None,
 ) -> dict[str, T]:
     """Recursively find submodels
 
@@ -473,24 +474,38 @@ def find_models(
         base = base + (torch.Tensor,)
     if isinstance(obj, base):
         return out
-    if isinstance(obj, pydantic.BaseModel):
-        # copy and set to avoid modifying class attribute instead of instance attribute
-        if isinstance(obj, Type):
-            out = {"": obj}
-            if stop_on_find:
-                return out
-        private = obj.__pydantic_private__
-        obj = dict(obj)
-        if include_private and private is not None:
-            obj.update(private)
-    if isinstance(obj, collections.abc.Sequence):
-        obj = {str(k): sub for k, sub in enumerate(obj)}
-    if isinstance(obj, dict):
-        for name, sub in obj.items():
-            subout = find_models(
-                sub, Type, include_private=include_private, stop_on_find=stop_on_find
-            )
-            out.update({f"{name}.{n}" if n else name: y for n, y in subout.items()})
+    # Track ids on the current path (not globally) to break reference cycles
+    # while still emitting shared acyclic objects under each of their paths.
+    _ancestors = set() if _ancestors is None else _ancestors
+    oid = id(obj)
+    if oid in _ancestors:
+        return out
+    _ancestors.add(oid)
+    try:
+        if isinstance(obj, pydantic.BaseModel):
+            # copy and set to avoid modifying class attribute instead of instance attribute
+            if isinstance(obj, Type):
+                out = {"": obj}
+                if stop_on_find:
+                    return out
+            private = obj.__pydantic_private__
+            obj = dict(obj)
+            if include_private and private is not None:
+                obj.update(private)
+        if isinstance(obj, collections.abc.Sequence):
+            obj = {str(k): sub for k, sub in enumerate(obj)}
+        if isinstance(obj, dict):
+            for name, sub in obj.items():
+                subout = find_models(
+                    sub,
+                    Type,
+                    include_private=include_private,
+                    stop_on_find=stop_on_find,
+                    _ancestors=_ancestors,
+                )
+                out.update({f"{name}.{n}" if n else name: y for n, y in subout.items()})
+    finally:
+        _ancestors.discard(oid)
     return out
 
 

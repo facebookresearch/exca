@@ -700,3 +700,16 @@ def test_resolve_step_inside_chain_cache(tmp_path: Path) -> None:
     # Second call returns cached
     out2 = chain.run()
     assert out1 == out2
+
+
+def test_resolve_step_force_recomputes_once(tmp_path: Path) -> None:
+    class FreshResolver(Step):
+        def _resolve_step(self) -> Step:
+            infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force"}
+            return conftest.Add(value=5, randomize=True, infra=infra)
+
+    outs = [FreshResolver().run()]
+    step = FreshResolver()
+    outs.extend(step.run() for _ in range(2))
+    assert outs[0] != outs[1], "fresh instance re-forces (randomize)"
+    assert outs[1] == outs[2], "memoised resolution, not re-forced"
