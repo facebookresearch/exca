@@ -1,7 +1,7 @@
 # Step caching, errors, and concurrency
 
 How a step's results, errors, and in-flight state are stored and how
-`Backend.run` reads them. Wider step concepts live in `spec.md`.
+`Backend._run` reads them. Wider step concepts live in `spec.md`.
 
 ## On-disk layout
 
@@ -31,7 +31,7 @@ to wrong results.
 
 ## Writer / reader / cleaner
 
-`_CachingCall` wraps the user function:
+`ComputeBatch.run_and_cache()` runs the user function on the worker:
 
 - **Success**: `cd[uid] = result` (no-op if another worker already
   wrote it — handles inflight reclaim).
@@ -68,7 +68,7 @@ in lockstep with disk by `Backend._clear_caches` (used by
 `LookupHandle.clear_cache()` and `force`); external rmtrees that don't
 go through Backend leave stale RAM. Cross-process workers get a fresh
 view via `CacheDict.__reduce__`.
-`_CachingCall` writes via the Backend's CacheDict; cross-process
+`ComputeBatch.run_and_cache()` writes via the Backend's CacheDict; cross-process
 workers get a reduced copy and the driver picks up new entries via
 folder-mtime invalidation in `_read_info_files`.
 
@@ -80,20 +80,21 @@ other owners, claims all requested uids, yields an `InflightClaim`, then
 releases on exit. Waits go through `wait_for_inflight` (polls the DB;
 reclaims dead PIDs).
 
-`Backend.run` serialises the final compute decision inside the inflight
-session: it re-checks cache state under the claim, clears any entries it
-will recompute, then calls `_submit`. The pre-lock cache check is a fast
-path only. `force` additionally runs `_clear_caches()` before the
-session to cancel/clear stale work promptly, then runs it again under
-the claim so a competitor that populated mid-wait doesn't hand its value
-back to the forcer. `retry` uses the same under-claim recheck to
-recompute cached errors.
+A run splits across three methods. `Backend._prepare` resolves paths and,
+for `force`, clears stale entries before any claim is held (the pre-lock
+cache check is a fast path only). `Backend._dispatch_batches` then holds
+one `inflight_session` per batch (claims taken in `step_uid` order so
+concurrent dispatches agree on lock order), and inside the held claims
+`_execute_claimed` re-checks cache state under the claim, clears entries
+it will recompute, and calls `_execute`. The under-claim recheck is what
+stops a competitor that populated mid-wait from handing its value back to
+a `force`; `retry` uses the same recheck to recompute cached errors.
 
 The session locks `inflight.db` only — direct user calls to
-`LookupHandle.clear_cache()` outside `Backend.run` race against
-in-flight workers. The worker writes to cache before returning;
-`Backend.run` re-reads from disk and raises if missing — results are not
-round-tripped through the job pickle (would be wasteful under submitit).
+`LookupHandle.clear_cache()` race against in-flight workers. The worker
+writes to cache before returning; `_dispatch_batches` re-reads from disk
+and raises if missing — results are not round-tripped through the job
+pickle (would be wasteful under submitit).
 
 Both registries inherit from `AdvisoryRegistry` (`exca/cachedict/registry.py`)
 which provides `journal_mode=DELETE` (avoids WAL — WAL actively breaks
