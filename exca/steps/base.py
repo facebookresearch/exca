@@ -88,11 +88,15 @@ class Step(exca.helpers.DiscriminatedModel):
     _ITEM_UID_MAX_LENGTH: tp.ClassVar[int] = 256
     # Final cache-backed carrier reused by `run` when all requested uids exist.
     _output_items: items.StepItems | None = pydantic.PrivateAttr(None)
+    _resolution_cache: Step | None = pydantic.PrivateAttr(
+        None
+    )  # see `utils.resolved_step`
 
     def __getstate__(self) -> dict[str, tp.Any]:
         out = super().__getstate__()
         private = out.get("__pydantic_private__", {})
         private["_output_items"] = None
+        private["_resolution_cache"] = None
         return out
 
     def model_copy(
@@ -100,6 +104,7 @@ class Step(exca.helpers.DiscriminatedModel):
     ) -> tp.Self:
         copied = super().model_copy(update=update, deep=deep)
         copied._output_items = None
+        copied._resolution_cache = None
         return copied
 
     def clone(self, *args: dict[str, tp.Any], **kwargs: tp.Any) -> tp.Self:

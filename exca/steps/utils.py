@@ -13,6 +13,8 @@ import typing as tp
 
 import pydantic
 
+from exca import utils
+
 from . import backends
 
 if tp.TYPE_CHECKING:
@@ -68,13 +70,35 @@ def infra_validator_after(self: tp.Any) -> tp.Any:
 
 
 def resolved_step(step: base.Step) -> base.Step:
-    """Resolve one Step to a fixed point, guarding circular decompositions."""
+    """Return the fixed point of ``step._resolve_step()`` (``step`` itself if it
+    does not resolve). Raises on circular or self-containing resolutions."""
+    from . import base  # lazy — avoids circular import at module level
+
+    if "has_resolve" not in step._step_flags:
+        return step
+    # Memoise distinct resolutions: their cache/_recomputed state must outlive a run.
+    if step._resolution_cache is not None:
+        return step._resolution_cache
+    built = step
     for _ in range(10):
-        built = step._resolve_step()
-        if built is step:
-            return step
-        step = built
-    raise RuntimeError(f"_resolve_step did not converge on {type(step).__name__}")
+        nxt = built._resolve_step()
+        if nxt is built:
+            break
+        built = nxt
+    else:
+        raise RuntimeError(f"_resolve_step did not converge on {type(step).__name__}")
+    if built is step:
+        return step
+    # A resolution containing `step` would recurse forever in _resolved_steps.
+    models = utils.find_models(built, base.Step, include_private=False)
+    if any(s is step for s in models.values()):
+        raise RuntimeError(
+            f"{type(step).__name__}._resolve_step returned a step containing itself"
+        )
+    # Freeze: memo is only valid while config is fixed; resolving finalises step.
+    utils.recursive_freeze(step)
+    step._resolution_cache = built
+    return built
 
 
 # ---------------------------------------------------------------------------
