@@ -703,32 +703,13 @@ def test_resolve_step_inside_chain_cache(tmp_path: Path) -> None:
 
 
 def test_resolve_step_force_recomputes_once(tmp_path: Path) -> None:
-    """force recomputes once across run() calls, even when each resolution
-    builds a new backend."""
-    calls = 0
-
-    class Fresh(Step):
-        value: float = 5.0
-        folder: str = ""
-        wrap: bool = True
-
-        def _run(self, x: float = 0.0) -> float:
-            nonlocal calls
-            calls += 1
-            return x + self.value
-
+    class FreshResolver(Step):
         def _resolve_step(self) -> Step:
-            if not self.wrap:
-                return self
-            inner = Fresh(
-                value=self.value,
-                folder=self.folder,
-                wrap=False,
-                infra={"backend": "Cached", "folder": self.folder, "mode": "force"},
-            )
-            return Chain(steps=[inner])
+            infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force"}
+            return conftest.Add(value=5, randomize=True, infra=infra)
 
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force"}
-    step = Fresh(folder=str(tmp_path), infra=infra)
-    assert [step.run() for _ in range(3)] == [5.0, 5.0, 5.0]
-    assert calls == 1
+    outs = [FreshResolver().run()]
+    step = FreshResolver()
+    outs.extend(step.run() for _ in range(2))
+    assert outs[0] != outs[1], "fresh instance re-forces (randomize)"
+    assert outs[1] == outs[2], "memoised resolution, not re-forced"
