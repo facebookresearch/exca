@@ -134,10 +134,15 @@ chain = steps.Chain(
     steps=[
         LoadValue(path="value.txt",
                  infra={"backend": "Cached"}),    # folder propagated
-        Multiply(coeff=2.0),                       # not cached
+        Multiply(coeff=3.0),                       # not cached
     ],
     infra={"backend": "Cached", "folder": cache},  # chain root
 )
+
+print(chain.show())  # tree view for debugging
+# Chain  [Cached, /cache]
+# ├── LoadValue  path='value.txt'  [Cached, /cache]
+# └── Multiply  coeff=3.0
 ```
 
 The `mode` field on `infra` controls cache behaviour:
