@@ -388,6 +388,20 @@ def test_resolve_step_circular(in_chain: bool) -> None:
         step.run()
 
 
+def test_resolve_step_self_containing_raises() -> None:
+    """A resolution nesting the step within itself raises instead of recursing."""
+
+    class SelfRef(Step):
+        def _run(self) -> int:
+            return 1
+
+        def _resolve_step(self) -> Step:
+            return Chain(steps=[self, conftest.Add(value=1)])
+
+    with pytest.raises(RuntimeError, match="containing itself"):
+        SelfRef().run()
+
+
 def test_resolve_step_uid_consistency() -> None:
     """Resolved step and equivalent Chain produce the same UID."""
     step = conftest.AddWithTransforms(value=10, transforms=[conftest.Mult(coeff=3)])

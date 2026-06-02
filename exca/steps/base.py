@@ -82,13 +82,33 @@ def _is_step(value: tp.Any, disc_key: str) -> bool:
 
 
 def _resolved_step(step: Step) -> Step:
-    """Resolve one Step to a fixed point, guarding circular decompositions."""
+    """Return the fixed point of ``step._resolve_step()`` (``step`` itself if it
+    does not resolve). Raises on circular or self-containing resolutions."""
+    if "has_resolve" not in step._step_flags:
+        return step
+    # Memoise distinct resolutions: their cache/_recomputed state must outlive a run.
+    if step._resolution_cache is not None:
+        return step._resolution_cache
+    built = step
     for _ in range(10):
-        built = step._resolve_step()
-        if built is step:
-            return step
-        step = built
-    raise RuntimeError(f"_resolve_step did not converge on {type(step).__name__}")
+        nxt = built._resolve_step()
+        if nxt is built:
+            break
+        built = nxt
+    else:
+        raise RuntimeError(f"_resolve_step did not converge on {type(step).__name__}")
+    if built is step:
+        return step
+    # A resolution containing `step` would recurse forever in _resolved_steps.
+    models = utils.find_models(built, Step, include_private=False)
+    if any(s is step for s in models.values()):
+        raise RuntimeError(
+            f"{type(step).__name__}._resolve_step returned a step containing itself"
+        )
+    # Freeze: memo is only valid while config is fixed; resolving finalises step.
+    utils.recursive_freeze(step)
+    step._resolution_cache = built
+    return built
 
 
 class Step(exca.helpers.DiscriminatedModel):
@@ -151,11 +171,13 @@ class Step(exca.helpers.DiscriminatedModel):
     _ITEM_UID_MAX_LENGTH: tp.ClassVar[int] = 256
     # Final cache-backed carrier reused by `run` when all requested uids exist.
     _output_items: items.StepItems | None = pydantic.PrivateAttr(None)
+    _resolution_cache: Step | None = pydantic.PrivateAttr(None)  # see `_resolved_step`
 
     def __getstate__(self) -> dict[str, tp.Any]:
         out = super().__getstate__()
         private = out.get("__pydantic_private__", {})
         private["_output_items"] = None
+        private["_resolution_cache"] = None
         return out
 
     def model_copy(
@@ -163,6 +185,7 @@ class Step(exca.helpers.DiscriminatedModel):
     ) -> tp.Self:
         copied = super().model_copy(update=update, deep=deep)
         copied._output_items = None
+        copied._resolution_cache = None
         return copied
 
     def clone(self, *args: dict[str, tp.Any], **kwargs: tp.Any) -> tp.Self:

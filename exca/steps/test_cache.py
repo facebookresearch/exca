@@ -700,3 +700,35 @@ def test_resolve_step_inside_chain_cache(tmp_path: Path) -> None:
     # Second call returns cached
     out2 = chain.run()
     assert out1 == out2
+
+
+def test_resolve_step_force_recomputes_once(tmp_path: Path) -> None:
+    """force recomputes once across run() calls, even when each resolution
+    builds a new backend."""
+    calls = 0
+
+    class Fresh(Step):
+        value: float = 5.0
+        folder: str = ""
+        wrap: bool = True
+
+        def _run(self, x: float = 0.0) -> float:
+            nonlocal calls
+            calls += 1
+            return x + self.value
+
+        def _resolve_step(self) -> Step:
+            if not self.wrap:
+                return self
+            inner = Fresh(
+                value=self.value,
+                folder=self.folder,
+                wrap=False,
+                infra={"backend": "Cached", "folder": self.folder, "mode": "force"},
+            )
+            return Chain(steps=[inner])
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": "force"}
+    step = Fresh(folder=str(tmp_path), infra=infra)
+    assert [step.run() for _ in range(3)] == [5.0, 5.0, 5.0]
+    assert calls == 1
