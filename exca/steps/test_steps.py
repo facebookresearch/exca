@@ -620,7 +620,7 @@ def test_run_batch_yield_count(
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
     step = _NumYield(num=num, infra=infra)
     with pytest.raises(items.BatchProtocolError, match=match) as exc_info:
-        list(step.run(items.Items([10, 20, 30])))
+        list(step.run_items([10, 20, 30]))
     assert not any(step.lookup(v).cached() for v in [10, 20, 30])
     if with_infra:
         notes = getattr(exc_info.value, "__notes__", [])
@@ -636,7 +636,7 @@ def test_run_batch_cannot_yield_before_consuming() -> None:
     with pytest.raises(
         items.BatchProtocolError, match="yielded before consuming an input"
     ):
-        list(EarlyYield().run(items.Items([10, 20])))
+        list(EarlyYield().run_items([10, 20]))
 
 
 class _GroupedMult(Step):
@@ -661,7 +661,7 @@ def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
     step = _GroupedMult(group_size=2, fail_value=3, infra=infra)
     with pytest.raises(ValueError, match="boom") as exc_info:
-        list(step.run(items.Items([1, 2, 3, 4, 5, 6])))
+        list(step.run_items([1, 2, 3, 4, 5, 6]))
     inflight = getattr(exc_info.value, "_inflight_uids", [])
     assert len(inflight) == 2, f"expected 2 inflight uids, got {inflight}"
 
@@ -669,7 +669,7 @@ def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
 def test_chained_group_sizes_call_order() -> None:
     _GroupedMult._CALLS.clear()
     chain = Chain(steps=[_GroupedMult(group_size=s) for s in (2, 3, 1)])
-    _ = list(chain.run(items.Items([1, 2, 3, 4, 5])))
+    _ = list(chain.run_items([1, 2, 3, 4, 5]))
     calls = list(_GroupedMult._CALLS)
     _GroupedMult._CALLS.clear()
     # fmt: off

@@ -369,7 +369,7 @@ class Step(exca.helpers.DiscriminatedModel):
     # =========================================================================
 
     def run(self, value: tp.Any = identity.NoValue()) -> tp.Any:
-        """Execute the step, using the cache and backend when configured.
+        """Execute the step on a single input, using cache/backend when set.
 
         Parameters
         ----------
@@ -381,20 +381,33 @@ class Step(exca.helpers.DiscriminatedModel):
         Any
             Cached or freshly computed result.
         """
+        # Sugar over run_items: run one input, return the single result.
+        return next(iter(self.run_items([value])))
+
+    def run_items(self, values: tp.Iterable[tp.Any]) -> items.StepItems:
+        """Execute the step over many inputs, one cache entry per input.
+
+        Parameters
+        ----------
+        values:
+            Inputs to run; one result is produced per input, in order.
+
+        Returns
+        -------
+        StepItems
+            Streaming iterator yielding one result per input. Iterate it
+            as results arrive; don't ``list()`` it if you want streaming.
+        """
         built = _resolved_step(self)
         if built is not self:
-            return built.run(value)
+            return built.run_items(values)
 
-        if isinstance(value, items.StepItems):
-            raise TypeError("run() expects a plain value or Items, not StepItems")
-        is_items = isinstance(value, items.Items)
-        inp = value if is_items else items.Items([value])
-        values = list(inp)  # eager: uid computation needs all values upfront
+        values = list(values)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]
 
         cached = self._output_items
         if cached is not None and isinstance(cached._source, exca.cachedict.CacheDict):
-            # try fast path: no need to rebuild iterator from scratch
+            # fast path: reuse the cache-backed carrier instead of rebuilding it
             remembered = cached._mode != "force" or all(
                 uid in cached.uids for uid in uids
             )
@@ -402,9 +415,7 @@ class Step(exca.helpers.DiscriminatedModel):
                 with cached._source.frozen_cache_folder():
                     remembered = all(uid in cached._source for uid in uids)
                 if remembered:
-                    if is_items:
-                        return cached.select(uids)
-                    return next(cached.read(uids))
+                    return cached.select(uids)
 
         boundary = items.StepItems(
             source=dict(zip(uids, values)),
@@ -414,9 +425,7 @@ class Step(exca.helpers.DiscriminatedModel):
         if isinstance(result._source, exca.cachedict.CacheDict):
             self._output_items = result
             utils.recursive_freeze(self)
-        if is_items:
-            return result
-        return next(iter(result))
+        return result
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
         raise AttributeError("Step.forward() was removed; use run() instead")
