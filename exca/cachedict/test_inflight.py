@@ -105,8 +105,8 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
     reg = inflight.InflightRegistry(tmp_path)
     reg.claim(["stale"], pid=dead_pid)
     reg2 = inflight.InflightRegistry(tmp_path)
-    assert reg2.wait_for_inflight(["stale"]) == ["stale"]
-    assert reg2.get(["stale"]) == {}
+    reg2.wait_for_inflight(["stale"])
+    assert reg2.get(["stale"]) == {}, "dead worker's item should be reclaimed"
     reg2.close()
     reg.close()
 
@@ -119,15 +119,16 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
     info = reg_ns.get(["non_slurm"])["non_slurm"]
     assert not info.is_alive(), "fake Slurm job should not appear alive"
     reg_ns2 = inflight.InflightRegistry(tmp_path)
-    assert reg_ns2.wait_for_inflight(["non_slurm"]) == ["non_slurm"]
+    reg_ns2.wait_for_inflight(["non_slurm"])
+    assert reg_ns2.get(["non_slurm"]) == {}, "fake-Slurm dead item should be reclaimed"
     reg_ns2.close()
     reg_ns.close()
 
     # Own PID: skipped to prevent self-deadlock
     reg3 = inflight.InflightRegistry(tmp_path)
     reg3.claim(["mine"])
-    assert reg3.wait_for_inflight(["mine"]) == []
-    assert "mine" in reg3.get(["mine"])
+    reg3.wait_for_inflight(["mine"])
+    assert "mine" in reg3.get(["mine"]), "own-pid item must not be reclaimed"
     reg3.release(["mine"])
     reg3.close()
 
@@ -180,8 +181,8 @@ def test_db_deletion_unblocks_wait(
     db_path.unlink()
 
     # Next poll should detect deletion, reconnect to empty DB, and return
-    result = waiter.wait_for_inflight(["a", "b"])
-    assert result == [], "items should be forgotten (DB gone), not reclaimed"
+    waiter.wait_for_inflight(["a", "b"])  # must return, not hang
+    assert waiter.get(["a", "b"]) == {}, "items forgotten after DB deletion"
     waiter.close()
     reg.close()
 
@@ -235,17 +236,14 @@ def test_inflight_session_retries_lost_claim(
     original_wait = inflight.InflightRegistry.wait_for_inflight
     original_is_alive = inflight.WorkerInfo.is_alive
 
-    def wait_then_inject(
-        self: inflight.InflightRegistry, item_uids: list[str]
-    ) -> list[str]:
+    def wait_then_inject(self: inflight.InflightRegistry, item_uids: list[str]) -> None:
         nonlocal wait_calls
-        result = original_wait(self, item_uids)
+        original_wait(self, item_uids)
         wait_calls += 1
         if wait_calls == 1:
             rival = inflight.InflightRegistry(tmp_path)
             rival.claim(["x"], pid=competitor_pid)
             rival.close()
-        return result
 
     def patched_is_alive(self: inflight.WorkerInfo) -> bool:
         nonlocal alive_calls

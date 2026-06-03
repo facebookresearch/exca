@@ -297,6 +297,23 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             )
         return missing
 
+    def _recheck_after_wait(
+        self, missing: list[tuple[str, tp.Any]], claim: inflight.InflightClaim
+    ) -> list[tuple[str, tp.Any]]:
+        """Drop items another worker finished (or that we did not claim) while
+        we were blocked in ``inflight_session``, and log what changed."""
+        claimed_set = set(claim.uids)
+        n_before = len(missing)
+        if self.folder is not None:
+            keys = set(self.cache_dict)
+            missing = [
+                (k, item) for k, item in missing if k in claimed_set and k not in keys
+            ]
+        else:
+            missing = [(k, item) for k, item in missing if k in claimed_set]
+        inflight.after_wait_log(self.uid(), n_before, len(missing))
+        return missing
+
     def _method_override(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Iterator[tp.Any]:
         """This method replaces the decorated method"""
         # validate parameters
@@ -336,18 +353,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             np.random.shuffle(missing)
             reg = self._inflight_registry()
             with inflight.inflight_session(reg, [k for k, _ in missing]) as claim:
-                claimed_set = set(claim.uids)
-                # Re-check cache after wait: other workers may have completed
-                # items while we were blocked in inflight_session.
-                if self.folder is not None:
-                    keys = set(self.cache_dict)
-                    missing = [
-                        (k, item)
-                        for k, item in missing
-                        if k in claimed_set and k not in keys
-                    ]
-                else:
-                    missing = [(k, item) for k, item in missing if k in claimed_set]
+                missing = self._recheck_after_wait(missing, claim)
                 if missing:
                     jobs: list[tp.Any] = []
                     uid_item_chunks = list(
@@ -416,18 +422,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             reg = self._inflight_registry()
             with inflight.inflight_session(reg, [k for k, _ in missing]) as claim:
                 claim.record_worker_info()
-                claimed_set = set(claim.uids)
-                # Re-check cache after wait: other workers may have completed
-                # items while we were blocked in inflight_session.
-                if self.folder is not None:
-                    keys = set(self.cache_dict)
-                    missing = [
-                        (k, item)
-                        for k, item in missing
-                        if k in claimed_set and k not in keys
-                    ]
-                else:
-                    missing = [(k, item) for k, item in missing if k in claimed_set]
+                missing = self._recheck_after_wait(missing, claim)
                 if pool is None and missing:
                     msg = "Computing %s missing items"
                     logger.debug(msg, len(missing))
