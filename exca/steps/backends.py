@@ -570,6 +570,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         pending_statuses = self._pending_statuses(
             paths=cbatch.paths, uids=cbatch.items.uids, mode=mode
         )
+        inflight.after_wait_log(
+            cbatch.paths.step_uid, len(cbatch.items.uids), len(pending_statuses)
+        )
         retry_count = sum(status == "error" for status in pending_statuses.values())
         if retry_count:
             logger.warning(
