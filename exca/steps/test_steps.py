@@ -236,6 +236,17 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("kind", ["step", "chain"])
+def test_infra_without_folder_raises_at_runtime(kind: str) -> None:
+    infra: tp.Any = {"backend": "Cached"}  # no folder
+    if kind == "step":
+        step: Step = conftest.Mult(coeff=2.0, infra=infra)
+    else:
+        step = Chain(steps=[conftest.Mult(coeff=2.0)], infra=infra)
+    with pytest.raises(RuntimeError, match="no folder"):
+        step.run(5.0)
+
+
 def test_none_as_valid_input() -> None:
     """None should be a valid input value, not treated as 'no value provided'."""
 
