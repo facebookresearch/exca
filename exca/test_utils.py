@@ -445,6 +445,14 @@ def test_find_models() -> None:
     assert all(isinstance(y, A) for y in out.values())
 
 
+def test_find_models_breaks_cycles() -> None:
+    hcfg = HierarchicalCfg(content=[HierarchicalCfg()])  # sibling shares default `a`
+    hcfg.content.append(hcfg)
+    out = utils.find_models(hcfg, A)  # must terminate
+    # shared acyclic models still emitted per path; the self-reference is skipped
+    assert set(out) == {"a", "_a", "content.0.a", "content.0._a"}
+
+
 def test_fast_unlink(tmp_path: Path) -> None:
     # file
     fp = tmp_path / "blublu.txt"

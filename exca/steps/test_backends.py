@@ -244,6 +244,27 @@ def test_config_consistency_chain_and_step(tmp_path: Path) -> None:
     assert uid_files[0].read_text("utf8") == expected
 
 
+def test_derive(tmp_path: Path) -> None:
+    pool = backends.ProcessPool(folder=tmp_path, max_jobs=4, keep_in_ram=True)
+
+    slurm = pool.derive("Slurm", partition="gpu")
+    assert isinstance(slurm, backends.Slurm)
+    assert (slurm.folder, slurm.max_jobs, slurm.partition) == (tmp_path, 4, "gpu")
+
+    same = pool.derive(max_jobs=2)
+    assert isinstance(same, backends.ProcessPool) and same.max_jobs == 2
+
+    # fields absent from the target are dropped, so max_jobs doesn't reach Cached
+    cached = pool.derive("Cached")
+    assert isinstance(cached, backends.Cached) and cached.keep_in_ram is True
+
+    with pytest.raises(ValueError, match="Unknown backend"):
+        pool.derive("Nope")
+    # but explicit kwargs are validated, not dropped
+    with pytest.raises(pydantic.ValidationError):
+        pool.derive("Cached", partition="gpu")
+
+
 @pytest.mark.parametrize("backend", ("ThreadPool", "ProcessPool"))
 def test_pool_backend(tmp_path: Path, backend: str) -> None:
     infra: tp.Any = {"backend": backend, "folder": tmp_path}

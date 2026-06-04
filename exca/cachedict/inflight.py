@@ -13,6 +13,7 @@ corrupt or inaccessible, all methods degrade gracefully (log a
 warning and behave as if the registry is empty).
 """
 
+import collections
 import contextlib
 import dataclasses
 import functools
@@ -143,6 +144,53 @@ class WorkerInfo:
                 job.wait()
         except Exception:
             logger.debug("Could not wait for Slurm job %s", self.job_id, exc_info=True)
+
+    def describe(self) -> str:
+        """Compact identity + liveness status for logging, e.g.
+        ``'64059024 [slurm:FAILED]'`` or ``'pid=1234 [local]'``. Slurm array
+        tasks use their base id (the ``_<task>`` suffix is dropped)."""
+        if self.job_id is None or self.job_id == _LOCAL_JOB_ID:
+            ident = f"pid={self.pid}"
+        else:
+            ident = self.job_id.split("_")[0]  # array base id
+        job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
+        if job is not None:
+            try:
+                return f"{ident} [slurm:{job.state}]"
+            except Exception:
+                return f"{ident} [slurm:?]"
+        if self.job_id == _LOCAL_JOB_ID:
+            return f"{ident} [local]"
+        if self.job_id is None:
+            return f"{ident} [unstamped]"
+        return f"{ident} [slurm:unchecked]"
+
+
+def _summarize_workers(counts: tp.Mapping["WorkerInfo", int]) -> str:
+    """Render blocking/dead workers as a compact, bounded string, merging array
+    tasks that share the same base id and status (see ``WorkerInfo.describe``)."""
+    top = 12
+    merged: collections.Counter[str] = collections.Counter()
+    for info, n in counts.items():
+        merged[info.describe()] += n
+    parts = [f"{label} x{count}" for label, count in merged.most_common(top)]
+    if len(merged) > top:
+        parts.append(f"(+{len(merged) - top} more)")
+    return ", ".join(parts)
+
+
+def after_wait_log(name: str, before: int, after: int) -> None:
+    """Log how many of *name*'s items other workers finished during the wait.
+    No-op when the count is unchanged."""
+    if before == after:
+        return
+    logger.info(
+        "After inflight wait for %s: %d requested, %d now available, %d to compute",
+        name,
+        before,
+        before - after,
+        after,
+    )
 
 
 class InflightRegistry(registry.AdvisoryRegistry):
@@ -277,23 +325,20 @@ class InflightRegistry(registry.AdvisoryRegistry):
     def wait_for_inflight(
         self,
         item_uids: list[str],
-    ) -> list[str]:
+    ) -> None:
         """Block until the given items are no longer in-flight.
 
         For Slurm items, waits via submitit. For local items, polls with
         exponential backoff (0.5 s → 30 s) until the item disappears from
-        the registry or the owning process dies.
+        the registry or the owning process dies. Items reclaimed from dead
+        workers are released here, so the next ``claim`` picks them up.
 
         Items owned by the current process (``os.getpid()``) are silently
         skipped to prevent self-deadlock in re-entrant / nested calls.
-
-        Returns the list of item_uids that were reclaimed from dead workers
-        (caller should recompute these).
         """
         if not item_uids:
-            return []
+            return
         remaining = set(item_uids)
-        reclaimed: list[str] = []
         my_pid = os.getpid()
 
         inflight = self.get(list(remaining))
@@ -301,8 +346,9 @@ class InflightRegistry(registry.AdvisoryRegistry):
             # Jitter to de-synchronize callers that start simultaneously
             # (e.g. Slurm array jobs), reducing claim contention.
             time.sleep(random.uniform(0, 0.5))
-            msg = "Waiting for %d in-flight items (of %d requested)"
-            logger.warning(msg, len(inflight), len(item_uids))
+            msg = "Waiting for %d in-flight items (of %d requested) held by: %s"
+            workers = _summarize_workers(collections.Counter(inflight.values()))
+            logger.warning(msg, len(inflight), len(item_uids), workers)
         # Deduplicate by job_id: many items may share one Slurm array job,
         # so we wait once per job instead of once per item.
         waited_jobs: set[str] = set()
@@ -318,6 +364,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
 
         interval = 0.5
         next_log = time.time() + 3600.0
+        dead_workers: collections.Counter[WorkerInfo] = collections.Counter()
         while remaining:
             inflight = self.get(list(remaining))
             alive_cache: dict[WorkerInfo, bool] = {}
@@ -332,27 +379,34 @@ class InflightRegistry(registry.AdvisoryRegistry):
                 if info not in alive_cache:
                     alive_cache[info] = info.is_alive()
                 if not alive_cache[info]:
-                    msg = "Reclaiming item %s from dead worker (pid=%d)"
-                    logger.debug(msg, uid, info.pid)
                     dead_uids.append(uid)
+                    dead_workers[info] += 1
                 else:
                     still_waiting.add(uid)
             if dead_uids:
                 self.release(dead_uids)
-                reclaimed.extend(dead_uids)
             remaining = still_waiting
             if remaining:
                 now = time.time()
                 if now >= next_log:
-                    pids = {inflight[u].pid for u in remaining if u in inflight}
-                    msg = "Still waiting for %d in-flight items (pids: %s)"
-                    msg += " — to unblock, delete %s or kill the pids"
-                    logger.info(msg, len(remaining), pids, self.db_path)
+                    blocking = collections.Counter(
+                        inflight[u] for u in remaining if u in inflight
+                    )
+                    msg = "Still waiting for %d in-flight items held by: %s"
+                    msg += " — to unblock, delete %s or kill the workers"
+                    logger.info(
+                        msg, len(remaining), _summarize_workers(blocking), self.db_path
+                    )
                     next_log = now + 3600.0
                 time.sleep(interval)
                 interval = min(interval * 2, 30.0)
 
-        return reclaimed
+        if dead_workers:
+            logger.info(
+                "Reclaimed %d items from dead workers: %s",
+                sum(dead_workers.values()),
+                _summarize_workers(dead_workers),
+            )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -413,9 +467,7 @@ def inflight_session(
     # worker), so no partial claims are ever written — no release needed
     # on retry, and no hold-and-wait deadlock is possible.
     while True:
-        reclaimed = reg.wait_for_inflight(item_uids)
-        if reclaimed:
-            logger.info("Reclaimed %d items from dead workers", len(reclaimed))
+        reg.wait_for_inflight(item_uids)
         claimed = reg.claim(item_uids, pid=pid)
         if len(claimed) == len(item_uids):
             break
