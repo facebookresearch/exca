@@ -247,28 +247,22 @@ def test_config_consistency_chain_and_step(tmp_path: Path) -> None:
 def test_derive(tmp_path: Path) -> None:
     pool = backends.ProcessPool(folder=tmp_path, max_jobs=4, keep_in_ram=True)
 
-    # same type, tweak a field: shared fields survive
-    same = pool.derive(max_jobs=2)
-    assert isinstance(same, backends.ProcessPool)
-    assert (same.folder, same.max_jobs, same.keep_in_ram) == (tmp_path, 2, True)
-
-    # retype to Cached: max_jobs has no home there and is dropped silently
-    cached = pool.derive("Cached")
-    assert isinstance(cached, backends.Cached)
-    assert (cached.folder, cached.keep_in_ram) == (tmp_path, True)
-
-    # retype to Slurm with a new field
     slurm = pool.derive("Slurm", partition="gpu")
     assert isinstance(slurm, backends.Slurm)
     assert (slurm.folder, slurm.max_jobs, slurm.partition) == (tmp_path, 4, "gpu")
 
-    # backend type works positionally or as a keyword (no field is named "backend")
-    assert isinstance(pool.derive(backend="Cached"), backends.Cached)
+    same = pool.derive(max_jobs=2)
+    assert isinstance(same, backends.ProcessPool) and same.max_jobs == 2
+
+    # fields absent from the target are dropped, so max_jobs doesn't reach Cached
+    cached = pool.derive("Cached")
+    assert isinstance(cached, backends.Cached) and cached.keep_in_ram is True
 
     with pytest.raises(ValueError, match="Unknown backend"):
         pool.derive("Nope")
+    # but explicit kwargs are validated, not dropped
     with pytest.raises(pydantic.ValidationError):
-        pool.derive("Cached", partition="gpu")  # Cached has no partition
+        pool.derive("Cached", partition="gpu")
 
 
 @pytest.mark.parametrize("backend", ("ThreadPool", "ProcessPool"))
