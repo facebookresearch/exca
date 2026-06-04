@@ -438,6 +438,30 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             getattr(self, f) == getattr(other, f) for f in type(self).model_fields
         )
 
+    def derive(self, backend: str | None = None, **kwargs: tp.Any) -> "Backend":
+        """Return a new backend based on the current one's fields shared
+        with the target backend.
+
+        Parameters
+        ----------
+        backend: str (optional)
+            target backend type to build, which can differ from the current one
+            (defaults to current one)
+        kwargs**: Any
+            field override or new fields for the target backend.
+        """
+        options = Backend._get_discriminated_subclasses()
+        name = type(self).__name__ if backend is None else backend
+        if name not in options:
+            raise ValueError(f"Unknown backend {name!r}, available: {sorted(options)}")
+        target = options[name]
+        data = {
+            f: getattr(self, f)
+            for f in target.model_fields
+            if f in type(self).model_fields
+        }
+        return tp.cast("Backend", target(**{**data, **kwargs}))
+
     def _cache_dict(
         self, cache_folder: Path, *, cache_type: str | None
     ) -> exca.cachedict.CacheDict[tp.Any]:
