@@ -218,8 +218,13 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         """Push *batch* through this step, return result as StepItems."""
-        if self.infra is None or self.infra.folder is None:
+        if self.infra is None:
             return batch.apply_step(self)
+        if self.infra.folder is None:
+            raise RuntimeError(
+                f"{type(self).__name__} has infra={type(self.infra).__name__!r} but no "
+                "folder set; set infra.folder (or run inside a Chain that provides one)"
+            )
         return self.infra._run(self, batch)
 
     def _propagate_folder(self, parent_folder: Path) -> None:
@@ -535,7 +540,7 @@ class Chain(Step):
         return backends.effective_mode(own, *child_modes, own)
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        if self.infra is None or self.infra.folder is None:
+        if self.infra is None:
             return self._walk_steps(batch)
         return super()._dispatch(batch)
 
