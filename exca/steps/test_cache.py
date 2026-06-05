@@ -312,15 +312,15 @@ def test_chain_force_propagates_to_non_final(tmp_path: Path, chain_backend: str)
         infra=chain_infra,
     )
 
-    out1 = list(chain.run_items(values))
+    out1 = list(chain.run_many(values))
     assert len(Versioned.calls) == len(values)
 
     chain = chain.clone({"infra.mode": "force"})
-    out2 = list(chain.run_items(values))
+    out2 = list(chain.run_many(values))
     assert out2 != out1, "force on chain should reach cached child step"
     assert len(Versioned.calls) == 2 * len(values)
 
-    out3 = list(chain.run_items(values))
+    out3 = list(chain.run_many(values))
     assert out3 == out2
     assert len(Versioned.calls) == 2 * len(values), "force is one-shot"
 

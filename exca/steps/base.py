@@ -381,10 +381,10 @@ class Step(exca.helpers.DiscriminatedModel):
         Any
             Cached or freshly computed result.
         """
-        # Sugar over run_items: run one input, return the single result.
-        return next(iter(self.run_items([value])))
+        # Sugar over run_many: run one input, return the single result.
+        return next(iter(self.run_many([value])))
 
-    def run_items(self, values: tp.Iterable[tp.Any]) -> items.StepItems:
+    def run_many(self, values: tp.Iterable[tp.Any]) -> items.StepItems:
         """Execute the step over many inputs, one cache entry per input.
 
         Parameters
@@ -400,7 +400,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         built = _resolved_step(self)
         if built is not self:
-            return built.run_items(values)
+            return built.run_many(values)
 
         values = list(values)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]

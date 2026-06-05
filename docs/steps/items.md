@@ -1,15 +1,15 @@
 ---
 myst:
   html_meta:
-    "description": "run_items — batched, per-input caching for Steps. Feedback wanted."
+    "description": "run_many — batched, per-input caching for Steps. Feedback wanted."
 ---
 
-# Batched compute with run_items
+# Batched compute with run_many
 
 :::{admonition} Feedback wanted
 :class: important
 
-`run_items`, `_run_batch`, and `BatchProtocolError` live on `main`
+`run_many`, `_run_batch`, and `BatchProtocolError` live on `main`
 only — not in the latest PyPI release. To try the examples below,
 install from git: `pip install
 "git+https://github.com/facebookresearch/exca"`.
@@ -20,9 +20,9 @@ are settling. Comments via
 are welcome.
 :::
 
-## What run_items adds
+## What run_many adds
 
-`Step.run(value)` runs the step on a single input. Use `run_items`
+`Step.run(value)` runs the step on a single input. Use `run_many`
 to run the same configuration over many inputs, with **one cache
 entry per `(step, input)` pair**:
 
@@ -33,15 +33,18 @@ step = Multiply(coeff=2.0, infra={"backend": "Cached", "folder": cache})
 step.run(5.0)                       # 10.0
 
 # Many inputs — same configuration, one cache entry per input
-for r in step.run_items([1.0, 2.0, 3.0]):
+for r in step.run_many([1.0, 2.0, 3.0]):
     print(r)                        # 2.0, then 4.0, then 6.0
 ```
 
-`step.run_items(...)` returns a `StepItems` iterator — results
-stream as they're produced. Iterate; don't `list()` it. Re-running
-with overlapping inputs reuses the cache entries from the previous
-call. `run(value)` is sugar over `run_items([value])`, returning the
-single result.
+`step.run_many(...)` returns a `StepItems` iterator that yields one
+result per input, in input order — iterate it rather than `list()`-ing
+it so you never hold the whole result set in memory. (Without a
+backend, results compute lazily as you pull; with one, see
+[Distribution across workers](#distribution-across-workers).)
+Re-running with overlapping inputs reuses the cache entries from the
+previous call. `run(value)` is sugar over `run_many([value])`,
+returning the single result.
 
 ## Per-input identity: `item_uid`
 
@@ -99,7 +102,7 @@ exception with the uids consumed-but-not-yielded so you can see
 which items were in flight when it raised.
 
 A single-value call and a batched call share the same cache: if
-`step.run(v)` writes uid `X`, `next(iter(step.run_items([v])))`
+`step.run(v)` writes uid `X`, `next(iter(step.run_many([v])))`
 reads `X` back.
 
 ## Distribution across workers
@@ -119,16 +122,19 @@ step = Embed(
         "gpus_per_node": 1,
     },
 )
-for embedding in step.run_items(paths):           # M items → up to 16 jobs
-    print(embedding.shape)                         # streamed in input order
+for embedding in step.run_many(paths):           # M items → up to 16 jobs
+    print(embedding.shape)                         # read back in input order
 ```
 
 Each worker runs `_run_batch` on its sub-batch and writes results
-to the shared cache as they yield. The driver reads from the cache
-as the iterator advances — values are not round-tripped through
-the job pickle, and the full result set is never held in memory.
-Execution order within a batch is non-deterministic; output order
-matches input order.
+to the shared cache. With a distributed backend the driver **waits
+for every job to finish**, then the returned iterator reads results
+back from the cache — so the payoff of iterating is bounded memory,
+not early results: values are loaded one at a time (never the full
+set at once) and are not round-tripped through the job pickle, but
+you won't see any output until all jobs complete. Execution order
+within a batch is non-deterministic; output order matches input
+order.
 
 ## What's stable
 

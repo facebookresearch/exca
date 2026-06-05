@@ -8,7 +8,7 @@
 
 ``StepItems`` is the framework-internal carrier threaded through a
 pipeline: source + pending + upstream + uids + mode. Users never
-construct it — ``step.run_items(values)`` returns one (a streaming
+construct it — ``step.run_many(values)`` returns one (a streaming
 iterator over the results), and ``step.run(value)`` returns the single
 scalar result.
 """

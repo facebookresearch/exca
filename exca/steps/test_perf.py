@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Small perf scaffold comparing MapInfra with Step run_items."""
+"""Small perf scaffold comparing MapInfra with Step run_many."""
 
 # Rough warm scalar cache hits, 32x32 arrays:
 # - MapInfra: ~10 us/item
@@ -111,7 +111,7 @@ class PerfWorkload:
                 return list(obj.compute(range(100)))
             return [next(obj.compute([value])) for value in range(100)]
         if batched:
-            return list(obj.run_items(range(100)))
+            return list(obj.run_many(range(100)))
         return [obj.run(value) for value in range(100)]
 
     def profile(self) -> list[np.ndarray]:

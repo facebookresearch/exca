@@ -248,7 +248,7 @@ def test_config_consistency_chain_and_step(tmp_path: Path) -> None:
 def test_pool_backend(tmp_path: Path, backend: str) -> None:
     infra: tp.Any = {"backend": backend, "folder": tmp_path}
     step = conftest.Mult(coeff=2.0, infra=infra)
-    result = list(step.run_items([1.0, 2.0, 3.0]))
+    result = list(step.run_many([1.0, 2.0, 3.0]))
     assert result == [2.0, 4.0, 6.0]
     assert step.lookup(1.0).paths.cache_folder.exists()
 
@@ -257,7 +257,7 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path}
     step = conftest.Add(value=1, error=True, infra=infra)
     with pytest.raises(ValueError, match="Triggered an error") as exc_info:
-        step.run_items([1.0, 2.0])
+        step.run_many([1.0, 2.0])
     notes = exc_info.value.__notes__
     assert any("Add" in n for n in notes)
 

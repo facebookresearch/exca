@@ -119,13 +119,13 @@ preprocessing = Chain(steps=[Normalize(), Augment()])
 training = Chain(steps=[preprocessing, Train(epochs=50)])
 ```
 
-### Batched Execution with `run_items`
+### Batched Execution with `run_many`
 
-For data parallelism (one config, many inputs), use `run_items`:
+For data parallelism (one config, many inputs), use `run_many`:
 
 ```python
 step = Multiply(coeff=2.0, infra={"backend": "Cached", "folder": "/cache"})
-result = step.run_items([1.0, 2.0, 3.0])     # returns a StepItems iterator
+result = step.run_many([1.0, 2.0, 3.0])     # returns a StepItems iterator
 list(result)                                  # [2.0, 4.0, 6.0]
 ```
 
@@ -153,7 +153,7 @@ class Embed(Step):
 `_run_batch` must yield exactly one result per input, in order.
 
 Single-value calls and batched calls share cache entries:
-`step.run(v)` and `list(step.run_items([v]))[0]` produce the same
+`step.run(v)` and `list(step.run_many([v]))[0]` produce the same
 on-disk entry.
 
 For inputs that don't ConfDict-dump cleanly (e.g. large arrays,

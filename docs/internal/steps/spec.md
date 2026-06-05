@@ -229,7 +229,7 @@ When `step.run(value)` is called:
 1. Resolve via `_resolve_step()` to a fixed point. If non-self,
    delegate to the resolved step.
 2. Eagerly materialize values and uids (a scalar `run(value)` is the
-   one-input case of `run_items`), then build the initial `StepItems`.
+   one-input case of `run_many`), then build the initial `StepItems`.
 3. `_dispatch(batch)` runs inline when no backend folder is configured;
    otherwise it calls `Backend._run(step, batch)`.
 4. Backend handles cache modes, inflight coordination, and job

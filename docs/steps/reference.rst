@@ -11,7 +11,7 @@ Core classes
 ------------
 
 .. autoclass:: exca.steps.Step
-    :members: run, run_items, lookup, clone, item_uid, CACHE_TYPE
+    :members: run, run_many, lookup, clone, item_uid, CACHE_TYPE
 
 .. autoclass:: exca.steps.Chain
     :show-inheritance:
