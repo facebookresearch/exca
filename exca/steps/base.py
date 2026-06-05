@@ -13,7 +13,6 @@ import copy
 import logging
 import typing as tp
 import warnings
-from pathlib import Path
 
 import pydantic
 
@@ -173,6 +172,9 @@ class Step(exca.helpers.DiscriminatedModel):
             raise TypeError(
                 f"{type(self).__name__} must override _run, _run_batch, or _resolve_step"
             )
+        folder = utils.get_infra_folder(self)
+        if folder is not None:
+            utils.propagate_folder(self, folder)
 
     def _run(self, *args: tp.Any) -> tp.Any:
         """Override in subclasses."""
@@ -205,13 +207,6 @@ class Step(exca.helpers.DiscriminatedModel):
         """Check if step is a generator (no required input in _run)."""
         return "has_generator" in self._step_flags
 
-    def _inner_mode(self) -> identity.ModeType:
-        """Effective mode considering resolved sub-steps."""
-        resolved = utils.resolved_step(self)
-        if resolved is not self:
-            return resolved._inner_mode()
-        return "cached" if self.infra is None else self.infra.mode
-
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
         """Transform *batch* into the result carrier.
 
@@ -232,14 +227,6 @@ class Step(exca.helpers.DiscriminatedModel):
                 "folder set; set infra.folder (or run inside a Chain that provides one)"
             )
         return self.infra._run(self, batch)
-
-    def _propagate_folder(self, parent_folder: Path) -> None:
-        """Apply ``parent_folder`` to own ``infra`` when unset.
-
-        Default: this step only. Compound steps override to also descend.
-        """
-        if self.infra is not None and self.infra.folder is None:
-            self.infra.folder = parent_folder
 
     # =========================================================================
     # Identity
@@ -409,25 +396,6 @@ class Chain(Step):
         super().model_post_init(__context)
         if not self.steps:
             raise ValueError("steps cannot be empty")
-        # Folder cascade: chain's folder fills sub-step infras that have none.
-        # Static (config-only), runs once at construction.
-        folder = (
-            self.infra.folder
-            if self.infra is not None and self.infra.folder is not None
-            else None
-        )
-        if folder is not None:
-            self._propagate_folder(folder)
-
-    def _propagate_folder(self, parent_folder: Path) -> None:
-        super()._propagate_folder(parent_folder)
-        folder = (
-            self.infra.folder
-            if self.infra is not None and self.infra.folder is not None
-            else parent_folder
-        )
-        for step in self._step_sequence():
-            step._propagate_folder(folder)
 
     def _step_sequence(self) -> tuple[Step, ...]:
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)
@@ -538,12 +506,6 @@ class Chain(Step):
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
         return self._walk_steps(batch)
-
-    def _inner_mode(self) -> identity.ModeType:
-        own: identity.ModeType = "cached" if self.infra is None else self.infra.mode
-        child_modes = [s._inner_mode() for s in self._resolved_steps()]
-        # trailing own: chain reasserts its mode after children
-        return backends.effective_mode(own, *child_modes, own)
 
 
 Step._exca_chain_class = Chain

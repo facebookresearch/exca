@@ -236,6 +236,18 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     )
 
 
+def test_folder_cascades_into_non_chain_substep() -> None:
+    folderless: tp.Any = {"backend": "Cached"}
+    step = conftest.AddWithTransforms(
+        transforms=[conftest.Mult(coeff=2.0, infra=folderless)],
+        infra={"backend": "Cached", "folder": Path("/cache")},  # type: ignore
+    )
+    sub = step.transforms[0]
+    assert sub.infra is not None and sub.infra.folder == Path("/cache"), (
+        "own folder cascades into a step-valued field, not just Chain.steps"
+    )
+
+
 @pytest.mark.parametrize("kind", ["step", "chain"])
 def test_infra_without_folder_raises_at_runtime(kind: str) -> None:
     infra: tp.Any = {"backend": "Cached"}  # no folder
@@ -430,7 +442,7 @@ def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
         transforms=[conftest.Mult(coeff=2, infra=force_infra)],
     )
     chain = Chain(steps=[inner], infra=chain_infra)
-    assert chain._inner_mode() == "force", "Did not resolve Mult mode"
+    assert backends._effective_mode(chain) == "force", "Did not resolve Mult mode"
 
 
 # =============================================================================
