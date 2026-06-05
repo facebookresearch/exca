@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 import typing as tp
+from pathlib import Path
 
 import pydantic
 
@@ -28,6 +29,13 @@ def has_all_defaults(method: tp.Callable[..., tp.Any]) -> bool:
         for name, p in inspect.signature(method).parameters.items()
         if name != "self"
     )
+
+
+def get_infra_folder(step: base.Step) -> Path | None:
+    """The step's own configured cache folder, if any."""
+    if step.infra is not None and step.infra.folder is not None:
+        return step.infra.folder
+    return None
 
 
 @pydantic.model_validator(mode="before")

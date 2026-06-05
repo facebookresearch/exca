@@ -411,21 +411,14 @@ class Chain(Step):
             raise ValueError("steps cannot be empty")
         # Folder cascade: chain's folder fills sub-step infras that have none.
         # Static (config-only), runs once at construction.
-        folder = (
-            self.infra.folder
-            if self.infra is not None and self.infra.folder is not None
-            else None
-        )
+        folder = utils.get_infra_folder(self)
         if folder is not None:
             self._propagate_folder(folder)
 
     def _propagate_folder(self, parent_folder: Path) -> None:
         super()._propagate_folder(parent_folder)
-        folder = (
-            self.infra.folder
-            if self.infra is not None and self.infra.folder is not None
-            else parent_folder
-        )
+        own = utils.get_infra_folder(self)
+        folder = parent_folder if own is None else own
         for step in self._step_sequence():
             step._propagate_folder(folder)
 

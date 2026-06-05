@@ -21,14 +21,20 @@ from __future__ import annotations
 import collections
 import typing as tp
 
-import exca.cachedict
-
 from . import identity
 
 if tp.TYPE_CHECKING:
     from .base import Step
 
-_Source = dict[str, tp.Any] | exca.cachedict.CacheDict[tp.Any]
+
+class _Source(tp.Protocol):
+    """Carrier backing store: yields one value per uid.
+
+    Satisfied by ``dict``, :class:`~exca.cachedict.CacheDict`, and lazy views
+    (e.g. ``steps.patterns`` fan-out parts) -- anything indexable by uid.
+    """
+
+    def __getitem__(self, uid: str) -> tp.Any: ...
 
 
 class BatchProtocolError(RuntimeError):
