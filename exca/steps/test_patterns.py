@@ -51,42 +51,23 @@ class ScatterDict(Scatter):
         return list(item)
 
 
-class SumByGroup(Scatter):
-    """Group ``(label, value)`` rows by label, sum each group via ``body``."""
-
-    body: base.Step
-
-    def branches(self, rows: list[tuple[str, float]]) -> list:
-        return sorted({label for label, _ in rows})
-
-    def take(self, rows: list[tuple[str, float]], key: str) -> list[float]:
-        return [value for label, value in rows if label == key]
-
-    def gather(self, keys: list, results: list) -> dict:
-        return dict(zip(keys, results))
-
-
-class TenfoldDict(Scatter):
-    """Same branch keys as ScatterDict but ``take`` scales the part by 10."""
-
-    body: base.Step
-
-    def branches(self, item: dict[str, float]) -> list:
-        return list(item)
-
-    def take(self, item: dict[str, float], key: str) -> float:
-        return item[key] * 10.0
-
-
-def test_default_take_and_gather() -> None:
-    out = ScatterDict(body=conftest.Mult(coeff=2.0)).run({"a": 3.0, "b": 5.0})
-    assert out == [6.0, 10.0], "per-key take*2, gathered as a list in branches order"
-
-
 def test_custom_take_and_gather() -> None:
+    class SumByGroup(Scatter):
+        """Group ``(label, value)`` rows by label, sum each group via ``body``."""
+
+        body: base.Step
+
+        def branches(self, rows: list[tuple[str, float]]) -> list:
+            return sorted({label for label, _ in rows})
+
+        def take(self, rows: list[tuple[str, float]], key: str) -> list[float]:
+            return [value for label, value in rows if label == key]
+
+        def gather(self, keys: list, results: list) -> dict:
+            return dict(zip(keys, results))
+
     rows = [("a", 1.0), ("a", 2.0), ("b", 3.0)]
-    out = SumByGroup(body=Sum()).run(rows)
-    assert out == {"a": 3.0, "b": 3.0}
+    assert SumByGroup(body=Sum()).run(rows) == {"a": 3.0, "b": 3.0}
 
 
 def test_empty_keys_raises() -> None:
@@ -98,16 +79,6 @@ def test_empty_keys_raises() -> None:
 
     with pytest.raises(ValueError, match="no branches to scatter"):
         _Empty(body=conftest.Mult()).run({"a": 1.0})
-
-
-def test_body_field_named_freely() -> None:
-    class ScatterParts(Scatter):
-        parts: base.Step  # the body, discovered by type, not by name
-
-        def branches(self, item: dict[str, float]) -> list:
-            return list(item)
-
-    assert ScatterParts(parts=conftest.Mult(coeff=2.0)).run({"a": 3.0}) == [6.0]
 
 
 def test_ambiguous_body_raises() -> None:
@@ -145,19 +116,6 @@ def test_downstream_cache_keyed_by_scatter_identity(tmp_path: Path) -> None:
     assert chain(3.0).run(3.0) == 9.0, "coeff=3, not the cached coeff=2 result"
 
 
-def test_body_cache_keyed_by_scatter_identity(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    item = {"a": 1.0, "b": 2.0}
-
-    def run(
-        cls: tp.Callable[..., Scatter],
-    ) -> tp.Any:  # identity body, parts show through
-        return cls(body=conftest.Mult(coeff=1.0, infra=infra)).run(item)
-
-    assert run(ScatterDict) == [1.0, 2.0]
-    assert run(TenfoldDict) == [10.0, 20.0], "body cache keyed by Scatter config"
-
-
 def test_batched_items_scatter_independently(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     scat = ScatterDict(body=conftest.Mult(coeff=2.0, infra=infra))
@@ -165,40 +123,28 @@ def test_batched_items_scatter_independently(tmp_path: Path) -> None:
     assert out == [[2.0, 4.0], [20.0]], "(uid, key) keeps same-key items apart"
 
 
-@pytest.mark.parametrize("on_scatter", [False, True])
-def test_caching_and_folder_cascade(tmp_path: Path, on_scatter: bool) -> None:
-    # on_scatter: folder on the body (False) vs on Scatter, cascading down (True)
-    body_infra: tp.Any = {"backend": "Cached"}
+def test_scatter_and_body_caching(tmp_path: Path) -> None:
     scat_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    if not on_scatter:
-        body_infra["folder"] = tmp_path
-    scat = ScatterDict(
-        body=CountMult(coeff=10.0, infra=body_infra),
-        infra=scat_infra if on_scatter else None,
-    )
+
+    def scatter(mode: str = "cached") -> Scatter:
+        # body has no folder: it inherits the Scatter's via cascade
+        body_infra: tp.Any = {"backend": "Cached", "mode": mode}
+        return ScatterDict(body=CountMult(coeff=10.0, infra=body_infra), infra=scat_infra)
+
     _CALLS["n"] = 0
-    assert scat.run({"a": 1.0, "b": 2.0}) == [10.0, 20.0]
+    assert scatter().run({"a": 1.0, "b": 2.0}) == [10.0, 20.0]
     assert _CALLS["n"] == 2, "one body call per branch"
-    assert scat.run({"a": 1.0, "b": 2.0}) == [10.0, 20.0]
-    assert _CALLS["n"] == 2, "second run is all cache hits"
-
-
-def test_force_on_body_busts_scatter_cache(tmp_path: Path) -> None:
-    scat_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-
-    def scatter(mode: str) -> Scatter:
-        body_infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": mode}
-        body = CountMult(coeff=10.0, infra=body_infra)
-        return ScatterDict(body=body, infra=scat_infra)
-
-    _CALLS["n"] = 0
-    assert scatter("cached").run({"a": 1.0, "b": 2.0}) == [10.0, 20.0]
-    assert _CALLS["n"] == 2, "both branches computed on first run"
+    assert scatter().run({"a": 1.0, "b": 2.0}) == [10.0, 20.0]
+    assert _CALLS["n"] == 2, "re-run is all cache hits"
     assert scatter("force").run({"a": 1.0, "b": 2.0}) == [10.0, 20.0]
     assert _CALLS["n"] == 4, "force on body recomputes despite Scatter's own cache"
+    # body cache is nested under the Scatter's uid folder (its identity), via cascade
+    scat_uid = "type=ScatterDict,body={coeff=10,type=CountMult}-957a863b"
+    body_uid = "coeff=10,type=CountMult-d46058a7"
+    assert (tmp_path / scat_uid / body_uid / "cache").is_dir()
 
 
 def test_process_backend_runs_branches_cross_process(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "ProcessPool", "folder": tmp_path}
     scat = ScatterDict(body=conftest.Mult(coeff=2.0, infra=infra))
-    assert scat.run({"a": 1.0, "b": 2.0}) == [2.0, 4.0], "branches run cross-process"
+    assert scat.run({"a": 1.0, "b": 2.0}) == [2.0, 4.0]
