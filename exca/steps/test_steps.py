@@ -430,7 +430,7 @@ def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
         transforms=[conftest.Mult(coeff=2, infra=force_infra)],
     )
     chain = Chain(steps=[inner], infra=chain_infra)
-    assert chain._inner_mode() == "force", "Did not resolve Mult mode"
+    assert backends._effective_mode(chain) == "force", "Did not resolve Mult mode"
 
 
 # =============================================================================
