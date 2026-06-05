@@ -158,12 +158,12 @@ class Versioned(Step):
         ((), "cached"),
     ],
 )
-def test_effective_mode(modes: tuple[str, ...], expected: str | type) -> None:
+def test_fold_modes(modes: tuple[str, ...], expected: str | type) -> None:
     if expected is ValueError:
         with pytest.raises(ValueError, match="read-only mode conflicts"):
-            backends.effective_mode(*modes)  # type: ignore[arg-type]
+            backends._fold_modes(*modes)  # type: ignore[arg-type]
     else:
-        assert backends.effective_mode(*modes) == expected  # type: ignore[arg-type]
+        assert backends._fold_modes(*modes) == expected  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

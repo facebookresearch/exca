@@ -176,7 +176,7 @@ class LookupHandle:
         return None
 
 
-def effective_mode(*modes: identity.ModeType) -> identity.ModeType:
+def _fold_modes(*modes: identity.ModeType) -> identity.ModeType:
     """Fold modes in pipeline order: ``force``/``retry`` persist forward,
     ``read-only`` is local (resets on next step). ``force`` then ``read-only`` raises.
     """
@@ -194,6 +194,19 @@ def effective_mode(*modes: identity.ModeType) -> identity.ModeType:
         elif _rank(m) > _rank(acc):
             acc = m
     return acc
+
+
+def _effective_mode(step: Step) -> identity.ModeType:
+    """The mode in effect for ``step`` once its sub-steps are folded in."""
+    from . import utils  # lazy — backends is imported by utils at module level
+
+    resolved = utils.resolved_step(step)
+    if resolved is not step:
+        return _effective_mode(resolved)
+    own: identity.ModeType = "cached" if step.infra is None else step.infra.mode
+    sub_modes = [_effective_mode(sub) for sub in utils.nested_steps(step)]
+    # own brackets both ends: the step reasserts its mode after its sub-steps.
+    return _fold_modes(own, *sub_modes, own)
 
 
 @dataclasses.dataclass
@@ -533,7 +546,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             identity.write_configs(paths.step_folder, upstream)
             self._checked_configs.add(paths.step_folder)
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        mode = effective_mode(batch._mode, step._inner_mode())
+        mode = _fold_modes(batch._mode, _effective_mode(step))
 
         pending_statuses = self._pending_statuses(paths=paths, uids=batch.uids, mode=mode)
         if pending_statuses:
