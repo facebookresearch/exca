@@ -173,6 +173,10 @@ class Step(exca.helpers.DiscriminatedModel):
             raise TypeError(
                 f"{type(self).__name__} must override _run, _run_batch, or _resolve_step"
             )
+        # Cascade own folder into sub-steps at construction (config-only).
+        folder = utils.get_infra_folder(self)
+        if folder is not None:
+            self._propagate_folder(folder)
 
     def _run(self, *args: tp.Any) -> tp.Any:
         """Override in subclasses."""
@@ -233,13 +237,22 @@ class Step(exca.helpers.DiscriminatedModel):
             )
         return self.infra._run(self, batch)
 
-    def _propagate_folder(self, parent_folder: Path) -> None:
-        """Apply ``parent_folder`` to own ``infra`` when unset.
+    def _child_steps(self) -> list[Step]:
+        """Sub-steps held in fields (a single ``Step``, or a list/dict of them)."""
+        _, children = utils.step_children(self)
+        return [step for _, step in children]
 
-        Default: this step only. Compound steps override to also descend.
+    def _propagate_folder(self, parent_folder: Path) -> None:
+        """Fill own ``infra.folder`` when unset, then cascade into sub-steps.
+
+        Sub-steps inherit this step's own folder if set, else ``parent_folder``.
         """
         if self.infra is not None and self.infra.folder is None:
             self.infra.folder = parent_folder
+        own = utils.get_infra_folder(self)
+        folder = parent_folder if own is None else own
+        for child in self._child_steps():
+            child._propagate_folder(folder)
 
     # =========================================================================
     # Identity
@@ -409,18 +422,6 @@ class Chain(Step):
         super().model_post_init(__context)
         if not self.steps:
             raise ValueError("steps cannot be empty")
-        # Folder cascade: chain's folder fills sub-step infras that have none.
-        # Static (config-only), runs once at construction.
-        folder = utils.get_infra_folder(self)
-        if folder is not None:
-            self._propagate_folder(folder)
-
-    def _propagate_folder(self, parent_folder: Path) -> None:
-        super()._propagate_folder(parent_folder)
-        own = utils.get_infra_folder(self)
-        folder = parent_folder if own is None else own
-        for step in self._step_sequence():
-            step._propagate_folder(folder)
 
     def _step_sequence(self) -> tuple[Step, ...]:
         return tuple(self.steps.values() if isinstance(self.steps, dict) else self.steps)

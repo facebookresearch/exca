@@ -109,6 +109,32 @@ def resolved_step(step: base.Step) -> base.Step:
     return built
 
 
+def step_children(
+    step: base.Step,
+) -> tuple[set[str], list[tuple[str | None, base.Step]]]:
+    """Field-driven children: any field holding a Step, non-empty
+    list/tuple[Step], or non-empty dict[str, Step]. List/tuple entries
+    unlabeled (matches sequential Chain); single Step and dict entries
+    labeled. Returns (consumed_field_names, [(label, step), ...])."""
+    from . import base  # lazy — avoids circular import at module level
+
+    # vars() + __pydantic_extra__ covers extra='allow' fields (outside __dict__).
+    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
+    consumed: set[str] = set()
+    children: list[tuple[str | None, base.Step]] = []
+    for k, v in all_vals.items():
+        if isinstance(v, dict):
+            pairs = list(v.items())
+        elif isinstance(v, (list, tuple)):
+            pairs = [(None, x) for x in v]
+        else:
+            pairs = [(k, v)]
+        if pairs and all(isinstance(x, base.Step) for _, x in pairs):
+            consumed.add(k)
+            children.extend(pairs)
+    return consumed, children
+
+
 # ---------------------------------------------------------------------------
 # show() helpers
 # ---------------------------------------------------------------------------
@@ -125,37 +151,11 @@ def _truncate(s: str, max_len: int = 40) -> str:
     return f"{s[:head]}...{s[-tail:]}"
 
 
-def _step_children(
-    all_vals: dict[str, tp.Any],
-) -> tuple[set[str], list[tuple[str | None, "base.Step"]]]:
-    """Field-driven children for tree rendering: any field holding a Step,
-    non-empty list/tuple[Step], or non-empty dict[str, Step]. List/tuple
-    entries unlabeled (matches sequential Chain); single Step and dict
-    entries labeled. Returns (consumed_field_names, [(label, step), ...])."""
-    from . import base  # lazy — avoids circular import at module level
-
-    consumed: set[str] = set()
-    children: list[tuple[str | None, base.Step]] = []
-    for k, v in all_vals.items():
-        if isinstance(v, dict):
-            pairs = list(v.items())
-        elif isinstance(v, (list, tuple)):
-            pairs = [(None, x) for x in v]
-        else:
-            pairs = [(k, v)]
-        if pairs and all(isinstance(x, base.Step) for _, x in pairs):
-            consumed.add(k)
-            children.extend(pairs)
-    return consumed, children
-
-
 def step_label(step: base.Step) -> str:
     """One-line label: ClassName  key=val ...  [Backend, folder]"""
     parts = [type(step).__name__]
     disc = type(step)._exca_discriminator_key
-    # vars() + __pydantic_extra__ covers extra='allow' fields (stored outside __dict__).
-    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
-    consumed, _ = _step_children(all_vals)
+    consumed, _ = step_children(step)
     # Step-valued fields are rendered as a tree by step_lines; drop from inline.
     skip = {"infra", disc} | consumed
     # mode='json' fires field serializers (e.g. ImportString → dotted path).
@@ -181,8 +181,7 @@ def step_lines(step: base.Step) -> list[str]:
     if r is not step:
         return step_lines(r)
     lines = [step_label(step)]
-    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
-    _, children = _step_children(all_vals)
+    _, children = step_children(step)
     for i, (key, sub) in enumerate(children):
         is_last = i == len(children) - 1
         connector = "└── " if is_last else "├── "

@@ -9,11 +9,10 @@ subclasses that shape how computation fans out and recombines, with no
 domain logic of their own."""
 
 import typing as tp
-from pathlib import Path
 
 from exca import confdict
 
-from . import backends, identity, items, utils
+from . import backends, identity, items
 from .base import Step
 
 
@@ -45,27 +44,30 @@ class _Parts:
 
 
 class Scatter(Step):
-    """Split each input into keyed branches, run ``body`` per branch, gather (1->N->1).
+    """Fan each input into N keyed branches, run one body per branch, gather (1->N->1).
 
-    :meth:`branches` enumerates the keys, ``body`` runs over :meth:`take`
-    ``(item, key)``, and :meth:`gather` recombines the results (in ``branches``
-    order) into one value per input. Branches run through the body's own infra,
-    so a backend fans them out; when the upstream is cached, items are read by
-    reference in the worker rather than shipped (see :class:`_Parts`).
+    To implement a Scatter, declare a single ``Step`` field (the body, any
+    name; run on each branch) and override:
 
-    Branches are keyed positionally by ``(uid, key)``, not by part content,
-    so a ``body.item_uid`` does not dedup across branches.
+    - :meth:`branches` (required): the branch keys for one input.
+    - :meth:`take`: a branch's body input (default ``item[key]``).
+    - :meth:`gather`: recombine results, in ``branches`` order (default ``list``).
 
-    Subclass :meth:`branches` (and usually :meth:`take` / :meth:`gather`).
+    The body runs through its own infra, so a backend fans the branches out;
+    with a cached upstream, parts are read by reference in-worker (see
+    :class:`_Parts`).
     """
 
-    body: Step
-
-    def model_post_init(self, __context: tp.Any) -> None:
-        super().model_post_init(__context)
-        folder = utils.get_infra_folder(self)
-        if folder is not None:
-            self._propagate_folder(folder)
+    def _body(self) -> Step:
+        """The single sub-step to scatter over (auto-discovered from fields;
+        override if the subclass holds more than one ``Step``)."""
+        children = self._child_steps()
+        if len(children) != 1:
+            raise TypeError(
+                f"{type(self).__name__} must hold exactly one Step field to "
+                f"scatter over (found {len(children)}); override _body."
+            )
+        return children[0]
 
     # Not ``keys``: that name hits the mapping protocol (``dict(step)`` in the
     # config exporter would call it).
@@ -87,12 +89,7 @@ class Scatter(Step):
     def _inner_mode(self) -> identity.ModeType:
         # surface the body's mode
         own: identity.ModeType = "cached" if self.infra is None else self.infra.mode
-        return backends.effective_mode(own, self.body._inner_mode(), own)
-
-    def _propagate_folder(self, parent_folder: Path) -> None:
-        # Descend into the body so its per-branch caches share this root.
-        super()._propagate_folder(parent_folder)
-        self.body._propagate_folder(parent_folder)
+        return backends.effective_mode(own, self._body()._inner_mode(), own)
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
         # Each branch's uid is deterministic from (uid, key) -- positional
@@ -120,7 +117,7 @@ class Scatter(Step):
             mode=batch._mode,
         )
         # One dispatch over all N*M branches lets a backend submit them together.
-        dispatched = self.body._dispatch(carrier)
+        dispatched = self._body()._dispatch(carrier)
         out = {
             uid: self.gather(keys, list(dispatched.read(branch_uids)))
             for uid, (keys, branch_uids) in plan.items()

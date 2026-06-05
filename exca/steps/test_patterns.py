@@ -45,12 +45,16 @@ class MakeDict(base.Step):
 class ScatterDict(Scatter):
     """Scatter over a dict's keys; default ``take`` (getitem) and ``gather`` (list)."""
 
+    body: base.Step
+
     def branches(self, item: dict[str, float]) -> list:
         return list(item)
 
 
 class SumByGroup(Scatter):
     """Group ``(label, value)`` rows by label, sum each group via ``body``."""
+
+    body: base.Step
 
     def branches(self, rows: list[tuple[str, float]]) -> list:
         return sorted({label for label, _ in rows})
@@ -64,6 +68,8 @@ class SumByGroup(Scatter):
 
 class TenfoldDict(Scatter):
     """Same branch keys as ScatterDict but ``take`` scales the part by 10."""
+
+    body: base.Step
 
     def branches(self, item: dict[str, float]) -> list:
         return list(item)
@@ -85,11 +91,35 @@ def test_custom_take_and_gather() -> None:
 
 def test_empty_keys_raises() -> None:
     class _Empty(Scatter):
+        body: base.Step
+
         def branches(self, item: tp.Any) -> list:
             return []
 
     with pytest.raises(ValueError, match="no branches to scatter"):
         _Empty(body=conftest.Mult()).run({"a": 1.0})
+
+
+def test_body_field_named_freely() -> None:
+    class ScatterParts(Scatter):
+        parts: base.Step  # the body, discovered by type, not by name
+
+        def branches(self, item: dict[str, float]) -> list:
+            return list(item)
+
+    assert ScatterParts(parts=conftest.Mult(coeff=2.0)).run({"a": 3.0}) == [6.0]
+
+
+def test_ambiguous_body_raises() -> None:
+    class TwoSteps(Scatter):
+        a: base.Step
+        b: base.Step
+
+        def branches(self, item: tp.Any) -> list:
+            return list(item)
+
+    with pytest.raises(TypeError, match="exactly one Step field"):
+        TwoSteps(a=conftest.Mult(), b=conftest.Mult()).run({"x": 1.0})
 
 
 def test_mid_chain_scatter_splits_an_upstream_value() -> None:
@@ -119,7 +149,9 @@ def test_body_cache_keyed_by_scatter_identity(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     item = {"a": 1.0, "b": 2.0}
 
-    def run(cls: type[Scatter]) -> tp.Any:  # identity body, so parts show through
+    def run(
+        cls: tp.Callable[..., Scatter],
+    ) -> tp.Any:  # identity body, parts show through
         return cls(body=conftest.Mult(coeff=1.0, infra=infra)).run(item)
 
     assert run(ScatterDict) == [1.0, 2.0]
