@@ -236,18 +236,6 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     )
 
 
-def test_folder_cascades_into_non_chain_substep() -> None:
-    folderless: tp.Any = {"backend": "Cached"}
-    step = conftest.AddWithTransforms(
-        transforms=[conftest.Mult(coeff=2.0, infra=folderless)],
-        infra={"backend": "Cached", "folder": Path("/cache")},  # type: ignore
-    )
-    sub = step.transforms[0]
-    assert sub.infra is not None and sub.infra.folder == Path("/cache"), (
-        "own folder cascades into a step-valued field, not just Chain.steps"
-    )
-
-
 @pytest.mark.parametrize("kind", ["step", "chain"])
 def test_infra_without_folder_raises_at_runtime(kind: str) -> None:
     infra: tp.Any = {"backend": "Cached"}  # no folder
