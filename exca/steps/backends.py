@@ -281,7 +281,7 @@ class CoordinationInfo:
 
 @dataclasses.dataclass
 class ComputeBatch:
-    """One step's items, run and cached together as one ``_run_batch``.
+    """One step's items, run and cached together via ``step._run_items``.
 
     The picklable payload sent to a worker: ``run_and_cache()`` runs ``items``
     through ``step``, writing results to ``cache_dict`` and errors under

@@ -213,13 +213,19 @@ class Step(exca.helpers.DiscriminatedModel):
         return "cached" if self.infra is None else self.infra.mode
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
-        """Process *batch* and return result as StepItems."""
+        """Transform *batch* into the result carrier.
+
+        The override point for batch-level steps (composites, fan-out).
+        The result must be single-pass iterable (it may be consumed
+        eagerly) and must extend the carrier's identity with this step
+        (as ``StepItems.apply_step`` does), or the cache mis-keys silently.
+        """
         return batch.apply_step(self)
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        """Push *batch* through this step, return result as StepItems."""
+        """Route *batch*: run ``_run_items`` inline, or hand to the backend."""
         if self.infra is None:
-            return batch.apply_step(self)
+            return self._run_items(batch)
         if self.infra.folder is None:
             raise RuntimeError(
                 f"{type(self).__name__} has infra={type(self.infra).__name__!r} but no "
@@ -538,11 +544,6 @@ class Chain(Step):
         child_modes = [s._inner_mode() for s in self._resolved_steps()]
         # trailing own: chain reasserts its mode after children
         return backends.effective_mode(own, *child_modes, own)
-
-    def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        if self.infra is None:
-            return self._walk_steps(batch)
-        return super()._dispatch(batch)
 
 
 Step._exca_chain_class = Chain
