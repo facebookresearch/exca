@@ -47,7 +47,7 @@ class _Parts:
 
 
 class _Gather:
-    """Lazy carrier source: input uid -> ``gather({key: branch result})``.
+    """Lazy carrier source: input uid -> ``gather`` of its branch results.
 
     Defers each item's reduce to read time, so results stream and the Scatter's own
     cache fills per item (one item's gather failure isolates from the rest).
@@ -56,20 +56,20 @@ class _Gather:
     def __init__(
         self,
         dispatched: items.StepItems,
-        meta: dict[str, tuple[str, tp.Hashable]],
-        gather: tp.Callable[[dict], tp.Any],
+        meta: dict[str, tuple[str, tp.Any]],
+        gather: tp.Callable[[list], tp.Any],
     ) -> None:
         self._dispatched = dispatched
         self._gather = gather
-        # key insertion order = branches order (gather relies on it)
-        self._plan: dict[str, dict[tp.Hashable, str]] = {}
+        # list order = branches order (gather relies on it)
+        self._plan: dict[str, list[tuple[str, tp.Any]]] = {}
         for branch_uid, (uid, key) in meta.items():
-            self._plan.setdefault(uid, {})[key] = branch_uid
+            self._plan.setdefault(uid, []).append((branch_uid, key))
 
     def __getitem__(self, uid: str) -> tp.Any:
         branches = self._plan[uid]
-        results = self._dispatched.read(list(branches.values()))
-        return self._gather(dict(zip(branches, results)))
+        results = self._dispatched.read([branch_uid for branch_uid, _ in branches])
+        return self._gather([(key, res) for (_, key), res in zip(branches, results)])
 
 
 class Scatter(Step):
@@ -81,7 +81,7 @@ class Scatter(Step):
     - :meth:`branches` (required): the branch keys for one input.
     - :meth:`take`: a branch's body input (default ``item[key]``).
     - :meth:`gather`: recombine results, in ``branches`` order (default: the
-      ``{key: result}`` mapping as-is).
+      ``{key: result}`` mapping).
 
     The body runs through its own infra, so a backend fans the branches out;
     with a cached upstream, parts are read by reference in-worker (see
@@ -99,24 +99,25 @@ class Scatter(Step):
             )
         return children[0]
 
-    def branches(self, item: tp.Any) -> list[tp.Hashable]:
+    def branches(self, item: tp.Any) -> list[tp.Any]:
         """Branch keys (one branch per key), enumerated from the upstream value.
 
-        Keys must be hashable -- they key the ``gather`` mapping.
+        A key identifies its branch (in the cache and to :meth:`take`/:meth:`gather`)
+        and may be any value -- e.g. a config dict.
         """
         raise NotImplementedError
 
-    def take(self, item: tp.Any, key: tp.Hashable) -> tp.Any:
+    def take(self, item: tp.Any, key: tp.Any) -> tp.Any:
         """Slice one branch's part out of ``item``. Runs in-worker; keep it cheap.
 
         Default: ``item[key]`` (dict / label / index lookup).
         """
         return item[key]
 
-    def gather(self, results: dict) -> tp.Any:
-        """Recombine one item's branch ``results`` (a ``{key: result}`` mapping,
-        in ``branches`` order). Default: the mapping as-is."""
-        return results
+    def gather(self, results: list) -> tp.Any:
+        """Recombine one item's branch ``results``, given as ``(key, result)`` in
+        ``branches`` order. Default: the ``{key: result}`` mapping."""
+        return dict(results)
 
     def lookup(
         self,
@@ -150,7 +151,7 @@ class Scatter(Step):
         return handle
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
-        meta: dict[str, tuple[str, tp.Hashable]] = {}  # branch uid -> (uid, key)
+        meta: dict[str, tuple[str, tp.Any]] = {}  # branch uid -> (uid, key)
         # cached upstream: parts read by ref in-worker (_Parts); else built on the driver
         cached = isinstance(batch._source, cachedict.CacheDict)
         parts: dict[str, tp.Any] = {}
