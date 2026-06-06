@@ -662,6 +662,14 @@ def test_resolve_step_intermediate_cache(tmp_path: Path) -> None:
         f"Expected 1 AddWithTransforms cache folder, got {add_folders}"
     )
 
+    # clearing a resolvable step's cache makes it recompute internal steps.
+    resolved = step._resolve_step()
+    assert isinstance(resolved, Chain)
+    intermediate = resolved._step_sequence()[0]
+    assert intermediate.lookup().cached()
+    step.lookup().clear_cache()
+    assert not intermediate.lookup().cached()
+
 
 def test_resolve_step_inside_chain_cache(tmp_path: Path) -> None:
     """Resolved step works with caching inside a Chain."""
