@@ -219,26 +219,16 @@ def test_readonly_does_not_propagate(tmp_path: Path) -> None:
     assert chain.run(5.0) == 30.0
 
 
-def test_mode_retry_short_circuits_on_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mode_retry_short_circuits_on_success(tmp_path: Path) -> None:
     """retry+success returns the cached value without re-running _run
     (only retry+error should recompute)."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = conftest.RandomGenerator(infra=infra)
-    out = step.run()  # populate cache
+    out = conftest.RandomGenerator(infra=infra).run()  # populate cache
 
-    calls = {"n": 0}
-    original = conftest.RandomGenerator._run
-
-    def counted(self: conftest.RandomGenerator) -> float:
-        calls["n"] += 1
-        return original(self)
-
-    monkeypatch.setattr(conftest.RandomGenerator, "_run", counted)
-    step = step.clone({"infra.mode": "retry"})
+    # fresh clone -> its .calls starts empty, so any _run shows up
+    step = conftest.RandomGenerator(infra=infra).clone({"infra.mode": "retry"})
     assert step.run() == out
-    assert calls["n"] == 0
+    assert step.calls == []
 
 
 @pytest.mark.parametrize("chain", [True, False])
@@ -431,12 +421,12 @@ def test_force_on_grandchild(tmp_path: Path) -> None:
 
 def test_retry_on_grandchild(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    failing = conftest.Add(value=1, error=True, infra=infra)
+    failing = conftest.Add(value=1, fail_on="all", infra=infra)
     inner = Chain(steps=[failing, conftest.Mult(coeff=10)], infra=infra)
     outer = Chain(steps=[inner, conftest.Add(value=2)], infra=infra)
     with pytest.raises(ValueError, match="Triggered an error"):
         outer.run()
-    failing.error = False  # excluded from uid, so cache key is unchanged
+    failing.fail_on = None  # excluded from uid, so cache key is unchanged
     failing.infra.mode = "retry"  # type: ignore
     assert outer.run() == 12.0  # (0 + 1) * 10 + 2
 
@@ -547,18 +537,16 @@ def test_keep_in_ram(tmp_path: Path) -> None:
 def test_complex_input_caching(tmp_path: Path) -> None:
     """Complex input values (lists, dicts) should be cacheable via ConfDict uid."""
 
-    class Identity(Step):
-        _call_count: tp.ClassVar[int] = 0
-
+    class Identity(conftest.RecordingStep):
         def _run(self, value: tp.Any) -> tp.Any:
-            Identity._call_count += 1
+            self.record(value)
             return value
 
     step = Identity(infra={"backend": "Cached", "folder": tmp_path})  # type: ignore
     data: tp.Any = [1.0, {"a": 12}]
 
     assert step.run(data) == step.run(data)
-    assert Identity._call_count == 1  # Only computed once
+    assert len(step.calls) == 1  # Only computed once
     assert step.run(data) != step.run(12)
 
     # Check the uid is deterministic
@@ -567,20 +555,13 @@ def test_complex_input_caching(tmp_path: Path) -> None:
 
 
 def test_reused_cached_output_keeps_pending_steps(tmp_path: Path) -> None:
-    calls = 0
-
-    class CountedMult(Step):
-        def _run(self, value: int) -> int:
-            nonlocal calls
-            calls += 1
-            return value * 2
-
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(steps=[conftest.Add(value=1, infra=infra), CountedMult()])
+    mult = conftest.Mult(coeff=2)
+    chain = Chain(steps=[conftest.Add(value=1, infra=infra), mult])
 
     assert chain.run(1) == 4
     assert chain.run(1) == 4
-    assert calls == 2
+    assert len(mult.calls) == 2
 
 
 def test_item_uid_override_in_chain(tmp_path: Path) -> None:
