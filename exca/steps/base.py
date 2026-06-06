@@ -329,7 +329,6 @@ class Step(exca.helpers.DiscriminatedModel):
         Any
             Cached or freshly computed result.
         """
-        # Sugar over run_many: run one input, return the single result.
         return next(iter(self.run_many([value])))
 
     def run_many(self, values: tp.Iterable[tp.Any]) -> items.StepItems:
@@ -343,8 +342,7 @@ class Step(exca.helpers.DiscriminatedModel):
         Returns
         -------
         StepItems
-            Streaming iterator yielding one result per input. Iterate it
-            as results arrive; don't ``list()`` it if you want streaming.
+            Iterator yielding one result per input, in input order.
         """
         built = utils.resolved_step(self)
         if built is not self:
