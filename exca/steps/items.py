@@ -4,16 +4,11 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Items class hierarchy for batch execution.
+"""Carrier for batch execution.
 
-Hierarchy::
-
-    Items               user-facing root; wraps Iterable[Any]
-    └── StepItems       source + pending + upstream + uids + mode
-
-Users only construct ``Items(values)``; ``StepItems`` is framework-internal.
-When called with ``Items``, ``step.run(items)`` returns a ``StepItems``;
-scalar calls return the scalar result directly.
+``StepItems`` is the framework-internal carrier threaded through a
+pipeline: source + pending + upstream + uids + mode. Users never
+construct it; ``step.run_many`` returns one as its results iterator.
 """
 
 from __future__ import annotations
@@ -39,33 +34,6 @@ class _Source(tp.Protocol):
 
 class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
-
-
-class Items:
-    """Batch wrapper: run the same step over many inputs.
-
-    ``step.run(Items([v1, v2, ...]))`` produces a streaming iterator
-    yielding one result per input, in order, with one cache entry per
-    ``(step, input)`` pair. ``Items()`` with no arguments is the
-    no-input form for generator steps.
-
-    Example::
-
-        step = Multiply(coeff=2.0, infra={"backend": "Cached", "folder": cache})
-        for r in step.run(Items([1.0, 2.0, 3.0])):
-            print(r)                                    # 2.0, then 4.0, then 6.0
-
-    See :doc:`items` for batched semantics, custom ``item_uid``, and
-    ``_run_batch``.
-    """
-
-    def __init__(self, values: tp.Iterable[tp.Any] | None = None) -> None:
-        self._values: tp.Iterable[tp.Any] = (
-            [identity.NoValue()] if values is None else values
-        )
-
-    def __iter__(self) -> tp.Iterator[tp.Any]:
-        return iter(self._values)
 
 
 class _AnnotatedBatch:
@@ -115,7 +83,7 @@ class _AnnotatedBatch:
             )
 
 
-class StepItems(Items):
+class StepItems:
     """Pipeline carrier for inline computation between cached boundaries.
 
     For dict sources, uids default to the dict keys (insertion order).

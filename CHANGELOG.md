@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `exca/steps`: update experimental batch execution API to `step.run_many([v1, v2, ...])`. [#275]
+
 ## 0.5.26 - 26-06-03
 
 - `exca/steps`: experimental batch execution via `Items`. `step.run(Items([v1, v2, ...]))` processes multiple inputs sharing per-step caches. `_run_batch` hook for vectorised compute. [#248]

@@ -30,4 +30,3 @@ from . import helpers as helpers
 from . import patterns as patterns
 from .base import Chain as Chain
 from .base import Step as Step
-from .items import Items as Items

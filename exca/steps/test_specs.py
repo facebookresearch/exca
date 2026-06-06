@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from . import conftest, items
+from . import conftest
 from .base import Chain, Step
 
 # -----------------------------------------------------------------------------
@@ -63,11 +63,11 @@ def test_heterogeneous_items_cache(tmp_path: Path, as_chain: bool) -> None:
     if as_chain:
         step = Chain(steps=[step, conftest.Mult(coeff=1.0, infra=infra)])
 
-    list(step.run(items.Items([1.0, 2.0])))
+    list(step.run_many([1.0, 2.0]))
     assert set(counting.calls) == {1.0, 2.0}
 
     before = len(counting.calls)
-    result = list(step.run(items.Items([1.0, 2.0, 3.0])))
+    result = list(step.run_many([1.0, 2.0, 3.0]))
     assert counting.calls[before:] == [3.0], "Only the new item should compute"
     assert result == [2.0, 4.0, 6.0]
 
@@ -210,7 +210,7 @@ def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
 
 # -----------------------------------------------------------------------------
 # One execution engine for scalar and batch
-# "step.run(value) and list(step.run(Items([value])))[0] share a cache entry
+# "step.run(value) and list(step.run_many([value]))[0] share a cache entry
 #  and the same code path."
 # -----------------------------------------------------------------------------
 
@@ -222,7 +222,7 @@ def test_scalar_and_items_share_cache(tmp_path: Path, as_chain: bool) -> None:
     if as_chain:
         step = Chain(steps=[step, conftest.Mult(coeff=2.0)])
     scalar = step.run(10.0)
-    assert list(step.run(items.Items([10.0]))) == [scalar], "cache not shared"
+    assert list(step.run_many([10.0])) == [scalar], "cache not shared"
 
 
 # -----------------------------------------------------------------------------
@@ -240,7 +240,7 @@ def test_chain_items_per_step_batching(tmp_path: Path, with_infra: bool) -> None
 
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     chain = Chain(steps=[track(infra), track(None), track(infra if with_infra else None)])
-    result = list(chain.run(items.Items([1, 2, 3])))
+    result = list(chain.run_many([1, 2, 3]))
     assert result == [1000, 2000, 3000]
     assert set(calls[:3]) == {1, 2, 3}, "step1 (cached): eager, possibly unordered"
     rest = np.array(calls[3:])
@@ -269,7 +269,7 @@ def test_duplicate_uids_preserve_all_results(
     step: tp.Any = conftest.Mult(coeff=10.0, infra=infra if with_infra else None)
     if as_chain:
         step = Chain(steps=[step, conftest.Mult(coeff=1.0)])
-    result = list(step.run(items.Items([1.0, 1.0, 2.0])))
+    result = list(step.run_many([1.0, 1.0, 2.0]))
     assert result == [10.0, 10.0, 20.0], "one result per input, even with duplicate uids"
 
 
@@ -284,13 +284,13 @@ def test_fail_fast_partial_cache(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.Add(value=10, fail_on={3}, infra=infra)
     with pytest.raises(ValueError):
-        list(step.run(items.Items([1, 2, 3, 4, 5])))
+        list(step.run_many([1, 2, 3, 4, 5]))
     assert step.calls[-1] == 3, "fail-fast: nothing should compute after the failure"
     first_cached = set(step.calls[:-1])
 
     infra["mode"] = "retry"
     retried = conftest.Add(value=10, infra=infra)  # fail_on excluded from uid
-    result = list(retried.run(items.Items([1, 2, 3, 4, 5])))
+    result = list(retried.run_many([1, 2, 3, 4, 5]))
     assert result == [11, 12, 13, 14, 15]
     assert 3 in retried.calls
     assert first_cached.isdisjoint(set(retried.calls)), "cached items must not recompute"

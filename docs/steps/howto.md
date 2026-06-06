@@ -58,7 +58,7 @@ steps.helpers.Func(function=shift, input_param="x", by=1.5).run(2.0)  # 3.5
 
 ## Override `item_uid` for opaque inputs
 
-When a Step is called with `Items`, the framework needs a stable
+When a Step is called via `run_many`, the framework needs a stable
 string per input. By default it uses `exca.confdict.UidMaker` on
 the value, which is fine for paths, ints, small dicts, etc. For
 inputs the default can't key reliably — typically arrays or other

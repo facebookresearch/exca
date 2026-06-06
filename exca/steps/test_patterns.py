@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from . import base, conftest
-from .items import Items
 from .patterns import Scatter
 
 
@@ -109,7 +108,7 @@ def test_downstream_cache_keyed_by_scatter_identity(tmp_path: Path) -> None:
 def test_batched_items_scatter_independently(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     scat = ScatterDict(body=conftest.Mult(coeff=2.0, infra=infra))
-    out = list(scat.run(Items([{"a": 1.0, "b": 2.0}, {"a": 10.0}])))
+    out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"a": 10.0}]))
     assert out == [{"a": 2.0, "b": 4.0}, {"a": 20.0}], (
         "(uid, key) keeps same-key items apart"
     )
