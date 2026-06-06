@@ -280,6 +280,9 @@ class Step(exca.helpers.DiscriminatedModel):
         backends.LookupHandle
             Handle to inspect, retrieve, or clear the cached result.
         """
+        built = utils.resolved_step(self)
+        if built is not self:  # caching happens under the resolved form.
+            return built.lookup(value, _upstream=_upstream, _uid=_uid)
         if self.infra is None or self.infra.folder is None:
             return backends.LookupHandle()
         if _uid is not None and not isinstance(value, identity.NoValue):

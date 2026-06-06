@@ -15,18 +15,6 @@ from . import base, conftest
 from .items import Items
 from .patterns import Scatter
 
-_CALLS = {"n": 0}  # bumped by CountMult._run; tests read it for cache hits/misses
-
-
-class CountMult(base.Step):
-    """Multiplier that counts ``_run`` calls, to detect cache hits/misses."""
-
-    coeff: float = 2.0
-
-    def _run(self, value: float) -> float:
-        _CALLS["n"] += 1
-        return value * self.coeff
-
 
 class Sum(base.Step):
     """Sums a branch's row list, or a gathered ``{key: result}`` mapping downstream."""
@@ -60,7 +48,7 @@ def test_custom_take_and_gather() -> None:
         def branches(self, rows: list[tuple[str, float]]) -> list:
             return sorted({label for label, _ in rows})
 
-        def take(self, rows: list[tuple[str, float]], key: str) -> list[float]:
+        def take(self, rows: list[tuple[str, float]], key: tp.Hashable) -> list[float]:
             return [value for label, value in rows if label == key]
 
     rows = [("a", 1.0), ("a", 2.0), ("b", 3.0)]
@@ -130,22 +118,46 @@ def test_batched_items_scatter_independently(tmp_path: Path) -> None:
 def test_scatter_and_body_caching(tmp_path: Path) -> None:
     scat_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
 
+    calls: list = []  # shared hook: a fresh body per mode, counted across all
+
     def scatter(mode: str = "cached") -> Scatter:
         # body has no folder: it inherits the Scatter's via cascade
         body_infra: tp.Any = {"backend": "Cached", "mode": mode}
-        return ScatterDict(body=CountMult(coeff=10.0, infra=body_infra), infra=scat_infra)
+        body = conftest.Mult(coeff=10.0, infra=body_infra).on_call(calls.append)
+        return ScatterDict(body=body, infra=scat_infra)
 
-    _CALLS["n"] = 0
     assert scatter().run({"a": 1.0, "b": 2.0}) == {"a": 10.0, "b": 20.0}
-    assert _CALLS["n"] == 2, "one body call per branch"
+    assert len(calls) == 2, "one body call per branch"
     assert scatter().run({"a": 1.0, "b": 2.0}) == {"a": 10.0, "b": 20.0}
-    assert _CALLS["n"] == 2, "re-run is all cache hits"
+    assert len(calls) == 2, "re-run is all cache hits"
     assert scatter("force").run({"a": 1.0, "b": 2.0}) == {"a": 10.0, "b": 20.0}
-    assert _CALLS["n"] == 4, "force on body recomputes despite Scatter's own cache"
+    assert len(calls) == 4, "force on body recomputes despite Scatter's own cache"
     # body cache is nested under the Scatter's uid folder (its identity), via cascade
-    scat_uid = "type=ScatterDict,body={coeff=10,type=CountMult}-957a863b"
-    body_uid = "coeff=10,type=CountMult-d46058a7"
+    scat_uid = "type=ScatterDict,body={coeff=10,type=Mult}-63b52beb"
+    body_uid = "coeff=10,type=Mult-98baeffc"
     assert (tmp_path / scat_uid / body_uid / "cache").is_dir()
+
+
+def test_clear_cache_reaches_branch_caches(tmp_path: Path) -> None:
+    body_infra: tp.Any = {"backend": "Cached"}  # inherits the parent folder
+    direct_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "direct"}
+    chain_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "chain"}
+
+    body = conftest.Mult(coeff=10.0, infra=body_infra)
+    scat = ScatterDict(body=body, infra=direct_infra)
+    scat.run({"a": 1.0, "b": 2.0})  # one body call per branch
+    scat.lookup({"a": 1.0, "b": 2.0}).clear_cache()
+    scat.run({"a": 1.0, "b": 2.0})
+    assert len(body.calls) == 4, "direct clear recomputed branches, not stale cache"
+
+    chain_body = conftest.Mult(coeff=10.0, infra=body_infra)
+    chain = base.Chain(
+        steps=[MakeDict(), ScatterDict(body=chain_body)], infra=chain_infra
+    )
+    chain.run(2.0)  # MakeDict(2) -> {"0", "1"}
+    chain.lookup(2.0).clear_cache()
+    chain.run(2.0)
+    assert len(chain_body.calls) == 4, "chain (uid-only) clear reached the branch caches"
 
 
 def test_process_backend_runs_branches_cross_process(tmp_path: Path) -> None:

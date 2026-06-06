@@ -44,43 +44,31 @@ def test_chain_is_sequential(tmp_path: Path, with_infra: bool) -> None:
 def test_downstream_cache_skips_upstream(tmp_path: Path, with_cache: bool) -> None:
     # Cache key comes from a uid carried from the root, not from the
     # transformed upstream output — else checking the cache requires _run.
-    calls = {"up": 0}
-
-    class Upstream(Step):
-        def _run(self, x: float = 0.0) -> float:
-            calls["up"] += 1
-            return x + 1.0
-
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_cache else None
+    upstream = conftest.Add(value=1.0)  # one instance so .calls spans both runs
 
     def make_chain() -> Chain:
-        return Chain(steps=[Upstream(), conftest.Mult(coeff=10.0, infra=infra)])
+        return Chain(steps=[upstream, conftest.Mult(coeff=10.0, infra=infra)])
 
     make_chain().run()
     make_chain().run()
-    assert calls["up"] == (1 if with_cache else 2)
+    assert len(upstream.calls) == (1 if with_cache else 2)
 
 
 @pytest.mark.parametrize("as_chain", [False, True])
 def test_heterogeneous_items_cache(tmp_path: Path, as_chain: bool) -> None:
-    calls: list[float] = []
-
-    class Counting(Step):
-        def _run(self, x: float) -> float:
-            calls.append(x)
-            return x * 2
-
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step: tp.Any = Counting(infra=infra)
+    counting = conftest.Mult(coeff=2.0, infra=infra)
+    step: tp.Any = counting
     if as_chain:
         step = Chain(steps=[step, conftest.Mult(coeff=1.0, infra=infra)])
 
     list(step.run(items.Items([1.0, 2.0])))
-    assert set(calls) == {1.0, 2.0}
+    assert set(counting.calls) == {1.0, 2.0}
 
-    calls.clear()
+    before = len(counting.calls)
     result = list(step.run(items.Items([1.0, 2.0, 3.0])))
-    assert calls == [3.0], "Only the new item should compute"
+    assert counting.calls[before:] == [3.0], "Only the new item should compute"
     assert result == [2.0, 4.0, 6.0]
 
 
@@ -193,21 +181,25 @@ def test_exec_params_are_model_config_not_run_kwargs(tmp_path: Path) -> None:
 # -----------------------------------------------------------------------------
 
 
-class _PidRecorder(Step):
-    """Writes os.getpid() to a file during _run — works across processes."""
+def _pid_recorder(pid_file: Path, infra: tp.Any) -> conftest.Add:
+    """Add(value=1) whose on_call hook writes os.getpid() — fires in whatever
+    process runs _run, so it observes execution across a process boundary."""
 
-    pid_file: Path = Path()
+    def write_pid(_value: float) -> None:
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
 
-    def _run(self, value: float) -> float:
-        self.pid_file.write_text(str(os.getpid()), encoding="utf-8")
-        return value + 1
+    return conftest.Add(value=1, infra=infra).on_call(write_pid)
 
 
 def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
     cached: tp.Any = {"backend": "Cached", "folder": tmp_path}
     local: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
-    last = _PidRecorder(pid_file=tmp_path / "1.txt", infra=local)
-    chain = Chain(steps=[_PidRecorder(pid_file=tmp_path / "0.txt", infra=cached), last])
+    chain = Chain(
+        steps=[
+            _pid_recorder(tmp_path / "0.txt", cached),
+            _pid_recorder(tmp_path / "1.txt", local),
+        ]
+    )
     assert chain.run(5.0) == 7.0
     pids = [int((tmp_path / f"{k}.txt").read_text(encoding="utf-8")) for k in range(2)]
     assert pids[0] == os.getpid(), "First step should run in the main process"
@@ -241,19 +233,13 @@ def test_scalar_and_items_share_cache(tmp_path: Path, as_chain: bool) -> None:
 
 @pytest.mark.parametrize("with_infra", [False, True])
 def test_chain_items_per_step_batching(tmp_path: Path, with_infra: bool) -> None:
-    calls: list[float] = []
+    calls: list[float] = []  # shared across the 3 steps to observe interleaving
 
-    class Track(Step):
-        coeff: int = 10
-
-        def _run(self, x: int) -> int:
-            calls.append(x)
-            return x * self.coeff
+    def track(infra: tp.Any) -> conftest.Mult:
+        return conftest.Mult(coeff=10, infra=infra).on_call(calls.append)
 
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(
-        steps=[Track(infra=infra), Track(), Track(infra=infra if with_infra else None)]
-    )
+    chain = Chain(steps=[track(infra), track(None), track(infra if with_infra else None)])
     result = list(chain.run(items.Items([1, 2, 3])))
     assert result == [1000, 2000, 3000]
     assert set(calls[:3]) == {1, 2, 3}, "step1 (cached): eager, possibly unordered"
@@ -295,34 +281,19 @@ def test_duplicate_uids_preserve_all_results(
 
 
 def test_fail_fast_partial_cache(tmp_path: Path) -> None:
-    calls: list[int] = []
-
-    class FailOnValue(Step):
-        coeff: int = 10
-        fail_value: int | None = None
-
-        @classmethod
-        def _exclude_from_cls_uid(cls) -> list[str]:
-            return super()._exclude_from_cls_uid() + ["fail_value"]
-
-        def _run(self, x: int) -> int:
-            calls.append(x)
-            if self.fail_value is not None and x == self.fail_value:
-                raise ValueError("boom")
-            return x * self.coeff
-
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(value=10, fail_on={3}, infra=infra)
     with pytest.raises(ValueError):
-        list(FailOnValue(fail_value=3, infra=infra).run(items.Items([1, 2, 3, 4, 5])))
-    assert calls[-1] == 3, "fail-fast: nothing should compute after the failure"
-    first_cached = set(calls[:-1])
+        list(step.run(items.Items([1, 2, 3, 4, 5])))
+    assert step.calls[-1] == 3, "fail-fast: nothing should compute after the failure"
+    first_cached = set(step.calls[:-1])
 
-    calls.clear()
     infra["mode"] = "retry"
-    result = list(FailOnValue(infra=infra).run(items.Items([1, 2, 3, 4, 5])))
-    assert result == [10, 20, 30, 40, 50]
-    assert 3 in calls
-    assert first_cached.isdisjoint(set(calls)), "cached items must not recompute"
+    retried = conftest.Add(value=10, infra=infra)  # fail_on excluded from uid
+    result = list(retried.run(items.Items([1, 2, 3, 4, 5])))
+    assert result == [11, 12, 13, 14, 15]
+    assert 3 in retried.calls
+    assert first_cached.isdisjoint(set(retried.calls)), "cached items must not recompute"
 
 
 # -----------------------------------------------------------------------------

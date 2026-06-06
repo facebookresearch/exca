@@ -443,15 +443,15 @@ def _format_exc(exc: BaseException) -> str:
 
 
 def test_step_error_note() -> None:
-    step = conftest.Add(value=5, error=True)
+    step = conftest.Add(value=5, fail_on="all")
     with pytest.raises(ValueError) as exc_info:
         step.run(0)
     formatted = _format_exc(exc_info.value)
-    assert "Add(" in formatted and "error=True" in formatted
+    assert "Add(" in formatted and "fail_on='all'" in formatted
 
 
 def test_chain_error_note() -> None:
-    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=5, error=True)])
+    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=5, fail_on="all")])
     with pytest.raises(ValueError) as exc_info:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
@@ -538,7 +538,7 @@ def test_chain_indexing() -> None:
 
 
 def test_chain_string_indexing() -> None:
-    steps = collections.OrderedDict(
+    steps: collections.OrderedDict[str, Step] = collections.OrderedDict(
         add=conftest.Add(value=1),
         mult=conftest.Mult(coeff=2),
     )
@@ -561,7 +561,9 @@ def test_chain_slicing(tmp_path: Path) -> None:
     assert chain_infra[1:].infra is not None
     assert chain_infra[1:].run(5.0) == 13.0  # 5*2+3
     # OrderedDict keys preserved
-    odict = collections.OrderedDict(add=steps[0], mult=steps[1], add2=steps[2])
+    odict: collections.OrderedDict[str, Step] = collections.OrderedDict(
+        add=steps[0], mult=steps[1], add2=steps[2]
+    )
     sub_steps = Chain(steps=odict)[:2].steps
     assert isinstance(sub_steps, dict)
     assert list(sub_steps.keys()) == ["add", "mult"]

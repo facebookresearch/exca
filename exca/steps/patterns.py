@@ -12,8 +12,10 @@ import typing as tp
 
 from exca import cachedict, confdict
 
-from . import items, utils
+from . import backends, identity, items, utils
 from .base import Step
+
+_BRANCH_SEP = "/"  # branch uid = "{input uid}/{key uid}"
 
 
 class _Parts:
@@ -32,10 +34,10 @@ class _Parts:
         take: tp.Callable[[tp.Any, tp.Any], tp.Any],
         meta: dict[str, tuple[str, tp.Any]],
     ) -> None:
-        self._batch = batch  # full batch; one item read (and memoized) per uid
+        self._batch = batch
         self._take = take
-        self._meta = meta  # branch uid -> (uid, key)
-        self._read: dict[str, tp.Any] = {}  # uid -> value, memoized per process
+        self._meta = meta
+        self._read: dict[str, tp.Any] = {}
 
     def __getitem__(self, branch_uid: str) -> tp.Any:
         uid, key = self._meta[branch_uid]
@@ -54,16 +56,20 @@ class _Gather:
     def __init__(
         self,
         dispatched: items.StepItems,
-        plan: dict[str, tuple[list, list[str]]],
+        meta: dict[str, tuple[str, tp.Hashable]],
         gather: tp.Callable[[dict], tp.Any],
     ) -> None:
         self._dispatched = dispatched
-        self._plan = plan  # uid -> (keys, branch uids)
         self._gather = gather
+        # key insertion order = branches order (gather relies on it)
+        self._plan: dict[str, dict[tp.Hashable, str]] = {}
+        for branch_uid, (uid, key) in meta.items():
+            self._plan.setdefault(uid, {})[key] = branch_uid
 
     def __getitem__(self, uid: str) -> tp.Any:
-        keys, branch_uids = self._plan[uid]
-        return self._gather(dict(zip(keys, self._dispatched.read(branch_uids))))
+        branches = self._plan[uid]
+        results = self._dispatched.read(list(branches.values()))
+        return self._gather(dict(zip(branches, results)))
 
 
 class Scatter(Step):
@@ -93,17 +99,14 @@ class Scatter(Step):
             )
         return children[0]
 
-    # Not ``keys``: that name hits the mapping protocol (``dict(step)`` in the
-    # config exporter would call it).
-    def branches(self, item: tp.Any) -> list:
-        """Branch keys (one per branch), enumerated from the upstream value.
+    def branches(self, item: tp.Any) -> list[tp.Hashable]:
+        """Branch keys (one branch per key), enumerated from the upstream value.
 
-        Keys should be unique: a repeated key runs the body once but feeds
-        ``gather`` that result once per occurrence.
+        Keys must be hashable -- they key the ``gather`` mapping.
         """
         raise NotImplementedError
 
-    def take(self, item: tp.Any, key: tp.Any) -> tp.Any:
+    def take(self, item: tp.Any, key: tp.Hashable) -> tp.Any:
         """Slice one branch's part out of ``item``. Runs in-worker; keep it cheap.
 
         Default: ``item[key]`` (dict / label / index lookup).
@@ -115,14 +118,40 @@ class Scatter(Step):
         in ``branches`` order). Default: the mapping as-is."""
         return results
 
+    def lookup(
+        self,
+        value: tp.Any = identity.NoValue(),
+        *,
+        _upstream: tp.Sequence[Step] = (),
+        _uid: str | None = None,
+    ) -> backends.LookupHandle:
+        """Like :meth:`Step.lookup`, but the handle's ``clear_cache`` also clears
+        every branch's body cache (not just this Scatter's gathered result)."""
+        handle = super().lookup(value, _upstream=_upstream, _uid=_uid)
+        # input uid; branches exist even when the Scatter is uncached (inline in a Chain)
+        if _uid is not None:
+            uid = _uid
+        elif not isinstance(value, identity.NoValue):
+            uid = identity.materialize_uid(self, value)
+        else:
+            return handle  # no input -> no branches to scope
+        upstream = tuple(_upstream) + tuple(self._uid_steps())
+        body = self._body()
+        # any uid -> same body cachedict; we only read its keys
+        cd = body.lookup(_upstream=upstream, _uid=uid)._cache_dict
+        if cd is None:
+            return handle
+        prefix = uid + _BRANCH_SEP  # safe: the separator can't occur in a uid
+        handle._sub_handles = tuple(
+            body.lookup(_upstream=upstream, _uid=key)
+            for key in cd.keys()
+            if key.startswith(prefix)
+        )
+        return handle
+
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
-        # Branch uid is keyed by (parent uid, key), so equal parts of
-        # different items don't collide.
-        meta: dict[str, tuple[str, tp.Any]] = {}  # branch uid -> (uid, key)
-        plan: dict[str, tuple[list, list[str]]] = {}  # uid -> (keys, branch uids)
-        # Cached upstream: read parts lazily by reference in-worker (see _Parts).
-        # Inline upstream: build them here from the item already read, so the
-        # carrier ships only its parts -- no full-batch pickle, no upstream re-run.
+        meta: dict[str, tuple[str, tp.Hashable]] = {}  # branch uid -> (uid, key)
+        # cached upstream: parts read by ref in-worker (_Parts); else built on the driver
         cached = isinstance(batch._source, cachedict.CacheDict)
         parts: dict[str, tp.Any] = {}
         for uid in dict.fromkeys(batch.uids):  # unique upstream items, in order
@@ -133,13 +162,12 @@ class Scatter(Step):
                     f"{type(self).__name__}.branches(...) returned no branches to "
                     "scatter over."
                 )
-            branch_uids = [confdict.UidMaker((uid, key)).format() for key in keys]
-            plan[uid] = (keys, branch_uids)
-            for key, branch_uid in zip(keys, branch_uids):
+            for key in keys:
+                branch_uid = f"{uid}{_BRANCH_SEP}{confdict.UidMaker(key).format()}"
                 meta[branch_uid] = (uid, key)
                 if not cached:
                     parts[branch_uid] = self.take(item, key)
-        # folder keyed by upstream + Scatter; branch uid is (uid, key) only.
+        # folder = upstream + Scatter; the input uid lives in the branch uid
         scattered_upstream = batch._upstream + tuple(self._uid_steps())
         carrier = items.StepItems(
             source=_Parts(batch, self.take, meta) if cached else parts,
@@ -147,12 +175,11 @@ class Scatter(Step):
             upstream=scattered_upstream,
             mode=batch._mode,
         )
-        # One dispatch over all N*M branches lets a backend submit them together.
+        # one dispatch over all branches lets a backend submit them together
         dispatched = self._body()._dispatch(carrier)
-        # Gather lazily per item: results stream and cache one at a time (no
-        # materializing all M outputs), matching the backend path's cached_items().
+        # gather lazily per item: results stream and cache one at a time
         return items.StepItems(
-            source=_Gather(dispatched, plan, self.gather),
+            source=_Gather(dispatched, meta, self.gather),
             uids=batch.uids,
             upstream=scattered_upstream,
             mode=batch._mode,
