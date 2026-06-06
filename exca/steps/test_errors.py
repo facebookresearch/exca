@@ -102,7 +102,7 @@ def test_unpicklable_exception_falls_back_to_runtime_error(tmp_path: Path) -> No
 def _add(error: bool, tmp_path: Path, mode: str = "cached") -> tp.Any:
     """Build a fresh Add(value=1) step rooted at tmp_path."""
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "mode": mode}
-    return conftest.Add(value=1, error=error, infra=infra)
+    return conftest.Add(value=1, fail_on="all" if error else None, infra=infra)
 
 
 def test_step_error_caching_and_retry(tmp_path: Path) -> None:
