@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for Items class hierarchy."""
+"""Tests for the StepItems carrier."""
 
 import pickle
 from pathlib import Path
@@ -13,12 +13,7 @@ import pytest
 
 import exca.cachedict
 
-from . import identity, items
-
-
-def test_items_no_args_default() -> None:
-    result = list(items.Items())
-    assert len(result) == 1 and isinstance(result[0], identity.NoValue)
+from . import items
 
 
 @pytest.fixture(params=["dict", "cache_dict"])

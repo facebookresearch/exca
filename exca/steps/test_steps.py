@@ -430,7 +430,7 @@ def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
         transforms=[conftest.Mult(coeff=2, infra=force_infra)],
     )
     chain = Chain(steps=[inner], infra=chain_infra)
-    assert chain._inner_mode() == "force", "Did not resolve Mult mode"
+    assert backends._effective_mode(chain) == "force", "Did not resolve Mult mode"
 
 
 # =============================================================================
@@ -443,15 +443,15 @@ def _format_exc(exc: BaseException) -> str:
 
 
 def test_step_error_note() -> None:
-    step = conftest.Add(value=5, error=True)
+    step = conftest.Add(value=5, fail_on="all")
     with pytest.raises(ValueError) as exc_info:
         step.run(0)
     formatted = _format_exc(exc_info.value)
-    assert "Add(" in formatted and "error=True" in formatted
+    assert "Add(" in formatted and "fail_on='all'" in formatted
 
 
 def test_chain_error_note() -> None:
-    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=5, error=True)])
+    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=5, fail_on="all")])
     with pytest.raises(ValueError) as exc_info:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
@@ -538,7 +538,7 @@ def test_chain_indexing() -> None:
 
 
 def test_chain_string_indexing() -> None:
-    steps = collections.OrderedDict(
+    steps: collections.OrderedDict[str, Step] = collections.OrderedDict(
         add=conftest.Add(value=1),
         mult=conftest.Mult(coeff=2),
     )
@@ -561,7 +561,9 @@ def test_chain_slicing(tmp_path: Path) -> None:
     assert chain_infra[1:].infra is not None
     assert chain_infra[1:].run(5.0) == 13.0  # 5*2+3
     # OrderedDict keys preserved
-    odict = collections.OrderedDict(add=steps[0], mult=steps[1], add2=steps[2])
+    odict: collections.OrderedDict[str, Step] = collections.OrderedDict(
+        add=steps[0], mult=steps[1], add2=steps[2]
+    )
     sub_steps = Chain(steps=odict)[:2].steps
     assert isinstance(sub_steps, dict)
     assert list(sub_steps.keys()) == ["add", "mult"]
@@ -645,7 +647,7 @@ def test_run_batch_yield_count(
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
     step = _NumYield(num=num, infra=infra)
     with pytest.raises(items.BatchProtocolError, match=match) as exc_info:
-        list(step.run(items.Items([10, 20, 30])))
+        list(step.run_many([10, 20, 30]))
     assert not any(step.lookup(v).cached() for v in [10, 20, 30])
     if with_infra:
         notes = getattr(exc_info.value, "__notes__", [])
@@ -661,7 +663,7 @@ def test_run_batch_cannot_yield_before_consuming() -> None:
     with pytest.raises(
         items.BatchProtocolError, match="yielded before consuming an input"
     ):
-        list(EarlyYield().run(items.Items([10, 20])))
+        list(EarlyYield().run_many([10, 20]))
 
 
 class _GroupedMult(Step):
@@ -686,7 +688,7 @@ def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_infra else None
     step = _GroupedMult(group_size=2, fail_value=3, infra=infra)
     with pytest.raises(ValueError, match="boom") as exc_info:
-        list(step.run(items.Items([1, 2, 3, 4, 5, 6])))
+        list(step.run_many([1, 2, 3, 4, 5, 6]))
     inflight = getattr(exc_info.value, "_inflight_uids", [])
     assert len(inflight) == 2, f"expected 2 inflight uids, got {inflight}"
 
@@ -694,7 +696,7 @@ def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
 def test_chained_group_sizes_call_order() -> None:
     _GroupedMult._CALLS.clear()
     chain = Chain(steps=[_GroupedMult(group_size=s) for s in (2, 3, 1)])
-    _ = list(chain.run(items.Items([1, 2, 3, 4, 5])))
+    _ = list(chain.run_many([1, 2, 3, 4, 5]))
     calls = list(_GroupedMult._CALLS)
     _GroupedMult._CALLS.clear()
     # fmt: off

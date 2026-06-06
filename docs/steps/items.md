@@ -1,51 +1,50 @@
 ---
 myst:
   html_meta:
-    "description": "Items — batched, per-input caching for Steps. Feedback wanted."
+    "description": "run_many — batched, per-input caching for Steps. Feedback wanted."
 ---
 
-# Items — batched compute
+# Batched compute with run_many
 
 :::{admonition} Feedback wanted
 :class: important
 
-`Items`, `_run_batch`, and `BatchProtocolError` live on `main` only —
-not in the latest PyPI release. To try the examples below, install
-from git: `pip install
+`run_many`, `_run_batch`, and `BatchProtocolError` live on `main`
+only — not in the latest PyPI release. To try the examples below,
+install from git: `pip install
 "git+https://github.com/facebookresearch/exca"`.
 
 The underlying semantics (per-item caching, `_run_batch`, `item_uid`)
-are settling; the calling syntax is what's under review — see the
-open question at the bottom of this page. Comments via
+are settling. Comments via
 [GitHub issues](https://github.com/facebookresearch/exca/issues)
 are welcome.
 :::
 
-## What Items adds
+## What run_many adds
 
-`Step.run(value)` runs the step on a single input. Wrap inputs in
-`Items` to run the same configuration over many inputs, with **one
-cache entry per `(step, input)` pair**:
+`Step.run(value)` runs the step on a single input. Use `run_many`
+to run the same configuration over many inputs, with **one cache
+entry per `(step, input)` pair**:
 
 ```python
-from exca import steps
-
 step = Multiply(coeff=2.0, infra={"backend": "Cached", "folder": cache})
 
 # Single input
 step.run(5.0)                       # 10.0
 
 # Many inputs — same configuration, one cache entry per input
-for r in step.run(steps.Items([1.0, 2.0, 3.0])):
+for r in step.run_many([1.0, 2.0, 3.0]):
     print(r)                        # 2.0, then 4.0, then 6.0
 ```
 
-`step.run(Items(...))` returns a `StepItems` iterator — results
-stream as they're produced. Iterate; don't `list()` it. Re-running
-with overlapping inputs reuses the cache entries from the previous
-call.
-
-`Items()` (no arguments) is the no-input form for generator steps.
+`step.run_many(...)` returns a `StepItems` iterator that yields one
+result per input, in input order — iterate it rather than `list()`-ing
+it so you never hold the whole result set in memory. (Without a
+backend, results compute lazily as you pull; with one, see
+[Distribution across workers](#distribution-across-workers).)
+Re-running with overlapping inputs reuses the cache entries from the
+previous call. `run(value)` is sugar over `run_many([value])`,
+returning the single result.
 
 ## Per-input identity: `item_uid`
 
@@ -65,9 +64,8 @@ class Embed(steps.Step):
     def item_uid(self, value: np.ndarray) -> str:
         return hashlib.sha256(value.tobytes()).hexdigest()
 
-    def _run_batch(self, values):
-        for v in values:
-            yield embed(v)
+    def _run(self, value: np.ndarray) -> np.ndarray:
+        return embed(value)
 ```
 
 `item_uid` is consulted **once at chain entry** on the
@@ -104,7 +102,7 @@ exception with the uids consumed-but-not-yielded so you can see
 which items were in flight when it raised.
 
 A single-value call and a batched call share the same cache: if
-`step.run(v)` writes uid `X`, `next(iter(step.run(Items([v]))))`
+`step.run(v)` writes uid `X`, `next(iter(step.run_many([v])))`
 reads `X` back.
 
 ## Distribution across workers
@@ -124,16 +122,16 @@ step = Embed(
         "gpus_per_node": 1,
     },
 )
-for embedding in step.run(steps.Items(paths)):    # M items → up to 16 jobs
-    save(embedding)                                # stream as workers finish
+for embedding in step.run_many(paths):           # M items → up to 16 jobs
+    print(embedding.shape)                         # read back in input order
 ```
 
 Each worker runs `_run_batch` on its sub-batch and writes results
-to the shared cache as they yield. The driver reads from the cache
-as the iterator advances — values are not round-tripped through
-the job pickle, and the full result set is never held in memory.
-Execution order within a batch is non-deterministic; output order
-matches input order.
+to the shared cache. With a distributed backend the driver waits for
+all jobs, then the returned iterator reads results from the cache one
+at a time (never the full set in memory, never round-tripped through
+the job pickle). Execution order within a batch is non-deterministic;
+output order matches input order.
 
 ## What's stable
 
@@ -154,25 +152,3 @@ Pinned by tests — safe to rely on:
   own batch through its own backend. Without a chain-level
   `infra`, sub-step budgets (e.g. `max_jobs`) are independent;
   with one, the whole chain becomes a single job.
-
-## Open question for review
-
-The current calling shape is:
-
-```python
-step.run(steps.Items([v1, v2, v3]))
-```
-
-An alternative under consideration is a dedicated entry point:
-
-```python
-step.run_items([v1, v2, v3])
-```
-
-- The current shape keeps one entry method (`run`) and lets
-  `Items` carry the "batch" flag — uniform with the no-input
-  case (`Items()`).
-- The alternative removes the wrapper class from common code; the
-  signature is self-documenting.
-
-Please weigh in.

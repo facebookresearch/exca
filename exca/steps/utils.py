@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 import typing as tp
+from pathlib import Path
 
 import pydantic
 
@@ -28,6 +29,27 @@ def has_all_defaults(method: tp.Callable[..., tp.Any]) -> bool:
         for name, p in inspect.signature(method).parameters.items()
         if name != "self"
     )
+
+
+def get_infra_folder(step: base.Step) -> Path | None:
+    """The step's own configured cache folder, if any."""
+    if step.infra is not None and step.infra.folder is not None:
+        return step.infra.folder
+    return None
+
+
+def propagate_folder(step: base.Step, parent_folder: Path) -> None:
+    """Fill ``step``'s ``infra.folder`` when unset, then cascade into sub-steps.
+
+    Mutates the step graph in place (fill-if-unset). Sub-steps inherit the
+    step's own folder if it has one, else ``parent_folder``.
+    """
+    own = get_infra_folder(step)
+    folder = parent_folder if own is None else own
+    if step.infra is not None and step.infra.folder is None:
+        step.infra.folder = folder
+    for sub in nested_steps(step):
+        propagate_folder(sub, folder)
 
 
 @pydantic.model_validator(mode="before")
@@ -101,31 +123,29 @@ def resolved_step(step: base.Step) -> base.Step:
     return built
 
 
+def nested_steps(step: base.Step) -> list[base.Step]:
+    """The step's direct sub-steps: every field holding a ``Step``, or a
+    non-empty list/tuple/dict of them."""
+    # Shallow (direct fields only), unlike utils.find_models' deep graph walk.
+    _, children = _labeled_nested_steps(step)
+    return [child for _, child in children]
+
+
 # ---------------------------------------------------------------------------
 # show() helpers
 # ---------------------------------------------------------------------------
 
 
-def _truncate(s: str, max_len: int = 40) -> str:
-    """Middle-truncate; preserves the distinctive tail of dotted paths and
-    keeps repr() quotes balanced."""
-    if len(s) <= max_len:
-        return s
-    keep = max_len - 3
-    head = keep // 2
-    tail = keep - head
-    return f"{s[:head]}...{s[-tail:]}"
-
-
-def _step_children(
-    all_vals: dict[str, tp.Any],
-) -> tuple[set[str], list[tuple[str | None, "base.Step"]]]:
-    """Field-driven children for tree rendering: any field holding a Step,
-    non-empty list/tuple[Step], or non-empty dict[str, Step]. List/tuple
-    entries unlabeled (matches sequential Chain); single Step and dict
-    entries labeled. Returns (consumed_field_names, [(label, step), ...])."""
+def _labeled_nested_steps(
+    step: base.Step,
+) -> tuple[set[str], list[tuple[str | None, base.Step]]]:
+    """Sub-steps shaped for tree rendering: each paired with a label (``None``
+    for list/tuple entries, matching sequential Chain; the field/dict key
+    otherwise), plus the set of field names they were drawn from."""
     from . import base  # lazy — avoids circular import at module level
 
+    # vars() + __pydantic_extra__ covers extra='allow' fields (outside __dict__).
+    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
     consumed: set[str] = set()
     children: list[tuple[str | None, base.Step]] = []
     for k, v in all_vals.items():
@@ -141,13 +161,22 @@ def _step_children(
     return consumed, children
 
 
+def _truncate(s: str, max_len: int = 40) -> str:
+    """Middle-truncate; preserves the distinctive tail of dotted paths and
+    keeps repr() quotes balanced."""
+    if len(s) <= max_len:
+        return s
+    keep = max_len - 3
+    head = keep // 2
+    tail = keep - head
+    return f"{s[:head]}...{s[-tail:]}"
+
+
 def step_label(step: base.Step) -> str:
     """One-line label: ClassName  key=val ...  [Backend, folder]"""
     parts = [type(step).__name__]
     disc = type(step)._exca_discriminator_key
-    # vars() + __pydantic_extra__ covers extra='allow' fields (stored outside __dict__).
-    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
-    consumed, _ = _step_children(all_vals)
+    consumed, _ = _labeled_nested_steps(step)
     # Step-valued fields are rendered as a tree by step_lines; drop from inline.
     skip = {"infra", disc} | consumed
     # mode='json' fires field serializers (e.g. ImportString → dotted path).
@@ -173,8 +202,7 @@ def step_lines(step: base.Step) -> list[str]:
     if r is not step:
         return step_lines(r)
     lines = [step_label(step)]
-    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
-    _, children = _step_children(all_vals)
+    _, children = _labeled_nested_steps(step)
     for i, (key, sub) in enumerate(children):
         is_last = i == len(children) - 1
         connector = "└── " if is_last else "├── "

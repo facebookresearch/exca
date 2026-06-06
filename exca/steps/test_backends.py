@@ -113,7 +113,8 @@ def test_backend_error_caching(tmp_path: Path) -> None:
     """LocalProcess backend caches errors correctly."""
     infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
     chain = Chain(
-        steps=[conftest.Mult(coeff=10), conftest.Add(value=1, error=True)], infra=infra
+        steps=[conftest.Mult(coeff=10), conftest.Add(value=1, fail_on="all")],
+        infra=infra,
     )
 
     # First call: submitit wraps error in FailedJobError
@@ -121,9 +122,7 @@ def test_backend_error_caching(tmp_path: Path) -> None:
         chain.run(2)
 
     # Second call: error is cached, raises as ValueError
-    chain2 = Chain(
-        steps=[conftest.Mult(coeff=10), conftest.Add(value=1, error=False)], infra=infra
-    )
+    chain2 = Chain(steps=[conftest.Mult(coeff=10), conftest.Add(value=1)], infra=infra)
     with pytest.raises(ValueError, match="Triggered an error"):
         chain2.run(2)
 
@@ -269,16 +268,16 @@ def test_derive(tmp_path: Path) -> None:
 def test_pool_backend(tmp_path: Path, backend: str) -> None:
     infra: tp.Any = {"backend": backend, "folder": tmp_path}
     step = conftest.Mult(coeff=2.0, infra=infra)
-    result = list(step.run(items.Items([1.0, 2.0, 3.0])))
+    result = list(step.run_many([1.0, 2.0, 3.0]))
     assert result == [2.0, 4.0, 6.0]
     assert step.lookup(1.0).paths.cache_folder.exists()
 
 
 def test_pool_error_propagation(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path}
-    step = conftest.Add(value=1, error=True, infra=infra)
+    step = conftest.Add(value=1, fail_on="all", infra=infra)
     with pytest.raises(ValueError, match="Triggered an error") as exc_info:
-        step.run(items.Items([1.0, 2.0]))
+        step.run_many([1.0, 2.0])
     notes = exc_info.value.__notes__
     assert any("Add" in n for n in notes)
 
@@ -293,8 +292,8 @@ def test_dispatch_batches_recomputed_per_batch(tmp_path: Path) -> None:
         uid = backends.identity.materialize_uid(forced, value)
         return backend._prepare(forced, items.StepItems(source={uid: value}, uids=[uid]))
 
-    cb_fail = prepare(conftest.Add(error=True), 1.0)
-    cb_ok = prepare(conftest.Add(value=1, error=False), 1.0)
+    cb_fail = prepare(conftest.Add(fail_on="all"), 1.0)
+    cb_ok = prepare(conftest.Add(value=1), 1.0)
     # _dispatch_batches runs sorted by step_uid, so cb_fail must raise first
     assert cb_fail.paths.step_uid < cb_ok.paths.step_uid, "cb_fail must sort first"
 
@@ -311,16 +310,16 @@ def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
     item_uid = backends.identity.materialize_uid(conftest.Add(value=1), 2.0)
     batch = items.StepItems(source={item_uid: 2.0}, uids=[item_uid])
 
-    def run(value: float, error: bool, mode: str) -> float:
+    def run(value: float, fail: bool, mode: str) -> float:
         infra = backend.model_copy(update={"mode": mode})
-        step = conftest.Add(value=value, error=error, infra=infra)
+        step = conftest.Add(value=value, fail_on="all" if fail else None, infra=infra)
         return next(iter(backend._run(step, batch)))
 
     # seed a cached error under each step's folder
     for value in (1.0, 5.0):
         with pytest.raises(ValueError, match="Triggered an error"):
-            run(value, error=True, mode="cached")
+            run(value, fail=True, mode="cached")
 
     # retry both; a uid-only _recomputed would make the 2nd re-raise the 1st's error
-    assert run(1.0, error=False, mode="retry") == 3.0  # 2 + 1
-    assert run(5.0, error=False, mode="retry") == 7.0  # 2 + 5
+    assert run(1.0, fail=False, mode="retry") == 3.0  # 2 + 1
+    assert run(5.0, fail=False, mode="retry") == 7.0  # 2 + 5
