@@ -11,7 +11,7 @@ Core classes
 ------------
 
 .. autoclass:: exca.steps.Step
-    :members: run, lookup, clone, item_uid, CACHE_TYPE
+    :members: run, run_many, lookup, clone, item_uid, CACHE_TYPE
 
 .. autoclass:: exca.steps.Chain
     :show-inheritance:
@@ -24,7 +24,7 @@ slicing returns a new ``Chain``.
 Batched execution
 -----------------
 
-.. autoclass:: exca.steps.Items
+.. autoclass:: exca.steps.items.StepItems
 
 .. autoexception:: exca.steps.items.BatchProtocolError
 
