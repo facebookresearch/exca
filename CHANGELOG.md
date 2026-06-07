@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - `exca/steps`: update experimental batch execution API to `step.run_many([v1, v2, ...])`. [#275]
+- `exca/cachedict`: `Hdf5DataArray` handler stores `xarray.DataArray` as netCDF/HDF5 (`cache_type="Hdf5DataArray"`).
 
 ## 0.5.26 - 26-06-03
 

@@ -210,6 +210,27 @@ def test_key_path_concurrent_write_tolerance(tmp_path: Path) -> None:
     assert ctx2.load(info2) == 99
 
 
+def test_hdf5_dataarray_roundtrip(tmp_path: Path) -> None:
+    xr = pytest.importorskip("xarray")
+    pytest.importorskip("h5netcdf")
+    da = xr.DataArray(
+        np.arange(6.0).reshape(2, 3),
+        dims=("subject", "time"),
+        coords={"subject": [1, 2], "time": [0.1, 0.2, 0.3]},
+        name="score",
+    )
+    ctx = DumpContext(tmp_path, key="named")
+    with ctx:
+        info = ctx.dump(da, cache_type="Hdf5DataArray")
+    assert info["#type"] == "Hdf5DataArray"
+    xr.testing.assert_identical(ctx.load(info), da)
+    # an unnamed array round-trips with its name restored to None
+    ctx = DumpContext(tmp_path, key="unnamed")
+    with ctx:
+        info = ctx.dump(da.rename(None), cache_type="Hdf5DataArray")
+    assert ctx.load(info).name is None
+
+
 # =============================================================================
 # Json
 # =============================================================================

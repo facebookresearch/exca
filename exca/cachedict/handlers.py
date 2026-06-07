@@ -313,6 +313,35 @@ class MneRawBrainVision:
             shutil.rmtree(dirpath)
 
 
+@DumpContext.register
+class Hdf5DataArray(KeyFileHandler):
+    """Stores an ``xarray.DataArray`` as one netCDF/HDF5 file (h5netcdf engine),
+    round-tripping the array name (an unnamed array reloads with ``name=None``)."""
+
+    @classmethod
+    def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
+        import xarray as xr
+
+        if not isinstance(value, xr.DataArray):
+            raise TypeError(f"Only supports xr.DataArray (got {type(value)})")
+        named = value.name is not None
+        if not named:
+            value = value.rename("value")  # to_netcdf requires a named variable
+        name = ctx.key_path(".h5")
+        with utils.temporary_save_path(ctx.folder / name) as tmp:
+            value.to_netcdf(tmp, engine="h5netcdf")
+        return {"filename": name, "named": named}
+
+    @classmethod
+    def __load_from_info__(
+        cls, ctx: DumpContext, filename: str, named: bool = True
+    ) -> tp.Any:
+        import xarray as xr
+
+        da = xr.open_dataarray(ctx.folder / filename, engine="h5netcdf").load()
+        return da if named else da.rename(None)
+
+
 # =============================================================================
 # Auto (universal handler, replaces DataDict)
 # =============================================================================
