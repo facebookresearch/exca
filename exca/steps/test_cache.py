@@ -741,8 +741,8 @@ def test_generator_item_uid_colocation(tmp_path: Path) -> None:
     assert steps["b"].lookup().cached(), "clearing one variant must not affect others"
 
 
-class _DualModeStep(Step):
-    """Deliberately wrong: generator item_uid + accepts input → collision risk."""
+class _NonPureVariantGenerator(Step):
+    """Non-pure generator with item_uid — would cause collisions in transformer mode."""
 
     variant: str = "x"
 
@@ -759,9 +759,8 @@ class _DualModeStep(Step):
         return value + 1
 
 
-def test_generator_item_uid_rejects_transformer_input(tmp_path: Path) -> None:
+def test_generator_item_uid_rejects_non_pure_generator(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = _DualModeStep(variant="x", infra=infra)
-    assert step.run() == 1.0
-    with pytest.raises(TypeError, match="cannot also accept input"):
-        step.run(5.0)
+    step = _NonPureVariantGenerator(variant="x", infra=infra)
+    with pytest.raises(TypeError, match="accepts optional input"):
+        step.run()

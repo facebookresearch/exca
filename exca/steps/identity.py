@@ -40,23 +40,19 @@ def step_uid(steps: tp.Sequence[Step]) -> str:
 
 
 def materialize_uid(step: Step, value: tp.Any) -> str:
-    """Per-value uid: calls ``step.item_uid``, falls back to UidMaker.
-
-    Generators can return non-None from ``item_uid(NoValue())`` to use
-    attributes as item keys (colocation under one step_uid folder).
-    """
+    """Per-value uid: calls ``step.item_uid``, falls back to UidMaker."""
     custom = step.item_uid(value)
     if custom is not None:
+        if isinstance(value, NoValue) and "pure_generator" not in step._step_flags:
+            raise TypeError(
+                f"{type(step).__name__} returns a custom item_uid for NoValue "
+                f"but accepts optional input — cache collisions would occur "
+                f"when the step receives real input"
+            )
+        # avoid cluttering cache
         return utils.ShortItemUid._shorten(custom, step._ITEM_UID_MAX_LENGTH)
     if isinstance(value, NoValue):
         return _NOINPUT_UID
-    if step.item_uid(NoValue()) is not None:
-        raise TypeError(
-            f"{type(step).__name__} provides a custom item_uid for generator mode "
-            f"and cannot also accept input (received {type(value).__name__}): "
-            f"the excluded fields would be missing from the cache key, "
-            f"causing collisions across attribute values"
-        )
     return exca.confdict.UidMaker(value).format()
 
 
