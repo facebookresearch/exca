@@ -200,7 +200,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """Custom cache uid for *value*, or ``None`` for default keying.
 
         Pure generators can return non-None for ``NoValue`` to use attributes
-        as the item dimension (colocation). Such fields must also be excluded
+        as the item dimension (colocation). Such fields should usually be excluded
         via ``_exclude_from_cls_uid``.
         """
         return None
