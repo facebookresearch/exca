@@ -190,7 +190,13 @@ class Step(exca.helpers.DiscriminatedModel):
         return self
 
     def item_uid(self, value: tp.Any) -> str | None:
-        """Custom cache uid for *value*, or ``None`` for default keying."""
+        """Custom cache uid for *value*, or ``None`` for default keying.
+
+        Generators can return non-None for ``NoValue`` to use attributes as
+        the item dimension (colocation). Such fields must be excluded via
+        ``_exclude_from_cls_uid``; the step then cannot accept real input
+        (enforced at runtime).
+        """
         return None
 
     def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:

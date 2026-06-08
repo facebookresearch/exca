@@ -701,3 +701,67 @@ def test_resolve_step_force_recomputes_once(tmp_path: Path) -> None:
     outs.extend(step.run() for _ in range(2))
     assert outs[0] != outs[1], "fresh instance re-forces (randomize)"
     assert outs[1] == outs[2], "memoised resolution, not re-forced"
+
+
+# =============================================================================
+# Generator item_uid (attribute-as-item colocation)
+# =============================================================================
+
+
+class _VariantGenerator(conftest.RecordingStep):
+    """Generator whose ``variant`` field is an item dimension, not step identity."""
+
+    variant: str | None = None
+
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return super()._exclude_from_cls_uid() + ["variant"]
+
+    def item_uid(self, value: tp.Any) -> str | None:
+        if isinstance(value, identity.NoValue) and self.variant is not None:
+            return self.variant
+        return None
+
+    def _run(self) -> str:
+        self.record()
+        return f"result-for-{self.variant}"
+
+
+def test_generator_item_uid_colocation(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    steps = {v: _VariantGenerator(variant=v, infra=infra) for v in ("a", "b")}
+    for v, step in steps.items():
+        assert step.run() == f"result-for-{v}"
+
+    folders = conftest.extract_cache_folders(tmp_path)
+    assert len(folders) == 1, f"variants should share one step_uid folder, got {folders}"
+
+    steps["a"].lookup().clear_cache()
+    assert not steps["a"].lookup().cached()
+    assert steps["b"].lookup().cached(), "clearing one variant must not affect others"
+
+
+class _DualModeStep(Step):
+    """Deliberately wrong: generator item_uid + accepts input → collision risk."""
+
+    variant: str = "x"
+
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return super()._exclude_from_cls_uid() + ["variant"]
+
+    def item_uid(self, value: tp.Any) -> str | None:
+        if isinstance(value, identity.NoValue):
+            return self.variant
+        return None
+
+    def _run(self, value: float = 0) -> float:
+        return value + 1
+
+
+def test_generator_item_uid_rejects_transformer_input(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = _DualModeStep(variant="x", infra=infra)
+    assert step.run() == 1.0
+    with pytest.raises(TypeError, match="cannot also accept input"):
+        step.run(5.0)
