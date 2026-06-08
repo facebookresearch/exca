@@ -708,22 +708,19 @@ def test_resolve_step_force_recomputes_once(tmp_path: Path) -> None:
 # =============================================================================
 
 
-class _VariantGenerator(conftest.RecordingStep):
+class _VariantGenerator(Step):
     """Generator whose ``variant`` field is an item dimension, not step identity."""
 
-    variant: str | None = None
+    variant: str = "a"
 
     @classmethod
     def _exclude_from_cls_uid(cls) -> list[str]:
         return super()._exclude_from_cls_uid() + ["variant"]
 
     def item_uid(self, value: tp.Any) -> str | None:
-        if isinstance(value, identity.NoValue) and self.variant is not None:
-            return self.variant
-        return None
+        return self.variant if isinstance(value, identity.NoValue) else None
 
     def _run(self) -> str:
-        self.record()
         return f"result-for-{self.variant}"
 
 
@@ -741,26 +738,10 @@ def test_generator_item_uid_colocation(tmp_path: Path) -> None:
     assert steps["b"].lookup().cached(), "clearing one variant must not affect others"
 
 
-class _NonPureVariantGenerator(Step):
-    """Non-pure generator with item_uid — would cause collisions in transformer mode."""
+def test_generator_item_uid_rejects_non_pure_generator() -> None:
+    class _NonPure(_VariantGenerator):
+        def _run(self, value: float = 0) -> float:  # type: ignore[override]
+            return value + 1
 
-    variant: str = "x"
-
-    @classmethod
-    def _exclude_from_cls_uid(cls) -> list[str]:
-        return super()._exclude_from_cls_uid() + ["variant"]
-
-    def item_uid(self, value: tp.Any) -> str | None:
-        if isinstance(value, identity.NoValue):
-            return self.variant
-        return None
-
-    def _run(self, value: float = 0) -> float:
-        return value + 1
-
-
-def test_generator_item_uid_rejects_non_pure_generator(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = _NonPureVariantGenerator(variant="x", infra=infra)
     with pytest.raises(TypeError, match="accepts optional input"):
-        step.run()
+        _NonPure(variant="x").run()
