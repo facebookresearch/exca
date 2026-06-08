@@ -703,11 +703,6 @@ def test_resolve_step_force_recomputes_once(tmp_path: Path) -> None:
     assert outs[1] == outs[2], "memoised resolution, not re-forced"
 
 
-# =============================================================================
-# Generator item_uid (attribute-as-item colocation)
-# =============================================================================
-
-
 class _VariantGenerator(Step):
     """Generator whose ``variant`` field is an item dimension, not step identity."""
 
