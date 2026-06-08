@@ -16,7 +16,7 @@ from .patterns import Scatter
 
 
 class Sum(base.Step):
-    """Sums a branch's row list, or a gathered ``{key: result}`` mapping downstream."""
+    """Sums a branch's row list, or a gathered ``{branch: result}`` mapping downstream."""
 
     def _run(self, xs: tp.Any) -> float:
         return sum(xs.values() if isinstance(xs, dict) else xs)
@@ -47,8 +47,8 @@ def test_custom_take_and_gather() -> None:
         def branches(self, rows: list[tuple[str, float]]) -> list:
             return sorted({label for label, _ in rows})
 
-        def take(self, rows: list[tuple[str, float]], key: tp.Hashable) -> list[float]:
-            return [value for label, value in rows if label == key]
+        def take(self, rows: list[tuple[str, float]], branch: tp.Any) -> list[float]:
+            return [value for label, value in rows if label == branch]
 
     rows = [("a", 1.0), ("a", 2.0), ("b", 3.0)]
     # default gather keeps the {label: group-sum} mapping -- no override needed.
@@ -110,7 +110,7 @@ def test_batched_items_scatter_independently(tmp_path: Path) -> None:
     scat = ScatterDict(body=conftest.Mult(coeff=2.0, infra=infra))
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"a": 10.0}]))
     assert out == [{"a": 2.0, "b": 4.0}, {"a": 20.0}], (
-        "(uid, key) keeps same-key items apart"
+        "(uid, branch) keeps same-branch items apart"
     )
 
 
@@ -163,3 +163,58 @@ def test_process_backend_runs_branches_cross_process(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "ProcessPool", "folder": tmp_path}
     scat = ScatterDict(body=conftest.Mult(coeff=2.0, infra=infra))
     assert scat.run({"a": 1.0, "b": 2.0}) == {"a": 2.0, "b": 4.0}
+
+
+class Limited(Scatter):
+    """``limit`` selects the first N keys but doesn't parametrize a branch."""
+
+    body: base.Step
+    limit: int = 0  # 0 = all
+
+    def branches(self, item: dict[str, float]) -> list:
+        ks = list(item)
+        return ks[: self.limit] if self.limit else ks
+
+    def _branch_excludes(self) -> list[str]:
+        return ["limit"]
+
+
+class GlobalLoad(Scatter):
+    """Branches loaded from the spec alone (input only selects which to run)."""
+
+    body: base.Step
+
+    def branches(self, item: list[str]) -> list:
+        return list(item)
+
+    def take(self, item: list[str], branch: tp.Any) -> float:
+        return float(branch)
+
+    def _branch_excludes(self) -> list[str]:
+        return [Scatter._INPUT]
+
+
+def test_branch_excludes_field_shares_branch_cache(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    body_infra: tp.Any = {"backend": "Cached"}  # inherits the Scatter's folder
+    calls: list = []
+
+    def scat(limit: int) -> Limited:
+        body = conftest.Mult(coeff=2.0, infra=body_infra).on_call(calls.append)
+        return Limited(body=body, limit=limit, infra=infra)
+
+    item = {"a": 1.0, "b": 2.0, "c": 3.0}
+    assert scat(0).run(item) == {"a": 2.0, "b": 4.0, "c": 6.0}
+    assert len(calls) == 3
+    assert scat(2).run(item) == {"a": 2.0, "b": 4.0}, "output reflects the selection"
+    assert len(calls) == 3, "limit excluded from branch key -> subset reuses cache"
+
+
+def test_branch_excludes_input_shares_across_inputs(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    body_infra: tp.Any = {"backend": "Cached"}  # inherits the Scatter's folder
+    calls: list = []
+    body = conftest.Mult(coeff=10.0, infra=body_infra).on_call(calls.append)
+    out = list(GlobalLoad(body=body, infra=infra).run_many([["1", "2"], ["2", "3"]]))
+    assert out == [{"1": 10.0, "2": 20.0}, {"2": 20.0, "3": 30.0}]
+    assert sorted(calls) == [1.0, 2.0, 3.0], "branch 2 computed once across inputs"
