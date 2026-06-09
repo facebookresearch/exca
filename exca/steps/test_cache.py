@@ -701,3 +701,42 @@ def test_resolve_step_force_recomputes_once(tmp_path: Path) -> None:
     outs.extend(step.run() for _ in range(2))
     assert outs[0] != outs[1], "fresh instance re-forces (randomize)"
     assert outs[1] == outs[2], "memoised resolution, not re-forced"
+
+
+class _VariantGenerator(Step):
+    """Generator whose ``variant`` field is an item dimension, not step identity."""
+
+    variant: str = "a"
+
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return super()._exclude_from_cls_uid() + ["variant"]
+
+    def item_uid(self, value: tp.Any) -> str | None:
+        return self.variant if isinstance(value, identity.NoValue) else None
+
+    def _run(self) -> str:
+        return f"result-for-{self.variant}"
+
+
+def test_generator_item_uid_colocation(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    steps = {v: _VariantGenerator(variant=v, infra=infra) for v in ("a", "b")}
+    for v, step in steps.items():
+        assert step.run() == f"result-for-{v}"
+
+    folders = conftest.extract_cache_folders(tmp_path)
+    assert len(folders) == 1, f"variants should share one step_uid folder, got {folders}"
+
+    steps["a"].lookup().clear_cache()
+    assert not steps["a"].lookup().cached()
+    assert steps["b"].lookup().cached(), "clearing one variant must not affect others"
+
+
+def test_generator_item_uid_rejects_non_pure_generator() -> None:
+    class _NonPure(_VariantGenerator):
+        def _run(self, value: float = 0) -> float:  # type: ignore[override]
+            return value + 1
+
+    with pytest.raises(TypeError, match="accepts optional input"):
+        _NonPure(variant="x").run()
