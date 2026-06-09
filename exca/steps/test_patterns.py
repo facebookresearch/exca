@@ -19,13 +19,21 @@ class MakeDict(base.Step):
 
 
 class ScatterDict(Scatter):
+    """Scatter a dict over its keys -- the shared baseline, configured per test."""
+
     body: base.Step
+    limit: int = 0  # >0: scatter only the first N branches (a selector, not a branch key)
+    exclude_input: bool = False  # key branches by name alone -> shared across inputs
 
     def branches(self, item: dict[str, float]) -> list:
-        return list(item)
+        ks = list(item)
+        return ks[: self.limit] if self.limit else ks
 
     def take(self, item: dict[str, float], branch: tp.Any) -> float:
         return item[branch]
+
+    def _branch_excludes(self) -> list[str]:
+        return ["limit", Scatter._INPUT] if self.exclude_input else ["limit"]
 
 
 def test_gather_override() -> None:
@@ -138,58 +146,35 @@ def test_clear_cache_reaches_branches(tmp_path: Path, nested: bool) -> None:
     assert len(body.calls) == 4, "clear reached the per-branch caches"
 
 
-def test_process_backend_runs_branches_cross_process(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "ProcessPool", "folder": tmp_path}
-    scat = ScatterDict(body=conftest.Mult(coeff=2.0, infra=infra))
-    assert scat.run({"a": 1.0, "b": 2.0}) == {"a": 2.0, "b": 4.0}
-
-
-def test_cached_upstream_parts_read_in_worker(tmp_path: Path) -> None:
-    cached: tp.Any = {"backend": "Cached", "folder": tmp_path}
+@pytest.mark.parametrize("cached_upstream", [False, True])
+def test_process_backend_scatters_branches(tmp_path: Path, cached_upstream: bool) -> None:
     proc: tp.Any = {"backend": "ProcessPool", "folder": tmp_path}
-    # cached upstream -> the Scatter ships a _Parts cache-ref, not the dict, and the
-    # off-process body reads its branch by reference in-worker
-    chain = base.Chain(
-        steps=[
-            MakeDict(infra=cached),
-            ScatterDict(body=conftest.Mult(coeff=2.0, infra=proc)),
-        ]
-    )
-    assert chain.run(3.0) == {"0": 0.0, "1": 2.0, "2": 4.0}
+    body = conftest.Mult(coeff=2.0, infra=proc)
+    if cached_upstream:
+        # the branch input ships as a _Parts cache-ref read in-worker, not pickled whole
+        cached: tp.Any = {"backend": "Cached", "folder": tmp_path}
+        chain = base.Chain(steps=[MakeDict(infra=cached), ScatterDict(body=body)])
+        assert chain.run(3.0) == {"0": 0.0, "1": 2.0, "2": 4.0}
+    else:
+        assert ScatterDict(body=body).run({"a": 1.0, "b": 2.0}) == {"a": 2.0, "b": 4.0}
 
 
 def test_branch_excludes_field_shares_branch_cache(tmp_path: Path) -> None:
-    class Limited(ScatterDict):
-        """``limit`` selects the first N branches but isn't part of a branch's key."""
-
-        limit: int = 0  # 0 = all
-
-        def branches(self, item: dict[str, float]) -> list:
-            ks = super().branches(item)
-            return ks[: self.limit] if self.limit else ks
-
-        def _branch_excludes(self) -> list[str]:
-            return ["limit"]
-
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     body = conftest.Mult(coeff=2.0, infra=infra)
     item = {"a": 1.0, "b": 2.0, "c": 3.0}
     expected = {x: 2 * y for x, y in item.items()}
-    assert Limited(body=body, limit=0, infra=infra).run(item) == expected
+    assert ScatterDict(body=body, infra=infra).run(item) == expected
     assert len(body.calls) == 3
-    out = Limited(body=body, limit=2, infra=infra).run(item)
+    out = ScatterDict(body=body, limit=2, infra=infra).run(item)
     assert out == {"a": 2.0, "b": 4.0}, "output reflects the selection"
     assert len(body.calls) == 3, "limit excluded from branch key -> subset reuses cache"
 
 
 def test_branch_excludes_input_shares_across_inputs(tmp_path: Path) -> None:
-    class SharedBranch(ScatterDict):
-        def _branch_excludes(self) -> list[str]:
-            return [Scatter._INPUT]  # branch keyed by name alone, shared across inputs
-
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     body = conftest.Mult(coeff=10.0, infra=infra)
-    scat = SharedBranch(body=body, infra=infra)
+    scat = ScatterDict(body=body, exclude_input=True, infra=infra)
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))
     assert out == [{"a": 10.0, "b": 20.0}, {"b": 20.0, "c": 30.0}]
     assert sorted(body.calls) == [1.0, 2.0, 3.0], (
