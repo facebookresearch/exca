@@ -65,19 +65,14 @@ def test_invalid_scatter_raises() -> None:
         _TwoBodies(a=conftest.Mult(), b=conftest.Mult()).run({"x": 1.0})
 
 
-def test_mid_chain_scatter_splits_an_upstream_value() -> None:
+def test_scatter_composition() -> None:
+    # mid-chain: a scatter splits the value produced by an upstream step
     chain = base.Chain(steps=[MakeDict(), ScatterDict(body=conftest.Mult(coeff=2.0))])
-    assert chain.run(3.0) == {"0": 0.0, "1": 2.0, "2": 4.0}, (
-        "MakeDict(3)={0,1,2}, each *2"
-    )
-
-
-def test_nested_scatter() -> None:
-    inner = ScatterDict(body=conftest.Mult(coeff=2.0))
-    out = ScatterDict(body=inner).run({"g1": {"a": 1.0, "b": 2.0}, "g2": {"c": 3.0}})
-    assert out == {"g1": {"a": 2.0, "b": 4.0}, "g2": {"c": 6.0}}, (
-        "outer & inner split; *2"
-    )
+    assert chain.run(3.0) == {"0": 0.0, "1": 2.0, "2": 4.0}, "MakeDict(3)={0,1,2}, *2"
+    # nested: a scatter whose body is itself a scatter splits both levels
+    nested = ScatterDict(body=ScatterDict(body=conftest.Mult(coeff=2.0)))
+    item = {"g1": {"a": 1.0, "b": 2.0}, "g2": {"c": 3.0}}
+    assert nested.run(item) == {"g1": {"a": 2.0, "b": 4.0}, "g2": {"c": 6.0}}
 
 
 def test_downstream_cache_keyed_by_scatter_identity(tmp_path: Path) -> None:
@@ -105,45 +100,31 @@ def test_batched_items_scatter_independently(tmp_path: Path) -> None:
     )
 
 
-def test_scatter_branch_caching(tmp_path: Path) -> None:
-    scat_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+@pytest.mark.parametrize("nested", [False, True])  # same cache, but lookup is !=
+def test_scatter_branch_caching(tmp_path: Path, nested: bool) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     calls: list = []  # shared across the fresh body built per mode
 
-    def scatter(mode: str = "cached") -> Scatter:
+    def make(mode: str = "cached") -> base.Step:
         # body has no folder: it inherits the Scatter's via cascade
         body_infra: tp.Any = {"backend": "Cached", "mode": mode}
         body = conftest.Mult(coeff=10.0, infra=body_infra).on_call(calls.append)
-        return ScatterDict(body=body, infra=scat_infra)
+        scat = ScatterDict(body=body, infra=infra)
+        return base.Chain(steps=[scat]) if nested else scat
 
     item, out = {"a": 1.0, "b": 2.0}, {"a": 10.0, "b": 20.0}
     # (mode, cumulative body calls): cached hits the per-branch cache, force recomputes
     for mode, n_calls in [("cached", 2), ("cached", 2), ("force", 4)]:
-        assert scatter(mode).run(item) == out
+        assert make(mode).run(item) == out
         assert len(calls) == n_calls, mode
 
-    # body cache is nested under the Scatter's uid folder (its identity), via cascade
+    make().lookup(item).clear_cache()
+    assert make().run(item) == out
+    assert len(calls) == 6, "clear reached the per-branch caches"
+
     scat_uid = "type=ScatterDict,body={coeff=10,type=Mult}-63b52beb"
     body_uid = "coeff=10,type=Mult-98baeffc"
     assert (tmp_path / scat_uid / body_uid / "cache").is_dir()
-
-
-@pytest.mark.parametrize("nested", [False, True])
-def test_clear_cache_reaches_branches(tmp_path: Path, nested: bool) -> None:
-    # nested: the Scatter has no own folder, so the clear must cascade through the Chain
-    body_infra: tp.Any = {"backend": "Cached"}  # inherits the parent folder
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    body = conftest.Mult(coeff=10.0, infra=body_infra)
-    if nested:
-        steps = [MakeDict(), ScatterDict(body=body)]
-        runnable: base.Step = base.Chain(steps=steps, infra=infra)
-        item: tp.Any = 2.0  # MakeDict(2) -> {"0", "1"}
-    else:
-        runnable = ScatterDict(body=body, infra=infra)
-        item = {"a": 1.0, "b": 2.0}
-    runnable.run(item)
-    runnable.lookup(item).clear_cache()
-    runnable.run(item)
-    assert len(body.calls) == 4, "clear reached the per-branch caches"
 
 
 @pytest.mark.parametrize("cached_upstream", [False, True])
