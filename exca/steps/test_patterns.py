@@ -142,14 +142,12 @@ def test_process_backend_scatters_branches(tmp_path: Path, cached_upstream: bool
 
 def test_branch_excludes(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    # a field (limit) selects branches but is excluded from their key, so a subset reuses
     body = conftest.Mult(coeff=2.0, infra=infra)
     item = {"a": 1.0, "b": 2.0, "c": 3.0}
     assert ScatterDict(body=body, infra=infra).run(item) == {"a": 2.0, "b": 4.0, "c": 6.0}
     assert len(body.calls) == 3
     assert ScatterDict(body=body, limit=2, infra=infra).run(item) == {"a": 2.0, "b": 4.0}
     assert len(body.calls) == 3, "limit excluded from branch key -> subset reuses cache"
-    # excluding the input keys branches by name alone, sharing them across inputs
     shared = conftest.Mult(coeff=10.0, infra=infra)
     scat = ScatterDict(body=shared, exclude_input=True, infra=infra)
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))
