@@ -34,7 +34,7 @@ class _BranchKeyer:
     steps: tuple[Step, ...]  # branch-folder steps (excluded selectors stripped)
     _input_scoped: bool
 
-    _SEP = "/"  # uid separator; default uids are "/"-free (bare: not a field)
+    _SEP = "/"  # default uids are "/"-free (bare: not a field)
 
     @classmethod
     def from_scatter(cls, scatter: Scatter) -> _BranchKeyer:
@@ -183,7 +183,7 @@ class Scatter(Step):
         every branch's body cache (not just this Scatter's gathered result). For
         input-independent branches that cache is shared, so it clears other inputs too."""
         handle = super().lookup(value, _upstream=_upstream, _uid=_uid)
-        # input uid; branches exist even when the Scatter is uncached (inline in a Chain)
+        # branches exist even when the Scatter is uncached (inline in a Chain)
         if _uid is not None:
             uid = _uid
         elif not isinstance(value, identity.NoValue):
@@ -227,7 +227,6 @@ class Scatter(Step):
         )
         # one dispatch over all branches lets a backend submit them together
         dispatched = self._body()._dispatch(carrier)
-        # gather lazily per item: results stream and cache one at a time
         return items.StepItems(
             source=_Gather(dispatched, plan, self.gather),
             uids=batch.uids,
