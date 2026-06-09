@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import collections
 import copy
+import inspect
 import logging
 import typing as tp
 import warnings
@@ -141,7 +142,13 @@ class Step(exca.helpers.DiscriminatedModel):
         if has_run:
             flags.add("has_run")
             if utils.has_all_defaults(cls._run):
-                flags.add("has_generator")
+                flags.add("generator")
+                if not any(
+                    p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                    for name, p in inspect.signature(cls._run).parameters.items()
+                    if name != "self"
+                ):
+                    flags.add("pure_generator")
         if cls._resolve_step is not Step._resolve_step:
             flags.add("has_resolve")
         cls._step_flags = frozenset(flags)
@@ -190,7 +197,12 @@ class Step(exca.helpers.DiscriminatedModel):
         return self
 
     def item_uid(self, value: tp.Any) -> str | None:
-        """Custom cache uid for *value*, or ``None`` for default keying."""
+        """Custom cache uid for *value*, or ``None`` for default keying.
+
+        Pure generators can return non-None for ``NoValue`` to use attributes
+        as the item dimension (colocation). Such fields should usually be excluded
+        via ``_exclude_from_cls_uid``.
+        """
         return None
 
     def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
@@ -205,7 +217,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
-        return "has_generator" in self._step_flags
+        return "generator" in self._step_flags
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
         """Transform *batch* into the result carrier.

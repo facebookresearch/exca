@@ -41,12 +41,18 @@ def step_uid(steps: tp.Sequence[Step]) -> str:
 
 def materialize_uid(step: Step, value: tp.Any) -> str:
     """Per-value uid: calls ``step.item_uid``, falls back to UidMaker."""
-    if isinstance(value, NoValue):
-        return _NOINPUT_UID
     custom = step.item_uid(value)
     if custom is not None:
+        if isinstance(value, NoValue) and "pure_generator" not in step._step_flags:
+            raise TypeError(
+                f"{type(step).__name__} returns a custom item_uid for NoValue "
+                f"but accepts optional input — cache collisions would occur "
+                f"when the step receives real input"
+            )
         # avoid cluttering cache
         return utils.ShortItemUid._shorten(custom, step._ITEM_UID_MAX_LENGTH)
+    if isinstance(value, NoValue):
+        return _NOINPUT_UID
     return exca.confdict.UidMaker(value).format()
 
 
