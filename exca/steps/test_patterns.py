@@ -140,24 +140,18 @@ def test_process_backend_scatters_branches(tmp_path: Path, cached_upstream: bool
         assert ScatterDict(body=body).run({"a": 1.0, "b": 2.0}) == {"a": 2.0, "b": 4.0}
 
 
-def test_branch_excludes_field_shares_branch_cache(tmp_path: Path) -> None:
+def test_branch_excludes(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    # a field (limit) selects branches but is excluded from their key, so a subset reuses
     body = conftest.Mult(coeff=2.0, infra=infra)
     item = {"a": 1.0, "b": 2.0, "c": 3.0}
-    expected = {x: 2 * y for x, y in item.items()}
-    assert ScatterDict(body=body, infra=infra).run(item) == expected
+    assert ScatterDict(body=body, infra=infra).run(item) == {"a": 2.0, "b": 4.0, "c": 6.0}
     assert len(body.calls) == 3
-    out = ScatterDict(body=body, limit=2, infra=infra).run(item)
-    assert out == {"a": 2.0, "b": 4.0}, "output reflects the selection"
+    assert ScatterDict(body=body, limit=2, infra=infra).run(item) == {"a": 2.0, "b": 4.0}
     assert len(body.calls) == 3, "limit excluded from branch key -> subset reuses cache"
-
-
-def test_branch_excludes_input_shares_across_inputs(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    body = conftest.Mult(coeff=10.0, infra=infra)
-    scat = ScatterDict(body=body, exclude_input=True, infra=infra)
+    # excluding the input keys branches by name alone, sharing them across inputs
+    shared = conftest.Mult(coeff=10.0, infra=infra)
+    scat = ScatterDict(body=shared, exclude_input=True, infra=infra)
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))
     assert out == [{"a": 10.0, "b": 20.0}, {"b": 20.0, "c": 30.0}]
-    assert sorted(body.calls) == [1.0, 2.0, 3.0], (
-        "shared branch b computed once across inputs"
-    )
+    assert sorted(shared.calls) == [1.0, 2.0, 3.0], "shared branch b computed once"
