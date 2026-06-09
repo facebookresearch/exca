@@ -14,6 +14,10 @@ from . import base, conftest
 from .patterns import Parallel, Scatter
 from .test_backends import _CapturingAutoExecutor
 
+# =========================================================================
+# Scatter
+# =========================================================================
+
 
 class MakeDict(base.Step):
     def _run(self, n: float) -> dict[str, float]:
@@ -157,6 +161,11 @@ def test_branch_excludes(tmp_path: Path) -> None:
     assert sorted(shared.calls) == [1.0, 2.0, 3.0], "shared branch b computed once"
 
 
+# =========================================================================
+# Parallel
+# =========================================================================
+
+
 def _sweep(tmp_path: Path) -> Parallel:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     variants = [conftest.Mult(coeff=c) for c in (2.0, 3.0, 4.0)]
@@ -189,6 +198,8 @@ def test_invalid_inputs_rejected(tmp_path: Path) -> None:
     conflicting = [conftest.Mult(coeff=2.0), conftest.Mult(coeff=3.0, infra=other)]
     with pytest.raises(ValueError, match="one shared backend"):
         Parallel(steps=conflicting, infra=infra)
+    with pytest.raises(TypeError, match="parallel.steps"):
+        _sweep(tmp_path).lookup(5.0)
 
 
 @pytest.mark.parametrize("folder_first", (True, False))
@@ -207,8 +218,6 @@ def test_backend_on_steps_is_adopted_with_folder(
 
 
 def test_one_variant_errors_others_still_cache(tmp_path: Path) -> None:
-    # LocalProcess so variants run as separate jobs: the ok one caches even
-    # though the bad one fails (SubmititDebug runs inline and would short-circuit)
     infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
     ok, bad = conftest.Add(value=2.0), conftest.Add(value=5.0, fail_on="all")
     sweep = Parallel(steps=[ok, bad], infra=infra)
@@ -227,6 +236,5 @@ def test_single_array_across_variants(
     infra: tp.Any = {"backend": "Slurm", "folder": tmp_path}
     sweep = Parallel(steps=[conftest.Add(value=v) for v in (1.0, 2.0, 3.0)], infra=infra)
     sweep.run()
-    # exactly one executor, its array spanning all three variants
-    [(_, params)] = _CapturingAutoExecutor.captured
-    assert params["slurm_array_parallelism"] == 3
+    [(_, params)] = _CapturingAutoExecutor.captured  # exactly one executor
+    assert params["slurm_array_parallelism"] == 3, "one array spans all variants"

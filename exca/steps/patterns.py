@@ -283,7 +283,7 @@ class Parallel(Step):
         if self.infra is None:
             # round-trip rather than reuse, so we don't mutate the caller's object
             self.infra = type(infras[0]).model_validate(infras[0].model_dump())
-        # the one folder set anywhere wins as the shared base
+        # any set folder works as the shared base — the loop below rejects mismatches
         base = next((i.folder for i in infras if i.folder is not None), None)
         if self.infra.folder is None:
             self.infra.folder = base
@@ -304,8 +304,14 @@ class Parallel(Step):
     def _uid_steps(self) -> list[Step]:
         return []  # coordinator only: no identity of its own
 
+    def lookup(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:
+        raise TypeError(
+            "Parallel has no cache of its own; look up a variant instead, "
+            "e.g. parallel.steps[k].lookup(value)"
+        )
+
     def _run(self, *args: tp.Any) -> tp.NoReturn:
-        # only to satisfy Step's has_run requirement; run_many handles dispatch
+        # never called (run_many overrides dispatch); only here to pass has_run
         raise RuntimeError("Parallel.run_many drives dispatch directly; _run is unused")
 
     def run(self, value: tp.Any = identity.NoValue()) -> None:
@@ -313,15 +319,12 @@ class Parallel(Step):
         self.run_many([value])
 
     def run_many(self, values: tp.Iterable[tp.Any]) -> list[None]:  # type: ignore[override]
-        """Run every variant over the inputs; return one ``None`` per input.
-
-        Run-for-effect: the return is a placeholder, not the results (see class
-        docstring for how to read them).
-        """
+        """Run every variant over the inputs; return one ``None`` per input."""
         assert self.infra is not None  # guaranteed by _unify_infra at construction
         if self.infra.folder is None:
             raise RuntimeError(
-                f"Parallel requires infra.folder to be set, got {self.infra!r}"
+                f"Parallel needs a cache folder; set infra.folder (on Parallel or "
+                f"a step), got {self.infra!r}"
             )
         values = list(values)
         cbatches = []
