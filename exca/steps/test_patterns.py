@@ -11,7 +11,8 @@ import pytest
 import submitit
 
 from . import base, conftest
-from .patterns import Parallel, Scatter
+from .helpers import Parallel
+from .patterns import Scatter
 from .test_backends import _CapturingAutoExecutor
 
 # =========================================================================

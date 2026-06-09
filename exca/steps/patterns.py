@@ -119,6 +119,8 @@ class _Gather:
 class Scatter(Step):
     """Fan each input into N keyed branches, run one body per branch, gather (1->N->1).
 
+    .. warning:: Experimental — API may change.
+
     To implement a Scatter, declare a single ``Step`` field (the body, any
     name; run on each branch) and override:
 
@@ -233,105 +235,3 @@ class Scatter(Step):
             upstream=output_upstream,
             mode=batch._mode,
         )
-
-
-class Parallel(Step):
-    """Run a fixed set of step variants over one shared item set.
-
-    The variants run together under one shared backend, each caching under its
-    own identity. ``run`` is for effect — read results back per variant via
-    ``parallel.steps[k].lookup(value)``.
-
-    Example::
-
-        sweep = Parallel(
-            steps=[extractor.clone({"model_name": m}) for m in models],
-            infra={"backend": "Slurm", "folder": cache},
-        )
-        sweep.run_many(events)                   # populates each variant's cache
-        out = sweep.steps[0].lookup(events[0])   # read one variant back
-
-    Parameters
-    ----------
-    steps:
-        The pre-built variants to sweep. Build them with ``clone``.
-    """
-
-    steps: tp.Sequence[Step]
-
-    def model_post_init(self, __context: tp.Any) -> None:
-        super().model_post_init(__context)
-        if not self.steps:
-            raise ValueError("steps cannot be empty")
-        self._unify_infra()
-
-    def _unify_infra(self) -> None:
-        """Make Parallel and every step share one identical backend.
-
-        A sweep dispatches as a single submission, so the whole construct must
-        agree on one backend (the spec may be given on Parallel or on the steps).
-        """
-        # top-level only: a child's own inner backend would re-dispatch in the worker
-        infras = [s.infra for s in self.steps if s.infra is not None]
-        if self.infra is not None:
-            infras.append(self.infra)
-        if not infras:
-            raise ValueError(
-                "Parallel needs an infra (on itself or its steps) to coordinate "
-                "a sweep — there is nothing to dispatch otherwise"
-            )
-        if self.infra is None:
-            # round-trip rather than reuse, so we don't mutate the caller's object
-            self.infra = type(infras[0]).model_validate(infras[0].model_dump())
-        # any set folder works as the shared base — the loop below rejects mismatches
-        base = next((i.folder for i in infras if i.folder is not None), None)
-        if self.infra.folder is None:
-            self.infra.folder = base
-        infra_dict = self.infra.model_dump()
-        self.steps = [
-            s if s.infra is not None else s.clone({"infra": infra_dict})
-            for s in self.steps
-        ]
-        if base is not None:
-            utils.propagate_folder(self, base)
-        for step in self.steps:
-            if step.infra != self.infra:
-                raise ValueError(
-                    "Parallel requires one shared backend across itself and its "
-                    f"steps; {self.infra!r} differs from {step.infra!r}"
-                )
-
-    def _uid_steps(self) -> list[Step]:
-        return []  # coordinator only: no identity of its own
-
-    def lookup(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:
-        raise TypeError(
-            "Parallel has no cache of its own; look up a variant instead, "
-            "e.g. parallel.steps[k].lookup(value)"
-        )
-
-    def _run(self, *args: tp.Any) -> tp.NoReturn:
-        # never called (run_many overrides dispatch); only here to pass has_run
-        raise RuntimeError("Parallel.run_many drives dispatch directly; _run is unused")
-
-    def run(self, value: tp.Any = identity.NoValue()) -> None:
-        """Run every variant on a single input (for effect — see class docstring)."""
-        self.run_many([value])
-
-    def run_many(self, values: tp.Iterable[tp.Any]) -> list[None]:  # type: ignore[override]
-        """Run every variant over the inputs; return one ``None`` per input."""
-        assert self.infra is not None  # guaranteed by _unify_infra at construction
-        if self.infra.folder is None:
-            raise RuntimeError(
-                f"Parallel needs a cache folder; set infra.folder (on Parallel or "
-                f"a step), got {self.infra!r}"
-            )
-        values = list(values)
-        cbatches = []
-        for child in self.steps:
-            # per child: item_uid() may key on the child's own config
-            uids = [identity.materialize_uid(child, v) for v in values]
-            batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
-            cbatches.append(self.infra._prepare(child, batch))
-        self.infra._dispatch_batches(cbatches)
-        return [None] * len(values)
