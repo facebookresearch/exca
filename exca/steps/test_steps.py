@@ -359,9 +359,9 @@ def test_step_flags() -> None:
     """_step_flags and _is_generator are computed correctly at class definition."""
     expected: dict[type[Step], tuple[set[str], bool]] = {
         conftest.Mult: ({"has_run"}, False),
-        conftest.RandomGenerator: ({"has_run", "has_generator"}, True),
-        conftest.Add: ({"has_run", "has_generator"}, True),
-        conftest.AddWithTransforms: ({"has_run", "has_generator", "has_resolve"}, True),
+        conftest.RandomGenerator: ({"has_run", "generator", "pure_generator"}, True),
+        conftest.Add: ({"has_run", "generator"}, True),
+        conftest.AddWithTransforms: ({"has_run", "generator", "has_resolve"}, True),
         conftest.PureResolver: ({"has_resolve"}, False),
     }
     for cls, (flags, is_gen) in expected.items():
