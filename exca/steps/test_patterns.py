@@ -4,8 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for computation-topology primitives (patterns.Scatter)."""
-
 import typing as tp
 from pathlib import Path
 
@@ -23,15 +21,11 @@ class Sum(base.Step):
 
 
 class MakeDict(base.Step):
-    """Turns ``n`` into ``{"0": 0.0, ..., "n-1": n-1.0}`` (a splittable item)."""
-
     def _run(self, n: float) -> dict[str, float]:
         return {str(i): float(i) for i in range(int(n))}
 
 
 class ScatterDict(Scatter):
-    """Scatter over a dict's keys; default ``take`` (getitem) and ``gather`` (mapping)."""
-
     body: base.Step
 
     def branches(self, item: dict[str, float]) -> list:
@@ -40,8 +34,6 @@ class ScatterDict(Scatter):
 
 def test_custom_take_and_gather() -> None:
     class SumByGroup(Scatter):
-        """Group ``(label, value)`` rows by label, sum each group via ``body``."""
-
         body: base.Step
 
         def branches(self, rows: list[tuple[str, float]]) -> list:
@@ -163,6 +155,20 @@ def test_process_backend_runs_branches_cross_process(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "ProcessPool", "folder": tmp_path}
     scat = ScatterDict(body=conftest.Mult(coeff=2.0, infra=infra))
     assert scat.run({"a": 1.0, "b": 2.0}) == {"a": 2.0, "b": 4.0}
+
+
+def test_cached_upstream_parts_read_in_worker(tmp_path: Path) -> None:
+    cached: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    proc: tp.Any = {"backend": "ProcessPool", "folder": tmp_path}
+    # cached upstream -> the Scatter ships a _Parts cache-ref, not the dict, and the
+    # off-process body reads its branch by reference in-worker
+    chain = base.Chain(
+        steps=[
+            MakeDict(infra=cached),
+            ScatterDict(body=conftest.Mult(coeff=2.0, infra=proc)),
+        ]
+    )
+    assert chain.run(3.0) == {"0": 0.0, "1": 2.0, "2": 4.0}
 
 
 class Limited(Scatter):

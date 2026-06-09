@@ -9,7 +9,7 @@ from __future__ import annotations
 import dataclasses
 import typing as tp
 
-from exca import cachedict, confdict
+from exca import confdict
 
 from . import backends, identity, items, utils
 from .base import Step
@@ -24,9 +24,8 @@ class BranchResult(tp.NamedTuple):
 
 @dataclasses.dataclass(frozen=True)
 class _BranchKeyer:
-    """Sole authority on the branch-uid format, built from
-    :meth:`Scatter._branch_excludes`: callers get finished uids (:meth:`branch_uid`) and
-    key subsets (:meth:`select`) without handling the format themselves.
+    """Owns the branch-uid format (from :meth:`Scatter._branch_excludes`):
+    :meth:`branch_uid` builds them, :meth:`select` subsets them by input.
 
     A branch uid is ``"{input uid}/{branch}"`` when input-scoped (it belongs to its
     input) or just ``"{branch}"`` when input-independent (shared across inputs).
@@ -35,7 +34,7 @@ class _BranchKeyer:
     steps: tuple[Step, ...]  # branch-folder steps (excluded selectors stripped)
     _input_scoped: bool
 
-    _SEP = "/"  # input-uid/branch separator; absent from any uid (bare: not a field)
+    _SEP = "/"  # uid separator; default uids are "/"-free (bare: not a field)
 
     @classmethod
     def from_scatter(cls, scatter: Scatter) -> _BranchKeyer:
@@ -62,10 +61,10 @@ class _BranchKeyer:
 
 
 class _Parts:
-    """Lazy branch-uid -> ``take(item, branch)`` mapping over a cache-backed upstream.
+    """Lazy branch-uid -> ``take(item, branch)`` mapping over the upstream batch.
 
-    Reads each upstream item by reference on first access (in-worker once dispatched),
-    so only the cache ref, branches and ``take`` cross a job boundary -- not the data.
+    Reads each input lazily on access, so when the upstream is cached and the body
+    runs off-process only the cache ref (not the data) crosses the job boundary.
     """
 
     def __init__(
@@ -161,9 +160,10 @@ class Scatter(Step):
         raise NotImplementedError
 
     def take(self, item: tp.Any, branch: tp.Any) -> tp.Any:
-        """Slice one branch's body input out of ``item``. Runs in-worker; keep it cheap.
+        """The body's input for one branch (default ``item[branch]``).
 
-        Default: ``item[branch]`` (dict / label / index lookup).
+        Called once per branch, lazily where the body consumes it -- in-worker when
+        the body runs off-process.
         """
         return item[branch]
 
@@ -180,7 +180,8 @@ class Scatter(Step):
         _uid: str | None = None,
     ) -> backends.LookupHandle:
         """Like :meth:`Step.lookup`, but the handle's ``clear_cache`` also clears
-        every branch's body cache (not just this Scatter's gathered result)."""
+        every branch's body cache (not just this Scatter's gathered result). For
+        input-independent branches that cache is shared, so it clears other inputs too."""
         handle = super().lookup(value, _upstream=_upstream, _uid=_uid)
         # input uid; branches exist even when the Scatter is uncached (inline in a Chain)
         if _uid is not None:
@@ -205,12 +206,9 @@ class Scatter(Step):
         # branch folder drops the selectors; the gathered output keeps full identity
         branch_upstream = batch._upstream + keyer.steps
         output_upstream = batch._upstream + tuple(self._uid_steps())
-        # cached upstream: parts read by ref in-worker (_Parts); else built on the driver
-        cached = isinstance(batch._source, cachedict.CacheDict)
         # input uid -> {branch uid: branch}; feeds both _Parts and _Gather
         # (input-independent branches reuse one branch uid across inputs)
         plan: dict[str, dict[str, tp.Any]] = {}
-        parts: dict[str, tp.Any] = {}
         for uid in dict.fromkeys(batch.uids):
             item = next(iter(batch.select([uid])))  # one driver read to enumerate
             branches = list(self.branches(item))
@@ -219,15 +217,10 @@ class Scatter(Step):
                     f"{type(self).__name__}.branches(...) returned no branches to "
                     "scatter over."
                 )
-            plan[uid] = {}
-            for branch in branches:
-                branch_uid = keyer.branch_uid(uid, branch)
-                plan[uid][branch_uid] = branch
-                if not cached:
-                    parts.setdefault(branch_uid, self.take(item, branch))
+            plan[uid] = {keyer.branch_uid(uid, b): b for b in branches}
         uids = list(dict.fromkeys(branch_uid for m in plan.values() for branch_uid in m))
         carrier = items.StepItems(
-            source=_Parts(batch, self.take, plan) if cached else parts,
+            source=_Parts(batch, self.take, plan),
             uids=uids,
             upstream=branch_upstream,
             mode=batch._mode,
