@@ -13,13 +13,6 @@ from . import base, conftest
 from .patterns import Scatter
 
 
-class Sum(base.Step):
-    """Sums a branch's row list, or a gathered ``{branch: result}`` mapping downstream."""
-
-    def _run(self, xs: tp.Any) -> float:
-        return sum(xs.values() if isinstance(xs, dict) else xs)
-
-
 class MakeDict(base.Step):
     def _run(self, n: float) -> dict[str, float]:
         return {str(i): float(i) for i in range(int(n))}
@@ -31,43 +24,37 @@ class ScatterDict(Scatter):
     def branches(self, item: dict[str, float]) -> list:
         return list(item)
 
-
-def test_custom_take_and_gather() -> None:
-    class SumByGroup(Scatter):
-        body: base.Step
-
-        def branches(self, rows: list[tuple[str, float]]) -> list:
-            return sorted({label for label, _ in rows})
-
-        def take(self, rows: list[tuple[str, float]], branch: tp.Any) -> list[float]:
-            return [value for label, value in rows if label == branch]
-
-    rows = [("a", 1.0), ("a", 2.0), ("b", 3.0)]
-    # default gather keeps the {label: group-sum} mapping -- no override needed.
-    assert SumByGroup(body=Sum()).run(rows) == {"a": 3.0, "b": 3.0}
+    def take(self, item: dict[str, float], branch: tp.Any) -> float:
+        return item[branch]
 
 
-def test_empty_keys_raises() -> None:
+def test_gather_override() -> None:
+    class SumBranches(ScatterDict):
+        def gather(self, results: list) -> float:
+            return sum(br.result for br in results)
+
+    out = SumBranches(body=conftest.Mult(coeff=2.0)).run({"a": 1.0, "b": 2.0})
+    assert out == 6.0  # default {a: 2, b: 4} -> summed by the override
+
+
+def test_invalid_scatter_raises() -> None:
     class _Empty(Scatter):
         body: base.Step
 
         def branches(self, item: tp.Any) -> list:
             return []
 
-    with pytest.raises(ValueError, match="no branches to scatter"):
-        _Empty(body=conftest.Mult()).run({"a": 1.0})
-
-
-def test_ambiguous_body_raises() -> None:
-    class TwoSteps(Scatter):
+    class _TwoBodies(Scatter):
         a: base.Step
         b: base.Step
 
         def branches(self, item: tp.Any) -> list:
             return list(item)
 
+    with pytest.raises(ValueError, match="no branches to scatter"):
+        _Empty(body=conftest.Mult()).run({"a": 1.0})
     with pytest.raises(TypeError, match="exactly one body Step"):
-        TwoSteps(a=conftest.Mult(), b=conftest.Mult()).run({"x": 1.0})
+        _TwoBodies(a=conftest.Mult(), b=conftest.Mult()).run({"x": 1.0})
 
 
 def test_mid_chain_scatter_splits_an_upstream_value() -> None:
@@ -86,6 +73,10 @@ def test_nested_scatter() -> None:
 
 
 def test_downstream_cache_keyed_by_scatter_identity(tmp_path: Path) -> None:
+    class Sum(base.Step):  # downstream reducer: gathered {branch: result} -> scalar
+        def _run(self, xs: dict) -> float:
+            return sum(xs.values())
+
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
 
     def chain(coeff: float) -> base.Chain:
@@ -106,10 +97,9 @@ def test_batched_items_scatter_independently(tmp_path: Path) -> None:
     )
 
 
-def test_scatter_and_body_caching(tmp_path: Path) -> None:
+def test_scatter_branch_caching(tmp_path: Path) -> None:
     scat_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-
-    calls: list = []  # shared hook: a fresh body per mode, counted across all
+    calls: list = []  # shared across the fresh body built per mode
 
     def scatter(mode: str = "cached") -> Scatter:
         # body has no folder: it inherits the Scatter's via cascade
@@ -117,38 +107,35 @@ def test_scatter_and_body_caching(tmp_path: Path) -> None:
         body = conftest.Mult(coeff=10.0, infra=body_infra).on_call(calls.append)
         return ScatterDict(body=body, infra=scat_infra)
 
-    assert scatter().run({"a": 1.0, "b": 2.0}) == {"a": 10.0, "b": 20.0}
-    assert len(calls) == 2, "one body call per branch"
-    assert scatter().run({"a": 1.0, "b": 2.0}) == {"a": 10.0, "b": 20.0}
-    assert len(calls) == 2, "re-run is all cache hits"
-    assert scatter("force").run({"a": 1.0, "b": 2.0}) == {"a": 10.0, "b": 20.0}
-    assert len(calls) == 4, "force on body recomputes despite Scatter's own cache"
+    item, out = {"a": 1.0, "b": 2.0}, {"a": 10.0, "b": 20.0}
+    # (mode, cumulative body calls): cached hits the per-branch cache, force recomputes
+    for mode, n_calls in [("cached", 2), ("cached", 2), ("force", 4)]:
+        assert scatter(mode).run(item) == out
+        assert len(calls) == n_calls, mode
+
     # body cache is nested under the Scatter's uid folder (its identity), via cascade
     scat_uid = "type=ScatterDict,body={coeff=10,type=Mult}-63b52beb"
     body_uid = "coeff=10,type=Mult-98baeffc"
     assert (tmp_path / scat_uid / body_uid / "cache").is_dir()
 
 
-def test_clear_cache_reaches_branch_caches(tmp_path: Path) -> None:
+@pytest.mark.parametrize("nested", [False, True])
+def test_clear_cache_reaches_branches(tmp_path: Path, nested: bool) -> None:
+    # nested: the Scatter has no own folder, so the clear must cascade through the Chain
     body_infra: tp.Any = {"backend": "Cached"}  # inherits the parent folder
-    direct_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "direct"}
-    chain_infra: tp.Any = {"backend": "Cached", "folder": tmp_path / "chain"}
-
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     body = conftest.Mult(coeff=10.0, infra=body_infra)
-    scat = ScatterDict(body=body, infra=direct_infra)
-    scat.run({"a": 1.0, "b": 2.0})  # one body call per branch
-    scat.lookup({"a": 1.0, "b": 2.0}).clear_cache()
-    scat.run({"a": 1.0, "b": 2.0})
-    assert len(body.calls) == 4, "direct clear recomputed branches, not stale cache"
-
-    chain_body = conftest.Mult(coeff=10.0, infra=body_infra)
-    chain = base.Chain(
-        steps=[MakeDict(), ScatterDict(body=chain_body)], infra=chain_infra
-    )
-    chain.run(2.0)  # MakeDict(2) -> {"0", "1"}
-    chain.lookup(2.0).clear_cache()
-    chain.run(2.0)
-    assert len(chain_body.calls) == 4, "chain (uid-only) clear reached the branch caches"
+    if nested:
+        steps = [MakeDict(), ScatterDict(body=body)]
+        runnable: base.Step = base.Chain(steps=steps, infra=infra)
+        item: tp.Any = 2.0  # MakeDict(2) -> {"0", "1"}
+    else:
+        runnable = ScatterDict(body=body, infra=infra)
+        item = {"a": 1.0, "b": 2.0}
+    runnable.run(item)
+    runnable.lookup(item).clear_cache()
+    runnable.run(item)
+    assert len(body.calls) == 4, "clear reached the per-branch caches"
 
 
 def test_process_backend_runs_branches_cross_process(tmp_path: Path) -> None:
@@ -171,56 +158,40 @@ def test_cached_upstream_parts_read_in_worker(tmp_path: Path) -> None:
     assert chain.run(3.0) == {"0": 0.0, "1": 2.0, "2": 4.0}
 
 
-class Limited(Scatter):
-    """``limit`` selects the first N keys but doesn't parametrize a branch."""
-
-    body: base.Step
-    limit: int = 0  # 0 = all
-
-    def branches(self, item: dict[str, float]) -> list:
-        ks = list(item)
-        return ks[: self.limit] if self.limit else ks
-
-    def _branch_excludes(self) -> list[str]:
-        return ["limit"]
-
-
-class GlobalLoad(Scatter):
-    """Branches loaded from the spec alone (input only selects which to run)."""
-
-    body: base.Step
-
-    def branches(self, item: list[str]) -> list:
-        return list(item)
-
-    def take(self, item: list[str], branch: tp.Any) -> float:
-        return float(branch)
-
-    def _branch_excludes(self) -> list[str]:
-        return [Scatter._INPUT]
-
-
 def test_branch_excludes_field_shares_branch_cache(tmp_path: Path) -> None:
+    class Limited(ScatterDict):
+        """``limit`` selects the first N branches but isn't part of a branch's key."""
+
+        limit: int = 0  # 0 = all
+
+        def branches(self, item: dict[str, float]) -> list:
+            ks = super().branches(item)
+            return ks[: self.limit] if self.limit else ks
+
+        def _branch_excludes(self) -> list[str]:
+            return ["limit"]
+
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    body_infra: tp.Any = {"backend": "Cached"}  # inherits the Scatter's folder
-    calls: list = []
-
-    def scat(limit: int) -> Limited:
-        body = conftest.Mult(coeff=2.0, infra=body_infra).on_call(calls.append)
-        return Limited(body=body, limit=limit, infra=infra)
-
+    body = conftest.Mult(coeff=2.0, infra=infra)
     item = {"a": 1.0, "b": 2.0, "c": 3.0}
-    assert scat(0).run(item) == {"a": 2.0, "b": 4.0, "c": 6.0}
-    assert len(calls) == 3
-    assert scat(2).run(item) == {"a": 2.0, "b": 4.0}, "output reflects the selection"
-    assert len(calls) == 3, "limit excluded from branch key -> subset reuses cache"
+    expected = {x: 2 * y for x, y in item.items()}
+    assert Limited(body=body, limit=0, infra=infra).run(item) == expected
+    assert len(body.calls) == 3
+    out = Limited(body=body, limit=2, infra=infra).run(item)
+    assert out == {"a": 2.0, "b": 4.0}, "output reflects the selection"
+    assert len(body.calls) == 3, "limit excluded from branch key -> subset reuses cache"
 
 
 def test_branch_excludes_input_shares_across_inputs(tmp_path: Path) -> None:
+    class SharedBranch(ScatterDict):
+        def _branch_excludes(self) -> list[str]:
+            return [Scatter._INPUT]  # branch keyed by name alone, shared across inputs
+
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    body_infra: tp.Any = {"backend": "Cached"}  # inherits the Scatter's folder
-    calls: list = []
-    body = conftest.Mult(coeff=10.0, infra=body_infra).on_call(calls.append)
-    out = list(GlobalLoad(body=body, infra=infra).run_many([["1", "2"], ["2", "3"]]))
-    assert out == [{"1": 10.0, "2": 20.0}, {"2": 20.0, "3": 30.0}]
-    assert sorted(calls) == [1.0, 2.0, 3.0], "branch 2 computed once across inputs"
+    body = conftest.Mult(coeff=10.0, infra=infra)
+    scat = SharedBranch(body=body, infra=infra)
+    out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))
+    assert out == [{"a": 10.0, "b": 20.0}, {"b": 20.0, "c": 30.0}]
+    assert sorted(body.calls) == [1.0, 2.0, 3.0], (
+        "shared branch b computed once across inputs"
+    )

@@ -123,7 +123,7 @@ class Scatter(Step):
     name; run on each branch) and override:
 
     - :meth:`branches` (required): the branches for one input.
-    - :meth:`take`: a branch's body input (default ``item[branch]``).
+    - :meth:`take` (required): a branch's body input (e.g. ``item[branch]``).
     - :meth:`gather`: recombine results, in ``branches`` order (default: the
       ``{branch: result}`` mapping).
     - :meth:`_branch_excludes`: config fields or the input that pick branches but
@@ -160,12 +160,12 @@ class Scatter(Step):
         raise NotImplementedError
 
     def take(self, item: tp.Any, branch: tp.Any) -> tp.Any:
-        """The body's input for one branch (default ``item[branch]``).
+        """The body's input for one branch (required; e.g. ``item[branch]``).
 
         Called once per branch, lazily where the body consumes it -- in-worker when
         the body runs off-process.
         """
-        return item[branch]
+        raise NotImplementedError
 
     def gather(self, results: list[BranchResult]) -> tp.Any:
         """Recombine one item's branch ``results`` (:class:`BranchResult` items in
