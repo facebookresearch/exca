@@ -141,20 +141,26 @@ def test_no_job_timeout() -> None:
     stale = inflight.WorkerInfo(pid=os.getpid(), claimed_at=time.time() - 700)
     assert not stale.is_alive(no_job_timeout=600), "stale PID-only claim should be dead"
 
-    # With Slurm job_id set, the timeout does not apply
-    with_slurm = inflight.WorkerInfo(
+    local = inflight.WorkerInfo(
+        pid=os.getpid(), job_id="local", claimed_at=time.time() - 700
+    )
+    assert local.is_alive(no_job_timeout=600), (
+        "local job_id has PID — timeout does not apply"
+    )
+
+
+def test_unreconstructable_slurm_job_times_out() -> None:
+    # Claim with job_id set but SlurmJob unreconstructable (_job = None)
+    worker = inflight.WorkerInfo(
         pid=os.getpid(),
         job_id="12345",
         job_folder="/nonexistent",
         claimed_at=time.time() - 700,
     )
-    assert with_slurm.is_alive(no_job_timeout=600)
-
-    # With local job_id, the timeout does not apply either
-    local = inflight.WorkerInfo(
-        pid=os.getpid(), job_id="local", claimed_at=time.time() - 700
+    assert worker._job is None, "SlurmJob should not be constructable"  # type: ignore[attr-defined]
+    assert not worker.is_alive(no_job_timeout=600), (
+        "stale Slurm claim with unreachable folder should time out"
     )
-    assert local.is_alive(no_job_timeout=600)
 
 
 def test_db_deletion_unblocks_wait(

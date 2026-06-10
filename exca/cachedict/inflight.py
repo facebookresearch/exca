@@ -113,12 +113,8 @@ class WorkerInfo:
         Parameters
         ----------
         no_job_timeout:
-            Applies only while ``job_id IS NULL`` (between ``claim`` and
-            ``update_worker_info``). PID is the only liveness signal in
-            that window; if ``claimed_at`` is older than this many
-            seconds, the worker is presumed dead (the window is normally
-            seconds, not minutes). ``_LOCAL_JOB_ID`` and Slurm ``job_id``
-            both bypass the timeout — they have stronger liveness signals.
+            Seconds after ``claimed_at`` beyond which a claim with no
+            usable liveness signal is presumed dead.
         """
         job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
         if job is not None:
@@ -128,7 +124,7 @@ class WorkerInfo:
                 return False
         if (
             self.claimed_at is not None
-            and self.job_id is None
+            and self.job_id != _LOCAL_JOB_ID
             and (time.time() - self.claimed_at) > no_job_timeout
         ):
             return False
