@@ -142,6 +142,21 @@ def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
     assert yaml == expected_yaml
 
 
+def test_step_uid_compression(monkeypatch: pytest.MonkeyPatch) -> None:
+    steps = [conftest.Add(value=i) for i in range(10)]
+    monkeypatch.setattr(identity, "MAX_STEP_UID_LENGTH", 9999)
+    full_uid = identity.step_uid(steps)
+    assert len(full_uid) > 200, "need a chain long enough to trigger compression"
+    monkeypatch.setattr(identity, "MAX_STEP_UID_LENGTH", 200)
+    uid = identity.step_uid(steps)
+    assert len(uid) <= 200
+    assert "Add" in uid, "type name should be preserved in compressed tail"
+    assert uid != full_uid
+    assert identity.step_uid(steps) == uid, "must be deterministic"
+    other = [conftest.Add(value=i) for i in range(1, 11)]
+    assert identity.step_uid(other) != uid, "different config must produce different uid"
+
+
 # =============================================================================
 # Safety checks for recursion risks - Equality and pickling
 # =============================================================================

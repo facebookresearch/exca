@@ -12,6 +12,8 @@ the matching configs.
 
 from __future__ import annotations
 
+import hashlib
+import re
 import typing as tp
 from pathlib import Path
 
@@ -25,6 +27,10 @@ if tp.TYPE_CHECKING:
 # Cache key for the no-input case (generators). Read by `materialize_uid`.
 _NOINPUT_UID = "__exca_no_input__"
 
+# OS PATH_MAX is 1024 (macOS) / 4096 (Linux); sqlite limit is 512.
+MAX_STEP_UID_LENGTH = 350
+STEP_UID_TAIL_BUDGET = MAX_STEP_UID_LENGTH // 5
+
 
 ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 
@@ -33,10 +39,43 @@ class NoValue:
     """Sentinel for unset input (e.g. a generator step has no value to bind)."""
 
 
+def _compress_tail(segments: list[str], budget: int) -> str:
+    """Collapse multiple UID segments into one directory-name-sized string."""
+    full = "/".join(segments)
+    h = hashlib.md5(full.encode()).hexdigest()[:8]
+    types = [
+        m.group(1) if (m := re.search(r"type=(\w+)", seg)) else seg[:20]
+        for seg in segments
+    ]
+    n = len(types)
+    suffix = f"-{n}-{h}"
+    label = "+".join(types)
+    max_label = budget - len(suffix)
+    if len(label) > max_label:
+        keep = max_label - 3
+        head = keep // 2
+        tail = keep - head
+        label = label[:head] + "..." + label[-tail:]
+    return f"{label}{suffix}"
+
+
 def step_uid(steps: tp.Sequence[Step]) -> str:
-    """Slash-joined per-step uid; empty input → empty string."""
+    """Slash-joined per-step uid; compressed if over MAX_STEP_UID_LENGTH."""
     opts = {"exclude_defaults": True, "uid": True}
-    return "/".join(exca.ConfDict.from_model(s, **opts).to_uid() for s in steps)
+    segments = [exca.ConfDict.from_model(s, **opts).to_uid() for s in steps]
+    full = "/".join(segments)
+    if len(full) <= MAX_STEP_UID_LENGTH:
+        return full
+    head: list[str] = []
+    used = 0
+    for seg in segments:
+        needed = (1 if head else 0) + len(seg)
+        if used + needed + 1 + STEP_UID_TAIL_BUDGET > MAX_STEP_UID_LENGTH:
+            break
+        head.append(seg)
+        used += needed
+    tail_segments = segments[len(head) :]
+    return "/".join(head + [_compress_tail(tail_segments, STEP_UID_TAIL_BUDGET)])
 
 
 def materialize_uid(step: Step, value: tp.Any) -> str:
