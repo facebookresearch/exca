@@ -144,15 +144,15 @@ def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
 
 def test_step_uid_compression(monkeypatch: pytest.MonkeyPatch) -> None:
     steps = [conftest.Add(value=i) for i in range(10)]
-    monkeypatch.setattr(identity, "MAX_STEP_UID_LENGTH", 9999)
-    full_uid = identity.step_uid(steps)
-    assert len(full_uid) > 200, "need a chain long enough to trigger compression"
-    monkeypatch.setattr(identity, "MAX_STEP_UID_LENGTH", 200)
+    monkeypatch.setattr(identity, "MAX_STEP_UID_LENGTH", 100)
+    monkeypatch.setattr(identity, "STEP_UID_TAIL_BUDGET", 40)
     uid = identity.step_uid(steps)
-    assert len(uid) <= 200
-    assert "Add" in uid, "type name should be preserved in compressed tail"
-    assert uid != full_uid
-    assert identity.step_uid(steps) == uid, "must be deterministic"
+    expected = (
+        "value=0,type=Add-a5bf3c53/"
+        "value=1,type=Add-c1a6f4c8/"
+        "Add+Add+Add+A...d+Add+Add+Add-8-10614000"
+    )
+    assert uid == expected
     other = [conftest.Add(value=i) for i in range(1, 11)]
     assert identity.step_uid(other) != uid, "different config must produce different uid"
 
