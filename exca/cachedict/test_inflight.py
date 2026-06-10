@@ -157,7 +157,7 @@ def test_unreconstructable_slurm_job_times_out() -> None:
         job_folder="/nonexistent",
         claimed_at=time.time() - 700,
     )
-    assert worker._job is None, "SlurmJob should not be constructable"
+    assert worker._job is None, "SlurmJob should not be constructable"  # type: ignore[attr-defined]
     assert not worker.is_alive(no_job_timeout=600), (
         "stale Slurm claim with unreachable folder should time out"
     )
