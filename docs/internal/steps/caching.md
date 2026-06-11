@@ -80,15 +80,20 @@ other owners, claims all requested uids, yields an `InflightClaim`, then
 releases on exit. Waits go through `wait_for_inflight` (polls the DB;
 reclaims dead PIDs).
 
-A run splits across three methods. `Backend._prepare` resolves paths and,
-for `force`, clears stale entries before any claim is held (the pre-lock
-cache check is a fast path only). `Backend._dispatch_batches` then holds
-one `inflight_session` per batch (claims taken in `step_uid` order so
-concurrent dispatches agree on lock order), and inside the held claims
-`_execute_claimed` re-checks cache state under the claim, clears entries
-it will recompute, and calls `_execute`. The under-claim recheck is what
-stops a competitor that populated mid-wait from handing its value back to
-a `force`; `retry` uses the same recheck to recompute cached errors.
+A run splits across methods. `Backend._prepare` resolves paths and, for
+`force`, clears stale entries before any claim is held (the pre-lock cache
+check is a fast path only). `Backend._dispatch_batches` then holds one
+`inflight_session` per batch (claims taken in `step_uid` order so
+concurrent dispatches agree on lock order). Under the held claims it calls
+`_recheck_and_clear` per batch — re-checking cache state and clearing
+entries it will recompute — then hands every still-pending batch to a
+single `_execute` call. The under-claim recheck is what stops a competitor
+that populated mid-wait from handing its value back to a `force`; `retry`
+uses the same recheck to recompute cached errors. `_execute` takes the
+whole batch set so a sweep (many step variants dispatched together) packs
+into one submitit array instead of one per variant; `Backend._mark_recomputed`
+records each batch as it is attempted, so a raising inline run leaves
+un-attempted batches unmarked.
 
 The session locks `inflight.db` only — direct user calls to
 `LookupHandle.clear_cache()` race against in-flight workers. The worker

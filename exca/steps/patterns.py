@@ -119,6 +119,8 @@ class _Gather:
 class Scatter(Step):
     """Fan each input into N keyed branches, run one body per branch, gather (1->N->1).
 
+    .. warning:: Experimental — API may change.
+
     To implement a Scatter, declare a single ``Step`` field (the body, any
     name; run on each branch) and override:
 
