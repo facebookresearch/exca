@@ -200,17 +200,8 @@ class BaseInfra(pydantic.BaseModel):
 
     def __repr_args__(self) -> tp.Iterator[tuple[str | None, tp.Any]]:
         """Compact repr: only show fields that differ from their default value."""
-        # note: fields with a default_factory have default=PydanticUndefined,
-        # so they never compare equal and are always shown
-        fields = type(self).model_fields
-        for name, value in super().__repr_args__():
-            if name is not None and name in fields:
-                try:
-                    if bool(value == fields[name].default):
-                        continue  # equal to default -> hide
-                except Exception:
-                    pass  # non-comparable values are shown
-            yield name, value
+        for name in self.model_dump(exclude_defaults=True):
+            yield name, getattr(self, name)
 
     def config(self, uid: bool = True, exclude_defaults: bool = False) -> ConfDict:
         """Exports the task configuration as a ConfigDict
