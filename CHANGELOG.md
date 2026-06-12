@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Infra reprs now only display fields that differ from their default value. [#289]
 - `exca/steps`: `Scatter` primitive — fan each input into N branches, run a body Step per branch, gather (N->NxM->N). [#282]
 - `exca/steps`: update experimental batch execution API to `step.run_many([v1, v2, ...])`. [#275]
 
