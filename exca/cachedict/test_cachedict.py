@@ -238,19 +238,9 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     # now complete
     info_path.write_bytes(b"\n".join(lines))
     assert len(cache) == 3
-
-
-def test_info_jsonl_partially_blanked_deletion(tmp_path: Path) -> None:
-    """Reader skips lines whose first byte is a space (deleted entries),
-    even when the rest of the blanking is incomplete (GH-294)."""
-    valid = b'{"#key": "a", "#type": "Json", "value": 1}'
-    # Simulate incomplete blanking: spaces prefix + stale JSON tail
-    blanked = b'                                           png"}'
-    fp = tmp_path / "test-info.jsonl"
-    fp.write_bytes(blanked + b"\n" + valid + b"\n")
-    reader = cd.JsonlReader(fp)
-    out = reader.read()
-    assert list(out) == ["a"], "partially blanked line should be skipped"
+    (tmp_path / "blanked-info.jsonl").write_bytes(b'   png"}\n' + lines[0] + b"\n")
+    fresh = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert len(fresh) == 3, "partially blanked line should be skipped"
 
 
 def test_jsonl_reader_resets_on_rewrite_or_truncate(tmp_path: Path) -> None:
@@ -342,6 +332,10 @@ def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
             '     \n{"#key": "blu", "#type": "MemmapArrayFile"}',
             False,
         ),  # deleted + remaining
+        (
+            '   png"}\n{"#key": "blu", "#type": "MemmapArrayFile"}',
+            False,
+        ),  # partially blanked + remaining
         # old format (metadata header)
         ('metadata={"cache_type":', False),  # writing metadata
         ('metadata={"cache_type": "MemmapArrayFile"}\n', False),  # metadata only
@@ -360,9 +354,7 @@ def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
         ),  # remaining data
     ],
 )
-def test_orphaned_cleanup_edge_cases(
-    tmp_path: Path, content: str, should_delete: bool
-) -> None:
+def test_jsonl_edge_cases(tmp_path: Path, content: str, should_delete: bool) -> None:
     """Test edge cases for orphaned file cleanup."""
     cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, cache_type="MemmapArrayFile"
