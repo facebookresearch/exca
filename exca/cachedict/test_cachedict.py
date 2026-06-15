@@ -240,6 +240,19 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     assert len(cache) == 3
 
 
+def test_info_jsonl_partially_blanked_deletion(tmp_path: Path) -> None:
+    """Reader skips lines whose first byte is a space (deleted entries),
+    even when the rest of the blanking is incomplete (GH-294)."""
+    valid = b'{"#key": "a", "#type": "Json", "value": 1}'
+    # Simulate incomplete blanking: spaces prefix + stale JSON tail
+    blanked = b'                                           png"}'
+    fp = tmp_path / "test-info.jsonl"
+    fp.write_bytes(blanked + b"\n" + valid + b"\n")
+    reader = cd.JsonlReader(fp)
+    out = reader.read()
+    assert list(out) == ["a"], "partially blanked line should be skipped"
+
+
 def test_jsonl_reader_resets_on_rewrite_or_truncate(tmp_path: Path) -> None:
     """JsonlReader resets on truncate-in-place and unlink+recreate, even
     when the FS reuses the inode."""

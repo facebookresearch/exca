@@ -46,10 +46,8 @@ class DumpInfo:
     )
 
     def delete_info(self, *, ignore_errors: bool = False) -> None:
-        """Overwrite this entry's JSONL bytes with spaces (keep newline).
+        """Blank this entry so ``JsonlReader`` treats it as deleted.
 
-        A line starting with ``b" "`` marks a deleted item;
-        ``_cleanup_orphaned_jsonl_files`` relies on this convention.
         When *ignore_errors* is True, silently ignores missing/locked files."""
         start, end = self.byte_range
         if start == end:
@@ -57,7 +55,10 @@ class DumpInfo:
         try:
             with self.jsonl.open("rb+") as f:
                 f.seek(start)
-                f.write(b" " * (end - start - 1))
+                f.write(b" ")  # atomic mark — survives partial bulk write
+                f.flush()
+                if end - start > 2:
+                    f.write(b" " * (end - start - 2))  # blank out
         except (FileNotFoundError, OSError):
             if not ignore_errors:
                 raise
@@ -452,8 +453,7 @@ class JsonlReader:
                     raise RuntimeError(msg)
                 count = len(line)
                 brange = (last, last + count)
-                line = line.strip()
-                if not line:
+                if line[:1] == b" " or not line.strip():  # deleted — DumpInfo.delete_info
                     last += count
                     continue
                 try:
