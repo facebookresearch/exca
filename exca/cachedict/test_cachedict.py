@@ -239,7 +239,7 @@ def test_info_jsonl_partial_write(tmp_path: Path) -> None:
     info_path.write_bytes(b"\n".join(lines))
     assert len(cache) == 3
     (tmp_path / "blanked-info.jsonl").write_bytes(b'   png"}\n' + lines[0] + b"\n")
-    fresh = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    fresh: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert len(fresh) == 3, "partially blanked line should be skipped"
 
 
