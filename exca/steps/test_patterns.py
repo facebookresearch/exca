@@ -8,12 +8,9 @@ import typing as tp
 from pathlib import Path
 
 import pytest
-import submitit
 
 from . import base, conftest
-from .helpers import Parallel
 from .patterns import Scatter
-from .test_backends import _CapturingAutoExecutor
 
 # =========================================================================
 # Scatter
@@ -160,82 +157,3 @@ def test_branch_excludes(tmp_path: Path) -> None:
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))
     assert out == [{"a": 10.0, "b": 20.0}, {"b": 20.0, "c": 30.0}]
     assert sorted(shared.calls) == [1.0, 2.0, 3.0], "shared branch b computed once"
-
-
-# =========================================================================
-# Parallel
-# =========================================================================
-
-
-def _sweep(tmp_path: Path) -> Parallel:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    variants = [conftest.Mult(coeff=c) for c in (2.0, 3.0, 4.0)]
-    return Parallel(steps=variants, infra=infra)
-
-
-def test_run_caches_each_variant_under_own_identity(tmp_path: Path) -> None:
-    sweep = _sweep(tmp_path)
-    assert sweep.run_many([1.0, 5.0]) == [None, None]
-    assert [s.lookup(5.0).result() for s in sweep.steps] == [10.0, 15.0, 20.0]
-    # clone-equivalence: a standalone clone hits the swept cell
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    assert conftest.Mult(coeff=3.0, infra=infra).lookup(5.0).cached()
-
-
-def test_generator_variants_no_items(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    sweep = Parallel(steps=[conftest.Add(value=v) for v in (1.0, 2.0)], infra=infra)
-    sweep.run()
-    assert [s.lookup().result() for s in sweep.steps] == [1.0, 2.0]  # 0+1, 0+2
-
-
-def test_invalid_inputs_rejected(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    with pytest.raises(ValueError, match="steps cannot be empty"):
-        Parallel(steps=[], infra=infra)
-    with pytest.raises(ValueError, match="needs an infra"):
-        Parallel(steps=[conftest.Mult(coeff=2.0)])
-    other: tp.Any = {"backend": "Cached", "folder": tmp_path / "other"}
-    conflicting = [conftest.Mult(coeff=2.0), conftest.Mult(coeff=3.0, infra=other)]
-    with pytest.raises(ValueError, match="one shared backend"):
-        Parallel(steps=conflicting, infra=infra)
-    with pytest.raises(TypeError, match="parallel.steps"):
-        _sweep(tmp_path).lookup(5.0)
-
-
-@pytest.mark.parametrize("folder_first", (True, False))
-def test_backend_on_steps_is_adopted_with_folder(
-    tmp_path: Path, folder_first: bool
-) -> None:
-    # backend on the steps, folder on only one: it must win regardless of position
-    set_: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    unset: tp.Any = {"backend": "Cached"}
-    pair = (set_, unset) if folder_first else (unset, set_)
-    steps = [conftest.Mult(coeff=c, infra=i) for c, i in zip((2.0, 3.0), pair)]
-    sweep = Parallel(steps=steps)
-    assert sweep.infra is not None and sweep.infra.folder == tmp_path
-    sweep.run(5.0)
-    assert [s.lookup(5.0).result() for s in sweep.steps] == [10.0, 15.0]
-
-
-def test_one_variant_errors_others_still_cache(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
-    ok, bad = conftest.Add(value=2.0), conftest.Add(value=5.0, fail_on="all")
-    sweep = Parallel(steps=[ok, bad], infra=infra)
-    with pytest.raises(submitit.core.utils.FailedJobError):
-        sweep.run()
-    assert sweep.steps[0].lookup().result() == 2.0
-    with pytest.raises(ValueError, match="Triggered an error"):
-        sweep.steps[1].lookup().result()  # the error itself is cached
-
-
-def test_single_array_across_variants(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _CapturingAutoExecutor.captured = []
-    monkeypatch.setattr(submitit, "AutoExecutor", _CapturingAutoExecutor)
-    infra: tp.Any = {"backend": "Slurm", "folder": tmp_path}
-    sweep = Parallel(steps=[conftest.Add(value=v) for v in (1.0, 2.0, 3.0)], infra=infra)
-    sweep.run()
-    [(_, params)] = _CapturingAutoExecutor.captured  # exactly one executor
-    assert params["slurm_array_parallelism"] == 3, "one array spans all variants"

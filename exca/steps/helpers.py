@@ -151,11 +151,7 @@ class Parallel(Step):
         self._unify_infra()
 
     def _unify_infra(self) -> None:
-        """Make Parallel and every step share one identical backend.
-
-        A sweep dispatches as a single submission, so the whole construct must
-        agree on one backend (the spec may be given on Parallel or on the steps).
-        """
+        """Ensure all children share one backend (for single-array dispatch)."""
         infras = [s.infra for s in self.steps if s.infra is not None]
         if self.infra is not None:
             infras.append(self.infra)
@@ -192,8 +188,31 @@ class Parallel(Step):
             "e.g. parallel.steps[k].lookup(value)"
         )
 
-    def _run(self, *args: tp.Any) -> tp.NoReturn:
-        raise RuntimeError("Parallel.run_many drives dispatch directly; _run is unused")
+    def _dispatch(self, batch: items.StepItems) -> items.StepItems:
+        """Inline orchestration: dispatch children, don't go through a backend."""
+        return self._run_items(batch)
+
+    def _run_items(self, batch: items.StepItems) -> items.StepItems:
+        """Dispatch all variants via single-array, return None-valued StepItems."""
+        assert self.infra is not None
+        if self.infra.folder is None:
+            raise RuntimeError(
+                f"Parallel needs a cache folder; set infra.folder (on Parallel or "
+                f"a step), got {self.infra!r}"
+            )
+        cbatches = []
+        for child in self.steps:
+            uids = [identity.materialize_uid(child, v) for v in batch]
+            child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
+            cbatches.append(self.infra._prepare(child, child_batch))
+        self.infra._dispatch_batches(cbatches)
+        # Run-for-effect: return Nones. Composable output is future work.
+        return items.StepItems(
+            source={uid: None for uid in batch.uids},
+            uids=batch.uids,
+            upstream=batch._upstream,
+            mode=batch._mode,
+        )
 
     def run(self, value: tp.Any = identity.NoValue()) -> None:
         """Run every variant on a single input (for effect — see class docstring)."""
@@ -201,17 +220,8 @@ class Parallel(Step):
 
     def run_many(self, values: tp.Iterable[tp.Any]) -> list[None]:  # type: ignore[override]
         """Run every variant over the inputs; return one ``None`` per input."""
-        assert self.infra is not None  # guaranteed by _unify_infra at construction
-        if self.infra.folder is None:
-            raise RuntimeError(
-                f"Parallel needs a cache folder; set infra.folder (on Parallel or "
-                f"a step), got {self.infra!r}"
-            )
         values = list(values)
-        cbatches = []
-        for child in self.steps:
-            uids = [identity.materialize_uid(child, v) for v in values]
-            batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
-            cbatches.append(self.infra._prepare(child, batch))
-        self.infra._dispatch_batches(cbatches)
+        uids = [identity.materialize_uid(self, v) for v in values]
+        batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
+        self._dispatch(batch)
         return [None] * len(values)
