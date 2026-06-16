@@ -609,6 +609,17 @@ if __name__ == "__main__":
         assert list(Path(tmp).iterdir())
 
 
+def test_repr_shows_only_non_defaults() -> None:
+    infra = TaskInfra(folder="/tmp/blublu", version="3")
+    rep = repr(infra)
+    assert rep == "TaskInfra(folder='/tmp/blublu', version='3')"
+    # fields equal to their default are hidden even when explicitly set
+    assert repr(TaskInfra(mode="cached")) == "TaskInfra()"
+    # non-default values coming from a class-level default remain visible
+    model = Base(infra={"folder": "/tmp/blublu"})  # type: ignore
+    assert "version='12'" in repr(model.infra)
+
+
 def test_fast_state_no_fallback() -> None:
     """Catch pydantic upgrades that change PrivateAttr storage."""
     model = Base(param=1)
