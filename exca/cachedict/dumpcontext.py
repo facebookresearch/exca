@@ -310,6 +310,8 @@ class DumpContext:
         ctx.key = key
         info = ctx.dump(value, cache_type=cache_type)
         info["#key"] = key
+        for fh in self._files.values():
+            fh.flush()
         f, name = self.shared_file(self.INFO_SUFFIX)
         line = orjson.dumps(info)
         offset = f.tell()
