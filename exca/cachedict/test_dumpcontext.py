@@ -504,3 +504,13 @@ def test_resource_cache_isolated_after_fork(tmp_path: Path) -> None:
     assert os.read(r_fd, 1) == b"1", "child must re-run factory, not inherit parent cache"
     os.close(r_fd)
     os.waitpid(pid, 0)
+
+
+def test_data_file_flushed_before_metadata(tmp_path: Path) -> None:
+    ctx = DumpContext(tmp_path)
+    with ctx:
+        result = ctx.dump_entry("k", np.arange(3, dtype=np.float32))
+        data_path = tmp_path / result["content"]["filename"]
+        assert data_path.stat().st_size >= 12, (
+            "data must be on disk before metadata is committed"
+        )
