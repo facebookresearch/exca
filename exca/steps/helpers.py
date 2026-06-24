@@ -139,7 +139,7 @@ class Parallel(Step):
     Parameters
     ----------
     steps:
-        The pre-built variants to sweep.
+        The step variants to run.
     """
 
     steps: tp.Sequence[Step]
@@ -151,7 +151,7 @@ class Parallel(Step):
         self._unify_infra()
 
     def _unify_infra(self) -> None:
-        """Ensure all children share one backend (for single-array dispatch)."""
+        """Ensure all children share one backend."""
         infras = [s.infra for s in self.steps if s.infra is not None]
         if self.infra is not None:
             infras.append(self.infra)
@@ -189,11 +189,10 @@ class Parallel(Step):
         )
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        """Inline orchestration: dispatch children, don't go through a backend."""
         return self._run_items(batch)
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
-        """Dispatch all variants via single-array, return None-valued StepItems."""
+        """Dispatch all variants, return None-valued StepItems."""
         assert self.infra is not None
         if self.infra.folder is None:
             raise RuntimeError(
@@ -206,7 +205,7 @@ class Parallel(Step):
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
             cbatches.append(self.infra._prepare(child, child_batch))
         self.infra._dispatch_batches(cbatches)
-        # Run-for-effect: return Nones. Composable output is future work.
+        # Run-for-effect: returns Nones (no composable output).
         return items.StepItems(
             source={uid: None for uid in batch.uids},
             uids=batch.uids,

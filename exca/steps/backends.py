@@ -729,8 +729,7 @@ class _SubmititBackend(Backend):
         return params
 
     def _execute(self, cbatches: list[ComputeBatch]) -> None:
-        # Pack all batches into tasks, submit them in ONE executor.batch() so a
-        # multi-batch sweep packs into a single slurm array (P-single-array).
+        # all batches → one executor.batch() → one slurm array
         for cbatch in cbatches:
             if cbatch.info.claim is None:
                 raise RuntimeError("_execute runs only on claimed batches")

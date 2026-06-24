@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.5.27 - 26-06-24
+
 - `exca/steps`: `Parallel` primitive — run a fixed set of step variants over one shared item set under a single backend dispatch, each variant caching under its own identity.
 - `exca/steps`: `Scatter` primitive — fan each input into N branches, run a body Step per branch, gather (N->NxM->N). [#282]
 - `exca/steps`: update experimental batch execution API to `step.run_many([v1, v2, ...])`. [#275]

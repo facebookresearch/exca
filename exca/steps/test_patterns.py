@@ -12,10 +12,6 @@ import pytest
 from . import base, conftest
 from .patterns import Scatter
 
-# =========================================================================
-# Scatter
-# =========================================================================
-
 
 class MakeDict(base.Step):
     def _run(self, n: float) -> dict[str, float]:
