@@ -198,6 +198,11 @@ class BaseInfra(pydantic.BaseModel):
         super().model_post_init(log__)
         self._set_permissions(None)  # set compatibility for permissions as string
 
+    def __repr_args__(self) -> tp.Iterator[tuple[str | None, tp.Any]]:
+        """Compact repr: only show fields that differ from their default value."""
+        for name in self.model_dump(exclude_defaults=True):
+            yield name, getattr(self, name)
+
     def config(self, uid: bool = True, exclude_defaults: bool = False) -> ConfDict:
         """Exports the task configuration as a ConfigDict
         ConfDict are dict which split on "." with extra flatten,
