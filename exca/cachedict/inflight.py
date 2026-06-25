@@ -280,10 +280,12 @@ class InflightRegistry(registry.AdvisoryRegistry):
             return
 
         def _do(conn: sqlite3.Connection) -> None:
+            conn.execute("BEGIN")
             conn.executemany(
                 "UPDATE inflight SET job_id = ?, job_folder = ? WHERE item_uid = ?",
                 [(job_id, job_folder, uid) for uid in item_uids],
             )
+            conn.execute("COMMIT")
 
         self._safe_execute("update", None, _do)
         msg = "Updated worker info for %d items (job_id=%s)"
