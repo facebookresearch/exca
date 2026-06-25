@@ -106,7 +106,7 @@ class AdvisoryRegistry:
             timeout=20,
             isolation_level=None,
         )
-        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(self._SCHEMA)
         if self.permissions is not None:
             try:
