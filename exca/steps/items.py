@@ -134,6 +134,8 @@ class StepItems:
         source = self._source
         if isinstance(source, dict):
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
+        elif hasattr(source, "select"):
+            source = source.select(uids)
         return StepItems(
             source=source,
             uids=uids,

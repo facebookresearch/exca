@@ -127,6 +127,22 @@ def test_scatter_branch_caching(tmp_path: Path, nested: bool) -> None:
     assert (tmp_path / scat_uid / body_uid / "cache").is_dir()
 
 
+def test_scatter_pickle_scales_linearly() -> None:
+    """Chunk pickle must not carry the full _Parts payload."""
+    import pickle
+
+    from .items import StepItems
+
+    def chunk_size(n: int) -> int:
+        source = {str(i): {str(i): float(i)} for i in range(n)}
+        scat = ScatterDict(body=conftest.Mult(coeff=2.0))
+        carrier = scat._run_items(StepItems(source=source, uids=list(source)))
+        return len(pickle.dumps(carrier.select(carrier.uids[:10])))
+
+    ratio = chunk_size(10_000) / chunk_size(100)
+    assert ratio < 5, f"chunk pickle grew {ratio:.0f}x for 100x items"
+
+
 @pytest.mark.parametrize("cached_upstream", [False, True])
 def test_process_backend_scatters_branches(tmp_path: Path, cached_upstream: bool) -> None:
     proc: tp.Any = {"backend": "ProcessPool", "folder": tmp_path}

@@ -82,6 +82,17 @@ class _Parts:
         }
         self._cached: tuple[str, tp.Any] | None = None
 
+    def select(self, branch_uids: tp.Sequence[str]) -> _Parts:
+        """Subset to *branch_uids* so only matching _origin / _batch are pickled."""
+        origin = {b: self._origin[b] for b in branch_uids if b in self._origin}
+        input_uids = list(dict.fromkeys(uid for uid, _ in origin.values()))
+        new = _Parts.__new__(_Parts)
+        new._batch = self._batch.select(input_uids)
+        new._take = self._take
+        new._origin = origin
+        new._cached = None
+        return new
+
     def __getitem__(self, branch_uid: str) -> tp.Any:
         uid, branch = self._origin[branch_uid]
         # one slot, not a dict: dedupe an input's contiguous branches without
@@ -107,6 +118,18 @@ class _Gather:
         self._dispatched = dispatched
         self._gather = gather
         self._plan = plan
+
+    def select(self, uids: tp.Sequence[str]) -> _Gather:
+        """Subset to *uids* so only matching plan / dispatched are pickled."""
+        plan = {u: self._plan[u] for u in uids if u in self._plan}
+        branch_uids = list(
+            dict.fromkeys(b for m in plan.values() for b in m)
+        )
+        new = _Gather.__new__(_Gather)
+        new._dispatched = self._dispatched.select(branch_uids)
+        new._gather = self._gather
+        new._plan = plan
+        return new
 
     def __getitem__(self, uid: str) -> tp.Any:
         branches = self._plan[uid]  # {branch uid: branch}
