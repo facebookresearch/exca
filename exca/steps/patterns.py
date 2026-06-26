@@ -190,14 +190,9 @@ class Scatter(Step):
         every branch's body cache (not just this Scatter's gathered result). For
         input-independent branches that cache is shared, so it clears other inputs too."""
         handle = super().lookup(value, _upstream=_upstream, _uid=_uid)
-        # branches exist even when the Scatter is uncached (inline in a Chain)
-        if _uid is not None:
-            uid = _uid
-        elif not isinstance(value, identity.NoValue):
-            uid = identity.materialize_uid(self, value)
-        else:
-            return handle  # no input -> no branches to scope
         keyer = _BranchKeyer.from_scatter(self)
+        # branches cache independently of the Scatter
+        uid = _uid if _uid is not None else identity.materialize_uid(self, value)
         upstream = tuple(_upstream) + keyer.steps
         body = self._body()
         # any uid -> same body cachedict; we only read its keys
