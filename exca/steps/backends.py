@@ -776,10 +776,13 @@ class _PoolBackend(Backend):
             claim.record_worker_info(uids=c.items.uids)
         with utils.make_pool_executor(self._POOL_TYPE, max_workers) as pool:
             logger.info("Sent %s items for %s into a %s", len(uids), paths.step_uid, pool)
-            futs = [pool.submit(c.run_and_cache) for c in chunks]
+            futs = {pool.submit(c.run_and_cache): c for c in chunks}
             try:
                 for f in futures.as_completed(futs):
                     f.result()
+                    if self.keep_in_ram:
+                        for uid in futs[f].items.uids:
+                            cbatch.cache_dict[uid]
             except BaseException:
                 for f in futs:
                     f.cancel()
