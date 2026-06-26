@@ -27,6 +27,8 @@ _CORRUPTION_HINTS = (
     "no such table",
     "no such column",
 )
+# OperationalError substrings for transient lock contention (retried).
+_LOCK_HINTS = ("locked", "busy")
 
 
 def select_in_chunks(
@@ -121,31 +123,31 @@ class AdvisoryRegistry:
         return conn
 
     def _safe_connect(self, *, create: bool = False) -> sqlite3.Connection | None:
-        """Open guarded by the same corruption gate as :meth:`_safe_execute`."""
-        try:
-            return self._connect(create=create)
-        except sqlite3.DatabaseError as e:
-            # DatabaseError (parent of OperationalError) covers SQLITE_NOTADB
-            # raised by executescript on a corrupt header.
-            corrupt = any(h in str(e).lower() for h in _CORRUPTION_HINTS)
-            logger.warning(
-                "%s registry unavailable at %s, treating as empty%s",
-                self._LABEL,
-                self.db_path,
-                " (resetting corrupt DB)" if corrupt else "",
-                exc_info=True,
-            )
-            if corrupt:
-                self._try_reset()
-            return None
-        except Exception:
-            logger.warning(
-                "%s registry unavailable at %s, treating as empty",
-                self._LABEL,
-                self.db_path,
-                exc_info=True,
-            )
-            return None
+        """Open guarded by the same corruption gate as :meth:`_safe_execute`,
+        retrying lock contention."""
+        for attempt in range(3):
+            try:
+                return self._connect(create=create)
+            except Exception as e:
+                corrupt = False
+                if isinstance(e, sqlite3.DatabaseError):  # also covers SQLITE_NOTADB
+                    msg = str(e).lower()
+                    # WAL switch takes a brief exclusive lock busy_timeout misses
+                    if any(h in msg for h in _LOCK_HINTS) and attempt < 2:
+                        time.sleep(random.uniform(0, attempt + 1))
+                        continue
+                    corrupt = any(h in msg for h in _CORRUPTION_HINTS)
+                logger.warning(
+                    "%s registry unavailable at %s, treating as empty%s",
+                    self._LABEL,
+                    self.db_path,
+                    " (resetting corrupt DB)" if corrupt else "",
+                    exc_info=True,
+                )
+                if corrupt:
+                    self._try_reset()
+                return None
+        return None
 
     def _try_reset(self) -> None:
         """Close connection and delete corrupt DB so next access recreates it."""
@@ -203,7 +205,7 @@ class AdvisoryRegistry:
                     pass
                 if isinstance(e, sqlite3.OperationalError):
                     msg = str(e).lower()
-                    if "locked" in msg or "busy" in msg:
+                    if any(h in msg for h in _LOCK_HINTS):
                         if attempt < 2:
                             delay = random.uniform(0, attempt + 1)
                             logger.debug(
