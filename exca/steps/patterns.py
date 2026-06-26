@@ -71,7 +71,6 @@ class _Parts:
         self,
         batch: items.StepItems,
         take: tp.Callable[[tp.Any, tp.Any], tp.Any],
-        *,
         origin: dict[str, tuple[str, tp.Any]],
     ) -> None:
         self._batch = batch
@@ -79,25 +78,11 @@ class _Parts:
         self._origin = origin
         self._cached: tuple[str, tp.Any] | None = None
 
-    @classmethod
-    def from_plan(
-        cls,
-        batch: items.StepItems,
-        take: tp.Callable[[tp.Any, tp.Any], tp.Any],
-        plan: dict[str, dict[str, tp.Any]],
-    ) -> _Parts:
-        origin = {
-            branch_uid: (uid, branch)
-            for uid, m in plan.items()
-            for branch_uid, branch in m.items()
-        }
-        return cls(batch, take, origin=origin)
-
     def select(self, branch_uids: tp.Sequence[str]) -> _Parts:
         """Subset to *branch_uids* so only matching _origin / _batch are pickled."""
         origin = {b: self._origin[b] for b in branch_uids if b in self._origin}
         input_uids = list(dict.fromkeys(uid for uid, _ in origin.values()))
-        return _Parts(self._batch.select(input_uids), self._take, origin=origin)
+        return _Parts(self._batch.select(input_uids), self._take, origin)
 
     def __getitem__(self, branch_uid: str) -> tp.Any:
         uid, branch = self._origin[branch_uid]
@@ -243,7 +228,15 @@ class Scatter(Step):
             plan[uid] = {keyer.branch_uid(uid, b): b for b in branches}
         uids = list(dict.fromkeys(branch_uid for m in plan.values() for branch_uid in m))
         carrier = items.StepItems(
-            source=_Parts.from_plan(batch, self.take, plan),
+            source=_Parts(
+                batch,
+                self.take,
+                {
+                    branch_uid: (uid, branch)
+                    for uid, m in plan.items()
+                    for branch_uid, branch in m.items()
+                },
+            ),
             uids=uids,
             upstream=branch_upstream,
             mode=batch._mode,

@@ -134,7 +134,7 @@ class StepItems:
         source = self._source
         if isinstance(source, dict):
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
-        elif hasattr(source, "select"):
+        elif hasattr(source, "select"):  # subset lazy sources before pickle
             source = source.select(uids)
         return StepItems(
             source=source,
