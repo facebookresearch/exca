@@ -71,27 +71,33 @@ class _Parts:
         self,
         batch: items.StepItems,
         take: tp.Callable[[tp.Any, tp.Any], tp.Any],
-        plan: dict[str, dict[str, tp.Any]],
+        *,
+        origin: dict[str, tuple[str, tp.Any]],
     ) -> None:
         self._batch = batch
         self._take = take
-        self._origin = {
+        self._origin = origin
+        self._cached: tuple[str, tp.Any] | None = None
+
+    @classmethod
+    def from_plan(
+        cls,
+        batch: items.StepItems,
+        take: tp.Callable[[tp.Any, tp.Any], tp.Any],
+        plan: dict[str, dict[str, tp.Any]],
+    ) -> _Parts:
+        origin = {
             branch_uid: (uid, branch)
             for uid, m in plan.items()
             for branch_uid, branch in m.items()
         }
-        self._cached: tuple[str, tp.Any] | None = None
+        return cls(batch, take, origin=origin)
 
     def select(self, branch_uids: tp.Sequence[str]) -> _Parts:
         """Subset to *branch_uids* so only matching _origin / _batch are pickled."""
         origin = {b: self._origin[b] for b in branch_uids if b in self._origin}
         input_uids = list(dict.fromkeys(uid for uid, _ in origin.values()))
-        new = _Parts.__new__(_Parts)
-        new._batch = self._batch.select(input_uids)
-        new._take = self._take
-        new._origin = origin
-        new._cached = None
-        return new
+        return _Parts(self._batch.select(input_uids), self._take, origin=origin)
 
     def __getitem__(self, branch_uid: str) -> tp.Any:
         uid, branch = self._origin[branch_uid]
@@ -122,14 +128,8 @@ class _Gather:
     def select(self, uids: tp.Sequence[str]) -> _Gather:
         """Subset to *uids* so only matching plan / dispatched are pickled."""
         plan = {u: self._plan[u] for u in uids if u in self._plan}
-        branch_uids = list(
-            dict.fromkeys(b for m in plan.values() for b in m)
-        )
-        new = _Gather.__new__(_Gather)
-        new._dispatched = self._dispatched.select(branch_uids)
-        new._gather = self._gather
-        new._plan = plan
-        return new
+        branch_uids = list(dict.fromkeys(b for m in plan.values() for b in m))
+        return _Gather(self._dispatched.select(branch_uids), plan, self._gather)
 
     def __getitem__(self, uid: str) -> tp.Any:
         branches = self._plan[uid]  # {branch uid: branch}
@@ -243,7 +243,7 @@ class Scatter(Step):
             plan[uid] = {keyer.branch_uid(uid, b): b for b in branches}
         uids = list(dict.fromkeys(branch_uid for m in plan.values() for branch_uid in m))
         carrier = items.StepItems(
-            source=_Parts(batch, self.take, plan),
+            source=_Parts.from_plan(batch, self.take, plan),
             uids=uids,
             upstream=branch_upstream,
             mode=batch._mode,
