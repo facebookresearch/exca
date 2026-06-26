@@ -79,7 +79,7 @@ class _Parts:
         self._cached: tuple[str, tp.Any] | None = None
 
     def select(self, branch_uids: tp.Sequence[str]) -> _Parts:
-        """Subset to *branch_uids* so only matching _origin / _batch are pickled."""
+        # StepItems.select → avoid pickling the full batch
         origin = {b: self._origin[b] for b in branch_uids if b in self._origin}
         input_uids = list(dict.fromkeys(uid for uid, _ in origin.values()))
         return _Parts(self._batch.select(input_uids), self._take, origin)
@@ -111,7 +111,6 @@ class _Gather:
         self._plan = plan
 
     def select(self, uids: tp.Sequence[str]) -> _Gather:
-        """Subset to *uids* so only matching plan / dispatched are pickled."""
         plan = {u: self._plan[u] for u in uids if u in self._plan}
         branch_uids = list(dict.fromkeys(b for m in plan.values() for b in m))
         return _Gather(self._dispatched.select(branch_uids), plan, self._gather)
@@ -227,16 +226,13 @@ class Scatter(Step):
                 )
             plan[uid] = {keyer.branch_uid(uid, b): b for b in branches}
         uids = list(dict.fromkeys(branch_uid for m in plan.values() for branch_uid in m))
+        origin = {
+            branch_uid: (uid, branch)
+            for uid, m in plan.items()
+            for branch_uid, branch in m.items()
+        }
         carrier = items.StepItems(
-            source=_Parts(
-                batch,
-                self.take,
-                {
-                    branch_uid: (uid, branch)
-                    for uid, m in plan.items()
-                    for branch_uid, branch in m.items()
-                },
-            ),
+            source=_Parts(batch, self.take, origin),
             uids=uids,
             upstream=branch_upstream,
             mode=batch._mode,
