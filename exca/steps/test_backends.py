@@ -277,7 +277,7 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path}
     step = conftest.Add(value=1, fail_on="all", infra=infra)
     with pytest.raises(ValueError, match="Triggered an error") as exc_info:
-        step.run_many([1.0, 2.0])
+        list(step.run_many([1.0, 2.0]))
     notes = exc_info.value.__notes__
     assert any("Add" in n for n in notes)
 
