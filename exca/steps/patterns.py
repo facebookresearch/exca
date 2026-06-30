@@ -71,16 +71,18 @@ class _Parts:
         self,
         batch: items.StepItems,
         take: tp.Callable[[tp.Any, tp.Any], tp.Any],
-        plan: dict[str, dict[str, tp.Any]],
+        origin: dict[str, tuple[str, tp.Any]],
     ) -> None:
         self._batch = batch
         self._take = take
-        self._origin = {
-            branch_uid: (uid, branch)
-            for uid, m in plan.items()
-            for branch_uid, branch in m.items()
-        }
+        self._origin = origin
         self._cached: tuple[str, tp.Any] | None = None
+
+    def select(self, branch_uids: tp.Sequence[str]) -> _Parts:
+        # StepItems.select → avoid pickling the full batch
+        origin = {b: self._origin[b] for b in branch_uids if b in self._origin}
+        input_uids = list(dict.fromkeys(uid for uid, _ in origin.values()))
+        return _Parts(self._batch.select(input_uids), self._take, origin)
 
     def __getitem__(self, branch_uid: str) -> tp.Any:
         uid, branch = self._origin[branch_uid]
@@ -107,6 +109,11 @@ class _Gather:
         self._dispatched = dispatched
         self._gather = gather
         self._plan = plan
+
+    def select(self, uids: tp.Sequence[str]) -> _Gather:
+        plan = {u: self._plan[u] for u in uids if u in self._plan}
+        branch_uids = list(dict.fromkeys(b for m in plan.values() for b in m))
+        return _Gather(self._dispatched.select(branch_uids), plan, self._gather)
 
     def __getitem__(self, uid: str) -> tp.Any:
         branches = self._plan[uid]  # {branch uid: branch}
@@ -185,14 +192,9 @@ class Scatter(Step):
         every branch's body cache (not just this Scatter's gathered result). For
         input-independent branches that cache is shared, so it clears other inputs too."""
         handle = super().lookup(value, _upstream=_upstream, _uid=_uid)
-        # branches exist even when the Scatter is uncached (inline in a Chain)
-        if _uid is not None:
-            uid = _uid
-        elif not isinstance(value, identity.NoValue):
-            uid = identity.materialize_uid(self, value)
-        else:
-            return handle  # no input -> no branches to scope
         keyer = _BranchKeyer.from_scatter(self)
+        # branches cache independently of the Scatter
+        uid = _uid if _uid is not None else identity.materialize_uid(self, value)
         upstream = tuple(_upstream) + keyer.steps
         body = self._body()
         # any uid -> same body cachedict; we only read its keys
@@ -221,8 +223,13 @@ class Scatter(Step):
                 )
             plan[uid] = {keyer.branch_uid(uid, b): b for b in branches}
         uids = list(dict.fromkeys(branch_uid for m in plan.values() for branch_uid in m))
+        origin = {
+            branch_uid: (uid, branch)
+            for uid, m in plan.items()
+            for branch_uid, branch in m.items()
+        }
         carrier = items.StepItems(
-            source=_Parts(batch, self.take, plan),
+            source=_Parts(batch, self.take, origin),
             uids=uids,
             upstream=branch_upstream,
             mode=batch._mode,

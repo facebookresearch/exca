@@ -4,12 +4,13 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import pickle
 import typing as tp
 from pathlib import Path
 
 import pytest
 
-from . import base, conftest
+from . import base, conftest, items
 from .patterns import Scatter
 
 
@@ -125,6 +126,19 @@ def test_scatter_branch_caching(tmp_path: Path, nested: bool) -> None:
     scat_uid = "type=ScatterDict,body={coeff=10,type=Mult}-63b52beb"
     body_uid = "coeff=10,type=Mult-98baeffc"
     assert (tmp_path / scat_uid / body_uid / "cache").is_dir()
+
+
+def test_scatter_pickle_scales_linearly() -> None:
+    """Chunk pickle must not carry the full _Parts payload."""
+
+    def chunk_size(n: int) -> int:
+        source = {str(i): {str(i): float(i)} for i in range(n)}
+        scat = ScatterDict(body=conftest.Mult(coeff=2.0))
+        carrier = scat._run_items(items.StepItems(source=source, uids=list(source)))
+        return len(pickle.dumps(carrier.select(carrier.uids[:10])))
+
+    ratio = chunk_size(10_000) / chunk_size(100)
+    assert ratio < 5, f"chunk pickle grew {ratio:.0f}x for 100x items"
 
 
 @pytest.mark.parametrize("cached_upstream", [False, True])

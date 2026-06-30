@@ -27,6 +27,8 @@ _CORRUPTION_HINTS = (
     "no such table",
     "no such column",
 )
+# OperationalError substrings for transient lock contention (retried).
+_LOCK_HINTS = ("locked", "busy")
 
 
 def select_in_chunks(
@@ -106,7 +108,7 @@ class AdvisoryRegistry:
             timeout=20,
             isolation_level=None,
         )
-        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(self._SCHEMA)
         if self.permissions is not None:
             try:
@@ -120,14 +122,34 @@ class AdvisoryRegistry:
         self._conn = conn
         return conn
 
+    def _retry_on_lock(self, fn: tp.Callable[[], T]) -> T:
+        """Run *fn*, retrying transient lock contention (jittered backoff, 3x).
+        Re-raises a non-lock error, or the lock error once retries run out."""
+        for attempt in range(2):  # 2 retries, then a final attempt that propagates
+            try:
+                return fn()
+            except sqlite3.OperationalError as e:
+                if not any(h in str(e).lower() for h in _LOCK_HINTS):
+                    raise
+                logger.debug(
+                    "%s registry lock contention at %s, retry %d",
+                    self._LABEL,
+                    self.db_path,
+                    attempt + 1,
+                )
+                time.sleep(random.uniform(0, attempt + 1))
+        return fn()
+
     def _safe_connect(self, *, create: bool = False) -> sqlite3.Connection | None:
-        """Open guarded by the same corruption gate as :meth:`_safe_execute`."""
+        """Open guarded by the same corruption gate as :meth:`_safe_execute`,
+        retrying lock contention."""
         try:
-            return self._connect(create=create)
-        except sqlite3.DatabaseError as e:
-            # DatabaseError (parent of OperationalError) covers SQLITE_NOTADB
-            # raised by executescript on a corrupt header.
-            corrupt = any(h in str(e).lower() for h in _CORRUPTION_HINTS)
+            # the WAL switch takes a brief exclusive lock busy_timeout misses
+            return self._retry_on_lock(lambda: self._connect(create=create))
+        except Exception as e:
+            corrupt = isinstance(e, sqlite3.DatabaseError) and any(
+                h in str(e).lower() for h in _CORRUPTION_HINTS
+            )
             logger.warning(
                 "%s registry unavailable at %s, treating as empty%s",
                 self._LABEL,
@@ -137,14 +159,6 @@ class AdvisoryRegistry:
             )
             if corrupt:
                 self._try_reset()
-            return None
-        except Exception:
-            logger.warning(
-                "%s registry unavailable at %s, treating as empty",
-                self._LABEL,
-                self.db_path,
-                exc_info=True,
-            )
             return None
 
     def _try_reset(self) -> None:
@@ -191,51 +205,37 @@ class AdvisoryRegistry:
         conn = self._safe_connect(create=create)
         if conn is None:
             return fallback
-        for attempt in range(3):
+
+        def run() -> T:
             try:
                 return fn(conn)
-            except Exception as e:
-                # Clear any aborted transaction so the cached connection
-                # isn't poisoned for subsequent ops (no-op when none open).
+            except Exception:
+                # clear any aborted transaction so the cached connection isn't
+                # poisoned for the retry / next op (no-op when none open)
                 try:
                     conn.execute("ROLLBACK")
                 except Exception:
                     pass
-                if isinstance(e, sqlite3.OperationalError):
-                    msg = str(e).lower()
-                    if "locked" in msg or "busy" in msg:
-                        if attempt < 2:
-                            delay = random.uniform(0, attempt + 1)
-                            logger.debug(
-                                "%s registry %s: lock contention, retry %d in %.1fs",
-                                self._LABEL,
-                                op_name,
-                                attempt + 1,
-                                delay,
-                            )
-                            time.sleep(delay)
-                            continue
-                        logger.warning(
-                            "%s registry %s: lock contention exhausted, skipping",
-                            self._LABEL,
-                            op_name,
-                        )
-                        return fallback
-                    if any(h in msg for h in _CORRUPTION_HINTS):
-                        break
-                    logger.warning("%s registry %s: %s", self._LABEL, op_name, e)
-                    return fallback
-                logger.warning(
-                    "%s registry %s failed",
-                    self._LABEL,
-                    op_name,
-                    exc_info=True,
-                )
-                return fallback
-        logger.warning(
-            "%s registry %s: corruption detected, resetting",
-            self._LABEL,
-            op_name,
-        )
-        self._try_reset()
-        return fallback
+                raise
+
+        try:
+            return self._retry_on_lock(run)
+        except Exception as e:
+            operational = isinstance(e, sqlite3.OperationalError)
+            msg = str(e).lower()
+            if operational and any(h in msg for h in _LOCK_HINTS):
+                reason = "lock contention exhausted, skipping"
+            elif operational and any(h in msg for h in _CORRUPTION_HINTS):
+                reason = "corruption detected, resetting"
+                self._try_reset()
+            else:
+                reason = str(e)  # unexpected I/O hiccup, programming bug, ...
+            # traceback only for the unexpected (non-OperationalError) failures
+            logger.warning(
+                "%s registry %s: %s",
+                self._LABEL,
+                op_name,
+                reason,
+                exc_info=not operational,
+            )
+            return fallback
