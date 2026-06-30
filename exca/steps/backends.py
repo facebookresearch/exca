@@ -767,22 +767,19 @@ class _PoolContext:
         self._pool: futures.Executor | None = pool
         self._claim_stack: contextlib.ExitStack | None = claim_stack
 
-    def close(self) -> None:
+    def _cleanup(self, *, wait: bool) -> None:
         if self._pool is not None:
-            self._pool.shutdown(wait=True)
+            self._pool.shutdown(wait=wait)
             self._pool = None
         if self._claim_stack is not None:
             self._claim_stack.close()
             self._claim_stack = None
 
+    def close(self) -> None:
+        self._cleanup(wait=True)
+
     def __del__(self) -> None:
-        # Best-effort: don't block the finalizer thread on hung workers
-        if self._pool is not None:
-            self._pool.shutdown(wait=False)
-            self._pool = None
-        if self._claim_stack is not None:
-            self._claim_stack.close()
-            self._claim_stack = None
+        self._cleanup(wait=False)
 
 
 class _PoolSource:
@@ -861,7 +858,7 @@ class _PoolBackend(Backend):
             filtered.run_and_cache()
             stack.close()
             return cbatch.cached_items()
-        # no shuffle: contiguous uids → one block per chunk, max overlap
+        # no shuffle: contiguous uids → one block per chunk, max overlap at read time
         chunks = [
             filtered.select(c) for c in utils.to_chunks(uids, max_chunks=3 * max_workers)
         ]
