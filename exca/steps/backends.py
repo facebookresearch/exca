@@ -755,8 +755,8 @@ class Auto(Slurm):
 class _PoolContext:
     """Shared state for a pool dispatch: cache, error context, and lifecycle.
 
-    Ref-counted via ``_PoolSource.select``; pool + claims clean up when the
-    last reference is dropped.
+    Ref-counted via ``_PoolSource.select``; call ``close()`` for deterministic
+    cleanup, or rely on ``__del__`` as fallback.
     """
 
     def __init__(
@@ -768,12 +768,19 @@ class _PoolContext:
     ) -> None:
         self.cd = cache_dict
         self.step_uid = step_uid
-        self._pool = pool
-        self._claim_stack = claim_stack
+        self._pool: futures.Executor | None = pool
+        self._claim_stack: contextlib.ExitStack | None = claim_stack
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
+        if self._claim_stack is not None:
+            self._claim_stack.close()
+            self._claim_stack = None
 
     def __del__(self) -> None:
-        self._pool.shutdown(wait=False)
-        self._claim_stack.close()
+        self.close()
 
 
 class _PoolSource:
