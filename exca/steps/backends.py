@@ -322,8 +322,8 @@ class ComputeBatch:
         return dataclasses.replace(self, items=items_, info=info)
 
     def shuffled(self) -> ComputeBatch:
-        """Same batch with its uids reordered randomly (avoid collisions on
-        competing runs picking items in the same order)."""
+        """Same batch with its uids in random order."""
+        # competing runs pick items in different orders, reducing claim collisions
         uids = list(self.items.uids)
         random.shuffle(uids)
         return self.select(uids)
@@ -416,16 +416,14 @@ def _tasks_from_batches(
 
 
 class _Claimed:
-    """Batches claimed under one ExitStack of inflight sessions, filled in by
-    `Backend._claim`. ``close`` releases every claim; a `_PoolContext` may take
-    ownership for streaming.
+    """Batches claimed under one ExitStack of inflight sessions; ``close``
+    releases every claim.
     """
 
     def __init__(self) -> None:
         self.stack = contextlib.ExitStack()
-        self.batches: list[ComputeBatch] = []  # all claimed; verified vs cache after
-        # still-pending subset after recheck; passed to _execute
-        self.ready: list[ComputeBatch] = []
+        self.batches: list[ComputeBatch] = []  # all claimed
+        self.ready: list[ComputeBatch] = []  # still-pending subset after recheck
 
     def close(self) -> None:
         self.stack.close()
@@ -632,12 +630,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return ComputeBatch(step=step, paths=paths, cache_dict=cd, items=batch, info=info)
 
     def _dispatch_batches(self, cbatches: list[ComputeBatch]) -> None:
-        """Compute all *cbatches*, blocking until cached.
-
-        ``_run`` passes one batch; sweeps pass several. Results are read from
-        cache afterwards. Streaming (pool, single step) lives in
-        ``_PoolBackend._run``, not here.
-        """
+        """Compute all *cbatches*, blocking until cached."""
         with self._claim(cbatches) as claimed:
             if claimed.ready:
                 self._execute(claimed.ready)
@@ -651,17 +644,13 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                         )
 
     def _claim(self, cbatches: list[ComputeBatch]) -> _Claimed:
-        """Claim every batch's pending uids, recheck, and return a `_Claimed`.
-
-        Claims in deadlock-safe step_uid order (concurrent dispatches claim in
-        the same order); holding all claims together lets a backend pack them
-        into one submission (one slurm array / one pool across variants).
-        """
+        """Claim every batch's pending uids, recheck, and return a `_Claimed`."""
         step_uids = [cb.paths.step_uid for cb in cbatches]
         if len(set(step_uids)) != len(step_uids):
             raise ValueError(f"one batch per step_uid required, got {step_uids}")
         claimed = _Claimed()
         try:
+            # sort by step_uid: concurrent dispatches claim in the same order
             for cb in sorted(cbatches, key=lambda cb: cb.paths.step_uid):
                 pending = self._pending_statuses(
                     paths=cb.paths, uids=cb.items.uids, mode=cb.info.mode
@@ -726,9 +715,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             self._recomputed.update((folder, uid) for uid in cbatch.items.uids)
 
     def _execute(self, cbatches: list[ComputeBatch]) -> None:
-        """Run all *cbatches* (already filtered, claimed), blocking until cached.
-        Override for chunking/pools/arrays. Each claim is on ``cb.info.claim``.
-        """
+        """Run *cbatches* (filtered+claimed) blocking; override for pools/arrays."""
         for cbatch in cbatches:
             self._mark_recomputed(cbatch)
             cbatch.run_and_cache()
@@ -786,8 +773,7 @@ class _SubmititBackend(Backend):
         executor.update_parameters(**params)
         with submitit.helpers.clean_env(), executor.batch():
             jobs = [executor.submit(_multi_run_and_cache, task) for task in tasks]
-        # a task may hold sub-batches from several variants; record each
-        # (own claim + step_folder) against the shared job.
+        # a task may span variants: record each sub-batch against the shared job
         by_folder: dict[Path, dict[str, tp.Sequence[str]]] = {}
         for task, job in zip(tasks, jobs):
             for batch in task:
@@ -920,10 +906,8 @@ class _PoolBackend(Backend):
     _POOL_TYPE: tp.ClassVar[str]
 
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
-        """Stream a single step's results, reading each uid as its chunk completes.
-
-        Same pool submission as a sweep (``_execute``), but hands back a lazy
-        carrier instead of blocking.
+        """Stream a single step: same submission as ``_execute``, lazy carrier
+        instead of blocking (reads each uid as its chunk completes).
         """
         cbatch = self._prepare(step, batch)
         claimed = self._claim([cbatch])
@@ -970,13 +954,10 @@ class _PoolBackend(Backend):
     def _submit_pool(
         self, cbatches: list[ComputeBatch]
     ) -> tuple[futures.Executor, dict[futures.Future[None], list[ComputeBatch]]] | None:
-        """Pack every variant's items into one pool and submit (no waiting).
-
-        One pool across all variants gives cross-variant load balancing, so
-        heterogeneous variants overlap instead of running pool-after-pool.
-        Returns the pool and its task->future map, or ``None`` if the work ran
-        inline (single worker).
+        """Submit all *cbatches* to one pool (no waiting); returns the pool and
+        its task->future map, or ``None`` if the work ran inline (single worker).
         """
+        # one pool across variants: heterogeneous variants overlap (load balance)
         n_items = sum(len(cb.items.uids) for cb in cbatches)
         for cbatch in cbatches:
             if cbatch.info.claim is None:
@@ -990,7 +971,7 @@ class _PoolBackend(Backend):
             for cbatch in cbatches:
                 cbatch.run_and_cache()
             return None
-        # group all batches into ~3x as many tasks as workers, run in one pool
+        # ~3x as many tasks as workers, run in one pool
         tasks = _tasks_from_batches(
             [cb.shuffled() for cb in cbatches],
             max_chunks=3 * max_workers,

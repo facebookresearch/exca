@@ -127,7 +127,8 @@ class Parallel(Step):
 
     The variants run together under one shared backend, each caching under its
     own identity. ``run`` is for effect — read results back per variant via
-    ``parallel.steps[k].lookup(value)``.
+    ``parallel.steps[k].lookup(value)``. It has no composable output (yields
+    ``None`` per input), so use it standalone, not as a non-terminal chain step.
 
     Example::
 
@@ -151,7 +152,6 @@ class Parallel(Step):
         self._unify_infra()
 
     def _unify_infra(self) -> None:
-        """Ensure all children share one backend."""
         infras = [s.infra for s in self.steps if s.infra is not None]
         if self.infra is not None:
             infras.append(self.infra)
@@ -180,7 +180,7 @@ class Parallel(Step):
                 )
 
     def _uid_steps(self) -> list[Step]:
-        return []  # coordinator only: no identity of its own
+        return []  # no identity of its own
 
     def lookup(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:
         raise TypeError(
@@ -189,10 +189,9 @@ class Parallel(Step):
         )
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        return self._run_items(batch)
+        return self._run_items(batch)  # not infra._run(self): dispatch variants
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
-        """Dispatch all variants, return None-valued StepItems."""
         assert self.infra is not None
         if self.infra.folder is None:
             raise RuntimeError(
@@ -205,7 +204,6 @@ class Parallel(Step):
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
             cbatches.append(self.infra._prepare(child, child_batch))
         self.infra._dispatch_batches(cbatches)
-        # Run-for-effect: returns Nones (no composable output).
         return items.StepItems(
             source={uid: None for uid in batch.uids},
             uids=batch.uids,
@@ -214,11 +212,9 @@ class Parallel(Step):
         )
 
     def run(self, value: tp.Any = identity.NoValue()) -> None:
-        """Run every variant on a single input (for effect — see class docstring)."""
         self.run_many([value])
 
     def run_many(self, values: tp.Iterable[tp.Any]) -> list[None]:  # type: ignore[override]
-        """Run every variant over the inputs; return one ``None`` per input."""
         values = list(values)
         uids = [identity.materialize_uid(self, v) for v in values]
         batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)

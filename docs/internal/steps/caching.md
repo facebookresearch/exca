@@ -90,10 +90,9 @@ entries it will recompute — then hands every still-pending batch to a
 single `_execute` call. The under-claim recheck is what stops a competitor
 that populated mid-wait from handing its value back to a `force`; `retry`
 uses the same recheck to recompute cached errors. `_execute` takes the
-whole batch set so a sweep (many step variants dispatched together) packs
-into one submitit array instead of one per variant; `Backend._mark_recomputed`
-records each batch as it is attempted, so a raising inline run leaves
-un-attempted batches unmarked.
+whole batch set, so a sweep (many step variants dispatched together) packs
+into one submitit array (one pool for pool backends). `_mark_recomputed`
+records force/retry batches per attempt.
 
 The session locks `inflight.db` only — direct user calls to
 `LookupHandle.clear_cache()` race against in-flight workers. The worker
