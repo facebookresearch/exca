@@ -753,11 +753,7 @@ class Auto(Slurm):
 
 
 class _PoolContext:
-    """Shared state for a pool dispatch: cache, error context, and lifecycle.
-
-    Ref-counted via ``_PoolSource.select``; call ``close()`` for deterministic
-    cleanup, or rely on ``__del__`` as fallback.
-    """
+    """Shared state for a pool dispatch: cache, step_uid, pool, and claim stack."""
 
     def __init__(
         self,
@@ -780,7 +776,13 @@ class _PoolContext:
             self._claim_stack = None
 
     def __del__(self) -> None:
-        self.close()
+        # Best-effort: don't block the finalizer thread on hung workers
+        if self._pool is not None:
+            self._pool.shutdown(wait=False)
+            self._pool = None
+        if self._claim_stack is not None:
+            self._claim_stack.close()
+            self._claim_stack = None
 
 
 class _PoolSource:
@@ -852,9 +854,14 @@ class _PoolBackend(Backend):
         if filtered is None:
             stack.close()
             return cbatch.cached_items()
-        # submit to pool (no shuffle: keeps contiguous uids in the same chunk
-        # so the consumer blocks once per chunk, maximising overlap)
         uids = list(filtered.items.uids)
+        # pending may have shrunk under the claim
+        max_workers = min(len(uids), max_workers)
+        if max_workers <= 1:
+            filtered.run_and_cache()
+            stack.close()
+            return cbatch.cached_items()
+        # no shuffle: contiguous uids → one block per chunk, max overlap
         chunks = [
             filtered.select(c) for c in utils.to_chunks(uids, max_chunks=3 * max_workers)
         ]
