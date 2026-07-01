@@ -282,24 +282,20 @@ class _CachedEntry:
 
 @dataclasses.dataclass
 class CoordinationInfo:
-    """Per-run state the driver uses to coordinate a ``ComputeBatch``.
-
-    Stripped before the worker pickle (see ``ComputeBatch.__getstate__``): the
-    worker computes from identity alone and never reads these.
+    """Driver-only per-run state for a ``ComputeBatch``; stripped from the
+    worker pickle (``ComputeBatch.__getstate__``).
     """
 
     mode: identity.ModeType = "cached"
     upstream: tuple[Step, ...] = ()  # this step + everything before it
-    claim: inflight.InflightClaim | None = None  # set in _dispatch_batches
+    claim: inflight.InflightClaim | None = None
 
 
 @dataclasses.dataclass
 class ComputeBatch:
     """One step's items, run and cached together via ``step._run_items``.
 
-    The picklable payload sent to a worker: ``run_and_cache()`` runs ``items``
-    through ``step``, writing results to ``cache_dict`` and errors under
-    ``paths``. ``info`` is driver-only and dropped from the worker pickle.
+    Picklable worker payload; ``info`` is driver-only (see ``CoordinationInfo``).
     """
 
     step: Step
@@ -395,10 +391,6 @@ def _tasks_from_batches(
 ) -> list[list[ComputeBatch]]:
     """Group the batches' items into worker tasks (one ``run_and_cache`` per
     sub-batch a task holds), splitting no more than ``utils.to_chunks`` needs.
-
-    Treats the batches as one concatenated pool: chunk a flat list of batch
-    indices, then slice each batch's uids by the per-chunk counts — so small
-    batches share a task and a large one spans several.
     """
     labels = [i for i, cb in enumerate(cbatches) for _ in cb.items.uids]
     cursors = [0] * len(cbatches)
@@ -442,7 +434,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _exclude_from_cls_uid(cls) -> list[str]:
         return ["."]  # force ignored in uid
 
-    # Used by Backend._run for the inflight registry (concurrent worker safety).
+    # _claim uses InflightRegistry when True (concurrent worker safety)
     _concurrent: tp.ClassVar[bool] = False
 
     folder: Path | None = None
@@ -676,10 +668,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return claimed
 
     def _recheck_and_clear(self, cbatch: ComputeBatch) -> ComputeBatch | None:
-        """Recheck under the claim, clear stale entries, return what to run.
-
-        Returns the batch narrowed to still-pending uids, or ``None`` if a
-        competitor populated everything between claim-time and now.
+        """Recheck under the claim, clear stale entries, return narrowed batch
+        or ``None`` if fully populated by a competitor.
         """
         mode = cbatch.info.mode
         pending_statuses = self._pending_statuses(
@@ -704,11 +694,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         return cbatch.select(list(pending_statuses))
 
     def _mark_recomputed(self, cbatch: ComputeBatch) -> None:
-        """Record a force/retry batch's uids as recomputed-this-lifetime.
+        """Record *cbatch*'s uids as recomputed-this-lifetime.
 
-        Call per batch as it is attempted (not for the whole set at once): a
-        raising inline run leaves later batches un-attempted, so they must
-        stay unmarked.
+        Per-batch, not all-at-once: a raising run leaves later batches
+        un-attempted → must stay unmarked.
         """
         if cbatch.info.mode in ("force", "retry"):
             folder = cbatch.paths.step_folder
