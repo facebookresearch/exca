@@ -14,7 +14,6 @@ import logging
 import os
 import shutil
 import threading
-import time
 import typing as tp
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -312,8 +311,7 @@ class CacheDict(tp.Generic[X]):
         finally:
             self._write_ctx = None
             if self.folder is not None:
-                t = time.time()  # explicit time for sub-jiffy precision
-                os.utime(self.folder, times=(t, t))
+                utils.best_effort_utime(self.folder)
 
     @contextlib.contextmanager
     def writer(self) -> tp.Iterator["CacheDict[X]"]:
@@ -353,7 +351,7 @@ class CacheDict(tp.Generic[X]):
             self._jsonl_readers.setdefault(
                 jsonl_path.name, JsonlReader(jsonl_path)
             )._last = result["byte_range"][1]
-            os.utime(self.folder)
+            utils.best_effort_utime(self.folder)
 
     def __delitem__(self, key: str) -> None:
         # On-disk artifacts are tolerated missing (a prior external

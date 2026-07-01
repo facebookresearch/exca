@@ -393,7 +393,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                     )
                     folder = self.uid_folder()
                     if folder is not None:
-                        os.utime(folder)  # make sure the modified time is updated
+                        utils.best_effort_utime(folder)
         cache_dict = self.cache_dict
         msg = "Recovering %s items for %s from %s"
         logger.debug(msg, len(items), self._factory(), cache_dict)
@@ -458,7 +458,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 if missing:
                     folder = self.uid_folder()
                     if folder is not None:
-                        os.utime(folder)
+                        utils.best_effort_utime(folder)
         try:
             cache_dict = self.cache_dict
         except ValueError:  # no caching
