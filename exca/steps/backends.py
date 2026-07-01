@@ -579,7 +579,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid."""
         cbatch = self._prepare(step, batch)
-        self._dispatch_batches([cbatch])
+        with self._claim([cbatch]) as claimed:
+            if claimed.ready:
+                self._execute(claimed.ready)
         return cbatch.cached_items()
 
     def _prepare(self, step: Step, batch: items.StepItems) -> ComputeBatch:
@@ -603,15 +605,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     msg = "Clearing %s items for %s (infra.mode=%s)"
                     logger.warning(msg, len(to_clear), paths.step_uid, mode)
                 self._clear_caches(paths=paths, cd=cd, uids=set(pending_statuses))
-        # carries the full input set; _dispatch_batches filters to pending
+        # carries the full input set; _claim filters to pending
         info = CoordinationInfo(mode=mode, upstream=upstream)
         return ComputeBatch(step=step, paths=paths, cache_dict=cd, items=batch, info=info)
-
-    def _dispatch_batches(self, cbatches: list[ComputeBatch]) -> None:
-        """Compute all *cbatches*, blocking until cached."""
-        with self._claim(cbatches) as claimed:
-            if claimed.ready:
-                self._execute(claimed.ready)
 
     def _claim(self, cbatches: list[ComputeBatch]) -> _Claimed:
         """Claim every batch's pending uids, recheck, and return a `_Claimed`."""

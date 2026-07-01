@@ -203,7 +203,9 @@ class Parallel(Step):
             uids = [identity.materialize_uid(child, v) for v in batch]
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
             cbatches.append(self.infra._prepare(child, child_batch))
-        self.infra._dispatch_batches(cbatches)
+        with self.infra._claim(cbatches) as claimed:
+            if claimed.ready:
+                self.infra._execute(claimed.ready)
         return items.StepItems(
             source={uid: None for uid in batch.uids},
             uids=batch.uids,
