@@ -1,0 +1,764 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta content="Recipes — Func, item_uid, custom hierarchies, resolve_step, CACHE_TYPE." name="description" />
+
+    <title>How-to &#8212; Exca 0.5.27 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=a95f357e85573c9b56d5" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=a95f357e85573c9b56d5" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom.css?v=f6ab64c4" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=a95f357e85573c9b56d5"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=a95f357e85573c9b56d5" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=a95f357e85573c9b56d5" />
+
+    <script src="../_static/documentation_options.js?v=973bce59"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'steps/howto';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="icon" href="../_static/exca.png"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Batched compute with run_many" href="items.html" />
+    <link rel="prev" title="Step" href="index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class=" navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/exca.png" class="logo__image only-light" alt=""/>
+    <img src="../_static/exca.png" class="logo__image only-dark pst-js-only" alt=""/>
+  
+  
+    <p class="title logo__title">Exca</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class=" navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/reference.html">
+    API Reference
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="index.html">
+    Step
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i><span class="visually-hidden">PyPI</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/getting-started.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/user-guide.html">
+    User guide
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../infra/reference.html">
+    API Reference
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="index.html">
+    Step
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/facebookresearch/exca" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i><span class="visually-hidden">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/exca/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i><span class="visually-hidden">PyPI</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="nav bd-sidenav">
+      <li class="toctree-l1"><a class="reference internal" href="index.html">Step</a></li>
+    </ul><ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">How-to</a></li>
+<li class="toctree-l1"><a class="reference internal" href="items.html">Batched compute with run_many</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reference.html">API Reference</a></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Step</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">How-to</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="how-to">
+<h1>How-to<a class="headerlink" href="#how-to" title="Link to this heading">#</a></h1>
+<p>Short recipes for common Step patterns. Each one assumes the
+material from <a class="reference internal" href="index.html"><span class="doc">Step</span></a> (including the breaking-changes
+warning).</p>
+<section id="wrap-a-plain-function-as-a-step">
+<h2>Wrap a plain function as a Step<a class="headerlink" href="#wrap-a-plain-function-as-a-step" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">steps.helpers.Func</span></code> adapts a regular callable to the Step API
+without subclassing. Extra kwargs are validated against the
+function’s signature and serialised in the cache uid:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">exca</span> <span class="kn">import</span> <span class="n">steps</span>
+
+
+<span class="k">def</span> <span class="nf">scale</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">factor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">x</span> <span class="o">*</span> <span class="n">factor</span>
+
+
+<span class="n">steps</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">Func</span><span class="p">(</span><span class="n">function</span><span class="o">=</span><span class="n">scale</span><span class="p">,</span> <span class="n">factor</span><span class="o">=</span><span class="mf">3.0</span><span class="p">)</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="mf">5.0</span><span class="p">)</span>  <span class="c1"># 15.0</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">Func</span></code> accepts a live callable or a dotted import path string
+(e.g. <code class="docutils literal notranslate"><span class="pre">&quot;mymodule.scale&quot;</span></code>), so it round-trips through
+JSON/YAML.</p>
+<p>A function with no required parameter becomes a generator:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">random</span>
+
+
+<span class="k">def</span> <span class="nf">random_value</span><span class="p">(</span><span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">random</span><span class="o">.</span><span class="n">Random</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span><span class="o">.</span><span class="n">random</span><span class="p">()</span>
+
+
+<span class="n">steps</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">Func</span><span class="p">(</span><span class="n">function</span><span class="o">=</span><span class="n">random_value</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">123</span><span class="p">)</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>If the function has more than one required parameter, set
+<code class="docutils literal notranslate"><span class="pre">input_param</span></code> to disambiguate which one receives the pipeline
+input:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">shift</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">by</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">x</span> <span class="o">+</span> <span class="n">by</span>
+
+
+<span class="n">steps</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">Func</span><span class="p">(</span><span class="n">function</span><span class="o">=</span><span class="n">shift</span><span class="p">,</span> <span class="n">input_param</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="mf">1.5</span><span class="p">)</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="mf">2.0</span><span class="p">)</span>  <span class="c1"># 3.5</span>
+</pre></div>
+</div>
+</section>
+<section id="override-item-uid-for-opaque-inputs">
+<h2>Override <code class="docutils literal notranslate"><span class="pre">item_uid</span></code> for opaque inputs<a class="headerlink" href="#override-item-uid-for-opaque-inputs" title="Link to this heading">#</a></h2>
+<p>When a Step is called via <code class="docutils literal notranslate"><span class="pre">run_many</span></code>, the framework needs a stable
+string per input. By default it uses <code class="docutils literal notranslate"><span class="pre">exca.confdict.UidMaker</span></code> on
+the value, which is fine for paths, ints, small dicts, etc. For
+inputs the default can’t key reliably — typically arrays or other
+unhashable / large objects — override <code class="docutils literal notranslate"><span class="pre">item_uid</span></code> to return a
+stable string. A content hash works well:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">hashlib</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+
+
+<span class="k">class</span> <span class="nc">L2Norm</span><span class="p">(</span><span class="n">steps</span><span class="o">.</span><span class="n">Step</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">item_uid</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">tobytes</span><span class="p">())</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">value</span><span class="p">))</span>
+</pre></div>
+</div>
+<p>Return <code class="docutils literal notranslate"><span class="pre">None</span></code> to fall back to the default. Long uids are
+truncated to <code class="docutils literal notranslate"><span class="pre">Step._ITEM_UID_MAX_LENGTH</span></code> (default 256) with a
+hashed middle section, so even a verbose return value keeps a
+unique key.</p>
+<p>See <a class="reference internal" href="items.html"><span class="doc">Batched compute with run_many</span></a> for the full story on per-input identity.</p>
+</section>
+<section id="declare-a-default-cache-format-with-cache-type">
+<h2>Declare a default cache format with <code class="docutils literal notranslate"><span class="pre">CACHE_TYPE</span></code><a class="headerlink" href="#declare-a-default-cache-format-with-cache-type" title="Link to this heading">#</a></h2>
+<p>When a Step always produces the same data type, set <code class="docutils literal notranslate"><span class="pre">CACHE_TYPE</span></code>
+on the class to fix the serialization format. The class default
+cascades to <code class="docutils literal notranslate"><span class="pre">infra.cache_type</span></code> automatically:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+
+
+<span class="k">class</span> <span class="nc">FetchTable</span><span class="p">(</span><span class="n">steps</span><span class="o">.</span><span class="n">Step</span><span class="p">):</span>
+    <span class="n">CACHE_TYPE</span> <span class="o">=</span> <span class="s2">&quot;ParquetPandasDataFrame&quot;</span>
+
+    <span class="n">url</span><span class="p">:</span> <span class="nb">str</span>
+
+    <span class="k">def</span> <span class="nf">_run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">url</span><span class="p">)</span>
+
+
+<span class="n">FetchTable</span><span class="p">(</span>
+    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+    <span class="n">infra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;backend&quot;</span><span class="p">:</span> <span class="s2">&quot;Cached&quot;</span><span class="p">,</span> <span class="s2">&quot;folder&quot;</span><span class="p">:</span> <span class="n">cache</span><span class="p">},</span>
+<span class="p">)</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>                                 <span class="c1"># stored as .parquet</span>
+</pre></div>
+</div>
+<p>A <code class="docutils literal notranslate"><span class="pre">Chain</span></code> propagates the last step’s <code class="docutils literal notranslate"><span class="pre">CACHE_TYPE</span></code> to its own
+<code class="docutils literal notranslate"><span class="pre">infra.cache_type</span></code> when the chain itself has an <code class="docutils literal notranslate"><span class="pre">infra</span></code> — so the
+chain’s cache cell uses the same format as the last step’s.</p>
+</section>
+<section id="build-a-custom-step-hierarchy-different-discriminator-key">
+<h2>Build a custom Step hierarchy (different discriminator key)<a class="headerlink" href="#build-a-custom-step-hierarchy-different-discriminator-key" title="Link to this heading">#</a></h2>
+<p>Downstream projects often want their own discriminator key (for
+instance <code class="docutils literal notranslate"><span class="pre">&quot;name&quot;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">&quot;type&quot;</span></code>) and a Chain that types its
+<code class="docutils literal notranslate"><span class="pre">steps</span></code> field to their hierarchy. Subclass both:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">collections</span>
+<span class="kn">import</span> <span class="nn">typing</span> <span class="k">as</span> <span class="nn">tp</span>
+
+<span class="kn">from</span> <span class="nn">exca</span> <span class="kn">import</span> <span class="n">steps</span>
+
+
+<span class="k">class</span> <span class="nc">MyStep</span><span class="p">(</span><span class="n">steps</span><span class="o">.</span><span class="n">Step</span><span class="p">,</span> <span class="n">discriminator_key</span><span class="o">=</span><span class="s2">&quot;name&quot;</span><span class="p">):</span>
+    <span class="k">pass</span>
+
+
+<span class="k">class</span> <span class="nc">MyChain</span><span class="p">(</span><span class="n">steps</span><span class="o">.</span><span class="n">Chain</span><span class="p">,</span> <span class="n">MyStep</span><span class="p">):</span>
+    <span class="n">steps</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">MyStep</span><span class="p">]</span> <span class="o">|</span> <span class="n">collections</span><span class="o">.</span><span class="n">OrderedDict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">MyStep</span><span class="p">]</span>  <span class="c1"># type: ignore</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">MyChain</span></code> uses diamond inheritance (<code class="docutils literal notranslate"><span class="pre">MyChain</span> <span class="pre">-&gt;</span> <span class="pre">Chain</span> <span class="pre">-&gt;</span> <span class="pre">MyStep</span> <span class="pre">-&gt;</span> <span class="pre">Step</span></code>). Base order matters: <code class="docutils literal notranslate"><span class="pre">Chain</span></code> must come first so chain
+methods take precedence in the MRO.</p>
+<p>List-to-chain conversion is wired automatically: a <code class="docutils literal notranslate"><span class="pre">list</span></code> appearing
+where a <code class="docutils literal notranslate"><span class="pre">MyStep</span></code> is expected becomes a <code class="docutils literal notranslate"><span class="pre">MyChain</span></code> (not the base
+<code class="docutils literal notranslate"><span class="pre">Chain</span></code>).</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pydantic</span>
+
+
+<span class="k">class</span> <span class="nc">Container</span><span class="p">(</span><span class="n">pydantic</span><span class="o">.</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">step</span><span class="p">:</span> <span class="n">MyStep</span>
+
+
+<span class="k">class</span> <span class="nc">MyMult</span><span class="p">(</span><span class="n">MyStep</span><span class="p">):</span>
+    <span class="n">coeff</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.0</span>
+
+    <span class="k">def</span> <span class="nf">_run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">v</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">coeff</span>
+
+
+<span class="n">c</span> <span class="o">=</span> <span class="n">Container</span><span class="p">(</span><span class="n">step</span><span class="o">=</span><span class="p">[</span><span class="n">MyMult</span><span class="p">(</span><span class="n">coeff</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span> <span class="n">MyMult</span><span class="p">(</span><span class="n">coeff</span><span class="o">=</span><span class="mi">3</span><span class="p">)])</span>
+<span class="k">assert</span> <span class="nb">type</span><span class="p">(</span><span class="n">c</span><span class="o">.</span><span class="n">step</span><span class="p">)</span> <span class="ow">is</span> <span class="n">MyChain</span>
+</pre></div>
+</div>
+<p>The narrowing <code class="docutils literal notranslate"><span class="pre">steps:</span> <span class="pre">list[MyStep]</span> <span class="pre">|</span> <span class="pre">OrderedDict[str,</span> <span class="pre">MyStep]</span></code>
+violates Liskov in mypy’s view; <code class="docutils literal notranslate"><span class="pre">#</span> <span class="pre">type:</span> <span class="pre">ignore</span></code> is the accepted
+escape hatch. See
+<a class="reference external" href="https://github.com/facebookresearch/exca/blob/main/docs/internal/steps/chain_step_duality.md"><code class="docutils literal notranslate"><span class="pre">chain_step_duality.md</span></code></a>
+for the trade-offs considered (and rejected).</p>
+</section>
+<section id="decompose-a-step-into-a-sub-chain-with-resolve-step">
+<h2>Decompose a Step into a sub-chain with <code class="docutils literal notranslate"><span class="pre">_resolve_step</span></code><a class="headerlink" href="#decompose-a-step-into-a-sub-chain-with-resolve-step" title="Link to this heading">#</a></h2>
+<p>A Step that internally wants to run as a chain — e.g. a “study
+loader” that holds a study and optional transforms — can override
+<code class="docutils literal notranslate"><span class="pre">_resolve_step</span></code> to return a <code class="docutils literal notranslate"><span class="pre">Chain</span></code>. This presents a single
+cohesive type to callers while caching each sub-step
+independently:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">AddWithTransforms</span><span class="p">(</span><span class="n">steps</span><span class="o">.</span><span class="n">Step</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Adds value, then runs optional transforms after.&quot;&quot;&quot;</span>
+
+    <span class="n">value</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="n">transforms</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">steps</span><span class="o">.</span><span class="n">Step</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">def</span> <span class="nf">_run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mi">0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">x</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">value</span>
+
+    <span class="k">def</span> <span class="nf">_resolve_step</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">steps</span><span class="o">.</span><span class="n">Step</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span>
+        <span class="c1"># Strip transforms from the copy so its own _resolve returns self.</span>
+        <span class="n">stripped</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span><span class="n">update</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;transforms&quot;</span><span class="p">:</span> <span class="p">[]})</span>
+        <span class="k">return</span> <span class="n">steps</span><span class="o">.</span><span class="n">Chain</span><span class="p">(</span><span class="n">steps</span><span class="o">=</span><span class="p">[</span><span class="n">stripped</span><span class="p">]</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="p">))</span>
+</pre></div>
+</div>
+<p>Key properties:</p>
+<ul class="simple">
+<li><p><strong>Stripped copy avoids recursion.</strong> The copy has <code class="docutils literal notranslate"><span class="pre">transforms</span></code>
+at its default (<code class="docutils literal notranslate"><span class="pre">[]</span></code>), so its <code class="docutils literal notranslate"><span class="pre">_resolve_step</span></code> returns <code class="docutils literal notranslate"><span class="pre">self</span></code>.</p></li>
+<li><p><strong>UID is consistent across shapes.</strong>
+<code class="docutils literal notranslate"><span class="pre">AddWithTransforms(value=5,</span> <span class="pre">transforms=[T1])</span></code> and
+<code class="docutils literal notranslate"><span class="pre">Chain(steps=[AddWithTransforms(value=5),</span> <span class="pre">T1])</span></code> produce the same
+uid (the resolved chain is the canonical form).</p></li>
+<li><p><strong>Per-sub-step caching falls out naturally.</strong> Each step in the
+resolved chain caches against its own prefix. Changing
+<code class="docutils literal notranslate"><span class="pre">transforms</span></code> doesn’t invalidate the cached <code class="docutils literal notranslate"><span class="pre">_run(x)</span></code>.</p></li>
+</ul>
+<p>When used standalone, <code class="docutils literal notranslate"><span class="pre">run()</span></code> detects the resolution and delegates
+to the resolved chain. When the resolvable step appears inside a
+larger chain, the chain resolves it at execution time so the
+sub-chain integrates correctly.</p>
+</section>
+<section id="wipe-the-cache-for-a-step">
+<h2>Wipe the cache for a step<a class="headerlink" href="#wipe-the-cache-for-a-step" title="Link to this heading">#</a></h2>
+<p>Use <code class="docutils literal notranslate"><span class="pre">lookup().clear_cache()</span></code> — <code class="docutils literal notranslate"><span class="pre">Chain.lookup</span></code> walks the chain, so
+<code class="docutils literal notranslate"><span class="pre">recursive=True</span></code> (the default) clears the whole pipeline:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">chain</span><span class="o">.</span><span class="n">lookup</span><span class="p">()</span><span class="o">.</span><span class="n">clear_cache</span><span class="p">()</span>                  <span class="c1"># recursive (default)</span>
+<span class="n">chain</span><span class="o">.</span><span class="n">lookup</span><span class="p">()</span><span class="o">.</span><span class="n">clear_cache</span><span class="p">(</span><span class="n">recursive</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>   <span class="c1"># final step only</span>
+<span class="n">chain</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">lookup</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="o">.</span><span class="n">clear_cache</span><span class="p">()</span>          <span class="c1"># one specific sub-step + input</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">Step.clear_cache()</span></code> (no <code class="docutils literal notranslate"><span class="pre">lookup()</span></code>) still works but is deprecated.</p>
+</section>
+<section id="inspect-a-running-job">
+<h2>Inspect a running job<a class="headerlink" href="#inspect-a-running-job" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">LookupHandle.job()</span></code> returns the live submitit job for an in-flight
+uid, or the latest recorded job if execution finished. Use it for
+log discovery, not for retrieving results — cache reads go through
+<code class="docutils literal notranslate"><span class="pre">handle.result()</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">handle</span> <span class="o">=</span> <span class="n">step</span><span class="o">.</span><span class="n">lookup</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+<span class="n">handle</span><span class="o">.</span><span class="n">status</span>                  <span class="c1"># &quot;running&quot; / &quot;success&quot; / &quot;error&quot; / None</span>
+<span class="n">job</span> <span class="o">=</span> <span class="n">handle</span><span class="o">.</span><span class="n">job</span><span class="p">()</span>
+<span class="k">if</span> <span class="n">job</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">job</span><span class="o">.</span><span class="n">paths</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="n">job</span><span class="o">.</span><span class="n">paths</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="keep-cached-data-in-ram-across-calls">
+<h2>Keep cached data in RAM across calls<a class="headerlink" href="#keep-cached-data-in-ram-across-calls" title="Link to this heading">#</a></h2>
+<p>Set <code class="docutils literal notranslate"><span class="pre">keep_in_ram=True</span></code> on the backend to avoid re-decoding the
+same cache entry on repeated reads:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">step</span> <span class="o">=</span> <span class="n">MyStep</span><span class="p">(</span>
+    <span class="n">infra</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;backend&quot;</span><span class="p">:</span> <span class="s2">&quot;Cached&quot;</span><span class="p">,</span> <span class="s2">&quot;folder&quot;</span><span class="p">:</span> <span class="n">cache</span><span class="p">,</span> <span class="s2">&quot;keep_in_ram&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+<span class="p">)</span>
+<span class="n">step</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>   <span class="c1"># loads from disk, keeps in RAM</span>
+<span class="n">step</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>   <span class="c1"># served from RAM</span>
+</pre></div>
+</div>
+<p>The RAM cache is per-<code class="docutils literal notranslate"><span class="pre">Backend</span></code> instance and is wiped in lockstep
+with disk by <code class="docutils literal notranslate"><span class="pre">clear_cache()</span></code> and <code class="docutils literal notranslate"><span class="pre">mode=&quot;force&quot;</span></code>. Cross-process
+workers get a fresh view (no shared RAM).</p>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Step</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="items.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Batched compute with run_many</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#wrap-a-plain-function-as-a-step">Wrap a plain function as a Step</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#override-item-uid-for-opaque-inputs">Override <code class="docutils literal notranslate"><span class="pre">item_uid</span></code> for opaque inputs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#declare-a-default-cache-format-with-cache-type">Declare a default cache format with <code class="docutils literal notranslate"><span class="pre">CACHE_TYPE</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#build-a-custom-step-hierarchy-different-discriminator-key">Build a custom Step hierarchy (different discriminator key)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#decompose-a-step-into-a-sub-chain-with-resolve-step">Decompose a Step into a sub-chain with <code class="docutils literal notranslate"><span class="pre">_resolve_step</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#wipe-the-cache-for-a-step">Wipe the cache for a step</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#inspect-a-running-job">Inspect a running job</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#keep-cached-data-in-ram-across-calls">Keep cached data in RAM across calls</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=a95f357e85573c9b56d5"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=a95f357e85573c9b56d5"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright Meta Platforms, Inc.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+</div>
+
+  </footer>
+  </body>
+</html>
