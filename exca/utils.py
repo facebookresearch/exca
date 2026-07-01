@@ -14,6 +14,7 @@ import math
 import os
 import shutil
 import sys
+import time
 import typing as tp
 import uuid
 import warnings
@@ -34,6 +35,20 @@ logger = logging.getLogger(__name__)
 DISCRIMINATOR_FIELD = "#infra#pydantic#discriminator"
 T = tp.TypeVar("T", bound=pydantic.BaseModel)
 X = tp.TypeVar("X")
+
+
+def best_effort_utime(folder: Path) -> None:
+    """Advance *folder*'s mtime, tolerating EPERM on foreign-owned directories."""
+    # dir mtime unchanged on file-append → must stamp explicitly
+    # times=(t,t): owner-only, sub-jiffy; times=None: write-perm only (POSIX fallback)
+    t = time.time()
+    try:
+        os.utime(folder, times=(t, t))
+    except PermissionError:
+        try:
+            os.utime(folder)
+        except PermissionError:
+            pass
 
 
 def to_chunks(
