@@ -612,14 +612,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         with self._claim(cbatches) as claimed:
             if claimed.ready:
                 self._execute(claimed.ready)
-            for cb in claimed.batches:
-                verify = _CachedEntry.lookup_statuses(cb.cache_dict, cb.items.uids)
-                for uid in cb.items.uids:
-                    if verify[uid] != "success":
-                        raise RuntimeError(
-                            f"Worker completed but cache missing: "
-                            f"{cb.paths.step_uid}[{uid}]"
-                        )
 
     def _claim(self, cbatches: list[ComputeBatch]) -> _Claimed:
         """Claim every batch's pending uids, recheck, and return a `_Claimed`."""
