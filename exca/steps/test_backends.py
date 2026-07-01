@@ -282,11 +282,11 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
     assert any("Add" in n for n in notes)
 
 
-def test_dispatch_batches_recomputed_per_batch(tmp_path: Path) -> None:
+def test_recomputed_per_batch(tmp_path: Path) -> None:
     backend = backends.Cached(folder=tmp_path)
 
     def prepare(step: Step, value: float) -> backends.ComputeBatch:
-        # force mode → _execute_claimed marks attempted uids as recomputed
+        # force mode → _execute marks attempted uids as recomputed
         infra = backend.model_copy(update={"mode": "force"})
         forced = step.model_copy(update={"infra": infra})
         uid = backends.identity.materialize_uid(forced, value)
@@ -294,11 +294,13 @@ def test_dispatch_batches_recomputed_per_batch(tmp_path: Path) -> None:
 
     cb_fail = prepare(conftest.Add(fail_on="all"), 1.0)
     cb_ok = prepare(conftest.Add(value=1), 1.0)
-    # _dispatch_batches runs sorted by step_uid, so cb_fail must raise first
+    # _claim sorts by step_uid, so cb_fail must sort first to raise first
     assert cb_fail.paths.step_uid < cb_ok.paths.step_uid, "cb_fail must sort first"
 
     with pytest.raises(ValueError, match="Triggered an error"):
-        backend._dispatch_batches([cb_fail, cb_ok])
+        with backend._claim([cb_fail, cb_ok]) as claimed:
+            if claimed.ready:
+                backend._execute(claimed.ready)
 
     key = (cb_ok.paths.step_folder, cb_ok.items.uids[0])
     assert key not in backend._recomputed, "cb_ok never ran, so it must be unmarked"

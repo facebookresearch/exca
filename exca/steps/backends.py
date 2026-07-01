@@ -12,6 +12,7 @@ cache lookup / force / compute, and writes results through CacheDict.
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import dataclasses
 import logging
@@ -281,25 +282,18 @@ class _CachedEntry:
 
 @dataclasses.dataclass
 class CoordinationInfo:
-    """Per-run state the driver uses to coordinate a ``ComputeBatch``.
-
-    Stripped before the worker pickle (see ``ComputeBatch.__getstate__``): the
-    worker computes from identity alone and never reads these.
+    """Driver-only per-run state for a ``ComputeBatch``; stripped from the
+    worker pickle (``ComputeBatch.__getstate__``).
     """
 
     mode: identity.ModeType = "cached"
     upstream: tuple[Step, ...] = ()  # this step + everything before it
-    claim: inflight.InflightClaim | None = None  # set in _dispatch_batches
+    claim: inflight.InflightClaim | None = None
 
 
 @dataclasses.dataclass
 class ComputeBatch:
-    """One step's items, run and cached together via ``step._run_items``.
-
-    The picklable payload sent to a worker: ``run_and_cache()`` runs ``items``
-    through ``step``, writing results to ``cache_dict`` and errors under
-    ``paths``. ``info`` is driver-only and dropped from the worker pickle.
-    """
+    """One step's items, run and cached together via ``step._run_items``."""
 
     step: Step
     paths: StepPaths
@@ -308,23 +302,25 @@ class ComputeBatch:
     info: CoordinationInfo = dataclasses.field(default_factory=CoordinationInfo)
 
     def __getstate__(self) -> dict[str, tp.Any]:
-        #  CoordinationInfo holds all (and only) non-worker state
         return {**self.__dict__, "info": CoordinationInfo()}
 
     def select(self, uids: tp.Sequence[str]) -> ComputeBatch:
-        """Sub-batch over *uids*, sharing step/paths/cache (for chunking).
-
-        Copies ``info`` so a sub-batch doesn't alias the parent's claim.
+        """Sub-batch over *uids*, sharing step/paths/cache; copies ``info``
+        (avoid aliasing the parent's claim).
         """
         info = dataclasses.replace(self.info)
         items_ = self.items.select(uids, mode=self.info.mode)
         return dataclasses.replace(self, items=items_, info=info)
 
-    def cached_items(self) -> StepItems:
-        """Lazy cache-backed handle to this batch's results.
+    def shuffled(self) -> ComputeBatch:
+        """Same batch with its uids in random order."""
+        # competing runs pick items in different orders, reducing claim collisions
+        uids = list(self.items.uids)
+        random.shuffle(uids)
+        return self.select(uids)
 
-        Call on a top-level batch (full uid set), not a chunked sub-batch.
-        """
+    def cached_items(self) -> StepItems:
+        """Lazy cache-backed carrier; use on a top-level batch, not a chunk."""
         return items.StepItems(
             source=self.cache_dict,
             uids=self.items.uids,
@@ -370,6 +366,57 @@ class ComputeBatch:
             raise
 
 
+def _multi_run_and_cache(batches: list[ComputeBatch]) -> None:
+    """``run_and_cache`` each batch of one worker task (a task may hold several)."""
+    for batch in batches:
+        logger.info(
+            "Running %s items for %s", len(batch.items.uids), batch.paths.step_uid
+        )
+        batch.run_and_cache()
+
+
+def _tasks_from_batches(
+    cbatches: list[ComputeBatch],
+    *,
+    max_chunks: int | None,
+    min_items_per_chunk: int,
+) -> list[list[ComputeBatch]]:
+    """Group the batches' items into worker tasks."""
+    labels = [i for i, cb in enumerate(cbatches) for _ in cb.items.uids]
+    cursors = [0] * len(cbatches)
+    tasks: list[list[ComputeBatch]] = []
+    for chunk in utils.to_chunks(
+        labels, max_chunks=max_chunks, min_items_per_chunk=min_items_per_chunk
+    ):
+        task: list[ComputeBatch] = []
+        for i, count in collections.Counter(chunk).items():
+            start = cursors[i]
+            task.append(cbatches[i].select(cbatches[i].items.uids[start : start + count]))
+            cursors[i] = start + count
+        tasks.append(task)
+    return tasks
+
+
+class _Claimed:
+    """Batches claimed under one ExitStack of inflight sessions; ``close``
+    releases every claim.
+    """
+
+    def __init__(self) -> None:
+        self.stack = contextlib.ExitStack()
+        self.batches: list[ComputeBatch] = []  # all claimed
+        self.ready: list[ComputeBatch] = []  # still-pending subset after recheck
+
+    def close(self) -> None:
+        self.stack.close()
+
+    def __enter__(self) -> _Claimed:
+        return self
+
+    def __exit__(self, *exc: tp.Any) -> None:
+        self.close()
+
+
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     """Base class for execution backends with integrated caching."""
 
@@ -377,7 +424,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _exclude_from_cls_uid(cls) -> list[str]:
         return ["."]  # force ignored in uid
 
-    # Used by Backend._run for the inflight registry (concurrent worker safety).
+    # uses InflightRegistry when True (concurrent worker safety)
     _concurrent: tp.ClassVar[bool] = False
 
     folder: Path | None = None
@@ -530,12 +577,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._checked_configs.discard(paths.step_folder)
 
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
-        """Execute *step* for uncached items, caching per uid.
-
-        Returns a :class:`~items.StepItems` backed by the cache.
-        """
+        """Execute *step* for uncached items, caching per uid."""
         cbatch = self._prepare(step, batch)
-        self._dispatch_batches([cbatch])
+        with self._claim([cbatch]) as claimed:
+            if claimed.ready:
+                self._execute(claimed.ready)
         return cbatch.cached_items()
 
     def _prepare(self, step: Step, batch: items.StepItems) -> ComputeBatch:
@@ -559,23 +605,19 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     msg = "Clearing %s items for %s (infra.mode=%s)"
                     logger.warning(msg, len(to_clear), paths.step_uid, mode)
                 self._clear_caches(paths=paths, cd=cd, uids=set(pending_statuses))
-        # carries the full input set; _dispatch_batches filters to pending
+        # carries the full input set; _claim filters to pending
         info = CoordinationInfo(mode=mode, upstream=upstream)
         return ComputeBatch(step=step, paths=paths, cache_dict=cd, items=batch, info=info)
 
-    def _dispatch_batches(self, cbatches: list[ComputeBatch]) -> None:
-        """Compute all *cbatches*."""
+    def _claim(self, cbatches: list[ComputeBatch]) -> _Claimed:
+        """Claim every batch's pending uids, recheck, and return a `_Claimed`."""
         step_uids = [cb.paths.step_uid for cb in cbatches]
         if len(set(step_uids)) != len(step_uids):
             raise ValueError(f"one batch per step_uid required, got {step_uids}")
-        # Sort by step_uid so concurrent dispatches claim in the same order
-        # (deadlock-safe). The ExitStack holds every claim until all batches
-        # finish — recheck/execute/verify run under the claims, and holding
-        # them together lets a future backend pack them into one submission.
-        cbatches = sorted(cbatches, key=lambda cb: cb.paths.step_uid)
-        with contextlib.ExitStack() as stack:
-            claimed: list[ComputeBatch] = []  # filtered to pending, claim set on .info
-            for cb in cbatches:
+        claimed = _Claimed()
+        try:
+            # sort by step_uid: concurrent dispatches claim in the same order
+            for cb in sorted(cbatches, key=lambda cb: cb.paths.step_uid):
                 pending = self._pending_statuses(
                     paths=cb.paths, uids=cb.items.uids, mode=cb.info.mode
                 )
@@ -584,25 +626,24 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 reg: inflight.InflightRegistry | None = None
                 if self._concurrent:
                     reg = inflight.InflightRegistry(cb.paths.step_folder)
-                claim = stack.enter_context(inflight.inflight_session(reg, set(pending)))
                 cb = cb.select(list(pending))
-                cb.info.claim = claim
-                claimed.append(cb)
-            for cb in claimed:
-                self._execute_claimed(cb)
-            for cb in claimed:
-                verify = _CachedEntry.lookup_statuses(cb.cache_dict, cb.items.uids)
-                for uid in cb.items.uids:
-                    if verify[uid] != "success":
-                        raise RuntimeError(
-                            f"Worker completed but cache missing: "
-                            f"{cb.paths.step_uid}[{uid}]"
-                        )
+                cb.info.claim = claimed.stack.enter_context(
+                    inflight.inflight_session(reg, set(pending))
+                )
+                claimed.batches.append(cb)
+            claimed.ready = [
+                n
+                for cb in claimed.batches
+                if (n := self._recheck_and_clear(cb)) is not None
+            ]
+        except BaseException:
+            claimed.close()
+            raise
+        return claimed
 
     def _recheck_and_clear(self, cbatch: ComputeBatch) -> ComputeBatch | None:
-        """Recheck pending under the claim, clear stale, mark recomputed.
-
-        Returns the filtered batch, or ``None`` if a competitor completed everything.
+        """Recheck under the claim, clear stale entries, return narrowed batch
+        or ``None`` if fully populated by a competitor.
         """
         mode = cbatch.info.mode
         pending_statuses = self._pending_statuses(
@@ -624,23 +665,23 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._clear_caches(paths=cbatch.paths, cd=cbatch.cache_dict, uids=clear_uids)
         if not pending_statuses:
             return None
-        if mode in ("force", "retry"):
-            folder = cbatch.paths.step_folder
-            self._recomputed.update((folder, uid) for uid in pending_statuses)
         return cbatch.select(list(pending_statuses))
 
-    def _execute_claimed(self, cbatch: ComputeBatch) -> None:
-        """Clear stale entries and execute *cbatch* (already filtered, claimed)."""
-        filtered = self._recheck_and_clear(cbatch)
-        if filtered is not None:
-            self._execute(filtered)
+    def _mark_recomputed(self, cbatch: ComputeBatch) -> None:
+        """Record *cbatch*'s uids as recomputed-this-lifetime.
 
-    def _execute(self, cbatch: ComputeBatch) -> None:
-        """Run *cbatch*. Override for chunking/pools/arrays.
-
-        The inflight claim, when needed, is on ``cbatch.info.claim``.
+        Per-batch, not all-at-once: a raising run leaves later batches
+        un-attempted → must stay unmarked.
         """
-        cbatch.run_and_cache()
+        if cbatch.info.mode in ("force", "retry"):
+            folder = cbatch.paths.step_folder
+            self._recomputed.update((folder, uid) for uid in cbatch.items.uids)
+
+    def _execute(self, cbatches: list[ComputeBatch]) -> None:
+        """Run *cbatches* (filtered+claimed) blocking; override for pools/arrays."""
+        for cbatch in cbatches:
+            self._mark_recomputed(cbatch)
+            cbatch.run_and_cache()
 
 
 class Cached(Backend):
@@ -674,40 +715,46 @@ class _SubmititBackend(Backend):
             params["name"] = params.pop("job_name")
         return params
 
-    def _execute(self, cbatch: ComputeBatch) -> None:
-        claim = cbatch.info.claim
-        if claim is None:
-            raise RuntimeError("_execute runs only on a claimed batch")
-        paths = cbatch.paths
-        uids = list(cbatch.items.uids)
-        random.shuffle(uids)  # avoid collisions on competing runs
-        chunks = [
-            cbatch.select(c)
-            for c in utils.to_chunks(
-                uids, max_chunks=self.max_jobs, min_items_per_chunk=self.min_items_per_job
-            )
-        ]
-        executor = submitit.AutoExecutor(folder=paths._logs_folder, cluster=self._CLUSTER)
+    def _execute(self, cbatches: list[ComputeBatch]) -> None:
+        # all batches → one executor.batch() → one slurm array
+        for cbatch in cbatches:
+            if cbatch.info.claim is None:
+                raise RuntimeError("_execute runs only on claimed batches")
+            self._mark_recomputed(cbatch)  # all tasks submitted together below
+        tasks = _tasks_from_batches(
+            [cb.shuffled() for cb in cbatches],
+            max_chunks=self.max_jobs,
+            min_items_per_chunk=self.min_items_per_job,
+        )
+        # one array → one logs folder; jobs.db still records per step_folder
+        executor = submitit.AutoExecutor(
+            folder=cbatches[0].paths._logs_folder, cluster=self._CLUSTER
+        )
         params = self._submitit_params()
         if self._CLUSTER in ("slurm", None):
-            params["slurm_array_parallelism"] = len(chunks)
+            params["slurm_array_parallelism"] = len(tasks)
         executor.update_parameters(**params)
         with submitit.helpers.clean_env(), executor.batch():
-            jobs = [executor.submit(c.run_and_cache) for c in chunks]
-        for c, j in zip(chunks, jobs):
-            claim.record_worker_info(j, uids=c.items.uids)
-        with jobregistry.JobRegistry(paths.step_folder) as reg:
-            reg.record(
-                {j.job_id: c.items.uids for c, j in zip(chunks, jobs)},
-                cluster=executor.cluster,
-            )
-        msg = "Sent %s items for %s into %s jobs on cluster '%s' (eg: %s)"
+            jobs = [executor.submit(_multi_run_and_cache, task) for task in tasks]
+        # a task may span variants: record each sub-batch against the shared job
+        by_folder: dict[Path, dict[str, tp.Sequence[str]]] = {}
+        for task, job in zip(tasks, jobs):
+            for batch in task:
+                assert batch.info.claim is not None  # inherited from its variant
+                batch.info.claim.record_worker_info(job, uids=batch.items.uids)
+                folder = batch.paths.step_folder
+                by_folder.setdefault(folder, {})[job.job_id] = batch.items.uids
+        for folder, records in by_folder.items():
+            with jobregistry.JobRegistry(folder) as reg:
+                reg.record(records, cluster=executor.cluster)
+        n_items = sum(len(cb.items.uids) for cb in cbatches)
+        msg = "Sent %s items for %s steps into %s jobs on cluster '%s' (eg: %s)"
         logger.info(
-            msg, len(uids), paths.step_uid, len(jobs), self._CLUSTER, jobs[0].job_id
+            msg, n_items, len(cbatches), len(tasks), self._CLUSTER, jobs[0].job_id
         )
-        for j in jobs:
-            j.result()
-        logger.info("Finished processing %s items for %s", len(uids), paths.step_uid)
+        for job in jobs:
+            job.result()
+        logger.info("Finished processing %s items for %s steps", n_items, len(cbatches))
 
 
 class LocalProcess(_SubmititBackend):
@@ -752,28 +799,27 @@ class Auto(Slurm):
     _CLUSTER: tp.ClassVar[str | None] = None
 
 
+# holds the pool + claims past the dispatch call so `_PoolSource` reads lazily
 class _PoolContext:
-    """Shared state for a pool dispatch: cache, step_uid, pool, and claim stack."""
-
     def __init__(
         self,
         cache_dict: exca.cachedict.CacheDict[tp.Any],
         step_uid: str,
         pool: futures.Executor,
-        claim_stack: contextlib.ExitStack,
+        claimed: _Claimed,
     ) -> None:
         self.cd = cache_dict
         self.step_uid = step_uid
         self._pool: futures.Executor | None = pool
-        self._claim_stack: contextlib.ExitStack | None = claim_stack
+        self._claimed: _Claimed | None = claimed
 
     def _cleanup(self, *, wait: bool) -> None:
         if self._pool is not None:
             self._pool.shutdown(wait=wait)
             self._pool = None
-        if self._claim_stack is not None:
-            self._claim_stack.close()
-            self._claim_stack = None
+        if self._claimed is not None:
+            self._claimed.close()
+            self._claimed = None
 
     def close(self) -> None:
         self._cleanup(wait=True)
@@ -822,67 +868,86 @@ class _PoolBackend(Backend):
     max_jobs: int | None = pydantic.Field(128, gt=0)
     _POOL_TYPE: tp.ClassVar[str]
 
-    def _run(self, step: Step, batch: StepItems) -> StepItems:
+    def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
+        """Single-step streaming: same submission as ``_execute``, returns a
+        lazy carrier instead of blocking.
+        """
         cbatch = self._prepare(step, batch)
-        pending = self._pending_statuses(
-            paths=cbatch.paths, uids=cbatch.items.uids, mode=cbatch.info.mode
-        )
-        if not pending:
-            return cbatch.cached_items()
-        # single-worker: blocking path via _dispatch_batches
+        claimed = self._claim([cbatch])
+        transferred = False
+        try:
+            submission = self._submit_pool(claimed.ready) if claimed.ready else None
+            if submission is None:  # nothing pending, or ran inline
+                return cbatch.cached_items()
+            pool, task_futs = submission
+            uid_to_future = {
+                uid: fut
+                for fut, task in task_futs.items()
+                for b in task
+                for uid in b.items.uids
+            }
+            ctx = _PoolContext(cbatch.cache_dict, cbatch.paths.step_uid, pool, claimed)
+            transferred = True  # _PoolContext closes `claimed`, not the finally
+            return items.StepItems(
+                source=_PoolSource(uid_to_future, ctx),
+                uids=cbatch.items.uids,
+                upstream=cbatch.info.upstream,
+                mode=cbatch.info.mode,
+            )
+        finally:
+            if not transferred:
+                claimed.close()
+
+    def _execute(self, cbatches: list[ComputeBatch]) -> None:
+        submission = self._submit_pool(cbatches)
+        if submission is None:  # ran inline (single worker)
+            return
+        pool, task_futs = submission
+        n_items = sum(len(cb.items.uids) for cb in cbatches)
+        with pool:
+            try:
+                for f in futures.as_completed(task_futs):
+                    f.result()
+            except BaseException:
+                for f in task_futs:
+                    f.cancel()
+                raise
+        logger.info("Finished processing %s items for %s steps", n_items, len(cbatches))
+
+    def _submit_pool(
+        self, cbatches: list[ComputeBatch]
+    ) -> tuple[futures.Executor, dict[futures.Future[None], list[ComputeBatch]]] | None:
+        """Submit all *cbatches* to one pool (no waiting); returns the pool and
+        its task->future map, or ``None`` if the work ran inline (single worker).
+        """
+        # one pool across variants: heterogeneous variants overlap (load balance)
+        n_items = sum(len(cb.items.uids) for cb in cbatches)
+        for cbatch in cbatches:
+            if cbatch.info.claim is None:
+                raise RuntimeError("_submit_pool runs only on claimed batches")
+            self._mark_recomputed(cbatch)
         cpus = max(1, (os.cpu_count() or 1) - 1)
-        max_workers = min(len(pending), cpus)
+        max_workers = min(n_items, cpus)
         if self.max_jobs is not None:
             max_workers = min(max_workers, self.max_jobs)
         if max_workers <= 1:
-            self._dispatch_batches([cbatch])
-            return cbatch.cached_items()
-        # claim + recheck
-        stack = contextlib.ExitStack()
-        reg = (
-            inflight.InflightRegistry(cbatch.paths.step_folder)
-            if self._concurrent
-            else None
+            for cbatch in cbatches:
+                cbatch.run_and_cache()
+            return None
+        # ~3x as many tasks as workers, run in one pool
+        tasks = _tasks_from_batches(
+            [cb.shuffled() for cb in cbatches],
+            max_chunks=3 * max_workers,
+            min_items_per_chunk=1,
         )
-        claim = stack.enter_context(inflight.inflight_session(reg, set(pending)))
-        cb = cbatch.select(list(pending))
-        cb.info.claim = claim
-        filtered = self._recheck_and_clear(cb)
-        if filtered is None:
-            stack.close()
-            return cbatch.cached_items()
-        uids = list(filtered.items.uids)
-        # pending may have shrunk under the claim
-        max_workers = min(len(uids), max_workers)
-        if max_workers <= 1:
-            filtered.run_and_cache()
-            stack.close()
-            return cbatch.cached_items()
-        # no shuffle: contiguous uids → one block per chunk, max overlap at read time
-        chunks = [
-            filtered.select(c) for c in utils.to_chunks(uids, max_chunks=3 * max_workers)
-        ]
-        for c in chunks:
-            claim.record_worker_info(uids=c.items.uids)
+        for task in tasks:
+            for batch in task:
+                assert batch.info.claim is not None  # inherited from its variant
+                batch.info.claim.record_worker_info(uids=batch.items.uids)
         pool = utils.make_pool_executor(self._POOL_TYPE, max_workers)
-        logger.info(
-            "Sent %s items for %s into a %s",
-            len(uids),
-            cbatch.paths.step_uid,
-            pool,
-        )
-        futs = {pool.submit(c.run_and_cache): c for c in chunks}
-        uid_to_future: dict[str, futures.Future[None]] = {}
-        for future, chunk in futs.items():
-            for uid in chunk.items.uids:
-                uid_to_future[uid] = future
-        ctx = _PoolContext(cbatch.cache_dict, cbatch.paths.step_uid, pool, stack)
-        return items.StepItems(
-            source=_PoolSource(uid_to_future, ctx),
-            uids=cbatch.items.uids,
-            upstream=cbatch.info.upstream,
-            mode=cbatch.info.mode,
-        )
+        logger.info("Sent %s items for %s steps into a %s", n_items, len(cbatches), pool)
+        task_futs = {pool.submit(_multi_run_and_cache, task): task for task in tasks}
+        return pool, task_futs
 
 
 class ProcessPool(_PoolBackend):
