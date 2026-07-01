@@ -282,7 +282,7 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
     assert any("Add" in n for n in notes)
 
 
-def test_dispatch_batches_recomputed_per_batch(tmp_path: Path) -> None:
+def test_recomputed_per_batch(tmp_path: Path) -> None:
     backend = backends.Cached(folder=tmp_path)
 
     def prepare(step: Step, value: float) -> backends.ComputeBatch:

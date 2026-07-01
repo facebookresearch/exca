@@ -5,10 +5,10 @@
 ## 0.5.27 - 26-06-24
 
 - Infra reprs now only display fields that differ from their default value. [#289]
-- `exca/steps`: `Parallel` primitive — run a fixed set of step variants over one shared item set under a single backend dispatch, each variant caching under its own identity. [#280]
-- `exca/steps`: threadpool and processpool backends now stream their output for efficient consumption [#302]
-- `exca/steps`: `Scatter` primitive — fan each input into N branches, run a body Step per branch, gather (N->NxM->N). [#282]
-- `exca/steps`: update experimental batch execution API to `step.run_many([v1, v2, ...])`. [#275]
+- `steps`: `Parallel` primitive — run a fixed set of step variants over one shared item set under a single backend dispatch, each variant caching under its own identity. [#280]
+- `steps`: threadpool and processpool backends now stream their output for efficient consumption [#302]
+- `steps`: `Scatter` primitive — fan each input into N branches, run a body Step per branch, gather (N->NxM->N). [#282]
+- `steps`: update experimental batch execution API to `step.run_many([v1, v2, ...])`. [#275]
 
 ## 0.5.26 - 26-06-03
 
