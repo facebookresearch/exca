@@ -293,10 +293,7 @@ class CoordinationInfo:
 
 @dataclasses.dataclass
 class ComputeBatch:
-    """One step's items, run and cached together via ``step._run_items``.
-
-    Picklable worker payload; ``info`` is driver-only (see ``CoordinationInfo``).
-    """
+    """One step's items, run and cached together via ``step._run_items``."""
 
     step: Step
     paths: StepPaths
@@ -305,13 +302,11 @@ class ComputeBatch:
     info: CoordinationInfo = dataclasses.field(default_factory=CoordinationInfo)
 
     def __getstate__(self) -> dict[str, tp.Any]:
-        #  CoordinationInfo holds all (and only) non-worker state
         return {**self.__dict__, "info": CoordinationInfo()}
 
     def select(self, uids: tp.Sequence[str]) -> ComputeBatch:
-        """Sub-batch over *uids*, sharing step/paths/cache (for chunking).
-
-        Copies ``info`` so a sub-batch doesn't alias the parent's claim.
+        """Sub-batch over *uids*, sharing step/paths/cache; copies ``info``
+        (avoid aliasing the parent's claim).
         """
         info = dataclasses.replace(self.info)
         items_ = self.items.select(uids, mode=self.info.mode)
@@ -325,10 +320,7 @@ class ComputeBatch:
         return self.select(uids)
 
     def cached_items(self) -> StepItems:
-        """Lazy cache-backed handle to this batch's results.
-
-        Call on a top-level batch (full uid set), not a chunked sub-batch.
-        """
+        """Lazy cache-backed carrier; use on a top-level batch, not a chunk."""
         return items.StepItems(
             source=self.cache_dict,
             uids=self.items.uids,
@@ -389,9 +381,7 @@ def _tasks_from_batches(
     max_chunks: int | None,
     min_items_per_chunk: int,
 ) -> list[list[ComputeBatch]]:
-    """Group the batches' items into worker tasks (one ``run_and_cache`` per
-    sub-batch a task holds), splitting no more than ``utils.to_chunks`` needs.
-    """
+    """Group the batches' items into worker tasks."""
     labels = [i for i, cb in enumerate(cbatches) for _ in cb.items.uids]
     cursors = [0] * len(cbatches)
     tasks: list[list[ComputeBatch]] = []
@@ -434,7 +424,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _exclude_from_cls_uid(cls) -> list[str]:
         return ["."]  # force ignored in uid
 
-    # _claim uses InflightRegistry when True (concurrent worker safety)
+    # uses InflightRegistry when True (concurrent worker safety)
     _concurrent: tp.ClassVar[bool] = False
 
     folder: Path | None = None
@@ -587,11 +577,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._checked_configs.discard(paths.step_folder)
 
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
-        """Execute *step* for uncached items, caching per uid.
-
-        Returns a :class:`~items.StepItems` backed by the cache. ``_PoolBackend``
-        overrides this to stream results as futures complete.
-        """
+        """Execute *step* for uncached items, caching per uid."""
         cbatch = self._prepare(step, batch)
         self._dispatch_batches([cbatch])
         return cbatch.cached_items()
@@ -895,8 +881,8 @@ class _PoolBackend(Backend):
     _POOL_TYPE: tp.ClassVar[str]
 
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
-        """Stream a single step: same submission as ``_execute``, lazy carrier
-        instead of blocking (reads each uid as its chunk completes).
+        """Single-step streaming: same submission as ``_execute``, returns a
+        lazy carrier instead of blocking.
         """
         cbatch = self._prepare(step, batch)
         claimed = self._claim([cbatch])
