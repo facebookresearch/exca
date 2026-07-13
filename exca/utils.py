@@ -450,6 +450,8 @@ def recursive_freeze(obj: tp.Any) -> None:
     for m in models.values():
         if m.model_config.get("frozen", False):
             continue  # no need to freeze + it actually creates a recursion (not sure why)
+        if isinstance(getattr(m, "_setattr_handler", None), _FrozenSetattr):
+            continue  # already frozen
         if hasattr(m, "__pydantic_setattr_handlers__"):
             # starting at pydantic 2.11
             m.__pydantic_setattr_handlers__.clear()  # type: ignore

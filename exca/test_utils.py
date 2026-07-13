@@ -169,6 +169,18 @@ def test_recursive_freeze() -> None:
         assert sub.model_config["frozen"]
 
 
+class _Priv(pydantic.BaseModel):
+    _v: int = pydantic.PrivateAttr(0)
+
+
+def test_recursive_freeze_idempotent() -> None:
+    m = _Priv()
+    for _ in range(2000):  # > recursion limit if freezes nest their handlers
+        utils.recursive_freeze(m)
+    m._v = 1
+    assert m._v == 1
+
+
 class OptDiscrim(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     val: tp.Annotated[D1 | D2, pydantic.Field(discriminator="uid")] | None = None
