@@ -108,7 +108,8 @@ class AdvisoryRegistry:
             timeout=20,
             isolation_level=None,
         )
-        conn.execute("PRAGMA journal_mode=WAL")
+        # WAL needs cross-host shared memory (broken on NFS) -> DELETE journal
+        conn.execute("PRAGMA journal_mode=DELETE")
         conn.executescript(self._SCHEMA)
         if self.permissions is not None:
             try:
@@ -144,7 +145,7 @@ class AdvisoryRegistry:
         """Open guarded by the same corruption gate as :meth:`_safe_execute`,
         retrying lock contention."""
         try:
-            # the WAL switch takes a brief exclusive lock busy_timeout misses
+            # connect can hit a transient lock (journal/schema init) busy_timeout misses
             return self._retry_on_lock(lambda: self._connect(create=create))
         except Exception as e:
             corrupt = isinstance(e, sqlite3.DatabaseError) and any(

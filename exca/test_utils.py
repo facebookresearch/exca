@@ -8,6 +8,7 @@ import collections
 import concurrent.futures
 import datetime
 import os
+import threading
 import typing as tp
 from pathlib import Path
 
@@ -571,6 +572,23 @@ def test_check_configs(tmp_path: Path) -> None:
     utils.ConfigDump(model=models).check_and_write(folder2)
     content = (folder2 / "uid.yaml").read_text("utf8")
     assert content == "- x: 1\n- x: 2\n"
+
+
+def test_check_configs_concurrently(tmp_path: Path) -> None:
+    def check(folder: Path, barrier: threading.Barrier) -> None:
+        barrier.wait()
+        utils.ConfigDump(model=A(x=5, y="test")).check_and_write(folder)
+
+    dump = utils.ConfigDump(model=A(x=5, y="test"))
+    for index in range(20):
+        folder = tmp_path / str(index)
+        folder.mkdir()
+        (folder / "uid.yaml").write_text(dump._to_yaml("uid"))
+        barrier = threading.Barrier(18)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=18) as pool:
+            futures = [pool.submit(check, folder, barrier) for _ in range(18)]
+            for future in futures:
+                future.result()
 
 
 def test_confdict_override_yaml() -> None:
