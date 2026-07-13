@@ -609,12 +609,11 @@ def temporary_save_path(filepath: Path | str, replace: bool = True) -> tp.Iterat
         if filepath.exists():
             os.remove(tmppath)
             return
-    with fast_unlink(filepath, missing_ok=True):
-        try:
-            os.rename(tmppath, filepath)
-        finally:
-            if tmppath.exists():
-                os.remove(tmppath)
+    try:
+        os.replace(tmppath, filepath)
+    finally:
+        if tmppath.exists():
+            os.remove(tmppath)
 
 
 class ShortItemUid:
@@ -707,6 +706,8 @@ class ConfigDump:
         def as_confdict(data: tp.Any) -> ConfDict:
             return ConfDict(data if isinstance(data, dict) else {"_": data})
 
+        corrupted: set[str] = set()
+
         def read_file(name: str) -> str | None:
             fp = folder / f"{name}.yaml"
             if not fp.exists():
@@ -717,9 +718,11 @@ class ConfigDump:
                 if not isinstance(data, (dict, list)):
                     raise TypeError(f"Expected dict or list, got {type(data).__name__}")
                 return content
+            except FileNotFoundError:
+                return None
             except Exception as e:
-                logger.warning("Deleting corrupted config '%s': %s", fp, e)
-                fp.unlink()
+                logger.warning("Replacing corrupted config '%s': %s", fp, e)
+                corrupted.add(name)
                 return None
 
         # uid.yaml must match exactly (cache collision detection)
@@ -754,7 +757,8 @@ class ConfigDump:
         if write:
             for name in ("uid", "full-uid", "config"):
                 fp = folder / f"{name}.yaml"
-                if fp.exists() and (name == "uid" or skip_write):
-                    continue
+                if fp.exists() and name not in corrupted:
+                    if name == "uid" or skip_write:
+                        continue
                 with temporary_save_path(fp) as tmp:
                     Path(tmp).write_text(self._to_yaml(name), encoding="utf8")
