@@ -146,6 +146,29 @@ def test_perf_workloads_are_equivalent(tmp_path: Path, batched: bool) -> None:
     np.testing.assert_allclose(out[1:], [out[0]] * (len(out) - 1))
 
 
+def _per_item(fn: tp.Callable[[int], tp.Any], n: int = 100) -> float:
+    for i in range(n):  # settle caches / warm paths
+        fn(i)
+    start = time.perf_counter()
+    for i in range(n):
+        fn(i)
+    return (time.perf_counter() - start) / n
+
+
+def test_nested_chain_head_reuses_warm_cache(tmp_path: Path) -> None:
+    infra = backends.Cached(folder=tmp_path, keep_in_ram=False)
+    pre = base.Chain(steps=[MakeArray(shape=(32, 32))], infra=infra)
+    list(pre.run_many(range(100)))  # populate cache + pre._output_items
+    list(pre.run_many(range(100)))
+
+    tail = (ArrayOp(add=1.5), ArrayOp(scale=3.0))
+    warm = _per_item(pre.run)
+    # fresh outer per call (the extractor's per-window shape): the cached head
+    # must reuse its warm carrier rather than re-dispatch to disk
+    nested = _per_item(lambda i: base.Chain(steps=[pre, *tail]).run(i))
+    assert nested < 8 * warm, {"warm us": warm * 1e6, "nested us": nested * 1e6}
+
+
 def test_warm_scalar_step_cache_is_close_to_mapinfra(tmp_path: Path) -> None:
     times: dict[str, float] = {}
 

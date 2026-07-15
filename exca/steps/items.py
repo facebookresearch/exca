@@ -83,6 +83,33 @@ class _AnnotatedBatch:
             )
 
 
+class _ScalarBatch:
+    """Run consecutive scalar steps with one UID/error-tracking layer."""
+
+    def __init__(
+        self,
+        steps: tp.Sequence[Step],
+        values: tp.Iterable[tp.Any],
+        uids: tp.Sequence[str],
+    ) -> None:
+        self.steps = tuple(steps)
+        self._values = values
+        self.uids = uids
+
+    def __iter__(self) -> tp.Iterator[tp.Any]:
+        for value, uid in zip(self._values, self.uids):
+            for step in self.steps:
+                try:
+                    args = () if isinstance(value, identity.NoValue) else (value,)
+                    value = step._run(*args)
+                except Exception as e:
+                    failed = [uid]
+                    e.add_note(f"  -> in {step!r}, inflight uids: {failed}")
+                    e._inflight_uids = failed  # type: ignore[attr-defined]
+                    raise
+            yield value
+
+
 class StepItems:
     """Pipeline carrier for inline computation between cached boundaries.
 
@@ -147,8 +174,17 @@ class StepItems:
     def read(self, uids: tp.Sequence[str]) -> tp.Iterator[tp.Any]:
         """Read these uids through the carrier's pending steps."""
         current: tp.Iterable[tp.Any] = (self._source[uid] for uid in uids)
+        scalar: list[Step] = []
         for step in self._pending:
+            if "scalar" in step._step_flags:
+                scalar.append(step)
+                continue
+            if scalar:
+                current = _ScalarBatch(scalar, current, uids)
+                scalar = []
             current = _AnnotatedBatch(step, current, uids)
+        if scalar:
+            current = _ScalarBatch(scalar, current, uids)
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:

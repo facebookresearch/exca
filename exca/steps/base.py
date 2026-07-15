@@ -141,6 +141,12 @@ class Step(exca.helpers.DiscriminatedModel):
         )
         if has_run:
             flags.add("has_run")
+            if (
+                cls._run is not Step._run
+                and cls._run_batch is Step._run_batch
+                and cls._run_items is Step._run_items
+            ):
+                flags.add("scalar")
             if utils.has_all_defaults(cls._run):
                 flags.add("generator")
                 if not any(
@@ -229,8 +235,26 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         return batch.apply_step(self)
 
+    def _warm_items(self, uids: tp.Sequence[str]) -> items.StepItems | None:
+        """Reuse a prior run's cache-backed carrier for *uids*, or ``None``."""
+        cached = self._output_items
+        if cached is None or not isinstance(cached._source, exca.cachedict.CacheDict):
+            return None
+        if cached._mode == "force" and not all(uid in cached.uids for uid in uids):
+            return None
+        with cached._source.frozen_cache_folder():
+            if not all(uid in cached._source for uid in uids):
+                return None
+        return cached.select(uids)
+
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        """Route *batch*: run ``_run_items`` inline, or hand to the backend."""
+        """Route *batch*: warm carrier, else ``_run_items`` inline or the backend."""
+        # only a pristine boundary (empty upstream+pending, cached mode) carries the
+        # step's standalone identity, so only then does the warm carrier still match
+        if not batch._upstream and not batch._pending and batch._mode == "cached":
+            warm = self._warm_items(batch.uids)
+            if warm is not None:
+                return warm
         if self.infra is None:
             return self._run_items(batch)
         if self.infra.folder is None:
@@ -363,17 +387,9 @@ class Step(exca.helpers.DiscriminatedModel):
         values = list(values)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]
 
-        cached = self._output_items
-        if cached is not None and isinstance(cached._source, exca.cachedict.CacheDict):
-            # fast path: reuse the cache-backed carrier instead of rebuilding it
-            remembered = cached._mode != "force" or all(
-                uid in cached.uids for uid in uids
-            )
-            if remembered:
-                with cached._source.frozen_cache_folder():
-                    remembered = all(uid in cached._source for uid in uids)
-                if remembered:
-                    return cached.select(uids)
+        warm = self._warm_items(uids)
+        if warm is not None:
+            return warm
 
         boundary = items.StepItems(
             source=dict(zip(uids, values)),
