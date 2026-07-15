@@ -483,6 +483,7 @@ class Chain(Step):
 
     def _uid_steps(self) -> list[Step]:
         # chain adds no identity of its own -> flatten to its resolved steps
+        # (-> whole chain and its last step share identity/cache)
         return [s for step in self._resolved_steps() for s in step._uid_steps()]
 
     def item_uid(self, value: tp.Any) -> str | None:
