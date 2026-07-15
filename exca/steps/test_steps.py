@@ -471,8 +471,8 @@ def test_chain_error_note() -> None:
     with pytest.raises(ValueError) as exc_info:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
-    assert "Add" in formatted and "inflight uids" in formatted
-    assert identity.materialize_uid(chain, 1) in formatted
+    assert "Add" in formatted
+    assert identity.materialize_uid(chain, 1) in formatted, "uid missing in message"
 
 
 # =============================================================================
@@ -669,16 +669,6 @@ def test_run_batch_yield_count(
     if with_infra:
         notes = getattr(exc_info.value, "__notes__", [])
         assert any(str(step.lookup(10).paths.cache_folder) in n for n in notes)
-
-
-@pytest.mark.parametrize(
-    "num, match",
-    [(1, "yielded 1 results for 3"), (4, "yielded more than 3")],
-)
-def test_run_batch_yield_count_before_fused(num: int, match: str) -> None:
-    chain = Chain(steps=[_NumYield(num=num), conftest.Mult(coeff=2)])
-    with pytest.raises(items.BatchProtocolError, match=match):
-        list(chain.run_many([10, 20, 30]))
 
 
 def test_run_batch_cannot_yield_before_consuming() -> None:

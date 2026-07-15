@@ -482,10 +482,7 @@ class Chain(Step):
         return self._resolved_steps()[-1]._infer_cache_type()
 
     def _uid_steps(self) -> list[Step]:
-        # Flatten to contained steps after `_resolve_step` expansion -
-        # the chain itself contributes nothing. So chain and its last step
-        # share the same step_uid (cache folder); combined with the same
-        # uid, they share the same cache entry.
+        # chain adds no identity of its own -> flatten to its resolved steps
         return [s for step in self._resolved_steps() for s in step._uid_steps()]
 
     def item_uid(self, value: tp.Any) -> str | None:
