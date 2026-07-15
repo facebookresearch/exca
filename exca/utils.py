@@ -454,7 +454,7 @@ def _is_frozen(m: pydantic.BaseModel) -> bool:
 def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hierarchy"""
     if isinstance(obj, pydantic.BaseModel) and _is_frozen(obj):
-        return
+        return  # avoid slow find_models call if unnecessary
     # skip frozen subtrees (avoid recursion)
     models = find_models(obj, pydantic.BaseModel, include_private=False, skip=_is_frozen)
     for m in models.values():
