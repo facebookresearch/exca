@@ -485,9 +485,9 @@ def find_models(
     include_private: bool
         include private attributes in the search
     stop_on_find: bool
-        stop the search when reaching the searched type
+        keep a matched model but don't search inside it (matches don't nest)
     skip: callable
-        prune a model and its subtree from the search when this returns True
+        drop a model and its whole subtree from the search when this returns True
     """
     out: dict[str, T] = {}
     base: tuple[type[tp.Any], ...] = (str, int, float, np.ndarray)
