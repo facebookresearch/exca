@@ -563,12 +563,11 @@ def test_reused_cached_output_keeps_pending_steps(tmp_path: Path) -> None:
     assert len(mult.calls) == 2
 
 
-def test_warm_head_reused_as_nested_first_step_skips_backend(
+def test_composed_head_warms_without_standalone_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     head = Chain(steps=[conftest.Add(value=1)], infra=infra)
-    head.run(0)  # warms head._output_items (and the disk cache)
 
     dispatches = 0
     original = backends.Backend._run
@@ -580,7 +579,9 @@ def test_warm_head_reused_as_nested_first_step_skips_backend(
 
     monkeypatch.setattr(backends.Backend, "_run", counting_run)
     assert Chain(steps=[head, conftest.Mult(coeff=2)]).run(0) == 2.0
-    assert not dispatches, "warm nested head re-dispatched instead of reusing its carrier"
+    assert dispatches == 1, "first composition must dispatch the head to the backend"
+    assert Chain(steps=[head, conftest.Mult(coeff=3)]).run(0) == 3.0
+    assert dispatches == 1, "warm head re-dispatched instead of reusing its carrier"
 
 
 def test_item_uid_override_in_chain(tmp_path: Path) -> None:

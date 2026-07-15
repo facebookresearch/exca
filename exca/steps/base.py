@@ -247,20 +247,27 @@ class Step(exca.helpers.DiscriminatedModel):
         return cached.select(uids)
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        """Route *batch*: warm carrier, else ``_run_items`` inline or the backend."""
-        # _output_items keys on the step alone -> reuse only at a standalone boundary
-        if not batch._upstream and not batch._pending and batch._mode == "cached":
+        """Route *batch*: reuse/remember warm carrier, else run inline or via backend."""
+        standalone = (
+            not batch._upstream and not batch._pending and batch._mode == "cached"
+        )
+        if standalone:  # _output_items only valid with no upstream
             warm = self._warm_items(batch.uids)
             if warm is not None:
                 return warm
         if self.infra is None:
-            return self._run_items(batch)
-        if self.infra.folder is None:
+            result = self._run_items(batch)
+        elif self.infra.folder is None:
             raise RuntimeError(
                 f"{type(self).__name__} has infra={type(self.infra).__name__!r} but no "
                 "folder set; set infra.folder (or run inside a Chain that provides one)"
             )
-        return self.infra._run(self, batch)
+        else:
+            result = self.infra._run(self, batch)
+        if standalone and isinstance(result._source, exca.cachedict.CacheDict):
+            self._output_items = result
+            exca.utils.recursive_freeze(self)  # carrier relies on fixed identity
+        return result
 
     # =========================================================================
     # Identity
@@ -393,11 +400,7 @@ class Step(exca.helpers.DiscriminatedModel):
             source=dict(zip(uids, values)),
             uids=uids,
         )
-        result = self._dispatch(boundary)
-        if isinstance(result._source, exca.cachedict.CacheDict):
-            self._output_items = result
-            exca.utils.recursive_freeze(self)
-        return result
+        return self._dispatch(boundary)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
         raise AttributeError("Step.forward() was removed; use run() instead")
