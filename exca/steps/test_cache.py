@@ -579,10 +579,8 @@ def test_warm_head_reused_as_nested_first_step_skips_backend(
         return original(self, step, batch)
 
     monkeypatch.setattr(backends.Backend, "_run", counting_run)
-    assert Chain(steps=[head, conftest.Mult(coeff=2)]).run(0) == 2.0  # (0 + 1) * 2
-    assert dispatches == 0, (
-        "warm nested head re-dispatched instead of reusing its carrier"
-    )
+    assert Chain(steps=[head, conftest.Mult(coeff=2)]).run(0) == 2.0
+    assert not dispatches, "warm nested head re-dispatched instead of reusing its carrier"
 
 
 def test_item_uid_override_in_chain(tmp_path: Path) -> None:
