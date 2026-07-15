@@ -444,12 +444,17 @@ class _FrozenSetattr:
         raise RuntimeError(msg)
 
 
+def _is_frozen(m: pydantic.BaseModel) -> bool:
+    return m.model_config.get("frozen", False) or isinstance(
+        getattr(m, "_setattr_handler", None), _FrozenSetattr
+    )
+
+
 def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hierarchy"""
-    models = find_models(obj, pydantic.BaseModel, include_private=False)
+    # skip already-frozen subtrees: re-wrapping the 2.11+ handler nests -> recursion
+    models = find_models(obj, pydantic.BaseModel, include_private=False, skip=_is_frozen)
     for m in models.values():
-        if m.model_config.get("frozen", False):
-            continue  # no need to freeze + it actually creates a recursion (not sure why)
         if hasattr(m, "__pydantic_setattr_handlers__"):
             # starting at pydantic 2.11
             m.__pydantic_setattr_handlers__.clear()  # type: ignore
@@ -466,6 +471,7 @@ def find_models(
     Type: type[T],
     include_private: bool = True,
     stop_on_find: bool = False,
+    skip: tp.Callable[[pydantic.BaseModel], bool] | None = None,
     _ancestors: set[int] | None = None,
 ) -> dict[str, T]:
     """Recursively find submodels
@@ -479,7 +485,9 @@ def find_models(
     include_private: bool
         include private attributes in the search
     stop_on_find: bool
-        stop the search when reaching the searched type
+        keep a matched model but don't search inside it (matches don't nest)
+    skip: callable
+        drop a model and its whole subtree from the search when this returns True
     """
     out: dict[str, T] = {}
     base: tuple[type[tp.Any], ...] = (str, int, float, np.ndarray)
@@ -498,6 +506,8 @@ def find_models(
     _ancestors.add(oid)
     try:
         if isinstance(obj, pydantic.BaseModel):
+            if skip is not None and skip(obj):
+                return out
             # copy and set to avoid modifying class attribute instead of instance attribute
             if isinstance(obj, Type):
                 out = {"": obj}
@@ -516,6 +526,7 @@ def find_models(
                     Type,
                     include_private=include_private,
                     stop_on_find=stop_on_find,
+                    skip=skip,
                     _ancestors=_ancestors,
                 )
                 out.update({f"{name}.{n}" if n else name: y for n, y in subout.items()})

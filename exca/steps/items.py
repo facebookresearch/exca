@@ -14,6 +14,7 @@ construct it; ``step.run_many`` returns one as its results iterator.
 from __future__ import annotations
 
 import collections
+import itertools
 import typing as tp
 
 from . import identity
@@ -34,6 +35,12 @@ class _Source(tp.Protocol):
 
 class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
+
+
+def _note_inflight(exc: Exception, step: Step, uids: list[str]) -> None:
+    exc.add_note(f"  -> in {step!r}, inflight uids: {uids}")
+    if uids:
+        exc._inflight_uids = uids  # type: ignore[attr-defined]  # read by retry logic
 
 
 class _AnnotatedBatch:
@@ -72,15 +79,37 @@ class _AnnotatedBatch:
                 self.n_out += 1
                 yield result
         except Exception as e:
-            failed = list(self._inflight)
-            e.add_note(f"  -> in {self.step!r}, inflight uids: {failed}")
-            if failed:
-                e._inflight_uids = failed  # type: ignore[attr-defined]
+            _note_inflight(e, self.step, list(self._inflight))
             raise
         if self.n_out < self._expected:
             raise BatchProtocolError(
                 f"{self.step!r}._run_batch yielded {self.n_out} results for {self._expected} inputs"
             )
+
+
+class _FusedRun:
+    """Run efficiently consecutive non-batched steps over the inputs in a single pass."""
+
+    def __init__(
+        self,
+        steps: tp.Sequence[Step],
+        values: tp.Iterable[tp.Any],
+        uids: tp.Sequence[str],
+    ) -> None:
+        self.steps = tuple(steps)
+        self._values = values
+        self.uids = uids
+
+    def __iter__(self) -> tp.Iterator[tp.Any]:
+        for value, uid in zip(self._values, self.uids):
+            for step in self.steps:
+                try:
+                    args = () if isinstance(value, identity.NoValue) else (value,)
+                    value = step._run(*args)
+                except Exception as e:
+                    _note_inflight(e, step, [uid])
+                    raise
+            yield value
 
 
 class StepItems:
@@ -147,8 +176,15 @@ class StepItems:
     def read(self, uids: tp.Sequence[str]) -> tp.Iterator[tp.Any]:
         """Read these uids through the carrier's pending steps."""
         current: tp.Iterable[tp.Any] = (self._source[uid] for uid in uids)
-        for step in self._pending:
-            current = _AnnotatedBatch(step, current, uids)
+        grouped = itertools.groupby(
+            self._pending, key=lambda s: "batched" in s._step_flags
+        )
+        for batched, group in grouped:
+            if batched:
+                for step in group:
+                    current = _AnnotatedBatch(step, current, uids)
+            else:
+                current = _FusedRun(list(group), current, uids)
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:

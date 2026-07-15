@@ -382,6 +382,7 @@ def test_step_flags() -> None:
     for cls, (flags, is_gen) in expected.items():
         assert cls._step_flags == flags, cls.__name__
         assert cls()._is_generator() is is_gen, cls.__name__
+    assert _NumYield._step_flags == {"has_run", "batched"}
 
 
 def test_resolve_step_transitive() -> None:
@@ -470,7 +471,8 @@ def test_chain_error_note() -> None:
     with pytest.raises(ValueError) as exc_info:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
-    assert "Add" in formatted and "inflight uids" in formatted
+    assert "Add" in formatted
+    assert identity.materialize_uid(chain, 1) in formatted, "uid missing in message"
 
 
 # =============================================================================

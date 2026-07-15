@@ -94,8 +94,6 @@ def infra_validator_after(self: tp.Any) -> tp.Any:
 def resolved_step(step: base.Step) -> base.Step:
     """Return the fixed point of ``step._resolve_step()`` (``step`` itself if it
     does not resolve). Raises on circular or self-containing resolutions."""
-    from . import base  # lazy — avoids circular import at module level
-
     if "has_resolve" not in step._step_flags:
         return step
     # Memoise distinct resolutions: their cache/_recomputed state must outlive a run.
@@ -111,6 +109,8 @@ def resolved_step(step: base.Step) -> base.Step:
         raise RuntimeError(f"_resolve_step did not converge on {type(step).__name__}")
     if built is step:
         return step
+    from . import base  # avoids circular; only import if needed
+
     # A resolution containing `step` would recurse forever in _resolved_steps.
     models = utils.find_models(built, base.Step, include_private=False)
     if any(s is step for s in models.values()):
