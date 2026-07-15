@@ -18,11 +18,6 @@ from . import conftest, items
 from .base import Step
 
 
-class _Batched(Step):  # "batched" flag -> must not fuse
-    def _run_batch(self, values: tp.Iterable[int]) -> tp.Iterator[int]:
-        yield from values
-
-
 @pytest.fixture(params=["dict", "cache_dict"])
 def source_abc(request: pytest.FixtureRequest, tmp_path: Path) -> items.StepItems:
     """StepItems with keys a,b,c → 1,2,3 backed by dict or CacheDict."""
@@ -55,6 +50,11 @@ def test_step_items_cache_dict_requires_uids() -> None:
     )
     with pytest.raises(TypeError, match="explicit uids"):
         items.StepItems(source=cd)
+
+
+class _Batched(Step):
+    def _run_batch(self, values: tp.Iterable[int]) -> tp.Iterator[int]:
+        yield from values  # "batched" flag -> must not fuse
 
 
 def test_read_fuses_defaults_and_isolates_batched(
