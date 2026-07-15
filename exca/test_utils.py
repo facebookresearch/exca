@@ -175,8 +175,9 @@ class _Priv(pydantic.BaseModel):
 
 def test_recursive_freeze_idempotent() -> None:
     m = _Priv()
-    for _ in range(2000):  # > recursion limit if freezes nest their handlers
-        utils.recursive_freeze(m)
+    for _ in range(2000):
+        # [m] to bypass early return / exercise skip=_is_frozen
+        utils.recursive_freeze([m])
     m._v = 1
     assert m._v == 1
 
