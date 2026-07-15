@@ -14,6 +14,7 @@ construct it; ``step.run_many`` returns one as its results iterator.
 from __future__ import annotations
 
 import collections
+import itertools
 import typing as tp
 
 from . import identity
@@ -34,6 +35,12 @@ class _Source(tp.Protocol):
 
 class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
+
+
+def _note_inflight(exc: Exception, step: Step, uids: list[str]) -> None:
+    exc.add_note(f"  -> in {step!r}, inflight uids: {uids}")
+    if uids:
+        exc._inflight_uids = uids  # type: ignore[attr-defined]  # read by retry logic
 
 
 class _AnnotatedBatch:
@@ -72,10 +79,7 @@ class _AnnotatedBatch:
                 self.n_out += 1
                 yield result
         except Exception as e:
-            failed = list(self._inflight)
-            e.add_note(f"  -> in {self.step!r}, inflight uids: {failed}")
-            if failed:
-                e._inflight_uids = failed  # type: ignore[attr-defined]
+            _note_inflight(e, self.step, list(self._inflight))
             raise
         if self.n_out < self._expected:
             raise BatchProtocolError(
@@ -83,8 +87,8 @@ class _AnnotatedBatch:
             )
 
 
-class _ScalarBatch:
-    """Run consecutive scalar steps with one UID/error-tracking layer."""
+class _FusedRun:
+    """Run efficiently consecutive non-batched steps over the inputs in a single pass."""
 
     def __init__(
         self,
@@ -103,9 +107,7 @@ class _ScalarBatch:
                     args = () if isinstance(value, identity.NoValue) else (value,)
                     value = step._run(*args)
                 except Exception as e:
-                    failed = [uid]
-                    e.add_note(f"  -> in {step!r}, inflight uids: {failed}")
-                    e._inflight_uids = failed  # type: ignore[attr-defined]
+                    _note_inflight(e, step, [uid])
                     raise
             yield value
 
@@ -174,17 +176,15 @@ class StepItems:
     def read(self, uids: tp.Sequence[str]) -> tp.Iterator[tp.Any]:
         """Read these uids through the carrier's pending steps."""
         current: tp.Iterable[tp.Any] = (self._source[uid] for uid in uids)
-        scalar: list[Step] = []
-        for step in self._pending:
-            if "scalar" in step._step_flags:
-                scalar.append(step)
-                continue
-            if scalar:
-                current = _ScalarBatch(scalar, current, uids)
-                scalar = []
-            current = _AnnotatedBatch(step, current, uids)
-        if scalar:
-            current = _ScalarBatch(scalar, current, uids)
+        grouped = itertools.groupby(
+            self._pending, key=lambda s: "batched" in s._step_flags
+        )
+        for batched, group in grouped:
+            if batched:
+                for step in group:
+                    current = _AnnotatedBatch(step, current, uids)
+            else:
+                current = _FusedRun(list(group), current, uids)
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:

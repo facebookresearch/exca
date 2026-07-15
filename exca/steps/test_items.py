@@ -7,13 +7,20 @@
 """Tests for the StepItems carrier."""
 
 import pickle
+import typing as tp
 from pathlib import Path
 
 import pytest
 
 import exca.cachedict
 
-from . import items
+from . import conftest, items
+from .base import Step
+
+
+class _Batched(Step):  # "batched" flag -> must not fuse
+    def _run_batch(self, values: tp.Iterable[int]) -> tp.Iterator[int]:
+        yield from values
 
 
 @pytest.fixture(params=["dict", "cache_dict"])
@@ -48,3 +55,22 @@ def test_step_items_cache_dict_requires_uids() -> None:
     )
     with pytest.raises(TypeError, match="explicit uids"):
         items.StepItems(source=cd)
+
+
+def test_read_fuses_defaults_and_isolates_batched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fused: list[int] = []
+    orig = items._FusedRun
+
+    def spy(steps: tp.Sequence[Step], values: tp.Any, uids: tp.Any) -> items._FusedRun:
+        fused.append(len(steps))
+        return orig(steps, values, uids)
+
+    monkeypatch.setattr(items, "_FusedRun", spy)
+    si = items.StepItems(source={"a": 1, "b": 2, "c": 3})
+    for step in (conftest.Mult(), conftest.Mult(), _Batched(), conftest.Mult()):
+        si = si.apply_step(step)
+    result = list(si)
+    assert result == [8, 16, 24], "x2, x2, identity batch, x2"
+    assert fused == [2, 1], "two defaults fuse; the batched step splits, then one default"

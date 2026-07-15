@@ -142,11 +142,10 @@ class Step(exca.helpers.DiscriminatedModel):
         if has_run:
             flags.add("has_run")
             if (
-                cls._run is not Step._run
-                and cls._run_batch is Step._run_batch
-                and cls._run_items is Step._run_items
+                cls._run_batch is not Step._run_batch
+                or cls._run_items is not Step._run_items
             ):
-                flags.add("scalar")
+                flags.add("batched")
             if utils.has_all_defaults(cls._run):
                 flags.add("generator")
                 if not any(

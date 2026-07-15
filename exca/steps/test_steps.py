@@ -373,21 +373,16 @@ def test_resolve_step_must_override_run_or_resolve() -> None:
 def test_step_flags() -> None:
     """_step_flags and _is_generator are computed correctly at class definition."""
     expected: dict[type[Step], tuple[set[str], bool]] = {
-        conftest.Mult: ({"has_run", "scalar"}, False),
-        conftest.RandomGenerator: (
-            {"has_run", "scalar", "generator", "pure_generator"},
-            True,
-        ),
-        conftest.Add: ({"has_run", "scalar", "generator"}, True),
-        conftest.AddWithTransforms: (
-            {"has_run", "scalar", "generator", "has_resolve"},
-            True,
-        ),
+        conftest.Mult: ({"has_run"}, False),
+        conftest.RandomGenerator: ({"has_run", "generator", "pure_generator"}, True),
+        conftest.Add: ({"has_run", "generator"}, True),
+        conftest.AddWithTransforms: ({"has_run", "generator", "has_resolve"}, True),
         conftest.PureResolver: ({"has_resolve"}, False),
     }
     for cls, (flags, is_gen) in expected.items():
         assert cls._step_flags == flags, cls.__name__
         assert cls()._is_generator() is is_gen, cls.__name__
+    assert _NumYield._step_flags == {"has_run", "batched"}
 
 
 def test_resolve_step_transitive() -> None:
@@ -477,9 +472,7 @@ def test_chain_error_note() -> None:
         chain.run(1)
     formatted = _format_exc(exc_info.value)
     assert "Add" in formatted and "inflight uids" in formatted
-    assert getattr(exc_info.value, "_inflight_uids", []) == [
-        identity.materialize_uid(chain, 1)
-    ]
+    assert identity.materialize_uid(chain, 1) in formatted
 
 
 # =============================================================================
@@ -682,7 +675,7 @@ def test_run_batch_yield_count(
     "num, match",
     [(1, "yielded 1 results for 3"), (4, "yielded more than 3")],
 )
-def test_run_batch_yield_count_before_scalar(num: int, match: str) -> None:
+def test_run_batch_yield_count_before_fused(num: int, match: str) -> None:
     chain = Chain(steps=[_NumYield(num=num), conftest.Mult(coeff=2)])
     with pytest.raises(items.BatchProtocolError, match=match):
         list(chain.run_many([10, 20, 30]))

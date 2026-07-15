@@ -109,9 +109,7 @@ def resolved_step(step: base.Step) -> base.Step:
         raise RuntimeError(f"_resolve_step did not converge on {type(step).__name__}")
     if built is step:
         return step
-    from . import (
-        base,  # lazy — avoids circular import; only the resolving branch needs it
-    )
+    from . import base  # avoids circular; only import if needed
 
     # A resolution containing `step` would recurse forever in _resolved_steps.
     models = utils.find_models(built, base.Step, include_private=False)
