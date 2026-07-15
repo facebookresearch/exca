@@ -20,6 +20,7 @@ import uuid
 import warnings
 from concurrent import futures
 from pathlib import Path
+from types import NoneType
 
 import numpy as np
 import pydantic
@@ -452,7 +453,9 @@ def _is_frozen(m: pydantic.BaseModel) -> bool:
 
 def recursive_freeze(obj: tp.Any) -> None:
     """Recursively freeze a pydantic model hierarchy"""
-    # skip already-frozen subtrees: re-wrapping the 2.11+ handler nests -> recursion
+    if isinstance(obj, pydantic.BaseModel) and _is_frozen(obj):
+        return
+    # skip frozen subtrees (avoid recursion)
     models = find_models(obj, pydantic.BaseModel, include_private=False, skip=_is_frozen)
     for m in models.values():
         if hasattr(m, "__pydantic_setattr_handlers__"):
@@ -490,7 +493,7 @@ def find_models(
         drop a model and its whole subtree from the search when this returns True
     """
     out: dict[str, T] = {}
-    base: tuple[type[tp.Any], ...] = (str, int, float, np.ndarray)
+    base: tuple[type[tp.Any], ...] = (str, int, float, np.ndarray, NoneType, Path)
     if "torch" in sys.modules:
         import torch
 
