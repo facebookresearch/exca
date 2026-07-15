@@ -248,8 +248,7 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         """Route *batch*: warm carrier, else ``_run_items`` inline or the backend."""
-        # only a pristine boundary (empty upstream+pending, cached mode) carries the
-        # step's standalone identity, so only then does the warm carrier still match
+        # _output_items keys on the step alone -> reuse only at a standalone boundary
         if not batch._upstream and not batch._pending and batch._mode == "cached":
             warm = self._warm_items(batch.uids)
             if warm is not None:
