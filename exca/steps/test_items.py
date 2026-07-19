@@ -78,9 +78,8 @@ def test_read_fuses_defaults_and_isolates_batched(
 
 
 def test_apply_step_uses_infra(tmp_path: Path) -> None:
-    step = conftest.Add(
-        value=2, randomize=True, infra={"backend": "Cached", "folder": tmp_path}
-    )
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(value=2, randomize=True, infra=infra)
     uid = identity.materialize_uid(step, 1.0)
     si = items.StepItems(source={uid: 1.0})
     assert list(si.apply_step(step)) == list(si.apply_step(step))
