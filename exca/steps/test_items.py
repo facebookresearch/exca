@@ -14,8 +14,7 @@ import pytest
 
 import exca.cachedict
 
-from . import conftest, items
-from .base import Step
+from . import base, conftest, identity, items
 
 
 @pytest.fixture(params=["dict", "cache_dict"])
@@ -52,7 +51,7 @@ def test_step_items_cache_dict_requires_uids() -> None:
         items.StepItems(source=cd)
 
 
-class _Batched(Step):
+class _Batched(base.Step):
     def _run_batch(self, values: tp.Iterable[int]) -> tp.Iterator[int]:
         yield from values  # "batched" flag -> must not fuse
 
@@ -63,7 +62,9 @@ def test_read_fuses_defaults_and_isolates_batched(
     fused: list[int] = []
     orig = items._FusedRun
 
-    def spy(steps: tp.Sequence[Step], values: tp.Any, uids: tp.Any) -> items._FusedRun:
+    def spy(
+        steps: tp.Sequence[base.Step], values: tp.Any, uids: tp.Any
+    ) -> items._FusedRun:
         fused.append(len(steps))
         return orig(steps, values, uids)
 
@@ -74,3 +75,13 @@ def test_read_fuses_defaults_and_isolates_batched(
     result = list(si)
     assert result == [8, 16, 24], "x2, x2, identity batch, x2"
     assert fused == [2, 1], "two defaults fuse; the batched step splits, then one default"
+
+
+def test_apply_step_uses_infra(tmp_path: Path) -> None:
+    step = conftest.Add(
+        value=2, randomize=True, infra={"backend": "Cached", "folder": tmp_path}
+    )
+    uid = identity.materialize_uid(step, 1.0)
+    si = items.StepItems(source={uid: 1.0})
+    assert list(si.apply_step(step)) == list(si.apply_step(step))
+    assert len(step.calls) == 1
