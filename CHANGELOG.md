@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## 0.5.28 - 26-07-20
+
+- `steps`: reduced `run_many` overhead by reusing warm cache-backed carriers in composed chains and fusing consecutive inline per-item steps. [#306, #307]
+- Improved cache/config write robustness under concurrent/shared-filesystem access. [#303, #305]
+
 ## 0.5.27 - 26-06-24
 
 - Infra reprs now only display fields that differ from their default value. [#289]
