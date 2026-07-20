@@ -7,6 +7,8 @@
 """Tests for execution backends (LocalProcess, Slurm, submitit integration)."""
 
 import contextlib
+import logging
+import sys
 import time
 import typing as tp
 from pathlib import Path
@@ -271,6 +273,33 @@ def test_pool_backend(tmp_path: Path, backend: str) -> None:
     result = list(step.run_many([1.0, 2.0, 3.0]))
     assert result == [2.0, 4.0, 6.0]
     assert step.lookup(1.0).paths.cache_folder.exists()
+
+
+class _PrintStep(Step):
+    def _run(self, value: str) -> str:
+        print(f"stdout:{value}")
+        print(f"stderr:{value}", file=sys.stderr)
+        logging.getLogger(__name__).warning("logger:%s", value)
+        return value.upper()
+
+
+def test_cached_capture_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "capture_logs": True}
+    step = _PrintStep(infra=infra)
+
+    assert step.run("ice") == "ICE"
+    captured = capsys.readouterr()
+
+    paths = step.lookup("ice").paths
+    log_folder = Path(paths._logs_folder.replace("%j", "main-process"))
+    for name, text in {"out": "stdout:ice\n", "err": "stderr:ice\n"}.items():
+        assert text in getattr(captured, name)  # console
+        assert text in (log_folder / f"log.std{name}").read_text("utf8")  # file
+    assert "Running 1 items for steps:" in captured.out  # header
+    assert "logger:ice" in (log_folder / "log.stderr").read_text("utf8")  # logging
+
+    assert step.run("ice") == "ICE"  # cache hit: nothing recomputed, nothing captured
+    assert capsys.readouterr().out == ""
 
 
 def test_pool_error_propagation(tmp_path: Path) -> None:
