@@ -149,6 +149,8 @@ def _labeled_nested_steps(
     consumed: set[str] = set()
     children: list[tuple[str | None, base.Step]] = []
     for k, v in all_vals.items():
+        if k.startswith("_"):  # skip cached_property / private caches
+            continue
         if isinstance(v, dict):
             pairs = list(v.items())
         elif isinstance(v, (list, tuple)):

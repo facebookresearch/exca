@@ -145,7 +145,11 @@ class StepItems:
         return len(self.uids)
 
     def apply_step(self, step: Step) -> StepItems:
-        """Append step's computation and identity."""
+        """Run *step* over the carrier, honoring its infra/caching (leaf or ``Chain``)."""
+        return step._dispatch(self)
+
+    def _append(self, step: Step) -> StepItems:
+        """Append a single leaf step's computation and identity."""
         return StepItems(
             source=self._source,
             uids=self.uids,

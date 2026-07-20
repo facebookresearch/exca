@@ -230,9 +230,9 @@ class Step(exca.helpers.DiscriminatedModel):
         The override point for batch-level steps (composites, fan-out).
         The result must be single-pass iterable (it may be consumed
         eagerly) and must extend the carrier's identity with this step
-        (as ``StepItems.apply_step`` does), or the cache mis-keys silently.
+        (as ``StepItems._append`` does), or the cache mis-keys silently.
         """
-        return batch.apply_step(self)
+        return batch._append(self)
 
     def _warm_items(self, uids: tp.Sequence[str]) -> items.StepItems | None:
         """Reuse a prior run's cache-backed carrier for *uids*, or ``None``."""
@@ -247,7 +247,10 @@ class Step(exca.helpers.DiscriminatedModel):
         return cached.select(uids)
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        """Route *batch*: reuse/remember warm carrier, else run inline or via backend."""
+        """Resolve, then route *batch*: reuse/remember warm carrier, run inline or via backend."""
+        built = utils.resolved_step(self)
+        if built is not self:
+            return built._dispatch(batch)
         standalone = (
             not batch._upstream and not batch._pending and batch._mode == "cached"
         )
@@ -400,7 +403,7 @@ class Step(exca.helpers.DiscriminatedModel):
             source=dict(zip(uids, values)),
             uids=uids,
         )
-        return self._dispatch(boundary)
+        return boundary.apply_step(self)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
         raise AttributeError("Step.forward() was removed; use run() instead")
@@ -535,10 +538,9 @@ class Chain(Step):
         values: items.StepItems,
     ) -> items.StepItems:
         """Compose sub-step dispatches sequentially."""
-        steps = self._resolved_steps()
         current = values
-        for step in steps:
-            current = step._dispatch(current)
+        for step in self._step_sequence():
+            current = current.apply_step(step)
         return current
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
