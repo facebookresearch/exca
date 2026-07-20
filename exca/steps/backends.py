@@ -15,9 +15,11 @@ from __future__ import annotations
 import collections
 import contextlib
 import dataclasses
+import datetime
 import logging
 import os
 import random
+import sys
 import traceback
 import typing as tp
 import warnings
@@ -685,7 +687,33 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
 
 class Cached(Backend):
-    """Inline execution + caching."""
+    """Inline execution + caching.
+
+    capture_logs: bool
+        if True, save stdout/stderr and logs of each run to
+        ``<step>/logs/main-process/`` (still shown on the console).
+    """
+
+    capture_logs: bool = False
+
+    def _execute(self, cbatches: list[ComputeBatch]) -> None:
+        if not cbatches:
+            return
+        log_folder = None
+        if self.capture_logs:
+            paths = cbatches[0].paths
+            log_folder = Path(paths._logs_folder.replace("%j", "main-process"))
+        from . import utils as step_utils  # circular
+
+        with step_utils.capture_logs(log_folder):
+            if log_folder is not None:
+                time = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
+                step_uids = ", ".join(cbatch.paths.step_uid for cbatch in cbatches)
+                n_items = sum(len(cbatch.items.uids) for cbatch in cbatches)
+                header = f"{time} - Running {n_items} items for steps: {step_uids}"
+                print(header)
+                print(header, file=sys.stderr)
+            super()._execute(cbatches)
 
 
 class _SubmititBackend(Backend):

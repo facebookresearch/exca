@@ -8,13 +8,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
+import logging
+import sys
 import typing as tp
 from pathlib import Path
 
 import pydantic
 
-from exca import utils
+from exca import logconf, utils
 
 from . import backends
 
@@ -215,3 +218,58 @@ def step_lines(step: base.Step) -> list[str]:
         for sl in sub_lines[1:]:
             lines.append(cont + sl)
     return lines
+
+
+# ---------------------------------------------------------------------------
+# print/log capture
+# ---------------------------------------------------------------------------
+
+
+class _StreamTee:
+    def __init__(self, stream: tp.TextIO, file: tp.TextIO) -> None:
+        self._stream = stream
+        self._file = file
+
+    def write(self, data: str) -> int:
+        self._stream.write(data)
+        self._file.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        self._stream.flush()
+        self._file.flush()
+
+    def __getattr__(self, name: str) -> tp.Any:
+        return getattr(self._stream, name)
+
+
+@contextlib.contextmanager
+def capture_logs(log_folder: Path | None) -> tp.Iterator[None]:
+    """Tee stdout/stderr and log records into ``log_folder``, serially.
+
+    Writes ``log.stdout``/``log.stderr`` (overwrites) while still passing
+    output through to the console. No-op if ``log_folder`` is None.
+    """
+    if log_folder is None:
+        yield
+        return
+    log_folder.mkdir(parents=True, exist_ok=True)
+    files: dict[str, tp.TextIO] = {}
+    streams = (
+        ("stdout", sys.stdout, contextlib.redirect_stdout),
+        ("stderr", sys.stderr, contextlib.redirect_stderr),
+    )
+    with contextlib.ExitStack() as stack:
+        for name, stream, redirect in streams:
+            file = stack.enter_context(
+                (log_folder / f"log.{name}").open("w", encoding="utf8", buffering=1)
+            )
+            files[name] = file
+            # process-global swap → concurrent callers would clobber each other
+            stack.enter_context(redirect(_StreamTee(stream, file)))
+        handler = logging.StreamHandler(files["stderr"])
+        handler.setFormatter(logconf._formatter)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(handler)
+        stack.callback(root_logger.removeHandler, handler)
+        yield
