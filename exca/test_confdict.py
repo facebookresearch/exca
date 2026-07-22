@@ -14,7 +14,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-import yaml
 
 from . import confdict
 from .confdict import ConfDict
@@ -53,26 +52,41 @@ def test_simplified_dict_2() -> None:
 
 def test_update_override() -> None:
     data = ConfDict({"a": 12, "b": 12})
-    data.update({ConfDict.OVERRIDE: True, "d": 13})
+    data.update({ConfDict.ops.REPLACE: True, "d": 13})
     assert data == {"d": 13}
+
+
+def test_override_deprecation() -> None:
+    with pytest.warns(DeprecationWarning, match="ConfDict.ops.REPLACE"):
+        assert ConfDict.OVERRIDE == ConfDict.ops.REPLACE
 
 
 def test_update() -> None:
     data = ConfDict({"a": {"c": 12}, "b": {"c": 12}})
-    data.update(a={ConfDict.OVERRIDE: True, "d": 13}, b={"d": 13})
+    data.update(a={ConfDict.ops.REPLACE: True, "d": 13}, b={"d": 13})
     assert data == {"a": {"d": 13}, "b": {"c": 12, "d": 13}}
     # more complex
     data = ConfDict({"a": {"b": {"c": 12}}})
-    data.update(a={"b": {"d": 12, ConfDict.OVERRIDE: True}})
+    data.update(a={"b": {"d": 12, ConfDict.ops.REPLACE: True}})
     assert data == {"a": {"b": {"d": 12}}}
     # with compressed key
-    data.update(**{"a.b": {"e": 13, ConfDict.OVERRIDE: True}})
+    data.update(**{"a.b": {"e": 13, ConfDict.ops.REPLACE: True}})
     assert data == {"a": {"b": {"e": 13}}}
     # assignment
-    data["a"] = {"c": 1, "b": {"d": 12, ConfDict.OVERRIDE: True}}
+    data["a"] = {"c": 1, "b": {"d": 12, ConfDict.ops.REPLACE: True}}
     assert data == {"a": {"b": {"d": 12}, "c": 1}}
-    data["a.b"] = {"e": 15, ConfDict.OVERRIDE: True}
+    data["a.b"] = {"e": 15, ConfDict.ops.REPLACE: True}
     assert data == {"a": {"b": {"e": 15}, "c": 1}}
+
+
+def test_update_ops_example() -> None:
+    data = ConfDict({"a": {"x": 1}, "b": {"x": 2}})
+
+    data.update({"a": {ConfDict.ops.REPLACE: True, "y": 4}, "b": {"y": 12}})
+    assert data == {"a": {"y": 4}, "b": {"x": 2, "y": 12}}
+
+    data.update({"a": {ConfDict.ops.AFTER: "b"}, "b.x": ConfDict.ops.DELETE})
+    assert data == {"b": {"y": 12}, "a": {"y": 4}}
 
 
 def test_update_delete_and_move() -> None:
@@ -86,7 +100,7 @@ def test_update_delete_and_move() -> None:
         """
     )
     data.update(
-        yaml.safe_load(
+        ConfDict.from_yaml(
             """
             steps:
               clean: =delete=
@@ -98,7 +112,8 @@ def test_update_delete_and_move() -> None:
                 frequency: 2
               pad:
                 =before=: resample
-            """
+            """,
+            apply_ops=False,
         )
     )
 
@@ -118,15 +133,27 @@ def test_update_delete_and_move() -> None:
 @pytest.mark.parametrize(
     "update",
     [
-        {"steps": {"a": {ConfDict.BEFORE: "b", ConfDict.AFTER: "b"}}},
-        {"steps": {"a": {ConfDict.AFTER: "a"}}},
-        {"steps": {"a": {ConfDict.AFTER: "missing"}}},
+        {"steps": {"a": {ConfDict.ops.BEFORE: "b", ConfDict.ops.AFTER: "b"}}},
+        {"steps": {"a": {ConfDict.ops.AFTER: "a"}}},
+        {"steps": {"a": {ConfDict.ops.AFTER: "missing"}}},
     ],
 )
 def test_update_move_errors(update: dict[str, tp.Any]) -> None:
     data = ConfDict({"steps": {"a": {}, "b": {}}})
     with pytest.raises((KeyError, ValueError)):
         data.update(update)
+
+
+def test_update_rejects_unknown_ops() -> None:
+    data = ConfDict({"steps": {"a": {}}})
+    patch = ConfDict.from_yaml("steps:\n  =unknown=: a\n", apply_ops=False)
+    assert patch["steps.=unknown="] == "a"
+    with pytest.raises(ValueError, match="Unknown ConfDict op"):
+        data.update(patch)
+    with pytest.raises(ValueError, match="Unknown ConfDict op"):
+        data.update({"steps": {"a": "=unknown="}})
+    with pytest.raises(ValueError, match="Unexpected ConfDict op"):
+        data.update({"steps": {"a": ConfDict.ops.BEFORE}})
 
 
 @pytest.mark.parametrize(

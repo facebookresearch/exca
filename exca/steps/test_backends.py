@@ -210,13 +210,13 @@ def test_config_files_and_consistency(tmp_path: Path) -> None:
 
     handle = step.lookup(10.0)
     step_folder = handle.paths.step_folder
-    expected_uid = "- coeff: 3.0\n  type: Mult\n"
+    expected_uid = "- type: Mult\n  coeff: 3.0\n"
     assert (step_folder / "uid.yaml").read_text("utf8") == expected_uid
     assert (step_folder / "full-uid.yaml").read_text("utf8") == expected_uid
     assert (step_folder / "config.yaml").exists()
 
     # Inconsistent uid.yaml raises error
-    (step_folder / "uid.yaml").write_text("- coeff: 999.0\n  type: Mult\n")
+    (step_folder / "uid.yaml").write_text("- type: Mult\n  coeff: 999.0\n")
     step.lookup(10.0).clear_cache()
     with pytest.raises(RuntimeError, match="Inconsistent uid config"):
         step.run(10.0)
