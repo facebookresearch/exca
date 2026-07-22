@@ -25,7 +25,6 @@ from . import utils
 logger = logging.getLogger(__name__)
 Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tuple[str, tp.Any]]
 _sentinel = object()
-OVERRIDE = "=replace="
 
 
 def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
@@ -34,7 +33,7 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
 
 def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
     """Recursively cast content of list and ordered dict to to confdicts"""
-    # Note: avoid replacing native dicts as they may contain OVERRIDE tag
+    # Note: avoid replacing native dicts as they may contain ConfDict.OVERRIDE tag
     # which needs to be processed later on
     if isinstance(obj, OrderedDict):
         sub = {x: _propagate_confdict(y, replace_dicts=True) for x, y in obj.items()}
@@ -51,6 +50,51 @@ def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
     return obj
 
 
+def _move_key(
+    obj: dict[str, tp.Any], key: str, *, before: str | None, after: str | None
+) -> None:
+    if before is not None and after is not None:
+        raise ValueError(
+            f"Use either {ConfDict.BEFORE!r} or {ConfDict.AFTER!r}, not both"
+        )
+    anchor = before if before is not None else after
+    if anchor is None:
+        return
+    if anchor == key:
+        raise ValueError(f"Cannot move {key!r} relative to itself")
+    if anchor not in obj:
+        raise KeyError(f"Cannot move {key!r}: anchor {anchor!r} is missing")
+    value = dict.pop(obj, key)
+    items = list(obj.items())
+    obj.clear()
+    for name, item in items:
+        if before is not None and name == anchor:
+            obj[key] = value
+        obj[name] = item
+        if after is not None and name == anchor:
+            obj[key] = value
+
+
+def _update_mapping(obj: dict[str, tp.Any], key: str, val: dict[str, tp.Any]) -> None:
+    val = dict(val)
+    before: str | None = None
+    after: str | None = None
+    if ConfDict.BEFORE in val:
+        before = val.pop(ConfDict.BEFORE)
+        if not isinstance(before, str):
+            raise TypeError(f"{ConfDict.BEFORE!r} expects a key name, got {before!r}")
+    if ConfDict.AFTER in val:
+        after = val.pop(ConfDict.AFTER)
+        if not isinstance(after, str):
+            raise TypeError(f"{ConfDict.AFTER!r} expects a key name, got {after!r}")
+    if val:
+        if isinstance(obj[key], dict):
+            obj[key].update(val)
+        else:
+            dict.__setitem__(obj, key, ConfDict(val))
+    _move_key(obj, key, before=before, after=after)
+
+
 def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     """Internal recursive setitem on ConfDict/list"""
     p, *rest = key.split(".", maxsplit=1)
@@ -61,24 +105,36 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         sub = obj[p]  # type: ignore
     else:
         raise TypeError(f"Cannot handle key {p!r} on existing container {obj!r}")
-    # replace sub by dict if not dict or sequence
-    if not _is_seq(sub) and not isinstance(sub, dict):
-        sub = ConfDict()
-        if _is_seq(obj):
-            obj[p] = sub  # type: ignore
-        else:
-            dict.__setitem__(obj, p, sub)
     if rest:
+        # replace sub by dict if not dict or sequence
+        if not _is_seq(sub) and not isinstance(sub, dict):
+            sub = ConfDict()
+            if _is_seq(obj):
+                obj[p] = sub  # type: ignore
+            else:
+                dict.__setitem__(obj, p, sub)
         _set_item(sub, rest[0], val)
+        if (
+            val == ConfDict.DELETE
+            and isinstance(obj, dict)
+            and isinstance(sub, dict)
+            and not sub
+        ):
+            dict.pop(obj, p, None)
         return
     # final part
     val = _propagate_confdict(val, replace_dicts=False)
+    if val == ConfDict.DELETE:
+        if _is_seq(obj):
+            raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
+        dict.pop(obj, p, None)
+        return
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore
         return
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
-        obj[p].update(val)
+        _update_mapping(obj, p, val)
     else:
         dict.__setitem__(obj, p, val)
 
@@ -97,14 +153,18 @@ class ConfDict(dict[str, tp.Any]):
     Note
     ----
     - This is designed for configurations, so it probably does not scale well to 100k+ keys
-    - dicts are merged expect if containing the key :code:`"=replace="`,
-      in which case they replace the content. On the other hand, non-dicts always
-      replace the content.
+    - dicts are merged except if containing the key :code:`ConfDict.OVERRIDE`,
+      in which case they replace the content. The scalar value
+      :code:`ConfDict.DELETE` deletes a key. The keys :code:`ConfDict.BEFORE`
+      and :code:`ConfDict.AFTER` move a key within the containing mapping.
     """
 
     LATEST_UID_VERSION = 3
     UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", LATEST_UID_VERSION))
-    OVERRIDE = OVERRIDE  # convenient to have it here
+    OVERRIDE = "=replace="
+    DELETE = "=delete="
+    BEFORE = "=before="
+    AFTER = "=after="
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
@@ -199,7 +259,7 @@ class ConfDict(dict[str, tp.Any]):
             kwargs.update(mapping)
         if not kwargs:
             return
-        if kwargs.pop(OVERRIDE, False):
+        if kwargs.pop(ConfDict.OVERRIDE, False):
             self.clear()
         for key, val in kwargs.items():
             self[key] = val
@@ -236,7 +296,7 @@ class ConfDict(dict[str, tp.Any]):
         """Exports the ConfDict to yaml string
         and optionally to a file if a filepath is provided
         """
-        out: str = _yaml.safe_dump(_to_simplified_dict(self), sort_keys=True)
+        out: str = _yaml.safe_dump(_to_simplified_dict(self), sort_keys=False)
         if filepath is not None:
             Path(filepath).write_text(out, encoding="utf8")
         return out

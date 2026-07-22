@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from . import confdict
 from .confdict import ConfDict
@@ -72,6 +73,60 @@ def test_update() -> None:
     assert data == {"a": {"b": {"d": 12}, "c": 1}}
     data["a.b"] = {"e": 15, ConfDict.OVERRIDE: True}
     assert data == {"a": {"b": {"e": 15}, "c": 1}}
+
+
+def test_update_delete_and_move() -> None:
+    data = ConfDict.from_yaml(
+        """
+        steps:
+          read.t: read
+          clean.t: clean
+          resample.t: resample
+          pad.t: pad
+        """
+    )
+    data.update(
+        yaml.safe_load(
+            """
+            steps:
+              clean: =delete=
+              project:
+                =after=: read
+                t: project
+              resample:
+                =after=: project
+                frequency: 2
+              pad:
+                =before=: resample
+            """
+        )
+    )
+
+    assert (
+        data.to_yaml()
+        == """steps:
+  read.t: read
+  project.t: project
+  pad.t: pad
+  resample:
+    t: resample
+    frequency: 2
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"steps": {"a": {ConfDict.BEFORE: "b", ConfDict.AFTER: "b"}}},
+        {"steps": {"a": {ConfDict.AFTER: "a"}}},
+        {"steps": {"a": {ConfDict.AFTER: "missing"}}},
+    ],
+)
+def test_update_move_errors(update: dict[str, tp.Any]) -> None:
+    data = ConfDict({"steps": {"a": {}, "b": {}}})
+    with pytest.raises((KeyError, ValueError)):
+        data.update(update)
 
 
 @pytest.mark.parametrize(
@@ -289,6 +344,20 @@ def test_dict_hash() -> None:
     maker2 = confdict.UidMaker({"x": 1.2, "z": ("z", 12.0)}, version=3)
     assert maker1.hash != maker2.hash
     assert maker1.hash == "dict:{x=float:461168601842738689,y=seq:(str:z,int:12)}"
+
+
+def test_uid_ordering_rules() -> None:
+    cfg = ConfDict.from_yaml("a: 1\nb: 2\n")
+    reversed_cfg = ConfDict.from_yaml("b: 2\na: 1\n")
+    ordered = OrderedDict([("a", 1), ("b", 2)])
+    reversed_ordered = OrderedDict([("b", 2), ("a", 1)])
+
+    assert cfg.to_yaml() != reversed_cfg.to_yaml()
+    assert cfg.to_uid() == reversed_cfg.to_uid()
+    assert (
+        confdict.UidMaker(ordered).format()
+        != confdict.UidMaker(reversed_ordered).format()
+    )
 
 
 def test_set_hash() -> None:

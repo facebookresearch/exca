@@ -109,8 +109,8 @@ def test_discriminated_model() -> None:
     model = Model(sub={"name": "World", "string": "Hello"})  # type: ignore
     cfg = ConfDict.from_model(model, exclude_defaults=True, uid=True)
     expected = """sub:
-  name: World
   string: Hello
+  name: World
 """
     assert cfg.to_yaml() == expected
     # instantiate base
