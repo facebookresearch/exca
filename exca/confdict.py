@@ -486,7 +486,7 @@ class UidMaker:
         elif isinstance(data, dict):
             for k in data:
                 # _to_simplified_dict may fuse an op into a dotted key (a.=op=)
-                if "=" in k and any(ConfDict.ops.is_op(p) for p in k.split(".")):
+                if any(ConfDict.ops.is_op(p) for p in k.split(".")):
                     raise ValueError(f"Cannot compute uid on unresolved config {k!r}")
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
             if version > 2:
@@ -525,6 +525,8 @@ class UidMaker:
             else:
                 self.string = f"{data:.2e}"
         elif isinstance(data, (str, int, np.int32, np.int64)) or data is None:
+            if ConfDict.ops.is_op(data):
+                raise ValueError(f"Cannot compute uid on unresolved config {data!r}")
             self.string = str(data)
             self.hash = self.string
             typestr = "str" if isinstance(data, str) else "int"

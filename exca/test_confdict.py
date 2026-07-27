@@ -174,6 +174,20 @@ item:
 
 
 @pytest.mark.parametrize(
+    "data",
+    [
+        {"missing": ConfDict.ops.DELETE},
+        {"item": {ConfDict.ops.REPLACE: True, "name": "new"}},
+        {"item": {ConfDict.ops.BEFORE: "anchor"}},
+        {"item": {ConfDict.ops.AFTER: "anchor"}},
+    ],
+)
+def test_to_uid_rejects_unresolved_ops(data: dict[str, tp.Any]) -> None:
+    with pytest.raises(ValueError, match="unresolved config"):
+        ConfDict(data).to_uid()
+
+
+@pytest.mark.parametrize(
     "update",
     [
         {"steps": {"a": {ConfDict.ops.BEFORE: "b", ConfDict.ops.AFTER: "b"}}},
