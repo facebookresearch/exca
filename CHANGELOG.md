@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- `ConfDict`: added `ConfDict` operations `ConfDict.ops.DELETE`, `ConfDict.ops.BEFORE`, and `ConfDict.ops.AFTER`; `ConfDict.ops.REPLACE` replaces `ConfDict.OVERRIDE`. [#310]
+- Config YAML dumps now preserve key order, cache uid checks tolerates key-order-only `uid.yaml` changes for compatibility. [#310]
+
 ## 0.5.28 - 26-07-20
 
 - `steps`: reduced `run_many` overhead by reusing warm cache-backed carriers in composed chains and fusing consecutive inline per-item steps. [#306, #307]
