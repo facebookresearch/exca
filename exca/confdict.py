@@ -291,15 +291,15 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
 
         Example
         -------
-        .. code-block:: python
-
-            cfg = ConfDict({"a": {"x": 1}, "b": {"x": 2}})
-
-            cfg.update({"a": {ConfDict.ops.REPLACE: True, "y": 4}, "b": {"y": 12}})
-            >> {"a": {"y": 4}, "b": {"x": 2, "y": 12}}
-
-            cfg.update({"a": {ConfDict.ops.AFTER: "b"}, "b.x": ConfDict.ops.DELETE})
-            >> {"b": {"y": 12}, "a": {"y": 4}}
+        >>> cfg = ConfDict({"a": {"x": 1}, "b": {"x": 2}})
+        >>> cfg.update(
+        ...     {
+        ...         "a": {ConfDict.ops.REPLACE: True, ConfDict.ops.AFTER: "b", "y": 4},
+        ...         "b": {"y": 12},
+        ...     }
+        ... )
+        >>> cfg
+        {'b': {'x': 2, 'y': 12}, 'a': {'y': 4}}
         """
         self._update(mapping, **kwargs)
 

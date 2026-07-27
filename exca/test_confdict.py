@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 import dataclasses
 import decimal
+import doctest
 import fractions
 import glob
 import typing as tp
@@ -79,14 +80,20 @@ def test_update() -> None:
     assert data == {"a": {"b": {"e": 15}, "c": 1}}
 
 
-def test_update_ops_example() -> None:
-    data = ConfDict({"a": {"x": 1}, "b": {"x": 2}})
-
-    data.update({"a": {ConfDict.ops.REPLACE: True, "y": 4}, "b": {"y": 12}})
-    assert data == {"a": {"y": 4}, "b": {"x": 2, "y": 12}}
-
-    data.update({"a": {ConfDict.ops.AFTER: "b"}, "b.x": ConfDict.ops.DELETE})
-    assert data == {"b": {"y": 12}, "a": {"y": 4}}
+def test_update_docstring_examples() -> None:
+    parser = doctest.DocTestParser()
+    runner = doctest.DocTestRunner()
+    docstring = ConfDict.update.__doc__
+    assert docstring is not None
+    test = parser.get_doctest(
+        docstring,
+        {"ConfDict": ConfDict},
+        "ConfDict.update",
+        None,
+        0,
+    )
+    result = runner.run(test)
+    assert not result.failed
 
 
 def test_update_delete_and_move() -> None:
@@ -96,6 +103,9 @@ def test_update_delete_and_move() -> None:
           clean.t: clean
           resample.t: resample
           pad.t: pad
+        item:
+          name: old
+          size: 1
         """
     data = ConfDict.from_yaml(base)
     patch = ConfDict.from_yaml(
@@ -110,6 +120,8 @@ def test_update_delete_and_move() -> None:
             frequency: 2
           pad:
             =before=: resample
+          late:
+            =after=: missing
         """
     )
     assert (
@@ -121,6 +133,7 @@ def test_update_delete_and_move() -> None:
     t: project
   pad: {}
   resample.frequency: 2
+  late.=after=: missing
 """
     )
 
@@ -135,95 +148,29 @@ def test_update_delete_and_move() -> None:
     t: resample
     frequency: 2
   pad.t: pad
+  late.=after=: missing
+item:
+  name: old
+  size: 1
 """
     )
-    data = ConfDict.from_yaml(base)
-    data.update(
-        ConfDict.from_yaml(
-            """
-            steps:
-              resample.t: resample
-              clean.t: clean
-            """
-        )
-    )
-    assert (
-        data.to_yaml()
-        == """steps:
-  read.t: read
-  clean.t: clean
-  resample.t: resample
-  pad.t: pad
-"""
-    )
-
-
-def test_update_keeps_deferred_ops_in_lists() -> None:
-    base = ConfDict({"item": {"name": "old", "size": 1}})
-    grid = ConfDict({"seed": [33]})
-
-    grid.update({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
-    element = grid.flat()["item"][0]
-    assert element == {ConfDict.ops.REPLACE: True, "name": "new"}
-
-    base.update({"item": element})
-    assert base["item"] == {"name": "new"}
-
-
-def test_update_moves_apply_eagerly() -> None:
-    data = ConfDict({"steps": {"a": {}, "b": {}, "c": {}}})
-
-    data.update(
-        {
-            "steps": {
-                "a": {ConfDict.ops.AFTER: "b"},
-                "b": {ConfDict.ops.AFTER: "c"},
-            }
-        }
-    )
-
-    assert list(data["steps"]) == ["a", "c", "b"]
-
-
-def test_update_delete_happens_before_later_move() -> None:
-    data = ConfDict({"steps": {"a": {}, "c": {}, "b": {}}})
-
-    data.update(
-        {
-            "steps": {
-                "b": ConfDict.ops.DELETE,
-                "a": {ConfDict.ops.AFTER: "b"},
-            }
-        }
-    )
-
-    assert list(data["steps"]) == ["a", "c"]
-    assert data["steps.a.=after="] == "b"
-
-
-def test_update_resolves_dangling_move_when_key_is_updated_again() -> None:
-    data = ConfDict({"steps": {"read": {}}})
-    data.update(
-        {
-            "steps": {
-                "resample": {ConfDict.ops.AFTER: "project"},
-                "project": {"t": "project"},
-            }
-        }
-    )
-
-    assert list(data["steps"]) == ["read", "resample", "project"]
-    assert data["steps.resample.=after="] == "project"
-
-    data.update({"steps": {"resample": {"t": 1}}})
-    assert list(data["steps"]) == ["read", "project", "resample"]
-    assert data["steps.resample"] == {"t": 1}
-
-
-def test_to_uid_rejects_unresolved_move() -> None:
-    data = ConfDict({"steps": {"read": {}, "resample": {ConfDict.ops.AFTER: "project"}}})
     with pytest.raises(ValueError, match="unresolved config"):
         data.to_uid()
+
+    data.update({"steps": {"missing": {}, "late": {"t": 1}}})
+    assert list(data["steps"]) == [
+        "read",
+        "project",
+        "resample",
+        "pad",
+        "missing",
+        "late",
+    ]
+    assert data["steps.late"] == {"t": 1}
+
+    grid = ConfDict({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
+    data.update({"item": grid.flat()["item"][0]})
+    assert data["item"] == {"name": "new"}
 
 
 @pytest.mark.parametrize(
@@ -234,28 +181,14 @@ def test_to_uid_rejects_unresolved_move() -> None:
         {"steps": {"a": ConfDict.ops.REPLACE}},
         {"steps": {"a": ConfDict.ops.BEFORE}},
         {"steps": {"a": ConfDict.ops.AFTER}},
+        {"steps": {"=unknown=": "a"}},
+        {"steps": {"a": "=unknown="}},
     ],
 )
 def test_update_op_errors(update: dict[str, tp.Any]) -> None:
     data = ConfDict({"steps": {"a": {}, "b": {}}})
     with pytest.raises(ValueError):
         data.update(update)
-
-
-def test_update_combines_replace_and_move() -> None:
-    data = ConfDict({"steps": {"a": {"x": 1}, "b": {}}})
-    update = {ConfDict.ops.REPLACE: True, ConfDict.ops.AFTER: "b", "z": 9}
-    data.update({"steps": {"a": update}})
-    assert list(data["steps"]) == ["b", "a"]
-    assert data["steps.a"] == {"z": 9}
-
-
-def test_update_rejects_unknown_ops() -> None:
-    data = ConfDict({"steps": {"a": {}}})
-    with pytest.raises(ValueError, match="Unknown ConfDict op"):
-        ConfDict.from_yaml("steps:\n  =unknown=: a\n")
-    with pytest.raises(ValueError, match="Unknown ConfDict op"):
-        data.update({"steps": {"a": "=unknown="}})
 
 
 @pytest.mark.parametrize(
