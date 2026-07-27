@@ -217,6 +217,26 @@ def test_update_delete_happens_before_later_move() -> None:
     assert data["steps.a.=after="] == "b"
 
 
+def test_update_resolves_dangling_move_when_key_is_updated_again() -> None:
+    data = ConfDict({"steps": {"read": {}, "resample": {ConfDict.ops.AFTER: "project"}}})
+    assert list(data["steps"]) == ["read", "resample"], "anchor absent -> dangling"
+
+    # adding the anchor alone does not resolve it: resample must be merged again
+    data.update({"steps": {"project": {}}})
+    assert list(data["steps"]) == ["read", "resample", "project"]
+
+    data.update({"steps": {"resample": {"t": 1}}})
+    assert list(data["steps"]) == ["read", "project", "resample"]
+    assert data["steps.resample"] == {"t": 1}, "op consumed once applied"
+
+
+def test_to_uid_rejects_unresolved_move() -> None:
+    data = ConfDict({"steps": {"read": {}, "resample": {ConfDict.ops.AFTER: "project"}}})
+    assert data.to_yaml()  # dangling ops stay renderable
+    with pytest.raises(ValueError, match="unresolved config"):
+        data.to_uid()
+
+
 @pytest.mark.parametrize(
     "update",
     [
@@ -228,6 +248,14 @@ def test_update_move_errors(update: dict[str, tp.Any]) -> None:
     data = ConfDict({"steps": {"a": {}, "b": {}}})
     with pytest.raises(ValueError):
         data.update(update)
+
+
+def test_update_combines_replace_and_move() -> None:
+    data = ConfDict({"steps": {"a": {"x": 1}, "b": {}}})
+    update = {ConfDict.ops.REPLACE: True, ConfDict.ops.AFTER: "b", "z": 9}
+    data.update({"steps": {"a": update}})
+    assert list(data["steps"]) == ["b", "a"]
+    assert data["steps.a"] == {"z": 9}, "content replaced, then key moved"
 
 
 def test_update_rejects_unknown_ops() -> None:

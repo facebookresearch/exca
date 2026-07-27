@@ -59,29 +59,27 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-_Move = tuple[str, str]
-
-
-def _move_from_mapping(val: dict[str, tp.Any]) -> _Move | None:
-    moves = []
-    for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
-        if op not in val:
-            continue
-        anchor = val[op]
-        if not isinstance(anchor, str):
-            raise TypeError(f"{op!r} expects a key name, got {anchor!r}")
-        moves.append((op, anchor))
-    if len(moves) > 1:
+def _apply_move(obj: dict[str, tp.Any], key: str) -> None:
+    """Reorder obj to place key =before=/=after= the anchor named by the op in
+    obj[key]. A missing anchor leaves the op in place for a later update.
+    """
+    sub = obj[key]
+    present = [op for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in sub]
+    if len(present) > 1:
         raise ValueError(
             f"Use either {ConfDict.ops.BEFORE!r} or {ConfDict.ops.AFTER!r}, not both"
         )
-    return moves[0] if moves else None
-
-
-def _move_key(obj: dict[str, tp.Any], key: str, move: _Move) -> None:
-    op, anchor = move
+    if not present:
+        return
+    op = present[0]
+    anchor = sub[op]
+    if not isinstance(anchor, str):
+        raise TypeError(f"{op!r} expects a key name, got {anchor!r}")
     if anchor == key:
         raise ValueError(f"Cannot move {key!r} relative to itself")
+    if anchor not in obj:
+        return
+    dict.pop(sub, op, None)
     value = dict.pop(obj, key)
     items = list(obj.items())
     obj.clear()
@@ -115,7 +113,6 @@ def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
 
 
 def _update_mapping(obj: dict[str, tp.Any], key: str, val: dict[str, tp.Any]) -> None:
-    move = _move_from_mapping(val)
     if isinstance(obj[key], ConfDict):
         sub = obj[key]
     elif isinstance(obj[key], dict):
@@ -126,12 +123,7 @@ def _update_mapping(obj: dict[str, tp.Any], key: str, val: dict[str, tp.Any]) ->
         sub = ConfDict()
         dict.__setitem__(obj, key, sub)
     sub._update(val)
-    if move is not None and move[1] in obj:
-        _move_key(obj, key, move)
-        value = obj[key]
-        if isinstance(value, dict):
-            op, _ = move
-            dict.pop(value, op, None)
+    _apply_move(obj, key)
 
 
 def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
@@ -492,6 +484,10 @@ class UidMaker:
                 self.hash = h
             typestr = "array"
         elif isinstance(data, dict):
+            for k in data:
+                # _to_simplified_dict may fuse an op into a dotted key (a.=op=)
+                if "=" in k and any(ConfDict.ops.is_op(p) for p in k.split(".")):
+                    raise ValueError(f"Cannot compute uid on unresolved config {k!r}")
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
             if version > 2:
                 if isinstance(data, OrderedDict):
