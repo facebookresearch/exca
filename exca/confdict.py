@@ -60,9 +60,6 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
 
 
 def _apply_move(obj: dict[str, tp.Any], key: str) -> None:
-    """Reorder obj to place key =before=/=after= the anchor named by the op in
-    obj[key]. A missing anchor leaves the op in place for a later update.
-    """
     sub = obj[key]
     present = [op for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in sub]
     if len(present) > 1:
@@ -163,7 +160,8 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
         dict.pop(obj, p, None)
         return
-    ConfDict.ops.is_op(val)
+    if ConfDict.ops.is_op(val) and val != ConfDict.ops.DELETE:
+        raise ValueError(f"Unexpected ConfDict op value {val!r}")
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore
@@ -288,6 +286,8 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         Dicts merge by default. :code:`ConfDict.ops.REPLACE` replaces a mapping,
         :code:`ConfDict.ops.DELETE` removes a key, and
         :code:`ConfDict.ops.BEFORE` / :code:`ConfDict.ops.AFTER` move a key.
+        Patches apply top to bottom: each mapping entry merges content, then
+        moves itself if its anchor exists. Otherwise, the op remains.
 
         Example
         -------

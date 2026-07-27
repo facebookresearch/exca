@@ -185,22 +185,6 @@ def test_update_moves_apply_eagerly() -> None:
     assert list(data["steps"]) == ["a", "c", "b"]
 
 
-def test_update_keeps_move_when_anchor_is_added_later() -> None:
-    data = ConfDict({"steps": {"read": {}}})
-
-    data.update(
-        {
-            "steps": {
-                "resample": {ConfDict.ops.AFTER: "project"},
-                "project": {"t": "project"},
-            }
-        }
-    )
-
-    assert list(data["steps"]) == ["read", "resample", "project"]
-    assert data["steps.resample.=after="] == "project"
-
-
 def test_update_delete_happens_before_later_move() -> None:
     data = ConfDict({"steps": {"a": {}, "c": {}, "b": {}}})
 
@@ -218,21 +202,26 @@ def test_update_delete_happens_before_later_move() -> None:
 
 
 def test_update_resolves_dangling_move_when_key_is_updated_again() -> None:
-    data = ConfDict({"steps": {"read": {}, "resample": {ConfDict.ops.AFTER: "project"}}})
-    assert list(data["steps"]) == ["read", "resample"], "anchor absent -> dangling"
+    data = ConfDict({"steps": {"read": {}}})
+    data.update(
+        {
+            "steps": {
+                "resample": {ConfDict.ops.AFTER: "project"},
+                "project": {"t": "project"},
+            }
+        }
+    )
 
-    # adding the anchor alone does not resolve it: resample must be merged again
-    data.update({"steps": {"project": {}}})
     assert list(data["steps"]) == ["read", "resample", "project"]
+    assert data["steps.resample.=after="] == "project"
 
     data.update({"steps": {"resample": {"t": 1}}})
     assert list(data["steps"]) == ["read", "project", "resample"]
-    assert data["steps.resample"] == {"t": 1}, "op consumed once applied"
+    assert data["steps.resample"] == {"t": 1}
 
 
 def test_to_uid_rejects_unresolved_move() -> None:
     data = ConfDict({"steps": {"read": {}, "resample": {ConfDict.ops.AFTER: "project"}}})
-    assert data.to_yaml()  # dangling ops stay renderable
     with pytest.raises(ValueError, match="unresolved config"):
         data.to_uid()
 
@@ -242,9 +231,12 @@ def test_to_uid_rejects_unresolved_move() -> None:
     [
         {"steps": {"a": {ConfDict.ops.BEFORE: "b", ConfDict.ops.AFTER: "b"}}},
         {"steps": {"a": {ConfDict.ops.AFTER: "a"}}},
+        {"steps": {"a": ConfDict.ops.REPLACE}},
+        {"steps": {"a": ConfDict.ops.BEFORE}},
+        {"steps": {"a": ConfDict.ops.AFTER}},
     ],
 )
-def test_update_move_errors(update: dict[str, tp.Any]) -> None:
+def test_update_op_errors(update: dict[str, tp.Any]) -> None:
     data = ConfDict({"steps": {"a": {}, "b": {}}})
     with pytest.raises(ValueError):
         data.update(update)
@@ -255,7 +247,7 @@ def test_update_combines_replace_and_move() -> None:
     update = {ConfDict.ops.REPLACE: True, ConfDict.ops.AFTER: "b", "z": 9}
     data.update({"steps": {"a": update}})
     assert list(data["steps"]) == ["b", "a"]
-    assert data["steps.a"] == {"z": 9}, "content replaced, then key moved"
+    assert data["steps.a"] == {"z": 9}
 
 
 def test_update_rejects_unknown_ops() -> None:
@@ -264,8 +256,6 @@ def test_update_rejects_unknown_ops() -> None:
         ConfDict.from_yaml("steps:\n  =unknown=: a\n")
     with pytest.raises(ValueError, match="Unknown ConfDict op"):
         data.update({"steps": {"a": "=unknown="}})
-    data.update({"steps": {"a": ConfDict.ops.BEFORE}})
-    assert data["steps.a"] == ConfDict.ops.BEFORE
 
 
 @pytest.mark.parametrize(
