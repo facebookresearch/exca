@@ -191,7 +191,9 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
       in which case they replace the content. The scalar value
       :code:`ConfDict.ops.DELETE` deletes a key. The keys
       :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` move a key
-      within the containing mapping.
+      within the containing mapping (see :code:`ConfDict.update`) for an example).
+    - Patches apply top to bottom: each mapping entry merges content, then
+      moves itself if its anchor exists. Otherwise, the op remains.
     """
 
     LATEST_UID_VERSION = 3
@@ -281,13 +283,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     def update(  # type: ignore
         self, mapping: Mapping | None = None, **kwargs: tp.Any
     ) -> None:
-        """Recursively update the config.
-
-        Dicts merge by default. :code:`ConfDict.ops.REPLACE` replaces a mapping,
-        :code:`ConfDict.ops.DELETE` removes a key, and
-        :code:`ConfDict.ops.BEFORE` / :code:`ConfDict.ops.AFTER` move a key.
-        Patches apply top to bottom: each mapping entry merges content, then
-        moves itself if its anchor exists. Otherwise, the op remains.
+        """Apply a patch using the ConfDict merge rules.
 
         Example
         -------
