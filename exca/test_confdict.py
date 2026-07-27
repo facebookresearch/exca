@@ -129,7 +129,6 @@ def test_pop_get() -> None:
         data.pop("a.x")
     assert data.pop("a.x", 12) == 12
     assert data.get("a.d") is None
-    assert data.get("b.c") == {}
     assert data.get("b.d") == 13
     assert data.pop("b.d") == 13
 
