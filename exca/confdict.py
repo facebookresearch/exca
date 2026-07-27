@@ -37,6 +37,9 @@ class ConfDictOps:
 
     @classmethod
     def is_op(cls, value: tp.Any) -> tp.TypeGuard[str]:
+        """True for a known op, False for a non-op token, and raises on an
+        op-shaped string (:code:`=...=`) that is not a known op (typo guard).
+        """
         if not isinstance(value, str) or cls._PATTERN.fullmatch(value) is None:
             return False
         if value not in {cls.REPLACE, cls.DELETE, cls.BEFORE, cls.AFTER}:
@@ -98,29 +101,13 @@ def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
         sub = {x: _propagate_confdict(y, replace_dicts=True) for x, y in obj.items()}
         return OrderedDict(sub)
     if replace_dicts and isinstance(obj, dict):
-        sub = ConfDict()
-        sub._update(obj)
-        return sub
+        return ConfDict(obj)
     if _is_seq(obj):
         Container = obj.__class__
         return Container([_propagate_confdict(v, replace_dicts=True) for v in obj])  # type: ignore
     if isinstance(obj, dict):
         return obj
     return obj
-
-
-def _update_mapping(obj: dict[str, tp.Any], key: str, val: dict[str, tp.Any]) -> None:
-    if isinstance(obj[key], ConfDict):
-        sub = obj[key]
-    elif isinstance(obj[key], dict):
-        sub = ConfDict()
-        sub._update(obj[key])
-        dict.__setitem__(obj, key, sub)
-    else:
-        sub = ConfDict()
-        dict.__setitem__(obj, key, sub)
-    sub._update(val)
-    _apply_move(obj, key)
 
 
 def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
@@ -166,9 +153,14 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     if _is_seq(obj):
         obj[p] = val  # type: ignore
         return
-    ConfDict.ops.is_op(p)
+    ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
-        _update_mapping(obj, p, val)
+        sub = obj[p]
+        if not isinstance(sub, ConfDict):
+            sub = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
+            dict.__setitem__(obj, p, sub)
+        sub.update(val)
+        _apply_move(obj, p)
     else:
         dict.__setitem__(obj, p, val)
 
@@ -202,7 +194,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
-        self._update(mapping, **kwargs)
+        self.update(mapping, **kwargs)
 
     @classmethod
     def from_model(
@@ -297,17 +289,13 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         >>> cfg
         {'b': {'x': 2, 'y': 12}, 'a': {'y': 4}}
         """
-        self._update(mapping, **kwargs)
-
-    def _update(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         if mapping is not None:
             if not isinstance(mapping, abc.Mapping):
                 mapping = dict(mapping)
             kwargs.update(mapping)
         if not kwargs:
             return
-        if kwargs.get(ConfDict.ops.REPLACE, False) and self:
-            kwargs.pop(ConfDict.ops.REPLACE)
+        if self and kwargs.pop(ConfDict.ops.REPLACE, False):
             self.clear()
         for key, val in kwargs.items():
             if not isinstance(key, str):
@@ -344,7 +332,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         if not isinstance(out, dict):
             raise TypeError(f"Cannot convert non-dict yaml:\n{out}\n(from {input_})")
         conf = ConfDict()
-        conf._update(out)
+        conf.update(out)
         return conf
 
     def to_yaml(self, filepath: Path | str | None = None) -> str:
