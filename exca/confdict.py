@@ -131,14 +131,6 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             else:
                 dict.__setitem__(obj, p, sub)
         _set_item(sub, rest[0], val)
-        if (
-            existed
-            and val == ConfDict.ops.DELETE
-            and isinstance(obj, dict)
-            and isinstance(sub, dict)
-            and not sub
-        ):
-            dict.pop(obj, p, None)
         return
     # final part
     val = _propagate_confdict(val, replace_dicts=False)

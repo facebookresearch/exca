@@ -172,6 +172,9 @@ item:
     data.update({"item": grid.flat()["item"][0]})
     assert data["item"] == {"name": "new"}
 
+    data.update({"item.name": ConfDict.ops.DELETE})
+    assert data["item"] == {}
+
 
 @pytest.mark.parametrize(
     "data",
