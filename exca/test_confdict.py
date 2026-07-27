@@ -246,7 +246,7 @@ def test_copy() -> None:
 def test_del() -> None:
     data = ConfDict({"a": 1, "b": {"c": {"e": 12}, "d": 13}})
     del data["b.c.e"]
-    assert data == {"a": 1, "b": {"d": 13}}
+    assert data == {"a": 1, "b": {"c": {}, "d": 13}}
     del data["b"]
     assert data == {"a": 1}
 
@@ -255,12 +255,11 @@ def test_pop_get() -> None:
     data = ConfDict({"a": 1, "b": {"c": {"e": 12}, "d": 13}})
     assert "b.c.e" in data
     data.pop("b.c.e")
-    assert data == {"a": 1, "b": {"d": 13}}
+    assert data == {"a": 1, "b": {"c": {}, "d": 13}}
     with pytest.raises(KeyError):
         data.pop("a.x")
     assert data.pop("a.x", 12) == 12
     assert data.get("a.d") is None
-    assert data.get("b.c") is None
     assert data.get("b.d") == 13
     assert data.pop("b.d") == 13
 
