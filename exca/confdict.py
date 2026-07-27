@@ -59,90 +59,90 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-def _propagate_confdict(
-    obj: tp.Any, replace_dicts: bool = False, *, apply_ops: bool
-) -> tp.Any:
-    """Recursively cast content of list and ordered dict to to confdicts"""
-    # Note: avoid replacing native dicts as they may contain ConfDict.ops.REPLACE tag
-    # which needs to be processed later on
-    params = dict(replace_dicts=True, apply_ops=apply_ops)
-    if isinstance(obj, OrderedDict):
-        sub = {x: _propagate_confdict(y, **params) for x, y in obj.items()}
-        return OrderedDict(sub)
-    if replace_dicts and isinstance(obj, dict):
-        sub = ConfDict()
-        sub._update(obj, apply_ops=apply_ops)
-        return sub
-    if _is_seq(obj):
-        Container = obj.__class__
-        return Container([_propagate_confdict(v, **params) for v in obj])  # type: ignore
-    if isinstance(obj, dict):
-        return obj
-    if isinstance(obj, ConfDict):
-        return obj
-    return obj
+_Move = tuple[str, str]
 
 
-def _move_key(
-    obj: dict[str, tp.Any], key: str, *, before: str | None, after: str | None
-) -> None:
-    if before is not None and after is not None:
+def _move_from_mapping(val: dict[str, tp.Any]) -> _Move | None:
+    moves = []
+    for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
+        if op not in val:
+            continue
+        anchor = val[op]
+        if not isinstance(anchor, str):
+            raise TypeError(f"{op!r} expects a key name, got {anchor!r}")
+        moves.append((op, anchor))
+    if len(moves) > 1:
         raise ValueError(
             f"Use either {ConfDict.ops.BEFORE!r} or {ConfDict.ops.AFTER!r}, not both"
         )
-    anchor = before if before is not None else after
-    if anchor is None:
-        return
+    return moves[0] if moves else None
+
+
+def _move_key(obj: dict[str, tp.Any], key: str, move: _Move) -> None:
+    op, anchor = move
     if anchor == key:
         raise ValueError(f"Cannot move {key!r} relative to itself")
-    if anchor not in obj:
-        raise KeyError(f"Cannot move {key!r}: anchor {anchor!r} is missing")
     value = dict.pop(obj, key)
     items = list(obj.items())
     obj.clear()
     for name, item in items:
-        if before is not None and name == anchor:
-            obj[key] = value
-        obj[name] = item
-        if after is not None and name == anchor:
-            obj[key] = value
+        if op == ConfDict.ops.BEFORE and name == anchor:
+            dict.__setitem__(obj, key, value)
+        dict.__setitem__(obj, name, item)
+        if op == ConfDict.ops.AFTER and name == anchor:
+            dict.__setitem__(obj, key, value)
 
 
-def _update_mapping(
-    obj: dict[str, tp.Any], key: str, val: dict[str, tp.Any], *, apply_ops: bool
-) -> None:
-    val = dict(val)
-    before: str | None = None
-    after: str | None = None
-    if apply_ops and ConfDict.ops.BEFORE in val:
-        before = val.pop(ConfDict.ops.BEFORE)
-        if not isinstance(before, str):
-            raise TypeError(f"{ConfDict.ops.BEFORE!r} expects a key name, got {before!r}")
-    if apply_ops and ConfDict.ops.AFTER in val:
-        after = val.pop(ConfDict.ops.AFTER)
-        if not isinstance(after, str):
-            raise TypeError(f"{ConfDict.ops.AFTER!r} expects a key name, got {after!r}")
-    if val:
-        if isinstance(obj[key], ConfDict):
-            sub = obj[key]
-        elif isinstance(obj[key], dict):
-            sub = ConfDict()
-            sub._update(obj[key], apply_ops=apply_ops)
-            dict.__setitem__(obj, key, sub)
-        else:
-            sub = ConfDict()
-            dict.__setitem__(obj, key, sub)
-        sub._update(val, apply_ops=apply_ops)
-    _move_key(obj, key, before=before, after=after)
+def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
+    """Recursively cast content of list and ordered dict to to confdicts"""
+    # Note: avoid replacing native dicts as they may contain ConfDict.ops.REPLACE tag
+    # which needs to be processed later on
+    if isinstance(obj, ConfDict):
+        return obj
+    if isinstance(obj, OrderedDict):
+        sub = {x: _propagate_confdict(y, replace_dicts=True) for x, y in obj.items()}
+        return OrderedDict(sub)
+    if replace_dicts and isinstance(obj, dict):
+        sub = ConfDict()
+        sub._update(obj)
+        return sub
+    if _is_seq(obj):
+        Container = obj.__class__
+        return Container([_propagate_confdict(v, replace_dicts=True) for v in obj])  # type: ignore
+    if isinstance(obj, dict):
+        return obj
+    return obj
 
 
-def _set_item(obj: tp.Any, key: str, val: tp.Any, *, apply_ops: bool) -> None:
+def _update_mapping(obj: dict[str, tp.Any], key: str, val: dict[str, tp.Any]) -> None:
+    move = _move_from_mapping(val)
+    if isinstance(obj[key], ConfDict):
+        sub = obj[key]
+    elif isinstance(obj[key], dict):
+        sub = ConfDict()
+        sub._update(obj[key])
+        dict.__setitem__(obj, key, sub)
+    else:
+        sub = ConfDict()
+        dict.__setitem__(obj, key, sub)
+    sub._update(val)
+    if move is not None and move[1] in obj:
+        _move_key(obj, key, move)
+        value = obj[key]
+        if isinstance(value, dict):
+            op, _ = move
+            dict.pop(value, op, None)
+
+
+def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     """Internal recursive setitem on ConfDict/list"""
     p, *rest = key.split(".", maxsplit=1)
     if isinstance(obj, dict):
+        existed = p in obj
         sub = obj.setdefault(p, ConfDict())
     elif _is_seq(obj) and p.isdigit():
         p = int(p)  # type: ignore
+        existed = True
         sub = obj[p]  # type: ignore
     else:
         raise TypeError(f"Cannot handle key {p!r} on existing container {obj!r}")
@@ -154,9 +154,9 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any, *, apply_ops: bool) -> None:
                 obj[p] = sub  # type: ignore
             else:
                 dict.__setitem__(obj, p, sub)
-        _set_item(sub, rest[0], val, apply_ops=apply_ops)
+        _set_item(sub, rest[0], val)
         if (
-            apply_ops
+            existed
             and val == ConfDict.ops.DELETE
             and isinstance(obj, dict)
             and isinstance(sub, dict)
@@ -165,22 +165,20 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any, *, apply_ops: bool) -> None:
             dict.pop(obj, p, None)
         return
     # final part
-    val = _propagate_confdict(val, replace_dicts=False, apply_ops=apply_ops)
-    if apply_ops and val == ConfDict.ops.DELETE:
+    val = _propagate_confdict(val, replace_dicts=False)
+    if val == ConfDict.ops.DELETE and existed:
         if _is_seq(obj):
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
         dict.pop(obj, p, None)
         return
-    if apply_ops and ConfDict.ops.is_op(val):
-        raise ValueError(f"Unexpected ConfDict op value {val!r}")
+    ConfDict.ops.is_op(val)
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore
         return
-    if apply_ops and ConfDict.ops.is_op(p):
-        raise ValueError(f"Unexpected ConfDict op key {p!r}")
+    ConfDict.ops.is_op(p)
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
-        _update_mapping(obj, p, val, apply_ops=apply_ops)
+        _update_mapping(obj, p, val)
     else:
         dict.__setitem__(obj, p, val)
 
@@ -212,7 +210,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
-        self._update(mapping, apply_ops=True, **kwargs)
+        self._update(mapping, **kwargs)
 
     @classmethod
     def from_model(
@@ -243,7 +241,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     def __setitem__(self, key: str, val: tp.Any) -> None:
         if not isinstance(key, str):
             raise TypeError(f"ConfDict only supports str keys, got {key!r}")
-        _set_item(self, key, val, apply_ops=True)
+        _set_item(self, key, val)
 
     def __getitem__(self, key: str) -> tp.Any:
         parts = key.split(".")
@@ -311,23 +309,22 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             cfg.update({"a": {ConfDict.ops.AFTER: "b"}, "b.x": ConfDict.ops.DELETE})
             >> {"b": {"y": 12}, "a": {"y": 4}}
         """
-        self._update(mapping, apply_ops=True, **kwargs)
+        self._update(mapping, **kwargs)
 
-    def _update(
-        self, mapping: Mapping | None = None, *, apply_ops: bool, **kwargs: tp.Any
-    ) -> None:
+    def _update(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         if mapping is not None:
             if not isinstance(mapping, abc.Mapping):
                 mapping = dict(mapping)
             kwargs.update(mapping)
         if not kwargs:
             return
-        if apply_ops and kwargs.pop(ConfDict.ops.REPLACE, False):
+        if kwargs.get(ConfDict.ops.REPLACE, False) and self:
+            kwargs.pop(ConfDict.ops.REPLACE)
             self.clear()
         for key, val in kwargs.items():
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
-            _set_item(self, key, val, apply_ops=apply_ops)
+            _set_item(self, key, val)
 
     def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as
@@ -342,8 +339,6 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     def from_yaml(
         cls,
         yaml: str | Path | tp.IO[str] | tp.IO[bytes],
-        *,
-        apply_ops: bool = True,
     ) -> "ConfDict":
         """Loads a ConfDict from a yaml string/filepath/file handle."""
         input_ = yaml
@@ -361,7 +356,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         if not isinstance(out, dict):
             raise TypeError(f"Cannot convert non-dict yaml:\n{out}\n(from {input_})")
         conf = ConfDict()
-        conf._update(out, apply_ops=apply_ops)
+        conf._update(out)
         return conf
 
     def to_yaml(self, filepath: Path | str | None = None) -> str:

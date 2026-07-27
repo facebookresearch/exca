@@ -90,44 +90,131 @@ def test_update_ops_example() -> None:
 
 
 def test_update_delete_and_move() -> None:
-    data = ConfDict.from_yaml(
-        """
+    base = """
         steps:
           read.t: read
           clean.t: clean
           resample.t: resample
           pad.t: pad
         """
+    data = ConfDict.from_yaml(base)
+    patch = ConfDict.from_yaml(
+        """
+        steps:
+          clean: =delete=
+          project:
+            =after=: read
+            t: project
+          resample:
+            =after=: project
+            frequency: 2
+          pad:
+            =before=: resample
+        """
     )
-    data.update(
-        ConfDict.from_yaml(
-            """
-            steps:
-              clean: =delete=
-              project:
-                =after=: read
-                t: project
-              resample:
-                =after=: project
-                frequency: 2
-              pad:
-                =before=: resample
-            """,
-            apply_ops=False,
-        )
+    assert (
+        patch.to_yaml()
+        == """steps:
+  clean: =delete=
+  project:
+    =after=: read
+    t: project
+  pad: {}
+  resample.frequency: 2
+"""
     )
+
+    data.update(patch)
 
     assert (
         data.to_yaml()
         == """steps:
   read.t: read
   project.t: project
-  pad.t: pad
   resample:
     t: resample
     frequency: 2
+  pad.t: pad
 """
     )
+    data = ConfDict.from_yaml(base)
+    data.update(
+        ConfDict.from_yaml(
+            """
+            steps:
+              resample.t: resample
+              clean.t: clean
+            """
+        )
+    )
+    assert (
+        data.to_yaml()
+        == """steps:
+  read.t: read
+  clean.t: clean
+  resample.t: resample
+  pad.t: pad
+"""
+    )
+
+
+def test_update_keeps_deferred_ops_in_lists() -> None:
+    base = ConfDict({"item": {"name": "old", "size": 1}})
+    grid = ConfDict({"seed": [33]})
+
+    grid.update({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
+    element = grid.flat()["item"][0]
+    assert element == {ConfDict.ops.REPLACE: True, "name": "new"}
+
+    base.update({"item": element})
+    assert base["item"] == {"name": "new"}
+
+
+def test_update_moves_apply_eagerly() -> None:
+    data = ConfDict({"steps": {"a": {}, "b": {}, "c": {}}})
+
+    data.update(
+        {
+            "steps": {
+                "a": {ConfDict.ops.AFTER: "b"},
+                "b": {ConfDict.ops.AFTER: "c"},
+            }
+        }
+    )
+
+    assert list(data["steps"]) == ["a", "c", "b"]
+
+
+def test_update_keeps_move_when_anchor_is_added_later() -> None:
+    data = ConfDict({"steps": {"read": {}}})
+
+    data.update(
+        {
+            "steps": {
+                "resample": {ConfDict.ops.AFTER: "project"},
+                "project": {"t": "project"},
+            }
+        }
+    )
+
+    assert list(data["steps"]) == ["read", "resample", "project"]
+    assert data["steps.resample.=after="] == "project"
+
+
+def test_update_delete_happens_before_later_move() -> None:
+    data = ConfDict({"steps": {"a": {}, "c": {}, "b": {}}})
+
+    data.update(
+        {
+            "steps": {
+                "b": ConfDict.ops.DELETE,
+                "a": {ConfDict.ops.AFTER: "b"},
+            }
+        }
+    )
+
+    assert list(data["steps"]) == ["a", "c"]
+    assert data["steps.a.=after="] == "b"
 
 
 @pytest.mark.parametrize(
@@ -135,25 +222,22 @@ def test_update_delete_and_move() -> None:
     [
         {"steps": {"a": {ConfDict.ops.BEFORE: "b", ConfDict.ops.AFTER: "b"}}},
         {"steps": {"a": {ConfDict.ops.AFTER: "a"}}},
-        {"steps": {"a": {ConfDict.ops.AFTER: "missing"}}},
     ],
 )
 def test_update_move_errors(update: dict[str, tp.Any]) -> None:
     data = ConfDict({"steps": {"a": {}, "b": {}}})
-    with pytest.raises((KeyError, ValueError)):
+    with pytest.raises(ValueError):
         data.update(update)
 
 
 def test_update_rejects_unknown_ops() -> None:
     data = ConfDict({"steps": {"a": {}}})
-    patch = ConfDict.from_yaml("steps:\n  =unknown=: a\n", apply_ops=False)
-    assert patch["steps.=unknown="] == "a"
     with pytest.raises(ValueError, match="Unknown ConfDict op"):
-        data.update(patch)
+        ConfDict.from_yaml("steps:\n  =unknown=: a\n")
     with pytest.raises(ValueError, match="Unknown ConfDict op"):
         data.update({"steps": {"a": "=unknown="}})
-    with pytest.raises(ValueError, match="Unexpected ConfDict op"):
-        data.update({"steps": {"a": ConfDict.ops.BEFORE}})
+    data.update({"steps": {"a": ConfDict.ops.BEFORE}})
+    assert data["steps.a"] == ConfDict.ops.BEFORE
 
 
 @pytest.mark.parametrize(
