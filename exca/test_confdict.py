@@ -109,46 +109,46 @@ def test_update_delete_and_move() -> None:
         """
     data = ConfDict.from_yaml(base)
     patch = ConfDict.from_yaml(
-        """
+        f"""
         steps:
-          clean: =delete=
+          clean: {ConfDict.ops.DELETE}
           project:
-            =after=: read
+            {ConfDict.ops.AFTER}: read
             t: project
           resample:
-            =after=: project
+            {ConfDict.ops.AFTER}: project
             frequency: 2
           pad:
-            =before=: resample
+            {ConfDict.ops.BEFORE}: resample
           late:
-            =after=: missing
+            {ConfDict.ops.AFTER}: missing
         """
     )
     assert (
         patch.to_yaml()
-        == """steps:
-  clean: =delete=
+        == f"""steps:
+  clean: {ConfDict.ops.DELETE}
   project:
-    =after=: read
+    {ConfDict.ops.AFTER}: read
     t: project
-  pad: {}
+  pad: {{}}
   resample.frequency: 2
-  late.=after=: missing
+  late.{ConfDict.ops.AFTER}: missing
 """
-    )
+    ), "patch should have resolved eagerly what could be"
 
     data.update(patch)
 
     assert (
         data.to_yaml()
-        == """steps:
+        == f"""steps:
   read.t: read
   project.t: project
   resample:
     t: resample
     frequency: 2
   pad.t: pad
-  late.=after=: missing
+  late.{ConfDict.ops.AFTER}: missing
 item:
   name: old
   size: 1
@@ -171,7 +171,6 @@ item:
     grid = ConfDict({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
     data.update({"item": grid.flat()["item"][0]})
     assert data["item"] == {"name": "new"}
-
     data.update({"item.name": ConfDict.ops.DELETE})
     assert data["item"] == {}
 
