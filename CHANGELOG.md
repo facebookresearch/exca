@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `ConfDict`: `pop`/`del` preserve emptied parent mappings instead of pruning them; an empty mapping is now a value like any other. This only affects uids of configs using a nested `exclude_from_cache_uid` that empties a parent.
+
 ## 0.5.28 - 26-07-20
 
 - `steps`: reduced `run_many` overhead by reusing warm cache-backed carriers in composed chains and fusing consecutive inline per-item steps. [#306, #307]
