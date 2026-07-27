@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- `ConfDict`: `pop`/`del` preserve emptied parent mappings instead of pruning them; an empty mapping is now a value like any other. This only affects uids of configs using a nested `exclude_from_cache_uid` that empties a parent.
+- `ConfDict`: `pop`/`del` no longer prune emptied parent mappings; an empty mapping is a value like any other. [#311]
 
 ## 0.5.28 - 26-07-20
 
