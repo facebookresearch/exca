@@ -626,3 +626,24 @@ def test_fast_state_no_fallback() -> None:
     private = model.infra.__pydantic_private__
     assert isinstance(private, dict)
     assert "_state" in private
+
+
+class PruneSub(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    x: int = 0
+
+
+class PruneCfg(pydantic.BaseModel):
+    infra: TaskInfra = TaskInfra(version="1")
+    sub: PruneSub = PruneSub()
+    opt_sub: PruneSub | None = None
+
+    @infra.apply(exclude_from_cache_uid=("sub.x", "opt_sub.x"))
+    def process(self) -> int:
+        return 0
+
+
+def test_uid_empty_dict_current_convention() -> None:  # for documentation, could evolve
+    cfg = PruneCfg(sub={"x": 9}, opt_sub={"x": 9})  # type: ignore
+    uid_cfg = cfg.infra.config(uid=True, exclude_defaults=True)
+    assert uid_cfg == {"sub": {}, "opt_sub": {}}

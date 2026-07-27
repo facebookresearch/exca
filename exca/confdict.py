@@ -179,11 +179,6 @@ class ConfDict(dict[str, tp.Any]):
             raise KeyError(key)
         else:
             return default
-
-        if not sub:  # trigger update as subconfig may have disappeared
-            flat = self.flat()
-            self.clear()
-            self.update(flat)
         return out
 
     def update(  # type: ignore

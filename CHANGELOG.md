@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `ConfDict`: `pop`/`del` no longer prune emptied parent mappings; an empty mapping is a value like any other. [#311]
+
 ## 0.5.28 - 26-07-20
 
 - `steps`: reduced `run_many` overhead by reusing warm cache-backed carriers in composed chains and fusing consecutive inline per-item steps. [#306, #307]
