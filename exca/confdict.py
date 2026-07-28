@@ -165,7 +165,8 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
 
 
 class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
-    """Dictionary which breaks into sub-dictionnaries on "." as in a config (see example)
+    """Dictionary which breaks into sub-dictionnaries on "." as in a config (see example),
+    and merges recursively.
     The data can be specified either through "." keywords or directly through sub-dicts
     or a mixture of both.
     Lists of dictionaries are processed as list of ConfDict
@@ -178,13 +179,8 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     Note
     ----
     - This is designed for configurations, so it probably does not scale well to 100k+ keys
-    - dicts are merged except if containing the key :code:`ConfDict.ops.REPLACE`,
-      in which case they replace the content. The scalar value
-      :code:`ConfDict.ops.DELETE` deletes a key. The keys
-      :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` move a key
-      within the containing mapping (see :code:`ConfDict.update`) for an example).
-    - Patches apply top to bottom: each mapping entry merges content, then
-      moves itself if its anchor exists. Otherwise, the op remains.
+    - Updates apply patches: mappings that merge dict values recursively and
+      may contain operation tokens. See :code:`ConfDict.update`.
     """
 
     LATEST_UID_VERSION = 3
@@ -270,6 +266,21 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         self, mapping: Mapping | None = None, **kwargs: tp.Any
     ) -> None:
         """Apply a patch using the ConfDict merge rules.
+
+        Rules
+        -----
+        - dict values merge recursively.
+        - non-dict values replace existing values.
+        - operations (see below) apply top to bottom; unresolved ops stay in the config until
+          applicable.
+
+        Operations
+        -----------
+        - :code:`ConfDict.ops.DELETE` as value to a key deletes the key altogether.
+        - :code:`ConfDict.ops.REPLACE` as key with True value replaces the whole
+          existing content with the new one instead of merging recursively.
+        - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
+          relative to an existing sibling.
 
         Example
         -------
