@@ -14,10 +14,11 @@ from pathlib import Path
 
 import pydantic
 import pytest
+import yaml
 
 import exca
 
-from . import utils
+from . import steps, utils
 from .confdict import ConfDict
 from .utils import ShortItemUid, to_dict
 
@@ -119,12 +120,12 @@ def test_discriminators(caplog: tp.Any) -> None:
         seq=[[{"uid": "D2"}, {"uid": "D1"}]],  # type: ignore
     )
     expected = """inst.uid: D2
+something_else: 12
 seq:
 - - uid: D2
-  - anything: 12
+  - uid: D1
+    anything: 12
     sub.uid: D2
-    uid: D1
-something_else: 12
 stuff: []
 """
     # check uid of subinstance (should not have discriminator)
@@ -134,10 +135,10 @@ stuff: []
     out = ConfDict.from_model(d).to_yaml()
     assert out == expected
     expected = """inst.uid: D2
+something_else: 12
 seq:
 - - uid: D2
   - uid: D1
-something_else: 12
 """
     out = ConfDict.from_model(d, exclude_defaults=True).to_yaml()
     assert not caplog.records
@@ -585,6 +586,26 @@ def test_check_configs(tmp_path: Path) -> None:
     utils.ConfigDump(model=models).check_and_write(folder2)
     content = (folder2 / "uid.yaml").read_text("utf8")
     assert content == "- x: 1\n- x: 2\n"
+
+
+class OrderYamlStep(steps.Step):
+    b: int = 2
+    a: int = 1
+
+    def _run(self, value: int = 0) -> int:
+        return value + self.a + self.b
+
+
+def test_check_configs_accepts_uid_yaml_key_order_change(tmp_path: Path) -> None:
+    step = OrderYamlStep(a=3, b=5, infra=steps.backends.Cached(folder=tmp_path))
+    assert step.run() == 8
+
+    uid_file = step.lookup().paths.step_folder / "uid.yaml"
+    current = uid_file.read_text("utf8")
+    uid_file.write_text(yaml.safe_dump(yaml.safe_load(current), sort_keys=True))
+    assert uid_file.read_text("utf8") != current
+
+    assert step.clone().run() == 8
 
 
 def test_check_configs_concurrently(tmp_path: Path) -> None:

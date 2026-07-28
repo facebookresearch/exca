@@ -704,7 +704,7 @@ class ConfigDump:
         data = getattr(self, name.replace("-", "_"))
         if hasattr(data, "to_yaml"):
             return data.to_yaml()  # ConfDict with OrderedDict support
-        return _yaml.safe_dump(data, sort_keys=True)
+        return _yaml.safe_dump(data, sort_keys=False)
 
     def _error(self, msg: str) -> RuntimeError:
         return RuntimeError(f"{msg}\n\n(this is for object: {self.model!r})")
@@ -739,16 +739,23 @@ class ConfigDump:
                 corrupted.add(name)
                 return None
 
-        # uid.yaml must match exactly (cache collision detection)
+        # uid.yaml must match (cache collision detection)
         prev_uid = read_file("uid")
         curr_uid = self._to_yaml("uid")
         if prev_uid is not None and curr_uid != prev_uid:
-            diff = "\n".join(difflib.ndiff(curr_uid.splitlines(), prev_uid.splitlines()))
-            uid_str = as_confdict(self.uid).to_uid()
-            raise self._error(
-                f"Inconsistent uid config for {uid_str} in '{folder / 'uid.yaml'}':\n"
-                f"* got:\n{curr_uid!r}\n\n* but uid file contains:\n{prev_uid!r}\n\n(diff:\n{diff})"
-            )
+            sorted_uids = [  # ordering may differ (support convention change)
+                _yaml.safe_dump(_yaml.safe_load(uid), sort_keys=True)
+                for uid in (prev_uid, curr_uid)
+            ]
+            if sorted_uids[0] != sorted_uids[1]:
+                uid_str = as_confdict(self.uid).to_uid()
+                diff = "\n".join(
+                    difflib.ndiff(curr_uid.splitlines(), prev_uid.splitlines())
+                )
+                raise self._error(
+                    f"Inconsistent uid config for {uid_str} in '{folder / 'uid.yaml'}':\n"
+                    f"* got:\n{curr_uid!r}\n\n* but uid file contains:\n{prev_uid!r}\n\n(diff:\n{diff})"
+                )
 
         # Check full-uid for incompatible default changes
         prev_full = read_file("full-uid")

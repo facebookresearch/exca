@@ -134,8 +134,8 @@ def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
     expected_yaml = """steps:
 - type: Add
   value: 12.0
-- coeff: 3.0
-  type: Mult
+- type: Mult
+  coeff: 3.0
 - type: Add
   value: 12.0
 """

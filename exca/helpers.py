@@ -482,7 +482,8 @@ class DiscriminatedModel(pydantic.BaseModel):
         cls = type(self)
         key = cls._exca_discriminator_key
         name = cls.__name__
-        result.setdefault(key, name)
+        if key not in result:
+            return {key: name, **result}  # type first for readability
         # serialization can be reentrant in some pydantic version (not sure why)
         # so the field may be prepopulated
         if result[key] != name:

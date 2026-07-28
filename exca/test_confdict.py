@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 import dataclasses
 import decimal
+import doctest
 import fractions
 import glob
 import typing as tp
@@ -52,26 +53,173 @@ def test_simplified_dict_2() -> None:
 
 def test_update_override() -> None:
     data = ConfDict({"a": 12, "b": 12})
-    data.update({ConfDict.OVERRIDE: True, "d": 13})
+    data.update({ConfDict.ops.REPLACE: True, "d": 13})
     assert data == {"d": 13}
+
+
+def test_override_deprecation() -> None:
+    with pytest.warns(DeprecationWarning, match="ConfDict.ops.REPLACE"):
+        assert ConfDict.OVERRIDE == ConfDict.ops.REPLACE
 
 
 def test_update() -> None:
     data = ConfDict({"a": {"c": 12}, "b": {"c": 12}})
-    data.update(a={ConfDict.OVERRIDE: True, "d": 13}, b={"d": 13})
+    data.update(a={ConfDict.ops.REPLACE: True, "d": 13}, b={"d": 13})
     assert data == {"a": {"d": 13}, "b": {"c": 12, "d": 13}}
     # more complex
     data = ConfDict({"a": {"b": {"c": 12}}})
-    data.update(a={"b": {"d": 12, ConfDict.OVERRIDE: True}})
+    data.update(a={"b": {"d": 12, ConfDict.ops.REPLACE: True}})
     assert data == {"a": {"b": {"d": 12}}}
     # with compressed key
-    data.update(**{"a.b": {"e": 13, ConfDict.OVERRIDE: True}})
+    data.update(**{"a.b": {"e": 13, ConfDict.ops.REPLACE: True}})
     assert data == {"a": {"b": {"e": 13}}}
     # assignment
-    data["a"] = {"c": 1, "b": {"d": 12, ConfDict.OVERRIDE: True}}
+    data["a"] = {"c": 1, "b": {"d": 12, ConfDict.ops.REPLACE: True}}
     assert data == {"a": {"b": {"d": 12}, "c": 1}}
-    data["a.b"] = {"e": 15, ConfDict.OVERRIDE: True}
+    data["a.b"] = {"e": 15, ConfDict.ops.REPLACE: True}
     assert data == {"a": {"b": {"e": 15}, "c": 1}}
+
+
+def test_update_docstring_examples() -> None:
+    parser = doctest.DocTestParser()
+    runner = doctest.DocTestRunner()
+    docstring = ConfDict.update.__doc__
+    assert docstring is not None
+    test = parser.get_doctest(
+        docstring,
+        {"ConfDict": ConfDict},
+        "ConfDict.update",
+        None,
+        0,
+    )
+    result = runner.run(test)
+    assert not result.failed
+
+
+def test_update_delete_and_move() -> None:
+    base = """
+        steps:
+          read.t: read
+          clean.t: clean
+          resample.t: resample
+          pad.t: pad
+        item:
+          name: old
+          size: 1
+        """
+    data = ConfDict.from_yaml(base)
+    patch = ConfDict.from_yaml(
+        f"""
+        steps:
+          clean: {ConfDict.ops.DELETE}
+          project:
+            {ConfDict.ops.AFTER}: read
+            t: project
+          resample:
+            {ConfDict.ops.AFTER}: project
+            frequency: 2
+          pad:
+            {ConfDict.ops.BEFORE}: resample
+          late:
+            {ConfDict.ops.AFTER}: missing
+        """
+    )
+    assert (
+        patch.to_yaml()
+        == f"""steps:
+  clean: {ConfDict.ops.DELETE}
+  project:
+    {ConfDict.ops.AFTER}: read
+    t: project
+  pad: {{}}
+  resample.frequency: 2
+  late.{ConfDict.ops.AFTER}: missing
+"""
+    ), "patch should have resolved eagerly what could be"
+
+    data.update(patch)
+
+    assert (
+        data.to_yaml()
+        == f"""steps:
+  read.t: read
+  project.t: project
+  resample:
+    t: resample
+    frequency: 2
+  pad.t: pad
+  late.{ConfDict.ops.AFTER}: missing
+item:
+  name: old
+  size: 1
+"""
+    )
+    with pytest.raises(ValueError, match="unresolved config"):
+        data.to_uid()
+
+    data.update({"steps": {"missing": {}, "late": {"t": 1}}})
+    assert list(data["steps"]) == [
+        "read",
+        "project",
+        "resample",
+        "pad",
+        "missing",
+        "late",
+    ]
+    assert data["steps.late"] == {"t": 1}
+
+    grid = ConfDict({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
+    data.update({"item": grid.flat()["item"][0]})
+    assert data["item"] == {"name": "new"}
+    data.update({"item.name": ConfDict.ops.DELETE})
+    assert data["item"] == {}
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"missing": ConfDict.ops.DELETE},
+        {"item": {ConfDict.ops.REPLACE: True, "name": "new"}},
+        {"item": {ConfDict.ops.BEFORE: "anchor"}},
+        {"item": {ConfDict.ops.AFTER: "anchor"}},
+    ],
+)
+def test_to_uid_rejects_unresolved_ops(data: dict[str, tp.Any]) -> None:
+    with pytest.raises(ValueError, match="unresolved config"):
+        ConfDict(data).to_uid()
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"steps": {"a": {ConfDict.ops.BEFORE: "b", ConfDict.ops.AFTER: "b"}}},
+        {"steps": {"a": {ConfDict.ops.AFTER: "a"}}},
+        {"steps": {"a": ConfDict.ops.REPLACE}},
+        {"steps": {"a": ConfDict.ops.BEFORE}},
+        {"steps": {"a": ConfDict.ops.AFTER}},
+        {"steps": {"=unknown=": "a"}},
+        {"steps": {"a": "=unknown="}},
+    ],
+)
+def test_update_op_errors(update: dict[str, tp.Any]) -> None:
+    data = ConfDict({"steps": {"a": {}, "b": {}}})
+    with pytest.raises(ValueError):
+        data.update(update)
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"steps": {"missing": "=unknown="}},
+        {"steps": {"=unknown=": "a"}},
+    ],
+)
+def test_update_op_error_does_not_mutate(update: dict[str, tp.Any]) -> None:
+    data = ConfDict({"steps": {"a": {}, "b": {}}})
+    before = data.to_yaml()
+    with pytest.raises(ValueError):
+        data.update(update)
+    assert data.to_yaml() == before
 
 
 @pytest.mark.parametrize(
@@ -288,6 +436,29 @@ def test_dict_hash() -> None:
     maker2 = confdict.UidMaker({"x": 1.2, "z": ("z", 12.0)}, version=3)
     assert maker1.hash != maker2.hash
     assert maker1.hash == "dict:{x=float:461168601842738689,y=seq:(str:z,int:12)}"
+
+
+def test_uid_ordering_rules() -> None:
+    cfg = ConfDict.from_yaml("a: 1\nb: 2\n")
+    reversed_cfg = ConfDict.from_yaml("b: 2\na: 1\n")
+    ordered = OrderedDict([("a", 1), ("b", 2)])
+    reversed_ordered = OrderedDict([("b", 2), ("a", 1)])
+
+    assert cfg.to_yaml() != reversed_cfg.to_yaml()
+    assert cfg.to_uid() == reversed_cfg.to_uid()
+    assert (
+        confdict.UidMaker(ordered).format()
+        != confdict.UidMaker(reversed_ordered).format()
+    )
+
+
+def test_update_preserves_ordered_dict_uid_order() -> None:
+    cfg = ConfDict({"x": OrderedDict((name, {"value": name}) for name in ("a", "b"))})
+    uid = cfg.to_uid()
+    cfg.update({"x": {"b": {ConfDict.ops.BEFORE: "a"}}})
+    assert isinstance(cfg["x"], OrderedDict)
+    assert list(cfg["x"]) == ["b", "a"]
+    assert cfg.to_uid() != uid
 
 
 def test_set_hash() -> None:

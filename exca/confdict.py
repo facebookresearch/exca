@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import typing as tp
+import warnings
 from collections import OrderedDict, abc
 from pathlib import Path, PosixPath, WindowsPath
 
@@ -25,17 +26,79 @@ from . import utils
 logger = logging.getLogger(__name__)
 Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tuple[str, tp.Any]]
 _sentinel = object()
-OVERRIDE = "=replace="
+
+
+class ConfDictOps:
+    _PATTERN = re.compile(r"=.+=")
+    REPLACE = "=replace="
+    DELETE = "=delete="
+    BEFORE = "=before="
+    AFTER = "=after="
+
+    @classmethod
+    def is_op(cls, value: tp.Any) -> tp.TypeGuard[str]:
+        """True for a known op, False for a non-op token, and raises on an
+        op-shaped string (:code:`=...=`) that is not a known op (typo guard).
+        """
+        if not isinstance(value, str) or cls._PATTERN.fullmatch(value) is None:
+            return False
+        if value not in {cls.REPLACE, cls.DELETE, cls.BEFORE, cls.AFTER}:
+            msg = f"Unknown ConfDict op {value!r} (key or values with format "
+            msg += "'=<string>=' are reserved for operations)"
+            raise ValueError(msg)
+        return True
+
+
+class _ConfDictMeta(type):
+    @property
+    def OVERRIDE(cls) -> str:  # noqa: N802
+        warnings.warn(
+            "ConfDict.OVERRIDE is deprecated, use ConfDict.ops.REPLACE",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return ConfDictOps.REPLACE
 
 
 def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
+def _apply_move(obj: dict[str, tp.Any], key: str) -> None:
+    sub = obj[key]
+    present = [op for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in sub]
+    if len(present) > 1:
+        raise ValueError(
+            f"Use either {ConfDict.ops.BEFORE!r} or {ConfDict.ops.AFTER!r}, not both"
+        )
+    if not present:
+        return
+    op = present[0]
+    anchor = sub[op]
+    if not isinstance(anchor, str):
+        raise TypeError(f"{op!r} expects a key name, got {anchor!r}")
+    if anchor == key:
+        raise ValueError(f"Cannot move {key!r} relative to itself")
+    if anchor not in obj:
+        return
+    dict.pop(sub, op, None)
+    value = dict.pop(obj, key)
+    items = list(obj.items())
+    obj.clear()
+    for name, item in items:
+        if op == ConfDict.ops.BEFORE and name == anchor:
+            dict.__setitem__(obj, key, value)
+        dict.__setitem__(obj, name, item)
+        if op == ConfDict.ops.AFTER and name == anchor:
+            dict.__setitem__(obj, key, value)
+
+
 def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
     """Recursively cast content of list and ordered dict to to confdicts"""
-    # Note: avoid replacing native dicts as they may contain OVERRIDE tag
+    # Note: avoid replacing native dicts as they may contain ConfDict.ops.REPLACE tag
     # which needs to be processed later on
+    if isinstance(obj, ConfDict):
+        return obj
     if isinstance(obj, OrderedDict):
         sub = {x: _propagate_confdict(y, replace_dicts=True) for x, y in obj.items()}
         return OrderedDict(sub)
@@ -46,45 +109,67 @@ def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
         return Container([_propagate_confdict(v, replace_dicts=True) for v in obj])  # type: ignore
     if isinstance(obj, dict):
         return obj
-    if isinstance(obj, ConfDict):
-        return obj
     return obj
 
 
 def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     """Internal recursive setitem on ConfDict/list"""
     p, *rest = key.split(".", maxsplit=1)
+    if not rest:
+        val = _propagate_confdict(val, replace_dicts=False)
+        if ConfDict.ops.is_op(val) and val != ConfDict.ops.DELETE:
+            raise ValueError(f"Unexpected ConfDict op value {val!r}")
+        if isinstance(obj, dict):
+            ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
     if isinstance(obj, dict):
+        existed = p in obj
         sub = obj.setdefault(p, ConfDict())
     elif _is_seq(obj) and p.isdigit():
         p = int(p)  # type: ignore
+        existed = True
         sub = obj[p]  # type: ignore
     else:
         raise TypeError(f"Cannot handle key {p!r} on existing container {obj!r}")
-    # replace sub by dict if not dict or sequence
-    if not _is_seq(sub) and not isinstance(sub, dict):
-        sub = ConfDict()
-        if _is_seq(obj):
-            obj[p] = sub  # type: ignore
-        else:
-            dict.__setitem__(obj, p, sub)
     if rest:
+        # replace sub by dict if not dict or sequence
+        if not _is_seq(sub) and not isinstance(sub, dict):
+            sub = ConfDict()
+            if _is_seq(obj):
+                obj[p] = sub  # type: ignore
+            else:
+                dict.__setitem__(obj, p, sub)
         _set_item(sub, rest[0], val)
         return
     # final part
-    val = _propagate_confdict(val, replace_dicts=False)
+    if val == ConfDict.ops.DELETE and existed:
+        if _is_seq(obj):
+            raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
+        dict.pop(obj, p, None)
+        return
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore
         return
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
-        obj[p].update(val)
+        if isinstance(sub, OrderedDict):
+            patched = ConfDict(sub)
+            patched.update(val)  # degrades to dict
+            sub.clear()
+            sub.update(OrderedDict(patched.items()))
+        elif not isinstance(sub, ConfDict):
+            sub = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
+            dict.__setitem__(obj, p, sub)
+            sub.update(val)
+        else:
+            sub.update(val)
+        _apply_move(obj, p)
     else:
         dict.__setitem__(obj, p, val)
 
 
-class ConfDict(dict[str, tp.Any]):
-    """Dictionary which breaks into sub-dictionnaries on "." as in a config (see example)
+class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
+    """Dictionary which breaks into sub-dictionnaries on "." as in a config (see example),
+    and merges recursively.
     The data can be specified either through "." keywords or directly through sub-dicts
     or a mixture of both.
     Lists of dictionaries are processed as list of ConfDict
@@ -97,14 +182,13 @@ class ConfDict(dict[str, tp.Any]):
     Note
     ----
     - This is designed for configurations, so it probably does not scale well to 100k+ keys
-    - dicts are merged expect if containing the key :code:`"=replace="`,
-      in which case they replace the content. On the other hand, non-dicts always
-      replace the content.
+    - Updates apply patches: mappings that merge dict values recursively and
+      may contain operation tokens. See :code:`ConfDict.update`.
     """
 
     LATEST_UID_VERSION = 3
     UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", LATEST_UID_VERSION))
-    OVERRIDE = OVERRIDE  # convenient to have it here
+    ops = ConfDictOps
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
@@ -184,9 +268,34 @@ class ConfDict(dict[str, tp.Any]):
     def update(  # type: ignore
         self, mapping: Mapping | None = None, **kwargs: tp.Any
     ) -> None:
-        """Updates recursively the keys of the confdict.
-        No key is removed unless a sub-dictionary contains :code:`"=replace=": True`,
-        in this case the existing keys in the sub-dictionary are wiped
+        """Apply a patch using the ConfDict merge rules.
+
+        Rules
+        -----
+        - dict values merge recursively.
+        - non-dict values replace existing values.
+        - operations (see below) apply top to bottom; unresolved ops stay in the config until
+          applicable.
+
+        Operations
+        -----------
+        - :code:`ConfDict.ops.DELETE` as value to a key deletes the key altogether.
+        - :code:`ConfDict.ops.REPLACE` as key with True value replaces the whole
+          existing content with the new one instead of merging recursively.
+        - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
+          relative to an existing sibling.
+
+        Example
+        -------
+        >>> cfg = ConfDict({"a": {"x": 1}, "b": {"x": 2}})
+        >>> cfg.update(
+        ...     {
+        ...         "a": {ConfDict.ops.REPLACE: True, ConfDict.ops.AFTER: "b", "y": 4},
+        ...         "b": {"y": 12},
+        ...     }
+        ... )
+        >>> cfg
+        {'b': {'x': 2, 'y': 12}, 'a': {'y': 4}}
         """
         if mapping is not None:
             if not isinstance(mapping, abc.Mapping):
@@ -194,10 +303,12 @@ class ConfDict(dict[str, tp.Any]):
             kwargs.update(mapping)
         if not kwargs:
             return
-        if kwargs.pop(OVERRIDE, False):
+        if self and kwargs.pop(ConfDict.ops.REPLACE, False):
             self.clear()
         for key, val in kwargs.items():
-            self[key] = val
+            if not isinstance(key, str):
+                raise TypeError(f"ConfDict only supports str keys, got {key!r}")
+            _set_item(self, key, val)
 
     def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as
@@ -209,7 +320,10 @@ class ConfDict(dict[str, tp.Any]):
         return self.__class__(super().copy())
 
     @classmethod
-    def from_yaml(cls, yaml: str | Path | tp.IO[str] | tp.IO[bytes]) -> "ConfDict":
+    def from_yaml(
+        cls,
+        yaml: str | Path | tp.IO[str] | tp.IO[bytes],
+    ) -> "ConfDict":
         """Loads a ConfDict from a yaml string/filepath/file handle."""
         input_ = yaml
         if isinstance(yaml, str):
@@ -225,13 +339,15 @@ class ConfDict(dict[str, tp.Any]):
         out = _yaml.safe_load(yaml)
         if not isinstance(out, dict):
             raise TypeError(f"Cannot convert non-dict yaml:\n{out}\n(from {input_})")
-        return ConfDict(out)
+        conf = ConfDict()
+        conf.update(out)
+        return conf
 
     def to_yaml(self, filepath: Path | str | None = None) -> str:
         """Exports the ConfDict to yaml string
         and optionally to a file if a filepath is provided
         """
-        out: str = _yaml.safe_dump(_to_simplified_dict(self), sort_keys=True)
+        out: str = _yaml.safe_dump(_to_simplified_dict(self), sort_keys=False)
         if filepath is not None:
             Path(filepath).write_text(out, encoding="utf8")
         return out
@@ -360,6 +476,10 @@ class UidMaker:
                 self.hash = h
             typestr = "array"
         elif isinstance(data, dict):
+            for k in data:
+                # _to_simplified_dict may fuse an op into a dotted key (a.=op=)
+                if any(ConfDict.ops.is_op(p) for p in k.split(".")):
+                    raise ValueError(f"Cannot compute uid on unresolved config {k!r}")
             udata = {x: UidMaker(y, version=version) for x, y in data.items()}
             if version > 2:
                 if isinstance(data, OrderedDict):
@@ -397,6 +517,8 @@ class UidMaker:
             else:
                 self.string = f"{data:.2e}"
         elif isinstance(data, (str, int, np.int32, np.int64)) or data is None:
+            if ConfDict.ops.is_op(data):
+                raise ValueError(f"Cannot compute uid on unresolved config {data!r}")
             self.string = str(data)
             self.hash = self.string
             typestr = "str" if isinstance(data, str) else "int"
