@@ -148,10 +148,17 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
         sub = obj[p]
-        if not isinstance(sub, ConfDict):
+        if isinstance(sub, OrderedDict):
+            patched = ConfDict(sub)
+            patched.update(val)
+            sub.clear()
+            sub.update(OrderedDict(patched.items()))
+        elif not isinstance(sub, ConfDict):
             sub = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
             dict.__setitem__(obj, p, sub)
-        sub.update(val)
+            sub.update(val)
+        else:
+            sub.update(val)
         _apply_move(obj, p)
     else:
         dict.__setitem__(obj, p, val)

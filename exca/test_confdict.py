@@ -437,6 +437,15 @@ def test_uid_ordering_rules() -> None:
     )
 
 
+def test_update_preserves_ordered_dict_uid_order() -> None:
+    cfg = ConfDict({"x": OrderedDict((name, {"value": name}) for name in ("a", "b"))})
+    uid = cfg.to_uid()
+    cfg.update({"x": {"b": {ConfDict.ops.BEFORE: "a"}}})
+    assert isinstance(cfg["x"], OrderedDict)
+    assert list(cfg["x"]) == ["b", "a"]
+    assert cfg.to_uid() != uid
+
+
 def test_set_hash() -> None:
     data = [str(k) for k in range(6)]
     np.random.shuffle(data)
