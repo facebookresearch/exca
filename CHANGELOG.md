@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - `ConfDict`: added `ConfDict` operations `ConfDict.ops.DELETE`, `ConfDict.ops.BEFORE`, and `ConfDict.ops.AFTER`; `ConfDict.ops.REPLACE` replaces `ConfDict.OVERRIDE`. [#310]
-- Config YAML dumps now preserve key order, cache uid checks tolerates key-order-only `uid.yaml` changes for compatibility. [#310]
+- Config YAML dumps now preserve key order, cache uid checks tolerate key-order-only `uid.yaml` changes for compatibility. [#310]
 - `ConfDict`: `pop`/`del` no longer prune emptied parent mappings; an empty mapping is a value like any other. [#311]
 
 ## 0.5.28 - 26-07-20

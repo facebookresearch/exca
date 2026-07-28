@@ -43,7 +43,9 @@ class ConfDictOps:
         if not isinstance(value, str) or cls._PATTERN.fullmatch(value) is None:
             return False
         if value not in {cls.REPLACE, cls.DELETE, cls.BEFORE, cls.AFTER}:
-            raise ValueError(f"Unknown ConfDict op {value!r}")
+            msg = f"Unknown ConfDict op {value!r} (key or values with format "
+            msg += "'=<string>=' are reserved for operations)"
+            raise ValueError(msg)
         return True
 
 
@@ -181,7 +183,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     ----
     - This is designed for configurations, so it probably does not scale well to 100k+ keys
     - Updates apply patches: mappings that merge dict values recursively and
-      may contain operation tokens. See :code:`ConfDict.update`.
+      may contain operation tokens. See :code:`ConfDict.update`..
     """
 
     LATEST_UID_VERSION = 3
