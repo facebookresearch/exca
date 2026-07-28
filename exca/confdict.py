@@ -153,7 +153,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
         if isinstance(sub, OrderedDict):
             patched = ConfDict(sub)
-            patched.update(val)
+            patched.update(val)  # degrades to dict
             sub.clear()
             sub.update(OrderedDict(patched.items()))
         elif not isinstance(sub, ConfDict):
@@ -183,7 +183,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     ----
     - This is designed for configurations, so it probably does not scale well to 100k+ keys
     - Updates apply patches: mappings that merge dict values recursively and
-      may contain operation tokens. See :code:`ConfDict.update`..
+      may contain operation tokens. See :code:`ConfDict.update`.
     """
 
     LATEST_UID_VERSION = 3
