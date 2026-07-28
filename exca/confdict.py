@@ -113,6 +113,12 @@ def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
 def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     """Internal recursive setitem on ConfDict/list"""
     p, *rest = key.split(".", maxsplit=1)
+    if not rest:
+        val = _propagate_confdict(val, replace_dicts=False)
+        if ConfDict.ops.is_op(val) and val != ConfDict.ops.DELETE:
+            raise ValueError(f"Unexpected ConfDict op value {val!r}")
+        if isinstance(obj, dict):
+            ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
     if isinstance(obj, dict):
         existed = p in obj
         sub = obj.setdefault(p, ConfDict())
@@ -133,21 +139,16 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         _set_item(sub, rest[0], val)
         return
     # final part
-    val = _propagate_confdict(val, replace_dicts=False)
     if val == ConfDict.ops.DELETE and existed:
         if _is_seq(obj):
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
         dict.pop(obj, p, None)
         return
-    if ConfDict.ops.is_op(val) and val != ConfDict.ops.DELETE:
-        raise ValueError(f"Unexpected ConfDict op value {val!r}")
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore
         return
-    ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
-        sub = obj[p]
         if isinstance(sub, OrderedDict):
             patched = ConfDict(sub)
             patched.update(val)

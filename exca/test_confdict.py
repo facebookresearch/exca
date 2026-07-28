@@ -208,6 +208,21 @@ def test_update_op_errors(update: dict[str, tp.Any]) -> None:
 
 
 @pytest.mark.parametrize(
+    "update",
+    [
+        {"steps": {"missing": "=unknown="}},
+        {"steps": {"=unknown=": "a"}},
+    ],
+)
+def test_update_op_error_does_not_mutate(update: dict[str, tp.Any]) -> None:
+    data = ConfDict({"steps": {"a": {}, "b": {}}})
+    before = data.to_yaml()
+    with pytest.raises(ValueError):
+        data.update(update)
+    assert data.to_yaml() == before
+
+
+@pytest.mark.parametrize(
     "update,expected",
     [
         ({"a.b.c": 12}, {"a.b.c": 12}),
