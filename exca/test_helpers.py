@@ -146,6 +146,22 @@ def test_discriminated_model_base_dispatch(
     assert isinstance(cls.model_validate(obj.model_dump()), expected_type)
 
 
+def test_discriminated_model_cache_invalidation() -> None:
+    # populate the subclass-map cache
+    assert set(BaseNamed._get_discriminated_subclasses()) >= {
+        "BaseNamed",
+        "Hello",
+        "World",
+    }
+
+    class LateSub(BaseNamed):  # defined after the cache was populated
+        pass
+
+    # the new subclass must be discoverable despite the earlier cache
+    assert "LateSub" in BaseNamed._get_discriminated_subclasses()
+    assert isinstance(BaseNamed(name="LateSub"), LateSub)
+
+
 def test_discriminated_model_errors() -> None:
     with pytest.raises(ValueError) as e:
         _ = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore
