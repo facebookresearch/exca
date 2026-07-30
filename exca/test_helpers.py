@@ -147,17 +147,11 @@ def test_discriminated_model_base_dispatch(
 
 
 def test_discriminated_model_cache_invalidation() -> None:
-    # populate the subclass-map cache
-    assert set(BaseNamed._get_discriminated_subclasses()) >= {
-        "BaseNamed",
-        "Hello",
-        "World",
-    }
+    assert "Hello" in BaseNamed._get_discriminated_subclasses()  # populate
 
-    class LateSub(BaseNamed):  # defined after the cache was populated
+    class LateSub(BaseNamed):  # defined after populating
         pass
 
-    # the new subclass must be discoverable despite the earlier cache
     assert "LateSub" in BaseNamed._get_discriminated_subclasses()
     assert isinstance(BaseNamed(name="LateSub"), LateSub)  # type: ignore
 

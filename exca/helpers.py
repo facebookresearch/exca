@@ -405,9 +405,8 @@ class DiscriminatedModel(pydantic.BaseModel):
     @classmethod
     def _get_discriminated_subclasses(cls) -> dict[str, type["DiscriminatedModel"]]:
         """Map from subclass __name__ to subclass, for the shared discriminator key."""
-        cached = cls.__dict__.get(
-            "_exca_subclass_cache"
-        )  # own class cache only, not its ancestor's
+        # __dict__ to get own class cache only, not its ancestor's
+        cached = cls.__dict__.get("_exca_subclass_cache")
         if cached is not None:
             return cached  # walking all subclasses is expensive at scale
         key = cls._exca_discriminator_key
@@ -441,10 +440,9 @@ class DiscriminatedModel(pydantic.BaseModel):
         if discriminator_key is not None:
             cls._exca_discriminator_key = discriminator_key
         for ancestor in cls.__mro__:
-            if issubclass(ancestor, DiscriminatedModel) and (
-                "_exca_subclass_cache" in ancestor.__dict__
-            ):
-                ancestor._exca_subclass_cache = None  # new class -> stale
+            if issubclass(ancestor, DiscriminatedModel):
+                if "_exca_subclass_cache" in ancestor.__dict__:
+                    ancestor._exca_subclass_cache = None  # new class -> stale
         super().__init_subclass__(**kwargs)
 
     @classmethod
