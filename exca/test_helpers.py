@@ -159,7 +159,7 @@ def test_discriminated_model_cache_invalidation() -> None:
 
     # the new subclass must be discoverable despite the earlier cache
     assert "LateSub" in BaseNamed._get_discriminated_subclasses()
-    assert isinstance(BaseNamed(name="LateSub"), LateSub)
+    assert isinstance(BaseNamed(name="LateSub"), LateSub)  # type: ignore
 
 
 def test_discriminated_model_errors() -> None:
