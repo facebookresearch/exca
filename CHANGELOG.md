@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- `DiscriminatedModel`: cache the per-class subclass map (invalidated when a new subclass is defined) instead of walking the subclass tree on every (de)serialization, and skip the lookup when the discriminator names the class itself. ~7x faster dispatch/validation.
+- `DiscriminatedModel`: optimized look-up.
 
 ## 0.5.29 - 26-07-28
 
