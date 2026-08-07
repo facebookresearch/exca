@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- `steps`: `Fit` primitive — fit one artifact over a cohort of items, then transform each item with it (N->1->N). The cohort's fingerprint enters the step uid, so the artifact and downstream caches are scoped to the fit.
+- `cachedict`: `Auto` stores tuples as lists, so a cached tuple loads (and deletes) its content whether or not it went through json first.
+
 ## 0.5.29 - 26-07-28
 
 - `ConfDict`: added `ConfDict` operations `ConfDict.ops.DELETE`, `ConfDict.ops.BEFORE`, and `ConfDict.ops.AFTER`; `ConfDict.ops.REPLACE` replaces `ConfDict.OVERRIDE`. [#310]

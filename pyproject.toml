@@ -23,6 +23,7 @@ dependencies = [
         # optional features
         "pandas>=2.2.2",
         "torch>=2.0.1",
+        "scikit-learn>=1.3.0",
         "mne>=1.4.0",
         "pybv>=0.7.6",
         "nibabel>=5.1.0",
@@ -115,7 +116,7 @@ addopts = ["--ignore=build", "--ignore=dist"]
   show_error_codes = true
 
 [[tool.mypy.overrides]]
-  module = ['pytest', 'setuptools', 'cloudpickle', 'mne', 'mne.*', 'nibabel', 'neuralset', 'pyarrow', 'pybv', 'excatest']
+  module = ['pytest', 'setuptools', 'cloudpickle', 'mne', 'mne.*', 'nibabel', 'neuralset', 'pyarrow', 'pybv', 'excatest', 'sklearn', 'sklearn.*']
   ignore_missing_imports = true
 [[tool.mypy.overrides]]
   # some packages we do not install

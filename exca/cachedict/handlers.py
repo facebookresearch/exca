@@ -384,8 +384,9 @@ class Auto:
                     )
             return {k: cls._dump_value(ctx, v, f"{key}[{k}]") for k, v in val.items()}
         if isinstance(val, (list, tuple)):
-            items = [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
-            return tuple(items) if isinstance(val, tuple) else items
+            # as a list: json has no tuple, so a tuple would only stay one until the
+            # first json round-trip, and `_load_value`/`_delete_value` would skip it
+            return [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
         handler = DumpContext._find_handler(type(val))
         if handler is not None or hasattr(val, "__dump_info__"):
             ctx.key = key

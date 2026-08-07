@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import contextvars
 import dataclasses
 import datetime
 import logging
@@ -40,6 +41,12 @@ if tp.TYPE_CHECKING:
     from .items import StepItems  # bare name for annotations (field shadows `items`)
 
 logger = logging.getLogger(__name__)
+
+# True while a backend computes a batch, which may be a shard of the caller's items
+# (-> a cross-item computation cannot trust it, see patterns.Fit)
+_computing: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "computing", default=False
+)
 
 CacheStatus = tp.Literal["success", "error", None]
 LookupStatus = tp.Literal["success", "error", "running", None]
@@ -335,9 +342,10 @@ class ComputeBatch:
         folder = self.cache_dict.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
-        result_items = self.step._run_items(self.items)
+        token = _computing.set(True)
         written_uids: list[str] = []
         try:
+            result_items = self.step._run_items(self.items)
             with self.cache_dict.write():
                 for i, result in enumerate(result_items):
                     uid = self.items.uids[i]
@@ -366,6 +374,8 @@ class ComputeBatch:
                     for uid in inflight:
                         reg.record(uid, e, tb)
             raise
+        finally:
+            _computing.reset(token)
 
 
 def _multi_run_and_cache(batches: list[ComputeBatch]) -> None:

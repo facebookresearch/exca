@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from . import base, conftest, items
-from .patterns import Scatter
+from .patterns import Fit, Scatter
 
 
 class MakeDict(base.Step):
@@ -167,3 +167,104 @@ def test_branch_excludes(tmp_path: Path) -> None:
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))
     assert out == [{"a": 10.0, "b": 20.0}, {"b": 20.0, "c": 30.0}]
     assert sorted(shared.calls) == [1.0, 2.0, 3.0], "shared branch b computed once"
+
+
+class Mean(Fit, conftest.RecordingStep):
+    """Centers each item on the cohort mean -- ``.calls`` records each fit's size."""
+
+    def _fit(self, values: tp.Iterable[float]) -> float:
+        cohort = list(values)
+        self.record(len(cohort))
+        return sum(cohort) / len(cohort)
+
+    def _run(self, value: float) -> float:
+        return value - self.fitted
+
+
+def test_fit_over_cohort(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    cohort = [0.0, 1.0, 2.0, 3.0]
+    up = conftest.Mult(coeff=10.0, infra=infra)  # the fit sees its output, not the input
+    mean = Mean(infra=infra)
+    chain = base.Chain(steps=[up, mean])
+    assert list(chain.run_many(cohort)) == [-15.0, -5.0, 5.0, 15.0], (
+        "mean of [0,10,20,30]"
+    )
+    assert mean.calls == [4], "one fit, over the whole cohort"
+    assert chain.run(10.0) == 85.0, "item outside the cohort, transformed by the same fit"
+    assert sorted(up.calls) == [0.0, 1.0, 2.0, 3.0, 10.0], "fit shares upstream's cache"
+    fresh = Mean(infra=infra)
+    assert list(base.Chain(steps=[up, fresh]).run_many(cohort))[0] == -15.0
+    assert fresh.calls == [], "same cohort -> artifact read back rather than refitted"
+
+    down = conftest.Add(value=0.0, infra=infra)  # shared by both cohorts below
+
+    def first_centered(cohort: list[float]) -> float:
+        chain = base.Chain(steps=[up, Mean(infra=infra), down])
+        return list(chain.run_many(cohort))[0]
+
+    assert first_centered(cohort) == -15.0
+    assert first_centered(cohort + [10.0]) == -32.0, "mean of [0,10,20,30,100], not -15"
+
+
+@pytest.mark.parametrize("forced", ["up", "fit"])  # the forced step: upstream or the Fit
+def test_force_refits(tmp_path: Path, forced: str) -> None:
+    def fit_sizes(**modes: str) -> list:
+        def infra(step: str) -> tp.Any:
+            mode = modes.get(step, "cached")
+            return {"backend": "Cached", "folder": tmp_path, "mode": mode}
+
+        mean = Mean(infra=infra("fit"))
+        chain = base.Chain(steps=[conftest.Mult(infra=infra("up")), mean])
+        assert list(chain.run_many([0.0, 2.0])) == [-2.0, 2.0], "mean of [0, 4]"
+        return mean.calls
+
+    assert fit_sizes() == [2]
+    assert fit_sizes() == [], "artifact reused"
+    assert fit_sizes(**{forced: "force"}) == [2], "force refits, no stale artifact"
+
+
+@pytest.mark.parametrize("backend", ["ThreadPool", "ProcessPool"])
+def test_pool_backends(tmp_path: Path, backend: str) -> None:
+    infra: tp.Any = {"backend": backend, "folder": tmp_path, "max_jobs": 4}
+    cohort, centered = [0.0, 2.0, 4.0, 6.0], [-3.0, -1.0, 1.0, 3.0]
+    own = Mean(infra=infra)
+    assert list(own.run_many(cohort)) == centered
+    assert own.calls == [4], "fitted once in the driver, not per worker split"
+    # an enclosing backend may hand the step a shard of the items, not the cohort
+    enclosed = Mean()  # no infra: its own folder below stays free of the fit above
+    sub: tp.Any = {**infra, "folder": tmp_path / "enclosed"}
+    chain = base.Chain(steps=[enclosed], infra=sub)
+    with pytest.raises(RuntimeError, match="enclosing backend"):
+        list(chain.run_many(cohort))
+    assert list(enclosed.run_many(cohort)) == centered, "fitted on the driver instead"
+    assert list(chain.run_many(cohort)) == centered, "the fit travels to the workers"
+
+
+def test_artifact_cache_type(tmp_path: Path) -> None:
+    class Pickled(Mean):
+        ARTIFACT_CACHE_TYPE = "Pickle"
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    assert list(Mean(infra=infra).run_many([0.0, 2.0])) == [-1.0, 1.0]
+    assert not list(tmp_path.rglob("*.pkl")), "the default pickles only what it must"
+    assert list(Pickled(infra=infra).run_many([0.0, 2.0])) == [-1.0, 1.0]
+    assert len(list(tmp_path.rglob("*.pkl"))) == 1, "ARTIFACT_CACHE_TYPE picked pickle"
+
+
+def test_unfitted_fit_safeguards(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    cohort, centered = [0.0, 2.0], [-1.0, 1.0]
+    with pytest.raises(RuntimeError, match="is not fitted"):
+        Mean().fitted
+    with pytest.raises(RuntimeError, match=r"unfitted Mean at steps\.1"):
+        Mean.check_fitted(base.Chain(steps=[conftest.Mult(), Mean()]))
+    with pytest.raises(RuntimeError, match="allow_fit=False"):
+        Mean(infra=infra, allow_fit=False).run_many(cohort)
+
+    fitted = Mean(infra=infra)
+    assert list(fitted.run_many(cohort)) == centered
+    Mean.check_fitted(fitted)
+    reader = Mean(infra=infra, allow_fit=False)
+    assert list(reader.run_many(cohort)) == centered, "allow_fit is not in the uid"
+    assert reader.calls == [], "allow_fit only gates fitting, not reading"

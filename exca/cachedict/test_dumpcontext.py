@@ -6,6 +6,7 @@
 
 """Tests for DumpContext, @DumpContext.register, and handler classes."""
 
+import json
 import os
 import typing as tp
 from pathlib import Path
@@ -298,6 +299,16 @@ def test_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert loaded["label"] == "test" and loaded["metrics"]["epochs"] == 3
     np.testing.assert_array_almost_equal(loaded["metrics"]["loss"], [0.5, 0.3, 0.1])
     np.testing.assert_array_almost_equal(loaded["weights"], [[1.0, 2.0], [3.0, 4.0]])
+
+
+def test_auto_tuple(tmp_path: Path) -> None:
+    ctx = DumpContext(tmp_path, key="test")
+    with ctx:
+        info = ctx.dump((np.array([1.0, 2.0]), 3), cache_type="Auto")
+    for content in [info["content"], json.loads(json.dumps(info["content"]))]:
+        loaded = ctx.load({**info, "content": content})  # as dumped, then as json has it
+        np.testing.assert_array_almost_equal(loaded[0], [1.0, 2.0])
+        assert loaded[1] == 3, "a tuple loads as a list either way"
 
 
 class _Opaque:

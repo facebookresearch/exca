@@ -7,8 +7,12 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import typing as tp
 
+import pydantic
+
+import exca
 from exca import confdict
 
 from . import backends, identity, items, utils
@@ -242,3 +246,164 @@ class Scatter(Step):
             upstream=output_upstream,
             mode=batch._mode,
         )
+
+
+def _cohort_uid(uids: tp.Iterable[str]) -> str:
+    """Order-independent fingerprint of a set of item uids, as ``<hash8>,<count>``."""
+    unique = sorted(set(uids))
+    digest = hashlib.sha256()
+    for uid in unique:
+        digest.update(uid.encode("utf8"))
+        digest.update(b"\0")
+    return f"{digest.hexdigest()[:8]},{len(unique)}"
+
+
+class Fit(Step):
+    """Fit one artifact over a cohort of items, then transform each item (N->1->N).
+
+    .. warning:: Experimental — API may change.
+
+    To implement a Fit, override:
+
+    - :meth:`_fit` (required): the artifact, from the cohort's values.
+    - :meth:`_run` (required): one item's output, reading :attr:`fitted`.
+
+    The cohort is the batch of the first dispatch, and its fingerprint enters this
+    step's uid -- so the artifact and every downstream cache are scoped to it, and
+    two cohorts never share an entry. Later batches reuse the artifact and may hold
+    items outside the cohort.
+
+    The fit runs where the step is dispatched from -- driver-side, ahead of a
+    backend splitting the batch -- and is cached under ``infra``, so workers read
+    it back instead of refitting. The upstream is read twice (once for the fit,
+    once per item), so give an expensive upstream its own ``infra``.
+
+    An *enclosing* backend is the one hazard: it may hand this step a shard of the
+    items rather than the cohort, so dispatching an unfitted ``Fit`` from inside one
+    raises.
+
+    ``CACHE_TYPE`` sets the format of the per-item outputs as for any step, and
+    ``ARTIFACT_CACHE_TYPE`` that of the artifact -- by default the handlers for
+    arrays, tensors &co (including nested), and pickle for the rest. Prefer
+    returning the former, e.g. a state dict over a model.
+
+    Parameters
+    ----------
+    allow_fit
+        Whether this step may fit. ``False`` raises instead, so a batch that is not
+        the intended cohort cannot become one (e.g. in an evaluation run).
+    """
+
+    ARTIFACT_CACHE_TYPE: tp.ClassVar[str | None] = "AutoPickle"
+
+    allow_fit: bool = True
+
+    _cohort: str = pydantic.PrivateAttr("")
+    _fitted: tp.Any = pydantic.PrivateAttr(None)
+
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return super()._exclude_from_cls_uid() + ["allow_fit"]  # a permission
+
+    def _fit(self, values: tp.Iterable[tp.Any]) -> tp.Any:
+        """The artifact for the cohort, from the values this step receives.
+
+        *values* streams the cohort, and can be iterated more than once (e.g. one
+        pass per epoch) -- at the cost of re-reading the upstream each time.
+        """
+        raise NotImplementedError
+
+    @property
+    def cohort(self) -> str:
+        """Fingerprint of the fitted cohort, empty until this step is fitted."""
+        return self._cohort
+
+    @property
+    def fitted(self) -> tp.Any:
+        """The artifact :meth:`_fit` produced, for :meth:`_run` to transform with."""
+        if not self._cohort:
+            raise RuntimeError(
+                f"{type(self).__name__} is not fitted: dispatch it on its cohort first"
+            )
+        return self._fitted
+
+    @classmethod
+    def check_fitted(cls, obj: tp.Any) -> None:
+        """Raise if *obj* holds an unfitted step of this class at any depth.
+
+        For guarding a hand-off to code that must not fit, e.g. a dataloader or an
+        evaluation run.
+        """
+        found = exca.utils.find_models(obj, cls)
+        unfitted = [name or "." for name, step in found.items() if not step.cohort]
+        if unfitted:
+            raise RuntimeError(
+                f"unfitted {cls.__name__} at {', '.join(unfitted)}: dispatch it on "
+                "its cohort before handing it over"
+            )
+
+    def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
+        if not self._cohort:
+            return super()._exca_uid_dict_override()
+        exporter = exca.utils.ConfigExporter(
+            uid=True, exclude_defaults=True, ignore_first_override=True
+        )
+        dump = exporter.apply(self)
+        dump["cohort"] = self._cohort
+        return dump
+
+    def _dispatch(self, batch: items.StepItems) -> items.StepItems:
+        # before super(): `_exca_uid_dict_override` needs the cohort ahead of
+        # `_make_paths`, and a backend would otherwise fit each split of `batch`
+        if not self._cohort:
+            cohort = _cohort_uid(batch.uids)
+            upstream = tuple(batch._upstream)
+            owner = self.model_copy(update={"infra": None})  # copy: keeps private state
+            owner._cohort = ""  # -> all cohorts of this Fit share one artifact folder
+            artifact = _Artifact(owner=owner, infra=self.infra)
+            reason = ""
+            if backends._computing.get():
+                reason = (
+                    "is dispatched under an enclosing backend, which may shard the "
+                    "items (each shard would then fit its own artifact) -- fit it "
+                    "beforehand, or move that backend onto this step"
+                )
+            elif not self.allow_fit:
+                reason = "has allow_fit=False -- fit it where fitting is allowed"
+            if reason and not artifact.lookup(_upstream=upstream, _uid=cohort).cached():
+                raise RuntimeError(
+                    f"{type(self).__name__} {reason} (nothing fitted for the "
+                    f"{len(set(batch.uids))} items presented, cohort {cohort})"
+                )
+            carrier = items.StepItems(
+                source={cohort: (batch,)},
+                uids=[cohort],
+                upstream=upstream,
+                mode=batch._mode,  # so a forced upstream refits instead of reusing
+            )
+            # dispatch (not lookup) so the artifact obeys infra's mode and caching
+            self._fitted = next(iter(artifact._dispatch(carrier)))
+            self._cohort = cohort
+        return super()._dispatch(batch)
+
+
+class _Artifact(Step):
+    """One cohort's artifact for a :class:`Fit`, cached as a single entry.
+
+    ``owner`` holds the fit configuration with its cohort reset, so every cohort of
+    one ``Fit`` shares a folder and takes one entry in it. The input is the cohort's
+    carrier, wrapped in a tuple so the framework treats it as a single item.
+    """
+
+    owner: Fit
+
+    def _infer_cache_type(self) -> str | None:
+        return self.owner.ARTIFACT_CACHE_TYPE
+
+    def item_uid(self, value: tuple[items.StepItems]) -> str:
+        return _cohort_uid(value[0].uids)
+
+    def _run(self, value: tuple[items.StepItems]) -> tp.Any:
+        # the carrier itself (not an iterator over it): iterating applies its pending
+        # steps, so the fit sees the values the transform will, and can iterate again
+        return self.owner._fit(value[0])
