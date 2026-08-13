@@ -348,6 +348,11 @@ class BaseInfra(pydantic.BaseModel):
             return folder
         folder.mkdir(exist_ok=True, parents=True)
         self._set_permissions(self.folder)
+        # the uid can contain several "/" segments (e.g. "{method},{version}/{uid}"),
+        # so mkdir(parents=True) may create intermediate directories in between
+        # self.folder and folder; chmod those too, not just the two endpoints.
+        for parent in reversed(list(folder.relative_to(self.folder).parents)[:-1]):
+            self._set_permissions(self.folder / parent)
         self._set_permissions(folder)
         return folder
 
