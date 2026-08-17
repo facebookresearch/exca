@@ -52,7 +52,7 @@ def best_effort_utime(folder: Path) -> None:
             pass
 
 
-def _mkdir_with_permissions(
+def mkdir_with_permissions(
     folder: Path | str,
     permissions: int | None,
     *,

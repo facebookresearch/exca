@@ -346,7 +346,7 @@ class BaseInfra(pydantic.BaseModel):
         folder = Path(self.folder) / self.uid()
         if not create:
             return folder
-        utils._mkdir_with_permissions(folder, self.permissions, root=self.folder)
+        utils.mkdir_with_permissions(folder, self.permissions, root=self.folder)
         return folder
 
     def iter_cached(self) -> tp.Iterable[pydantic.BaseModel]:
