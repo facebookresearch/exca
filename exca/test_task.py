@@ -451,7 +451,7 @@ def test_uid_folder_permissions(tmp_path: Path) -> None:
 def test_uid_folder_rejects_escape(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path / "cache", "version": "x/../../escape"}
     whatever = Whatever(param1=13, infra1=infra)
-    with pytest.raises(ValueError, match="resolves outside"):
+    with pytest.raises(ValueError, match="must not contain"):
         whatever.infra1.uid_folder(create=True)
     assert not (tmp_path / "escape").exists()
 

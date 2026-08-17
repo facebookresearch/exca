@@ -59,30 +59,24 @@ def mkdir_with_permissions(
     root: Path | str,
 ) -> None:
     """Create a folder and chmod its directory chain within a root."""
-    root_path = Path(root).expanduser().resolve()
-    folder_path = Path(folder).expanduser().resolve()
-    if not folder_path.is_relative_to(root_path):
-        raise ValueError(
-            f"Folder {folder!s} resolves outside its permission root {root!s}"
-        )
+    root_path = Path(root)
+    folder_path = Path(folder)
+    parts = folder_path.relative_to(root_path).parts
+    if ".." in parts:
+        raise ValueError(f"Folder path must not contain '..': {folder}")
     folder_path.mkdir(parents=True, exist_ok=True)
     if permissions is None:
         return
     path = root_path
-    paths = [path]
-    for part in folder_path.relative_to(root_path).parts:
-        path /= part
-        paths.append(path)
-    for path in paths:
-        try:
+    try:
+        path.chmod(permissions)
+        for part in parts:
+            path /= part
             path.chmod(permissions)
-        except Exception as e:
-            logger.warning(
-                "Failed to set permission to %s on '%s'\n(%s)",
-                permissions,
-                path,
-                e,
-            )
+    except Exception as e:
+        logger.warning(
+            "Failed to set permission to %s on '%s'\n(%s)", permissions, path, e
+        )
 
 
 def to_chunks(
