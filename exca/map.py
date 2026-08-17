@@ -167,10 +167,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             raise RuntimeError(f"Infra was not applied: {self!r}")
         cache_type = imethod.cache_type
         cache_path = self.uid_folder(create=True)
-        if isinstance(self.permissions, str):
-            self._set_permissions(None)
-        if isinstance(self.permissions, str):
-            raise RuntimeError("infra.permissions should have been an integer")
         cd: CacheDict[tp.Any] = CacheDict(
             folder=cache_path,
             keep_in_ram=self.keep_in_ram,
@@ -184,8 +180,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         cache_folder = self.uid_folder()
         if cache_folder is None:
             return None
-        perm = self.permissions if isinstance(self.permissions, int) else None
-        return inflight.InflightRegistry(cache_folder, permissions=perm)
+        return inflight.InflightRegistry(cache_folder, permissions=self.permissions)
 
     # pylint: disable=unused-argument
     def apply(

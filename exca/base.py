@@ -131,7 +131,7 @@ class BaseInfra(pydantic.BaseModel):
     # general permission for folders and files
     # use os.chmod / path.chmod compatible numbers, or None to deactivate
     # eg: 0o777 for all rights to all users
-    permissions: int | str | None = 0o777
+    permissions: int | None = 0o777
     # {folder} will be replaced by the class folder
     # {user} by user id and %j by job id
     logs: Path | str = "{folder}/logs/{user}/%j"
@@ -195,8 +195,8 @@ class BaseInfra(pydantic.BaseModel):
         return list(set(type(self).model_fields) - {"version"})
 
     def model_post_init(self, log__: tp.Any) -> None:
+        # Pydantic's private-attr hook would otherwise shadow SubmititMixin's hook.
         super().model_post_init(log__)
-        self._set_permissions(None)  # set compatibility for permissions as string
 
     def __repr_args__(self) -> tp.Iterator[tuple[str | None, tp.Any]]:
         """Compact repr: only show fields that differ from their default value."""
@@ -346,14 +346,7 @@ class BaseInfra(pydantic.BaseModel):
         folder = Path(self.folder) / self.uid()
         if not create:
             return folder
-        folder.mkdir(exist_ok=True, parents=True)
-        self._set_permissions(self.folder)
-        # the uid can contain several "/" segments (e.g. "{method},{version}/{uid}"),
-        # so mkdir(parents=True) may create intermediate directories in between
-        # self.folder and folder; chmod those too, not just the two endpoints.
-        for parent in reversed(list(folder.relative_to(self.folder).parents)[:-1]):
-            self._set_permissions(self.folder / parent)
-        self._set_permissions(folder)
+        utils._mkdir_with_permissions(folder, self.permissions, root=self.folder)
         return folder
 
     def iter_cached(self) -> tp.Iterable[pydantic.BaseModel]:
@@ -369,17 +362,8 @@ class BaseInfra(pydantic.BaseModel):
             cfg = ConfDict.from_yaml(fp)
             yield cls(**cfg)
 
-    def _set_permissions(self, path: str | Path | None) -> None:
-        if isinstance(self.permissions, str):
-            if not self.permissions:
-                self.permissions = None
-            elif self.permissions == "a+rwx":
-                self.permissions = 0o777
-            else:
-                raise ValueError(f"No compatibility for permissions {self.permissions}")
-            msg = "infra.permissions set to %s by compatibility mode"
-            logger.warning(msg, self.permissions)
-        if path is not None and self.permissions is not None:
+    def _set_permissions(self, path: str | Path) -> None:
+        if self.permissions is not None:
             try:
                 Path(path).chmod(self.permissions)
             except Exception as e:

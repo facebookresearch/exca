@@ -52,6 +52,39 @@ def best_effort_utime(folder: Path) -> None:
             pass
 
 
+def _mkdir_with_permissions(
+    folder: Path | str,
+    permissions: int | None,
+    *,
+    root: Path | str,
+) -> None:
+    """Create a folder and chmod its directory chain within a root."""
+    root_path = Path(root).expanduser().resolve()
+    folder_path = Path(folder).expanduser().resolve()
+    if not folder_path.is_relative_to(root_path):
+        raise ValueError(
+            f"Folder {folder!s} resolves outside its permission root {root!s}"
+        )
+    folder_path.mkdir(parents=True, exist_ok=True)
+    if permissions is None:
+        return
+    path = root_path
+    paths = [path]
+    for part in folder_path.relative_to(root_path).parts:
+        path /= part
+        paths.append(path)
+    for path in paths:
+        try:
+            path.chmod(permissions)
+        except Exception as e:
+            logger.warning(
+                "Failed to set permission to %s on '%s'\n(%s)",
+                permissions,
+                path,
+                e,
+            )
+
+
 def to_chunks(
     items: list[X], *, max_chunks: int | None, min_items_per_chunk: int = 1
 ) -> list[list[X]]:

@@ -8,6 +8,7 @@
 
 import contextlib
 import logging
+import stat
 import sys
 import time
 import typing as tp
@@ -65,6 +66,16 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     assert out1 == out2
     job = chain.lookup(1).job()
     assert (job is not None) == (backend == "LocalProcess")
+
+
+def test_step_permissions(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=1)], infra=infra)
+    intermediate = chain.lookup(1).paths.step_folder.parent
+    intermediate.mkdir(parents=True)
+    intermediate.chmod(0o700)
+    chain.run(1)
+    assert stat.S_IMODE(intermediate.stat().st_mode) == 0o777
 
 
 def test_slurm_backend_param_forwarding(

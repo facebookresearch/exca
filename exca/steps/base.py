@@ -18,6 +18,7 @@ import warnings
 import pydantic
 
 import exca
+from exca import utils as exca_utils
 
 from . import backends, identity, items, utils
 
@@ -294,7 +295,9 @@ class Step(exca.helpers.DiscriminatedModel):
             identity.step_uid(aligned),
             cache_type=self._infer_cache_type(),
         )
-        paths.step_folder.mkdir(parents=True, exist_ok=True)
+        exca_utils._mkdir_with_permissions(
+            paths.step_folder, 0o777, root=paths.base_folder
+        )
         return paths
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
