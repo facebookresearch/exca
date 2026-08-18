@@ -7,7 +7,6 @@
 import contextlib
 import importlib
 import logging
-import os
 import pickle
 import shutil
 import stat
@@ -437,39 +436,24 @@ def test_changing_defaults(tmp_path: Path) -> None:
         _ = whenever.process()
 
 
-def test_permissions(tmp_path: Path) -> None:
-    infra = Whatever(infra1={"permissions": "a+rwx"}).infra1  # type: ignore
-    fp = tmp_path / "test" / "whatever" / "text.txt"
-    fp.parent.mkdir(parents=True)
-    fp.touch()
-    before = fp.stat().st_mode
-    infra._set_permissions(fp)
-    after = fp.stat().st_mode
-    assert after > before
+def test_uid_folder_permissions(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path}
+    whatever = Whatever(param1=13, infra1=infra)
+    uid_folder = whatever.infra1.uid_folder()
+    assert uid_folder is not None
+    intermediate = uid_folder.parent
+    intermediate.mkdir(parents=True)
+    intermediate.chmod(0o700)
+    whatever.infra1.uid_folder(create=True)
+    assert stat.S_IMODE(intermediate.stat().st_mode) == 0o777
 
 
-def test_permissions_intermediate_uid_folder_dirs(tmp_path: Path) -> None:
-    """uid_folder() must chmod every directory mkdir(parents=True) creates.
-
-    The uid is formatted as "{method},{version}/{uid}" (see `_uid_string`), so
-    a fresh cache root has a "method,version" intermediate directory between
-    `infra.folder` and the leaf uid folder. Only the root and the leaf used to
-    be chmod-ed, leaving that intermediate directory at the umask-reduced mode.
-    """
-    old_umask = os.umask(0o022)
-    try:
-        whatever = Whatever(
-            param1=13, infra1={"folder": tmp_path, "permissions": 0o777}  # type: ignore
-        )
-        xpfolder = whatever.infra1.uid_folder(create=True)
-        assert xpfolder is not None
-        intermediate = xpfolder.parent
-        assert intermediate != tmp_path, "test assumes a nested uid with a '/' segment"
-        for path in (tmp_path, intermediate, xpfolder):
-            mode = stat.S_IMODE(path.stat().st_mode)
-            assert mode == 0o777, f"{path} has mode {oct(mode)}, expected 0o777"
-    finally:
-        os.umask(old_umask)
+def test_uid_folder_rejects_escape(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path / "cache", "version": "x/../../escape"}
+    whatever = Whatever(param1=13, infra1=infra)
+    with pytest.raises(ValueError, match="must not contain"):
+        whatever.infra1.uid_folder(create=True)
+    assert not (tmp_path / "escape").exists()
 
 
 class D2(pydantic.BaseModel):

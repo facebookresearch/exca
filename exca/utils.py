@@ -52,6 +52,33 @@ def best_effort_utime(folder: Path) -> None:
             pass
 
 
+def mkdir_with_permissions(
+    folder: Path | str,
+    permissions: int | None,
+    *,
+    root: Path | str,
+) -> None:
+    """Create a folder and chmod its directory chain within a root."""
+    root_path = Path(root)
+    folder_path = Path(folder)
+    parts = folder_path.relative_to(root_path).parts
+    if ".." in parts:
+        raise ValueError(f"Folder path must not contain '..': {folder}")
+    folder_path.mkdir(parents=True, exist_ok=True)
+    if permissions is None:
+        return
+    path = root_path
+    try:
+        path.chmod(permissions)
+        for part in parts:
+            path /= part
+            path.chmod(permissions)
+    except Exception as e:
+        logger.warning(
+            "Failed to set permission to %s on '%s'\n(%s)", permissions, path, e
+        )
+
+
 def to_chunks(
     items: list[X], *, max_chunks: int | None, min_items_per_chunk: int = 1
 ) -> list[list[X]]:
