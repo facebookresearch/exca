@@ -90,3 +90,14 @@ Helpers
 
 .. autoclass:: exca.steps.helpers.Func
     :members:
+
+
+Fitting over items
+------------------
+
+.. autoclass:: exca.steps.Fit
+    :show-inheritance:
+    :members: fitted, COHORT_KEY, ARTIFACT_CACHE_TYPE
+    :private-members: _fit
+
+.. autoclass:: exca.steps.FitCohort

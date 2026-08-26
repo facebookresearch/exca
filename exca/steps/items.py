@@ -21,6 +21,7 @@ from . import identity
 
 if tp.TYPE_CHECKING:
     from .base import Step
+    from .fit import FitCohort
 
 
 class _Source(tp.Protocol):
@@ -128,6 +129,7 @@ class StepItems:
         upstream: tp.Sequence[Step] = (),
         pending: tp.Sequence[Step] = (),
         mode: identity.ModeType = "cached",
+        cohort: FitCohort | None = None,
     ) -> None:
         if uids is None:
             if not isinstance(source, dict):
@@ -140,6 +142,7 @@ class StepItems:
         self._upstream = tuple(upstream)
         self._pending = tuple(pending)
         self._mode = mode
+        self._cohort = cohort
 
     def __len__(self) -> int:
         return len(self.uids)
@@ -148,14 +151,27 @@ class StepItems:
         """Run *step* over the carrier, honoring its infra/caching (leaf or ``Chain``)."""
         return step._dispatch(self)
 
+    def _replace(self, **changes: tp.Any) -> StepItems:
+        """Copy with some parts changed; everything else (mode, cohort, ...) carries over.
+
+        Pass ``pending=()`` when *source* becomes computed results, or its steps
+        would run a second time.
+        """
+        params: dict[str, tp.Any] = {
+            "source": self._source,
+            "uids": self.uids,
+            "upstream": self._upstream,
+            "pending": self._pending,
+            "mode": self._mode,
+            "cohort": self._cohort,
+        }
+        return StepItems(**{**params, **changes})
+
     def _append(self, step: Step) -> StepItems:
         """Append a single leaf step's computation and identity."""
-        return StepItems(
-            source=self._source,
-            uids=self.uids,
+        return self._replace(
             upstream=self._upstream + tuple(step._uid_steps()),
             pending=self._pending + (step,),
-            mode=self._mode,
         )
 
     def select(
@@ -169,11 +185,9 @@ class StepItems:
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
         elif hasattr(source, "select"):  # subset lazy sources before pickle
             source = source.select(uids)
-        return StepItems(
+        return self._replace(
             source=source,
             uids=uids,
-            upstream=self._upstream,
-            pending=self._pending,
             mode=mode if mode is not None else self._mode,
         )
 

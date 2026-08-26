@@ -11,7 +11,7 @@ import typing as tp
 
 import pydantic
 
-from . import identity, items, utils
+from . import fit, identity, items, utils
 from .base import Step
 
 
@@ -127,8 +127,9 @@ class Parallel(Step):
 
     The variants run together under one shared backend, each caching under its
     own identity. ``run`` is for effect — read results back per variant via
-    ``parallel.steps[k].lookup(value)``. It has no composable output (yields
-    ``None`` per input), so use it standalone, not as a non-terminal chain step.
+    ``parallel.steps[k].lookup(value)``, which are re-parented copies of the
+    steps handed over. It has no composable output (yields ``None`` per input),
+    so use it standalone, not as a non-terminal chain step.
 
     Example::
 
@@ -165,19 +166,16 @@ class Parallel(Step):
         base = next((i.folder for i in infras if i.folder is not None), None)
         if self.infra.folder is None:
             self.infra.folder = base
-        infra_dict = self.infra.model_dump()
-        self.steps = [
-            s if s.infra is not None else s.clone({"infra": infra_dict})
-            for s in self.steps
-        ]
         if base is not None:
             utils.propagate_folder(self, base)
         for step in self.steps:
-            if step.infra != self.infra:
+            if step.infra is not None and step.infra != self.infra:
                 raise ValueError(
                     "Parallel requires one shared backend across itself and its "
                     f"steps; {self.infra!r} differs from {step.infra!r}"
                 )
+        # the very object: one grouped dispatch then covers every variant
+        self.steps = [s.model_copy(update={"infra": self.infra}) for s in self.steps]
 
     def _uid_steps(self) -> list[Step]:
         return []  # no identity of its own
@@ -198,27 +196,31 @@ class Parallel(Step):
                 f"Parallel needs a cache folder; set infra.folder (on Parallel or "
                 f"a step), got {self.infra!r}"
             )
-        cbatches = []
-        for child in self.steps:
-            uids = [identity.materialize_uid(child, v) for v in batch]
-            child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
-            cbatches.append(self.infra._prepare(child, child_batch))
-        with self.infra._claim(cbatches) as claimed:
-            if claimed.ready:
-                self.infra._execute(claimed.ready)
-        return items.StepItems(
-            source={uid: None for uid in batch.uids},
-            uids=batch.uids,
-            upstream=batch._upstream,
-            mode=batch._mode,
-        )
+        values = list(batch)  # one read, shared by every variant
+        with self.infra._grouped():
+            for child in self.steps:
+                child = utils.resolved_step(
+                    child
+                )  # item uids key on it, as does its cache
+                if child.infra is None:
+                    raise ValueError(
+                        f"Parallel variant {type(child).__name__} resolves to a step "
+                        "with no infra: it would run uncached, leaving nothing to look up"
+                    )
+                if child.infra is not self.infra and child.infra == self.infra:
+                    child = child.model_copy(update={"infra": self.infra})  # one group
+                uids = [identity.materialize_uid(child, v) for v in values]
+                child._dispatch(
+                    items.StepItems(
+                        source=dict(zip(uids, values)), uids=uids, cohort=batch._cohort
+                    )
+                )
+        return batch._replace(source={uid: None for uid in batch.uids}, pending=())
 
     def run(self, value: tp.Any = identity.NoValue()) -> None:
         self.run_many([value])
 
-    def run_many(self, values: tp.Iterable[tp.Any]) -> list[None]:  # type: ignore[override]
-        values = list(values)
-        uids = [identity.materialize_uid(self, v) for v in values]
-        batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
-        self._dispatch(batch)
-        return [None] * len(values)
+    def run_many(  # type: ignore[override]
+        self, values: tp.Iterable[tp.Any] | fit.FitCohort
+    ) -> list[None]:
+        return list(super().run_many(values))

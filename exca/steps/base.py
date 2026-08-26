@@ -22,6 +22,9 @@ from exca import utils as xkutils
 
 from . import backends, identity, items, utils
 
+if tp.TYPE_CHECKING:
+    from .fit import FitCohort
+
 logger = logging.getLogger(__name__)
 
 
@@ -376,33 +379,44 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         return next(iter(self.run_many([value])))
 
-    def run_many(self, values: tp.Iterable[tp.Any]) -> items.StepItems:
+    def run_many(self, values: tp.Iterable[tp.Any] | FitCohort) -> items.StepItems:
         """Execute the step over many inputs, one cache entry per input.
 
         Parameters
         ----------
         values:
-            Inputs to run; one result is produced per input, in order.
+            Inputs to run; one result is produced per input, in order. Wrap them in a
+            :class:`~exca.steps.FitCohort` to let a :class:`~exca.steps.Fit` fit on them.
 
         Returns
         -------
         StepItems
             Iterator yielding one result per input, in input order.
         """
+        from .fit import FitCohort, _stamp_cohorts  # local import: fit builds on Step
+
         built = utils.resolved_step(self)
         if built is not self:
             return built.run_many(values)
 
+        cohort: FitCohort | None = None
+        if isinstance(values, FitCohort):
+            cohort, values = values, values.items
         values = list(values)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]
 
-        warm = self._warm_items(uids)
-        if warm is not None:
-            return warm  # extra-fast path -> avoid StepItems + _dispatch overhead
+        if cohort is None:  # a declared cohort must reach the steps
+            warm = self._warm_items(uids)
+            if warm is not None:
+                return warm  # extra-fast path -> avoid StepItems + _dispatch overhead
+        else:
+            cohort.uids = uids
+            _stamp_cohorts(self, cohort)
 
         boundary = items.StepItems(
             source=dict(zip(uids, values)),
             uids=uids,
+            cohort=cohort,
         )
         return boundary.apply_step(self)
 

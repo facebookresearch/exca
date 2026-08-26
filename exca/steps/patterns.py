@@ -228,7 +228,7 @@ class Scatter(Step):
             for uid, m in plan.items()
             for branch_uid, branch in m.items()
         }
-        carrier = items.StepItems(
+        carrier = items.StepItems(  # branch uids: not the cohort's identity space
             source=_Parts(batch, self.take, origin),
             uids=uids,
             upstream=branch_upstream,
@@ -236,9 +236,8 @@ class Scatter(Step):
         )
         # one dispatch over all branches lets a backend submit them together
         dispatched = self._body()._dispatch(carrier)
-        return items.StepItems(
+        return batch._replace(
             source=_Gather(dispatched, plan, self.gather),
-            uids=batch.uids,
+            pending=(),
             upstream=output_upstream,
-            mode=batch._mode,
         )

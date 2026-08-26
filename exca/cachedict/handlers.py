@@ -383,9 +383,8 @@ class Auto:
                         f"Found #type={val['#type']!r} which is not a registered handler."
                     )
             return {k: cls._dump_value(ctx, v, f"{key}[{k}]") for k, v in val.items()}
-        if isinstance(val, (list, tuple)):
-            items = [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
-            return tuple(items) if isinstance(val, tuple) else items
+        if isinstance(val, (list, tuple)):  # as a list: `_load_value` walks lists only
+            return [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
         handler = DumpContext._find_handler(type(val))
         if handler is not None or hasattr(val, "__dump_info__"):
             ctx.key = key
@@ -416,7 +415,7 @@ class Auto:
             else:
                 for v in val.values():
                     cls._delete_value(ctx, v)
-        elif isinstance(val, list):
+        elif isinstance(val, (list, tuple)):  # tuple: only in legacy entries
             for item in val:
                 cls._delete_value(ctx, item)
 
@@ -426,7 +425,7 @@ class Auto:
             if "#type" in val:
                 return ctx.load(val)
             return {k: cls._load_value(ctx, v) for k, v in val.items()}
-        if isinstance(val, list):
+        if isinstance(val, (list, tuple)):  # tuple: only in legacy entries
             return [cls._load_value(ctx, item) for item in val]
         return val
 

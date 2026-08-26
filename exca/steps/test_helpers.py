@@ -179,6 +179,25 @@ def test_backend_on_steps_is_adopted_with_folder(
     assert [s.lookup(5.0).result() for s in sweep.steps] == [10.0, 15.0]
 
 
+def test_resolved_variants(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+
+    class Configured(Step):
+        def _resolve_step(self) -> Step:
+            return conftest.Mult(coeff=3.0, infra=infra)
+
+    sweep = Parallel(steps=[Configured()], infra=infra)
+    sweep.run(5.0)
+    assert sweep.steps[0].lookup(5.0).result() == 15.0, "cached as the resolved step"
+
+    class Bare(Step):
+        def _resolve_step(self) -> Step:
+            return conftest.Mult(coeff=3.0)
+
+    with pytest.raises(ValueError, match="no infra"):
+        Parallel(steps=[Bare()], infra=infra).run(5.0)
+
+
 def test_one_variant_errors_others_still_cache(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
     ok, bad = conftest.Add(value=2.0), conftest.Add(value=5.0, fail_on="all")
@@ -190,13 +209,29 @@ def test_one_variant_errors_others_still_cache(tmp_path: Path) -> None:
         sweep.steps[1].lookup().result()  # the error itself is cached
 
 
+@pytest.mark.parametrize("resolved", [False, True])
 def test_single_array_across_variants(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resolved: bool
 ) -> None:
     _CapturingAutoExecutor.captured = []
     monkeypatch.setattr(submitit, "AutoExecutor", _CapturingAutoExecutor)
     infra: tp.Any = {"backend": "Slurm", "folder": tmp_path}
-    sweep = Parallel(steps=[conftest.Add(value=v) for v in (1.0, 2.0, 3.0)], infra=infra)
+
+    class Wrapper(Step):
+        value: float
+
+        def _resolve_step(self) -> Step:
+            return conftest.Add(value=self.value, infra=infra)
+
+    variant: tp.Any = Wrapper if resolved else conftest.Add
+    sweep = Parallel(steps=[variant(value=v) for v in (1.0, 2.0, 3.0)], infra=infra)
     sweep.run()
     [(_, params)] = _CapturingAutoExecutor.captured
     assert params["slurm_array_parallelism"] == 3, "one array spans all variants"
+
+
+def test_nested_sweep(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    inner = Parallel(steps=[conftest.Add(value=1.0)], infra=infra)
+    Parallel(steps=[inner, conftest.Add(value=2.0)], infra=infra).run()
+    assert inner.steps[0].lookup().result() == 1.0

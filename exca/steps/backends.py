@@ -323,9 +323,9 @@ class ComputeBatch:
 
     def cached_items(self) -> StepItems:
         """Lazy cache-backed carrier; use on a top-level batch, not a chunk."""
-        return items.StepItems(
+        return self.items._replace(
             source=self.cache_dict,
-            uids=self.items.uids,
+            pending=(),
             upstream=self.info.upstream,
             mode=self.info.mode,
         )
@@ -436,6 +436,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Force/retry: recompute each (step_folder, uid) at most once per lifetime
     _recomputed: set[tuple[Path, str]] = pydantic.PrivateAttr(default_factory=set)
     _checked_configs: set[Path] = pydantic.PrivateAttr(default_factory=set)
+    _group: list[ComputeBatch] | None = pydantic.PrivateAttr(default=None)
 
     def __getstate__(self) -> dict[str, tp.Any]:
         recomputed = self._recomputed
@@ -578,9 +579,39 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 ereg.clear(uids)
         self._checked_configs.discard(paths.step_folder)
 
+    @contextlib.contextmanager
+    def _grouped(self) -> tp.Iterator[None]:
+        """Hold back ``_run`` calls, then claim and execute them as one submission.
+
+        Carriers returned while grouping only hold results once the group ran.
+        Nesting joins the enclosing group.
+        """
+        if self._group is not None:  # nested sweep: the outer group submits it
+            yield
+            return
+        group: list[ComputeBatch] = []
+        self._group = group
+        try:
+            yield
+        finally:
+            self._group = None
+        with self._claim(group) as claimed:
+            if claimed.ready:
+                self._execute(claimed.ready)
+
+    def _defer(self, cbatch: ComputeBatch) -> items.StepItems | None:
+        """Inside ``_grouped``, queue *cbatch* and return its pending carrier."""
+        if self._group is None:
+            return None
+        self._group.append(cbatch)
+        return cbatch.cached_items()
+
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid."""
         cbatch = self._prepare(step, batch)
+        deferred = self._defer(cbatch)
+        if deferred is not None:
+            return deferred
         with self._claim([cbatch]) as claimed:
             if claimed.ready:
                 self._execute(claimed.ready)
@@ -901,6 +932,9 @@ class _PoolBackend(Backend):
         lazy carrier instead of blocking.
         """
         cbatch = self._prepare(step, batch)
+        deferred = self._defer(cbatch)
+        if deferred is not None:
+            return deferred
         claimed = self._claim([cbatch])
         transferred = False
         try:
@@ -916,9 +950,9 @@ class _PoolBackend(Backend):
             }
             ctx = _PoolContext(cbatch.cache_dict, cbatch.paths.step_uid, pool, claimed)
             transferred = True  # _PoolContext closes `claimed`, not the finally
-            return items.StepItems(
+            return cbatch.items._replace(
                 source=_PoolSource(uid_to_future, ctx),
-                uids=cbatch.items.uids,
+                pending=(),
                 upstream=cbatch.info.upstream,
                 mode=cbatch.info.mode,
             )
