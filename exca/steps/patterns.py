@@ -152,13 +152,13 @@ class Scatter(Step):
     def _body(self) -> Step:
         """The single sub-step to scatter over (auto-discovered from fields;
         override if the subclass holds more than one ``Step``)."""
-        children = utils.nested_steps(self)
-        if len(children) != 1:
+        bodies = [sub for _, sub in utils.nested_steps(self)]
+        if len(bodies) != 1:
             raise TypeError(
                 f"{type(self).__name__} must hold exactly one body Step to "
-                f"scatter over (found {len(children)}); override _body if it holds more."
+                f"scatter over (found {len(bodies)}); override _body if it holds more."
             )
-        return children[0]
+        return bodies[0]
 
     def branches(self, item: tp.Any) -> list[tp.Any]:
         """The branches to fan ``item`` into (one body run each), in any number.

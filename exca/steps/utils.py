@@ -9,11 +9,13 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import inspect
 import logging
 import sys
 import typing as tp
 from pathlib import Path
+from types import NoneType
 
 import pydantic
 
@@ -51,7 +53,7 @@ def propagate_folder(step: base.Step, parent_folder: Path) -> None:
     folder = parent_folder if own is None else own
     if step.infra is not None and step.infra.folder is None:
         step.infra.folder = folder
-    for sub in nested_steps(step):
+    for _, sub in nested_steps(step):
         propagate_folder(sub, folder)
 
 
@@ -126,44 +128,52 @@ def resolved_step(step: base.Step) -> base.Step:
     return built
 
 
-def nested_steps(step: base.Step) -> list[base.Step]:
-    """The step's direct sub-steps: every field holding a ``Step``, or a
-    non-empty list/tuple/dict of them."""
-    # Shallow (direct fields only), unlike utils.find_models' deep graph walk.
-    _, children = _labeled_nested_steps(step)
-    return [child for _, child in children]
+_LEAF = (str, int, float, Path, NoneType, type)
+
+
+def nested_steps(step: base.Step) -> list[tuple[str, base.Step]]:
+    """Every ``Step`` the step's fields reach without crossing another ``Step``,
+    each with the dotted path (field, then keys and indices) it sits at."""
+    from . import base  # lazy — avoids circular import at module level
+
+    out: list[tuple[str, base.Step]] = []
+    # vars() + __pydantic_extra__ covers extra='allow' fields (outside __dict__).
+    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
+
+    def walk(value: tp.Any, path: str, seen: set[int]) -> None:
+        if isinstance(value, base.Step):
+            out.append((path, value))
+            return
+        pairs: tp.Iterable[tuple[tp.Any, tp.Any]]
+        if isinstance(value, pydantic.BaseModel):
+            pairs = [(k, v) for k, v in vars(value).items() if not k.startswith("_")]
+        elif isinstance(value, dict):
+            pairs = value.items()
+        elif isinstance(value, (list, tuple)):
+            pairs = enumerate(value)
+        # instances only: is_dataclass accepts classes too
+        elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+            pairs = [(f.name, getattr(value, f.name)) for f in dataclasses.fields(value)]
+        else:
+            return
+        if id(value) in seen:
+            return  # a container holding itself
+        seen = seen | {id(value)}
+        for key, sub in pairs:
+            # skip the call for leaves: per-item calls dominate on big lists
+            if not isinstance(sub, _LEAF):
+                walk(sub, f"{path}.{key}", seen)
+
+    for name, value in all_vals.items():
+        # skip cached_property / private caches, and infra (costly, holds no Step)
+        if not name.startswith("_") and name != "infra":
+            walk(value, name, set())
+    return out
 
 
 # ---------------------------------------------------------------------------
 # show() helpers
 # ---------------------------------------------------------------------------
-
-
-def _labeled_nested_steps(
-    step: base.Step,
-) -> tuple[set[str], list[tuple[str | None, base.Step]]]:
-    """Sub-steps shaped for tree rendering: each paired with a label (``None``
-    for list/tuple entries, matching sequential Chain; the field/dict key
-    otherwise), plus the set of field names they were drawn from."""
-    from . import base  # lazy — avoids circular import at module level
-
-    # vars() + __pydantic_extra__ covers extra='allow' fields (outside __dict__).
-    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
-    consumed: set[str] = set()
-    children: list[tuple[str | None, base.Step]] = []
-    for k, v in all_vals.items():
-        if k.startswith("_"):  # skip cached_property / private caches
-            continue
-        if isinstance(v, dict):
-            pairs = list(v.items())
-        elif isinstance(v, (list, tuple)):
-            pairs = [(None, x) for x in v]
-        else:
-            pairs = [(k, v)]
-        if pairs and all(isinstance(x, base.Step) for _, x in pairs):
-            consumed.add(k)
-            children.extend(pairs)
-    return consumed, children
 
 
 def _truncate(s: str, max_len: int = 40) -> str:
@@ -177,17 +187,37 @@ def _truncate(s: str, max_len: int = 40) -> str:
     return f"{s[:head]}...{s[-tail:]}"
 
 
+_ELIDED = "..."
+
+
 def step_label(step: base.Step) -> str:
     """One-line label: ClassName  key=val ...  [Backend, folder]"""
     parts = [type(step).__name__]
     disc = type(step)._exca_discriminator_key
-    consumed, _ = _labeled_nested_steps(step)
-    # Step-valued fields are rendered as a tree by step_lines; drop from inline.
-    skip = {"infra", disc} | consumed
     # mode='json' fires field serializers (e.g. ImportString → dotted path).
     js = step.model_dump(mode="json", exclude_defaults=True)
+
+    def elide(path: str) -> None:
+        keys = path.split(".")
+        node: tp.Any = js
+        for key in keys[:-1]:
+            if isinstance(node, dict) and key in node:
+                node = node[key]
+            elif isinstance(node, list) and key.isdigit():
+                node = node[int(key)]
+            else:
+                return
+        if isinstance(node, dict):
+            node.pop(keys[-1], None)
+        elif isinstance(node, list) and keys[-1].isdigit():
+            node[int(keys[-1])] = _ELIDED  # keeps the entry's position visible
+
+    # Steps are rendered as a tree by step_lines; keep their non-Step siblings inline.
+    for path, _ in nested_steps(step):
+        elide(path)
     for k, v in js.items():
-        if k in skip:
+        gone = v == {} or (isinstance(v, list) and all(x == _ELIDED for x in v))
+        if k in {"infra", disc} or gone:
             continue
         parts.append(f"{k}={_truncate(repr(v))}")
     if step.infra is not None:
@@ -207,12 +237,13 @@ def step_lines(step: base.Step) -> list[str]:
     if r is not step:
         return step_lines(r)
     lines = [step_label(step)]
-    _, children = _labeled_nested_steps(step)
-    for i, (key, sub) in enumerate(children):
+    children = nested_steps(step)
+    for i, (path, sub) in enumerate(children):
         is_last = i == len(children) - 1
         connector = "└── " if is_last else "├── "
         cont = "    " if is_last else "│   "
-        label_prefix = f"{key}: " if key is not None else ""
+        label = path.rpartition(".")[2]
+        label_prefix = "" if label.isdigit() else f"{label}: "  # index: not a name
         sub_lines = step_lines(sub)
         lines.append(connector + label_prefix + sub_lines[0])
         for sl in sub_lines[1:]:
