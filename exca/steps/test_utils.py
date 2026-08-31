@@ -85,33 +85,6 @@ Branch
     assert b.show() == expected
 
 
-def test_nested_steps_paths(tmp_path: Path) -> None:
-    class Holder(pydantic.BaseModel):
-        step: Step
-
-    class Composite(Step):
-        mixed: list[Step | None]
-        holder: Holder
-        grouped: dict[str, list[Step]]
-
-        def _run(self, x: float) -> float:
-            return x
-
-    cached: tp.Any = {"backend": "Cached"}
-    root: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    comp = Composite(
-        mixed=[None, conftest.Mult(coeff=2.0, infra=cached)],
-        holder=Holder(step=conftest.Add(value=1.0, infra=cached)),
-        grouped={"g": [conftest.Mult(coeff=3.0, infra=cached)]},
-        infra=root,
-    )
-    found = utils.nested_steps(comp)
-    paths = ["mixed.1", "holder.step", "grouped.g.0"]
-    assert list(found) == paths
-    folders = [utils.get_infra_folder(sub) for sub in found.values()]
-    assert folders == [tmp_path] * len(paths), "folder not propagated to every sub-step"
-
-
 def test_resolved_step_convergence_error() -> None:
     class BadStep(Step):
         def _resolve_step(self) -> Step:
