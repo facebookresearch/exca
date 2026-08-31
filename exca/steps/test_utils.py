@@ -77,10 +77,12 @@ def test_show_non_chain_composite() -> None:
         mixed=[None, conftest.Mult(coeff=3.0)],
     )
     expected = """\
-Branch  opts={'lr': 0.5}  mixed=[None, '...']
+Branch
 ├── left: Mult
-├── inner: Add  value=1.0
-└── Mult  coeff=3.0"""
+├── opts  {'lr': 0.5}
+│   └── inner: Add  value=1.0
+└── mixed  [None]
+    └── Mult  coeff=3.0"""
     assert b.show() == expected
 
 

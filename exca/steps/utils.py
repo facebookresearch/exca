@@ -187,37 +187,16 @@ def _truncate(s: str, max_len: int = 40) -> str:
     return f"{s[:head]}...{s[-tail:]}"
 
 
-_ELIDED = "..."
-
-
 def step_label(step: base.Step) -> str:
     """One-line label: ClassName  key=val ...  [Backend, folder]"""
     parts = [type(step).__name__]
     disc = type(step)._exca_discriminator_key
+    # Step-bearing fields become tree levels, carrying their own config there.
+    skip = {"infra", disc} | {p.split(".", 1)[0] for p, _ in nested_steps(step)}
     # mode='json' fires field serializers (e.g. ImportString → dotted path).
-    js = step.model_dump(mode="json", exclude_defaults=True)
-
-    def elide(path: str) -> None:
-        keys = path.split(".")
-        node: tp.Any = js
-        for key in keys[:-1]:
-            if isinstance(node, dict) and key in node:
-                node = node[key]
-            elif isinstance(node, list) and key.isdigit():
-                node = node[int(key)]
-            else:
-                return
-        if isinstance(node, dict):
-            node.pop(keys[-1], None)
-        elif isinstance(node, list) and keys[-1].isdigit():
-            node[int(keys[-1])] = _ELIDED  # keeps the entry's position visible
-
-    # Steps are rendered as a tree by step_lines; keep their non-Step siblings inline.
-    for path, _ in nested_steps(step):
-        elide(path)
-    for k, v in js.items():
-        gone = v == {} or (isinstance(v, list) and all(x == _ELIDED for x in v))
-        if k in {"infra", disc} or gone:
+    config = step.model_dump(mode="json", exclude_defaults=True)
+    for k, v in config.items():
+        if k in skip:
             continue
         parts.append(f"{k}={_truncate(repr(v))}")
     if step.infra is not None:
@@ -236,18 +215,46 @@ def step_lines(step: base.Step) -> list[str]:
     r = resolved_step(step)
     if r is not step:
         return step_lines(r)
-    lines = [step_label(step)]
-    children = nested_steps(step)
-    for i, (path, sub) in enumerate(children):
-        is_last = i == len(children) - 1
-        connector = "└── " if is_last else "├── "
-        cont = "    " if is_last else "│   "
-        label = path.rpartition(".")[2]
-        label_prefix = "" if label.isdigit() else f"{label}: "  # index: not a name
-        sub_lines = step_lines(sub)
-        lines.append(connector + label_prefix + sub_lines[0])
-        for sl in sub_lines[1:]:
-            lines.append(cont + sl)
+    tree: dict[str, tp.Any] = {}
+    for path, sub in nested_steps(step):
+        keys = path.split(".")
+        node = tree
+        for key in keys[:-1]:
+            node = node.setdefault(key, {})
+        node[keys[-1]] = sub
+    config: tp.Any = step.model_dump(mode="json", exclude_defaults=True)
+    if len(tree) == 1:
+        (key,) = tree
+        if isinstance(tree[key], dict):
+            # sole container (a Chain's steps, say): its name adds nothing
+            tree, config = tree[key], config.get(key, {})
+    return [step_label(step)] + _tree_lines(tree, config)
+
+
+def _leftovers(config: tp.Any, node: dict[str, tp.Any]) -> str:
+    """A container's config minus the entries rendered as its children."""
+    if isinstance(config, dict):
+        rest: tp.Any = {k: v for k, v in config.items() if k not in node}
+    elif isinstance(config, list):
+        rest = [v for i, v in enumerate(config) if str(i) not in node]
+    else:
+        return ""
+    return f"  {_truncate(repr(rest))}" if rest else ""
+
+
+def _tree_lines(node: dict[str, tp.Any], config: tp.Any) -> list[str]:
+    lines: list[str] = []
+    bare = all(key.isdigit() for key in node)  # index: not a name
+    for i, (key, val) in enumerate(node.items()):
+        if isinstance(val, dict):
+            own = config[int(key)] if isinstance(config, list) else config.get(key, {})
+            head, rest = key + _leftovers(own, val), _tree_lines(val, own)
+        else:
+            sub = step_lines(val)
+            head, rest = ("" if bare else f"{key}: ") + sub[0], sub[1:]
+        is_last = i == len(node) - 1
+        lines.append(("└── " if is_last else "├── ") + head)
+        lines.extend(("    " if is_last else "│   ") + line for line in rest)
     return lines
 
 
