@@ -4,7 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import dataclasses
 import typing as tp
 from pathlib import Path
 
@@ -90,14 +89,9 @@ def test_nested_steps_paths(tmp_path: Path) -> None:
     class Holder(pydantic.BaseModel):
         step: Step
 
-    @dataclasses.dataclass
-    class Box:
-        step: Step
-
     class Composite(Step):
         mixed: list[Step | None]
         holder: Holder
-        box: Box
         grouped: dict[str, list[Step]]
 
         def _run(self, x: float) -> float:
@@ -108,14 +102,13 @@ def test_nested_steps_paths(tmp_path: Path) -> None:
     comp = Composite(
         mixed=[None, conftest.Mult(coeff=2.0, infra=cached)],
         holder=Holder(step=conftest.Add(value=1.0, infra=cached)),
-        box=Box(step=conftest.Add(value=2.0, infra=cached)),
         grouped={"g": [conftest.Mult(coeff=3.0, infra=cached)]},
         infra=root,
     )
     found = utils.nested_steps(comp)
-    paths = ["mixed.1", "holder.step", "box.step", "grouped.g.0"]
-    assert [path for path, _ in found] == paths
-    folders = [utils.get_infra_folder(sub) for _, sub in found]
+    paths = ["mixed.1", "holder.step", "grouped.g.0"]
+    assert list(found) == paths
+    folders = [utils.get_infra_folder(sub) for sub in found.values()]
     assert folders == [tmp_path] * len(paths), "folder not propagated to every sub-step"
 
 

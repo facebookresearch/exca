@@ -150,12 +150,13 @@ class Scatter(Step):
         return []
 
     def _body(self) -> Step:
-        """The single sub-step to scatter over (auto-discovered from fields;
-        override if the subclass holds more than one ``Step``)."""
-        bodies = [sub for _, sub in utils.nested_steps(self)]
+        """The single sub-step to scatter over (auto-discovered from the direct
+        fields; override if the subclass holds more than one ``Step``)."""
+        subs = utils.nested_steps(self)
+        bodies = [sub for path, sub in subs.items() if "." not in path]
         if len(bodies) != 1:
             raise TypeError(
-                f"{type(self).__name__} must hold exactly one body Step to "
+                f"{type(self).__name__} must hold exactly one body Step field to "
                 f"scatter over (found {len(bodies)}); override _body if it holds more."
             )
         return bodies[0]

@@ -9,13 +9,11 @@
 from __future__ import annotations
 
 import contextlib
-import dataclasses
 import inspect
 import logging
 import sys
 import typing as tp
 from pathlib import Path
-from types import NoneType
 
 import pydantic
 
@@ -53,7 +51,7 @@ def propagate_folder(step: base.Step, parent_folder: Path) -> None:
     folder = parent_folder if own is None else own
     if step.infra is not None and step.infra.folder is None:
         step.infra.folder = folder
-    for _, sub in nested_steps(step):
+    for sub in nested_steps(step).values():
         propagate_folder(sub, folder)
 
 
@@ -128,47 +126,14 @@ def resolved_step(step: base.Step) -> base.Step:
     return built
 
 
-_LEAF = (str, int, float, Path, NoneType, type)
-
-
-def nested_steps(step: base.Step) -> list[tuple[str, base.Step]]:
+def nested_steps(step: base.Step) -> dict[str, base.Step]:
     """Every ``Step`` the step's fields reach without crossing another ``Step``,
-    each with the dotted path (field, then keys and indices) it sits at."""
+    keyed by the dotted path (field, then keys and indices) it sits at."""
     from . import base  # lazy — avoids circular import at module level
 
-    out: list[tuple[str, base.Step]] = []
-    # vars() + __pydantic_extra__ covers extra='allow' fields (outside __dict__).
-    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
-
-    def walk(value: tp.Any, path: str, seen: set[int]) -> None:
-        if isinstance(value, base.Step):
-            out.append((path, value))
-            return
-        pairs: tp.Iterable[tuple[tp.Any, tp.Any]]
-        if isinstance(value, pydantic.BaseModel):
-            pairs = [(k, v) for k, v in vars(value).items() if not k.startswith("_")]
-        elif isinstance(value, dict):
-            pairs = value.items()
-        elif isinstance(value, (list, tuple)):
-            pairs = enumerate(value)
-        # instances only: is_dataclass accepts classes too
-        elif dataclasses.is_dataclass(value) and not isinstance(value, type):
-            pairs = [(f.name, getattr(value, f.name)) for f in dataclasses.fields(value)]
-        else:
-            return
-        if id(value) in seen:
-            return  # a container holding itself
-        seen = seen | {id(value)}
-        for key, sub in pairs:
-            # skip the call for leaves: per-item calls dominate on big lists
-            if not isinstance(sub, _LEAF):
-                walk(sub, f"{path}.{key}", seen)
-
-    for name, value in all_vals.items():
-        # skip cached_property / private caches, and infra (costly, holds no Step)
-        if not name.startswith("_") and name != "infra":
-            walk(value, name, set())
-    return out
+    return utils.find_models(
+        dict(step), base.Step, include_private=False, stop_on_find=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -191,8 +156,8 @@ def step_label(step: base.Step) -> str:
     """One-line label: ClassName  key=val ...  [Backend, folder]"""
     parts = [type(step).__name__]
     disc = type(step)._exca_discriminator_key
-    # Step-bearing fields become tree levels, carrying their own config there.
-    skip = {"infra", disc} | {p.split(".", 1)[0] for p, _ in nested_steps(step)}
+    # rendered as tree levels by step_lines
+    skip = {"infra", disc} | {p.split(".", 1)[0] for p in nested_steps(step)}
     # mode='json' fires field serializers (e.g. ImportString → dotted path).
     config = step.model_dump(mode="json", exclude_defaults=True)
     for k, v in config.items():
@@ -211,12 +176,12 @@ def step_label(step: base.Step) -> str:
 
 
 def step_lines(step: base.Step) -> list[str]:
-    """Render step as tree lines; follows _resolve_step and recurses into Step-valued fields."""
+    """The step's label, then one line per nested container and Step."""
     r = resolved_step(step)
     if r is not step:
         return step_lines(r)
     tree: dict[str, tp.Any] = {}
-    for path, sub in nested_steps(step):
+    for path, sub in nested_steps(step).items():
         keys = path.split(".")
         node = tree
         for key in keys[:-1]:
