@@ -27,10 +27,12 @@ def test_show_named_chain_with_resolution() -> None:
     chain = Chain(steps=steps)
     expected = """\
 Chain
-├── load: Chain
-│   ├── Add  value=1.0
-│   └── Mult  coeff=5.0
-└── scale: Add  value=4.0"""
+└── steps
+    ├── load: Chain
+    │   └── steps
+    │       ├── Add  value=1.0
+    │       └── Mult  coeff=5.0
+    └── scale: Add  value=4.0"""
     assert chain.show() == expected
 
 
@@ -48,12 +50,14 @@ def test_show_seq_chain_with_infra() -> None:
     )
     expected = """\
 Chain  [Cached, /tmp/x]
-├── Func  function='exca.steps.test_utils._scale'  factor=3.0  src='/data/in'
-├── Mult  coeff=3.0  [Cached, /tmp/x]
-└── Chain
-    ├── AddWithTransforms  value=1.0
-    ├── Mult
-    └── Mult  coeff=3.0"""
+└── steps
+    ├── Func  function='exca.steps.test_utils._scale'  factor=3.0  src='/data/in'
+    ├── Mult  coeff=3.0  [Cached, /tmp/x]
+    └── Chain
+        └── steps
+            ├── AddWithTransforms  value=1.0
+            ├── Mult
+            └── Mult  coeff=3.0"""
     assert chain.show() == expected
 
 

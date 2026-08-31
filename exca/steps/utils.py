@@ -187,12 +187,7 @@ def step_lines(step: base.Step) -> list[str]:
         for key in keys[:-1]:
             node = node.setdefault(key, {})
         node[keys[-1]] = sub
-    config: tp.Any = step.model_dump(mode="json", exclude_defaults=True)
-    if len(tree) == 1:
-        (key,) = tree
-        if isinstance(tree[key], dict):
-            # sole container (a Chain's steps, say): its name adds nothing
-            tree, config = tree[key], config.get(key, {})
+    config = step.model_dump(mode="json", exclude_defaults=True)
     return [step_label(step)] + _tree_lines(tree, config)
 
 
