@@ -166,7 +166,7 @@ config already carries (`Normalize(cohort="train")`) — settles before
 anything runs, and the step that runs is a copy carrying it, so the
 artifact and every downstream cache are scoped to it. A named cohort is
 recoverable from the config alone, for a pipeline that never presents
-the items it was fitted on. Fitting another cohort takes another
+the items it was fitted on. Another cohort or upstream takes another
 config, so `clone()` it.
 
 The fit runs where the step is dispatched from, ahead of any split,

@@ -103,7 +103,7 @@ class Fit(Step):
 
     Only a :class:`FitCohort` is fitted on; its name -- :attr:`cohort`, else the
     fingerprint of its items -- scopes the artifact and every downstream cache.
-    Fitting another cohort takes another config (:meth:`clone`).
+    Another cohort or upstream takes another config (:meth:`clone`).
 
     The fit runs where the step is dispatched from, ahead of a backend splitting the
     batch, and is cached under ``infra``. The upstream is read twice (once for the
@@ -182,7 +182,12 @@ class Fit(Step):
         artifact = _Artifact(owner=owner, infra=infra)
         upstream = tuple(batch._upstream)
         fitted_for = (uid, identity.step_uid([*upstream, artifact]))
-        if self._fitted_for == fitted_for:
+        if self._fitted_for is not None:
+            if self._fitted_for != fitted_for:
+                raise RuntimeError(
+                    f"{kind} already holds artifact {self._fitted_for!r}, cannot replace "
+                    f"it with {fitted_for!r}; use clone() for another upstream or config"
+                )
             return
         handle = artifact.lookup(_upstream=upstream, _uid=uid)
         status = handle.status
