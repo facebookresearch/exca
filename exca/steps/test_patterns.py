@@ -8,6 +8,7 @@ import pickle
 import typing as tp
 from pathlib import Path
 
+import pydantic
 import pytest
 
 from . import base, conftest, items
@@ -60,10 +61,21 @@ def test_invalid_scatter_raises() -> None:
         def branches(self, item: tp.Any) -> list:
             return list(item)
 
+    class Cfg(pydantic.BaseModel):
+        helper: base.Step
+
+    class _NestedOnly(Scatter):
+        cfg: Cfg
+
+        def branches(self, item: tp.Any) -> list:
+            return list(item)
+
     with pytest.raises(ValueError, match="no branches to scatter"):
         _Empty(body=conftest.Mult()).run({"a": 1.0})
     with pytest.raises(TypeError, match="exactly one body Step"):
         _TwoBodies(a=conftest.Mult(), b=conftest.Mult()).run({"x": 1.0})
+    with pytest.raises(TypeError, match="exactly one body Step"):
+        _NestedOnly(cfg=Cfg(helper=conftest.Mult())).run({"x": 1.0})
 
 
 def test_scatter_composition() -> None:

@@ -141,8 +141,9 @@ chain = steps.Chain(
 
 print(chain.show())  # tree view for debugging
 # Chain  [Cached, /cache]
-# ├── LoadValue  path='value.txt'  [Cached, /cache]
-# └── Multiply  coeff=3.0
+# └── steps
+#     ├── LoadValue  path='value.txt'  [Cached, /cache]
+#     └── Multiply  coeff=3.0
 ```
 
 The `mode` field on `infra` controls cache behaviour:
