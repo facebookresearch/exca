@@ -11,7 +11,6 @@ from pathlib import Path
 import numpy as np
 import pydantic
 import pytest
-import sklearn.decomposition
 import torch
 
 import exca
@@ -287,21 +286,6 @@ class Normalize(steps.Fit):
         return (value - mean) / std
 
 
-class PCA(steps.Fit):
-    """Projects each array on the cohort's principal components."""
-
-    n_components: int = 2
-
-    def _fit(self, values: tp.Iterable[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
-        model = sklearn.decomposition.PCA(n_components=self.n_components)
-        model.fit(np.concatenate(list(values), axis=0))
-        return model.mean_, model.components_
-
-    def _run(self, value: np.ndarray) -> np.ndarray:
-        mean, components = self.fitted
-        return (value - mean) @ components.T
-
-
 class TrainLinear(steps.Fit):
     """Trains a linear model to predict 2x+1, then predicts for each item."""
 
@@ -334,15 +318,6 @@ def test_normalize(tmp_path: Path) -> None:
     out = np.concatenate(list(step.run_many(steps.FitCohort(cohort))), axis=0)
     np.testing.assert_allclose(out.mean(axis=0), np.zeros(3), atol=1e-10)
     np.testing.assert_allclose(out.std(axis=0), np.ones(3), atol=1e-10)
-
-
-def test_pca(tmp_path: Path) -> None:
-    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
-    rng = np.random.default_rng(12)
-    base = rng.normal(size=(24, 2)) @ rng.normal(size=(2, 5))
-    cohort = [base[i : i + 8] for i in range(0, 24, 8)]
-    out = list(PCA(n_components=2, infra=infra).run_many(steps.FitCohort(cohort)))
-    assert [x.shape for x in out] == [(8, 2)] * 3
 
 
 def test_torch_train(tmp_path: Path) -> None:
