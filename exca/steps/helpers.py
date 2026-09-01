@@ -199,9 +199,8 @@ class Parallel(Step):
         values = list(batch)  # one read, shared by every variant
         with self.infra._grouped():
             for child in self.steps:
-                child = utils.resolved_step(
-                    child
-                )  # item uids key on it, as does its cache
+                # item uids key on the resolved step, as does its cache
+                child = utils.resolved_step(child)
                 if child.infra is None:
                     raise ValueError(
                         f"Parallel variant {type(child).__name__} resolves to a step "
@@ -210,11 +209,9 @@ class Parallel(Step):
                 if child.infra is not self.infra and child.infra == self.infra:
                     child = child.model_copy(update={"infra": self.infra})  # one group
                 uids = [identity.materialize_uid(child, v) for v in values]
-                child._dispatch(
-                    items.StepItems(
-                        source=dict(zip(uids, values)), uids=uids, cohort=batch._cohort
-                    )
-                )
+                child_batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
+                child_batch._cohort = batch._cohort  # same items, own uid space
+                child._dispatch(child_batch)
         return batch._replace(source={uid: None for uid in batch.uids}, pending=())
 
     def run(self, value: tp.Any = identity.NoValue()) -> None:

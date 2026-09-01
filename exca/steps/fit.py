@@ -11,12 +11,10 @@ import typing as tp
 
 import pydantic
 
-import exca
+from exca import utils as xkutils
 
-from . import backends, items
+from . import backends, items, utils
 from .base import Step
-
-CohortKey = tp.Literal["set", "multiset", "sequence"]
 
 
 class FitCohort:
@@ -43,20 +41,9 @@ class FitCohort:
     def __repr__(self) -> str:
         return f"{type(self).__name__}({len(self.items)} items)"
 
-    def __getstate__(self) -> dict[str, tp.Any]:
-        return {**self.__dict__, "items": []}  # values travel with the carrier
 
-
-def _cohort_uids(uids: tp.Sequence[str], key: CohortKey) -> list[str]:
-    """The cohort's uids as its fit sees them, ordered so the fit is reproducible."""
-    if key == "sequence":
-        return list(uids)
-    return sorted(set(uids) if key == "set" else uids)
-
-
-def _fingerprint(uids: tp.Sequence[str], key: CohortKey) -> str:
+def _fingerprint(ordered: tp.Sequence[str]) -> str:
     """Identity of a cohort that was not named, as ``<hash8>,<count>``."""
-    ordered = _cohort_uids(uids, key)
     digest = hashlib.sha256()
     for uid in ordered:
         digest.update(uid.encode("utf8"))
@@ -64,27 +51,35 @@ def _fingerprint(uids: tp.Sequence[str], key: CohortKey) -> str:
     return f"{digest.hexdigest()[:8]},{len(ordered)}"
 
 
-def _stamp_cohorts(step: Step, cohort: FitCohort) -> None:
-    """Name the cohort in every ``Fit`` of *step*, before anything runs.
+def _find_fits(step: Step, root: str = "") -> dict[str, Fit]:
+    """Every ``Fit`` of *step*, including those a ``_resolve_step`` builds."""
+    found: dict[str, Fit] = {}
+    for path, sub in xkutils.find_models(step, Step, include_private=False).items():
+        key = f"{root}{path}" if path else root
+        if isinstance(sub, Fit):  # not its resolution: that one carries a cohort
+            found[key] = sub
+        elif (built := utils.resolved_step(sub)) is not sub:
+            found.update(_find_fits(built, key))
+    return found
 
-    The name is part of the configuration, hence of the cache identity, so it must
-    be settled before a composite step keys its own cache.
-    """
-    fits = exca.utils.find_models(step, Fit, include_private=False)
-    for path, fit in fits.items():
-        uid = fit.cohort
-        if uid is None or fit._stamped:  # a name given in the config is kept
-            uid = _fingerprint(cohort.uids, fit.COHORT_KEY)
-        if fit.cohort != uid:
-            try:
-                fit.cohort = uid
-            except Exception as e:
+
+def declare_cohorts(step: Step, cohort: FitCohort) -> None:
+    """Name the cohort in every ``Fit`` of *step*, privately, before anything runs."""
+    for path, fit in _find_fits(step).items():
+        if fit.cohort is not None and fit._declared is None:
+            uid = fit.cohort  # a name given in the config is kept
+        else:
+            uid = _fingerprint(fit._cohort_uids(cohort.uids))
+            # the config that ran: this copy, or the one it resolved to
+            memo = tp.cast("Fit | None", fit._resolution_cache)
+            ran = fit if fit.cohort is not None else memo
+            if ran is not None and ran.cohort != uid:
                 raise RuntimeError(
                     f"{type(fit).__name__} at {path or '.'} already ran on cohort "
-                    f"{fit.cohort!r}: refitting in place is not supported, run "
-                    "clone({'cohort': None}) on the new cohort"
-                ) from e
-            fit._stamped = True
+                    f"{ran.cohort!r}: refitting in place is not supported, run "
+                    "clone() to fit another cohort"
+                )
+            fit._declared = uid
         cohort.fitted_by.append(f"{path or '.'}({uid})")
 
 
@@ -93,46 +88,62 @@ class Fit(Step):
 
     .. warning:: Experimental -- API may change.
 
-    Override :meth:`_fit` for the artifact, and :meth:`_run` for one item's output
-    (reading :attr:`fitted`).
+    Example::
 
-    Only a batch passed as a :class:`FitCohort` is fitted on; any other batch
-    transforms with what is already fitted, and raises if that is nothing. The
-    cohort's identity -- its name, or the fingerprint of its items -- is written to
-    :attr:`cohort` before the run, so the artifact and every downstream cache are
-    scoped to it. A step that ran is frozen, so its cohort cannot be replaced.
+        class Normalize(Fit):
+            def _fit(self, values):       # the cohort, streamed
+                return np.stack(list(values)).mean(0)
+
+            def _run(self, value):        # one item
+                return value - self.fitted
+
+        norm = Normalize(infra={"backend": "Cached", "folder": cache})
+        norm.run_many(FitCohort(train))  # fits on these, then transforms them
+        norm.run_many(test)              # transforms with the same artifact
+
+    Only a :class:`FitCohort` is fitted on; its name -- :attr:`cohort`, else the
+    fingerprint of its items -- scopes the artifact and every downstream cache.
+    Fitting another cohort takes another config (:meth:`clone`).
 
     The fit runs where the step is dispatched from, ahead of a backend splitting the
     batch, and is cached under ``infra``. The upstream is read twice (once for the
     fit, once per item), so give an expensive upstream its own ``infra``.
 
-    ``COHORT_KEY`` states whether order and repetitions define the cohort, and
-    ``ARTIFACT_CACHE_TYPE`` the artifact's cache format (``CACHE_TYPE`` stays the
-    per-item outputs'). Prefer fitting arrays or tensors -- e.g. a state dict over a
-    model -- as they cache natively instead of pickling.
+    Override :meth:`_cohort_uids` if order or repetitions define the cohort.
+    ``ARTIFACT_CACHE_TYPE`` is the artifact's cache format -- prefer fitting arrays
+    or tensors (e.g. a state dict over a model), which cache natively.
 
     Parameters
     ----------
     cohort
-        Name of the artifact, to fit it under a name or to use it in a run that
-        never presents the cohort (a config-only pipeline). Left unset, the
-        fingerprint of the cohort's items is written here instead.
+        Name for the artifact, to fit it under a name or to read it back in a run
+        that never presents the cohort. Unset, the items' fingerprint names it.
     """
 
-    COHORT_KEY: tp.ClassVar[CohortKey] = "set"
     ARTIFACT_CACHE_TYPE: tp.ClassVar[str | None] = "Auto"
 
     cohort: str | None = None
 
     _fitted: tp.Any = pydantic.PrivateAttr(None)
     _fitted_for: str | None = pydantic.PrivateAttr(None)  # cohort of `_fitted`
-    _stamped: bool = pydantic.PrivateAttr(False)  # `cohort` written by a declaration
+    _declared: str | None = pydantic.PrivateAttr(None)  # cohort handed by `run_many`
+
+    def _resolve_step(self) -> Step:
+        if self.cohort is not None or self._declared is None:
+            return self
+        return self.model_copy(update={"cohort": self._declared})
+
+    def _cohort_uids(self, uids: tp.Sequence[str]) -> list[str]:
+        """The cohort's uids as :meth:`_fit` reads them, and as they identify it.
+
+        Deduplicated and sorted; override with ``list(uids)`` for a sequence fit.
+        """
+        return sorted(set(uids))
 
     def _fit(self, values: tp.Iterable[tp.Any]) -> tp.Any:
         """The artifact for the cohort, from the values this step receives.
 
-        *values* streams the cohort, and can be iterated more than once (e.g. one
-        pass per epoch) -- at the cost of re-reading the upstream each time.
+        *values* re-iterates the cohort (one upstream read per pass).
         """
         raise NotImplementedError
 
@@ -146,12 +157,15 @@ class Fit(Step):
         return self._fitted
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
+        built = utils.resolved_step(self)
+        if built is not self:
+            return built._dispatch(batch)
         # before super(): a split ships the artifact along with the step
         if self.cohort is None or self._fitted_for != self.cohort:
-            self._resolve(batch)
+            self._resolve_artifact(batch)
         return super()._dispatch(batch)
 
-    def _resolve(self, batch: items.StepItems) -> None:
+    def _resolve_artifact(self, batch: items.StepItems) -> None:
         """Read the artifact for this step's cohort back, or fit it."""
         kind = type(self).__name__
         uid = self.cohort
@@ -160,30 +174,29 @@ class Fit(Step):
                 f"{kind} has no cohort to fit on or to read back: run it on a "
                 "FitCohort, or set its 'cohort' name"
             )
-        cohort = batch._cohort
         mode = backends._fold_modes(batch._mode, backends._effective_mode(self))
         # cohort cleared: all cohorts of this Fit share one folder, one entry each
         owner = self.model_copy(update={"infra": None, "cohort": None})
+        owner._declared = None  # or it would resolve the cohort back in
         infra = None if self.infra is None else self.infra.derive(mode=mode)
         artifact = _Artifact(owner=owner, infra=infra)
         upstream = tuple(batch._upstream)
         handle = artifact.lookup(_upstream=upstream, _uid=uid)
         status = handle.status
-        # same rule as `_pending_statuses`: a cached error still raises in "cached" mode
-        if status is None or mode == "force" or (mode == "retry" and status == "error"):
-            if cohort is None:
+        if status is None or backends._must_recompute(status, mode):
+            if not batch._cohort:
                 hint = "drop the force mode" if mode == "force" else "check its name"
                 raise RuntimeError(
                     f"{kind} must fit cohort {uid!r} but was handed no items to fit "
                     f"on: run it on a FitCohort, or {hint}"
                 )
             # counts, not uids: a step re-keying items has its own uid space
-            handed, declared_n = len(set(batch.uids)), len(set(cohort.uids))
-            if handed < declared_n:
+            handed = len(set(batch.uids))
+            if handed < batch._total_size:
                 raise RuntimeError(
-                    f"{kind} was handed {handed} of the {declared_n} items of cohort "
-                    f"{uid!r}, too few to fit it -- an enclosing backend sharded them; "
-                    "fit it before distributing, or move that backend onto this step"
+                    f"{kind} was handed {handed} of the {batch._total_size} items of "
+                    f"cohort {uid!r}, too few to fit it -- an enclosing backend sharded "
+                    "them; fit it before distributing, or move that backend onto this step"
                 )
         carrier = items.StepItems(
             source={uid: (batch,)}, uids=[uid], upstream=upstream, mode=mode
@@ -206,6 +219,4 @@ class _Artifact(Step):
 
     def _run(self, value: tuple[items.StepItems]) -> tp.Any:
         batch = value[0]  # the carrier itself: re-iterable, applies its pending steps
-        return self.owner._fit(
-            batch.select(_cohort_uids(batch.uids, self.owner.COHORT_KEY))
-        )
+        return self.owner._fit(batch.select(self.owner._cohort_uids(batch.uids)))

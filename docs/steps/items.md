@@ -162,12 +162,12 @@ for value in norm.run_many(test_paths):
 again (one upstream read per pass).
 
 The cohort's identity — the fingerprint of its items, or the name the
-config already carries (`Normalize(cohort="train")`) — is written to
-the `cohort` field before anything runs, so the artifact and every
-downstream cache are scoped to it. A named cohort is recoverable from
-the config alone, for a pipeline that never presents the items it was
-fitted on. A step that ran is frozen, so fitting another cohort takes
-a fresh config (`clone({"cohort": None})`).
+config already carries (`Normalize(cohort="train")`) — settles before
+anything runs, and the step that runs is a copy carrying it, so the
+artifact and every downstream cache are scoped to it. A named cohort is
+recoverable from the config alone, for a pipeline that never presents
+the items it was fitted on. Fitting another cohort takes another
+config, so `clone()` it.
 
 The fit runs where the step is dispatched from, ahead of any split,
 and is cached under `infra`. A `Fit` under a backend that shards the

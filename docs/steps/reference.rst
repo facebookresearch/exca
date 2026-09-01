@@ -97,7 +97,7 @@ Fitting over items
 
 .. autoclass:: exca.steps.Fit
     :show-inheritance:
-    :members: fitted, COHORT_KEY, ARTIFACT_CACHE_TYPE
-    :private-members: _fit
+    :members: fitted, ARTIFACT_CACHE_TYPE
+    :private-members: _fit, _cohort_uids
 
 .. autoclass:: exca.steps.FitCohort

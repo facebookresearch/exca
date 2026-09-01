@@ -5,7 +5,6 @@
 # LICENSE file in the root directory of this source tree.
 
 import collections
-import pickle
 import typing as tp
 from pathlib import Path
 
@@ -14,6 +13,8 @@ import pydantic
 import pytest
 import sklearn.decomposition
 import torch
+
+import exca
 
 from .. import steps
 from . import conftest
@@ -33,12 +34,11 @@ class Offset(steps.Fit):
         return value - self.fitted
 
 
-class OffsetMultiset(Offset):
-    COHORT_KEY = "multiset"
-
-
 class OffsetSequence(Offset):
-    COHORT_KEY = "sequence"
+    ARTIFACT_CACHE_TYPE = "Pickle"
+
+    def _cohort_uids(self, uids: tp.Sequence[str]) -> list[str]:
+        return list(uids)
 
 
 def test_fit_cohort_then_novel_items(tmp_path: Path) -> None:
@@ -60,14 +60,6 @@ def test_fit_cohort_then_novel_items(tmp_path: Path) -> None:
     forced = Offset(infra=forced_infra)
     forced.run_many(steps.FitCohort([1.0, 2.0, 3.0]))
     assert forced._fits == [[1.0, 2.0, 3.0]], "force must refit instead of reading back"
-
-
-def test_cohort_pickles_without_its_values() -> None:
-    cohort = steps.FitCohort([1.0, 2.0])
-    cohort.uids = ["a", "b"]
-    loaded = pickle.loads(pickle.dumps(cohort))
-    assert not loaded.items, "workers read the values from the carrier, not the cohort"
-    assert loaded.uids == ["a", "b"]
 
 
 def test_named_cohort(tmp_path: Path) -> None:
@@ -121,11 +113,10 @@ def test_retry_of_a_failed_fit(tmp_path: Path) -> None:
     "Variant,fit_values,reorder_fits",
     [
         (Offset, [1.0, 4.0], []),
-        (OffsetMultiset, [1.0, 1.0, 4.0], []),
         (OffsetSequence, [1.0, 1.0, 4.0], [[4.0, 1.0, 1.0]]),
     ],
 )
-def test_cohort_key(
+def test_cohort_uids(
     tmp_path: Path,
     Variant: type[Offset],
     fit_values: list[float],
@@ -134,7 +125,7 @@ def test_cohort_key(
     infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
     step = Variant(infra=infra)
     step.run_many(steps.FitCohort([1.0, 1.0, 4.0]))
-    assert step._fits == [fit_values], "the fit sees the cohort as its key defines it"
+    assert step._fits == [fit_values], "the fit sees the uids it asked for"
 
     reordered = Variant(infra=infra)
     reordered.run_many(steps.FitCohort([4.0, 1.0, 1.0]))
@@ -189,7 +180,7 @@ def test_fit_folder_structure(tmp_path: Path) -> None:
         steps=[
             conftest.Mult(coeff=2, infra=infra),
             Offset(infra=infra),
-            OffsetMultiset(infra=infra),
+            OffsetSequence(infra=infra),
             conftest.Add(value=1, infra=infra),
         ]
     )
@@ -197,15 +188,17 @@ def test_fit_folder_structure(tmp_path: Path) -> None:
 
     mult = "type=Mult-b9b7a7a5"
     offset = f"{mult}/type=Offset,cohort=ddcbb484,2-2e44a0e3"
-    multiset = f"{offset}/cohort=230495c7,3,type=OffsetMultiset-d8dbd9b1"
+    sequence = f"{offset}/cohort=230495c7,3,type=OffsetSequence-f1b2246a"
     assert conftest.extract_cache_folders(tmp_path) == (
         mult,  # upstream of every fit: one folder for all cohorts
-        offset,  # "set" key: the 2 distinct items
-        multiset,  # "multiset" key: the 3 items, and the cohort of the fit above
-        f"{multiset}/value=1,type=Add-c1a6f4c8",  # downstream: scoped by both fits
-        f"{offset}/type=_Artifact,owner.type=OffsetMultiset-74b84d3f",
+        offset,  # deduplicated: the 2 distinct items
+        sequence,  # as a sequence: the 3 items, and the cohort of the fit above
+        f"{sequence}/value=1,type=Add-c1a6f4c8",  # downstream: scoped by both fits
+        f"{offset}/type=_Artifact,owner.type=OffsetSequence-1cddb5b8",
         f"{mult}/type=_Artifact,owner.type=Offset-21454ccf",  # one entry per cohort
     )
+    [dumped] = tmp_path.glob("**/type=_Artifact*/cache/data/*")
+    assert dumped.suffix == ".pkl", "only ARTIFACT_CACHE_TYPE dumps beside the entry"
 
 
 def test_refit_needs_a_fresh_config(tmp_path: Path) -> None:
@@ -214,8 +207,27 @@ def test_refit_needs_a_fresh_config(tmp_path: Path) -> None:
     assert list(step.run_many(steps.FitCohort([1.0, 2.0, 3.0, 100.0])))[0] == -25.5
     with pytest.raises(RuntimeError, match="refitting in place"):
         step.run_many(steps.FitCohort([1.0, 2.0, 3.0]))
-    fresh = step.clone({"cohort": None})
-    assert list(fresh.run_many(steps.FitCohort([1.0, 2.0, 3.0])))[0] == -1.0
+    assert list(step.clone().run_many(steps.FitCohort([1.0, 2.0, 3.0])))[0] == -1.0
+
+
+def test_fit_in_a_frozen_config(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
+    step = Offset(infra=infra)
+    exca.utils.recursive_freeze(step)
+    out = list(step.run_many(steps.FitCohort([1.0, 2.0, 3.0])))
+    assert out == [-1.0, 0.0, 1.0], "a config frozen by an enclosing one still fits"
+
+
+def test_fit_from_a_nested_resolve_step(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
+
+    class Wrapper(steps.Step):
+        def _resolve_step(self) -> steps.Step:
+            return Offset(infra=infra)
+
+    chain = steps.Chain(steps=[Wrapper()])
+    out = list(chain.run_many(steps.FitCohort([1.0, 2.0, 3.0])))
+    assert out == [-1.0, 0.0, 1.0], "a Fit only a resolution builds must be named too"
 
 
 def test_fit_variants_in_parallel(tmp_path: Path) -> None:
@@ -225,7 +237,7 @@ def test_fit_variants_in_parallel(tmp_path: Path) -> None:
 
     infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
     sweep = steps.helpers.Parallel(
-        steps=[Offset(infra=infra), OffsetMultiset(infra=infra), Keyed(infra=infra)]
+        steps=[Offset(infra=infra), OffsetSequence(infra=infra), Keyed(infra=infra)]
     )
     assert sweep.run_many(steps.FitCohort([1.0, 1.0, 4.0])) == [None] * 3
     variants = tp.cast(list[Offset], list(sweep.steps))
@@ -240,11 +252,11 @@ def test_cohort_names_every_fit(tmp_path: Path) -> None:
     chain = steps.Chain(
         steps=collections.OrderedDict(scale=conftest.Mult(coeff=2), offset=offset)
     )
-    assert offset.cohort is None, "unfitted, so nothing keys an artifact yet"
     cohort = steps.FitCohort([1.0, 3.0])
     chain.run_many(cohort)
-    assert offset.cohort is not None, "the run names the cohort in the config"
-    assert cohort.fitted_by == [f"steps.offset({offset.cohort})"]
+    [named] = cohort.fitted_by
+    assert named.startswith("steps.offset("), "the run names the cohort in every Fit"
+    assert offset.cohort is None, "the config handed over is left as it was"
 
     vain = steps.FitCohort([1.0])
     conftest.Mult(coeff=2, infra=infra).run_many(vain)

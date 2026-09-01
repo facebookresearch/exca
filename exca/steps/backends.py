@@ -199,6 +199,11 @@ def _fold_modes(*modes: identity.ModeType) -> identity.ModeType:
     return acc
 
 
+def _must_recompute(status: LookupStatus, mode: identity.ModeType) -> bool:
+    """Whether a cached entry runs again under *mode* (a cached error still raises)."""
+    return mode == "force" or (mode == "retry" and status == "error")
+
+
 def _effective_mode(step: Step) -> identity.ModeType:
     """The mode in effect for ``step`` once its sub-steps are folded in."""
     from . import utils  # lazy — backends is imported by utils at module level
@@ -468,7 +473,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 if status == "error":
                     _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
                 continue
-            elif mode == "force" or (mode == "retry" and status == "error"):
+            elif _must_recompute(status, mode):
                 pending[uid] = status
             elif status == "error":
                 _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
@@ -599,19 +604,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             if claimed.ready:
                 self._execute(claimed.ready)
 
-    def _defer(self, cbatch: ComputeBatch) -> items.StepItems | None:
-        """Inside ``_grouped``, queue *cbatch* and return its pending carrier."""
-        if self._group is None:
-            return None
-        self._group.append(cbatch)
-        return cbatch.cached_items()
-
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid."""
         cbatch = self._prepare(step, batch)
-        deferred = self._defer(cbatch)
-        if deferred is not None:
-            return deferred
+        if self._group is not None:  # submitted when the group exits
+            self._group.append(cbatch)
+            return cbatch.cached_items()
         with self._claim([cbatch]) as claimed:
             if claimed.ready:
                 self._execute(claimed.ready)
@@ -932,9 +930,9 @@ class _PoolBackend(Backend):
         lazy carrier instead of blocking.
         """
         cbatch = self._prepare(step, batch)
-        deferred = self._defer(cbatch)
-        if deferred is not None:
-            return deferred
+        if self._group is not None:  # submitted when the group exits
+            self._group.append(cbatch)
+            return cbatch.cached_items()
         claimed = self._claim([cbatch])
         transferred = False
         try:

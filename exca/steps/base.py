@@ -393,14 +393,14 @@ class Step(exca.helpers.DiscriminatedModel):
         StepItems
             Iterator yielding one result per input, in input order.
         """
-        from .fit import FitCohort, _stamp_cohorts  # local import: fit builds on Step
+        from . import fit  # circular
 
         built = utils.resolved_step(self)
         if built is not self:
             return built.run_many(values)
 
         cohort: FitCohort | None = None
-        if isinstance(values, FitCohort):
+        if isinstance(values, fit.FitCohort):
             cohort, values = values, values.items
         values = list(values)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]
@@ -411,13 +411,10 @@ class Step(exca.helpers.DiscriminatedModel):
                 return warm  # extra-fast path -> avoid StepItems + _dispatch overhead
         else:
             cohort.uids = uids
-            _stamp_cohorts(self, cohort)
+            fit.declare_cohorts(self, cohort)
 
-        boundary = items.StepItems(
-            source=dict(zip(uids, values)),
-            uids=uids,
-            cohort=cohort,
-        )
+        boundary = items.StepItems(source=dict(zip(uids, values)), uids=uids)
+        boundary._cohort = cohort is not None
         return boundary.apply_step(self)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed

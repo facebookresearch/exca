@@ -2,9 +2,7 @@
 
 ## [Unreleased]
 
-- `steps`: `Fit` primitive — fit one artifact over a cohort of items, then transform each item with it (N->1->N). The cohort is declared by wrapping the items in `FitCohort`; its identity (the items fingerprint, or the name the config already carries) is written to the `cohort` field before the run, scoping the artifact and the outputs. A step that ran is frozen, so fitting another cohort takes a fresh config.
-- `steps`: `Parallel` now dispatches its variants through `Step._dispatch` (grouping their submission through the new `Backend._grouped`), so a variant can be a `Fit` or resolve through the `build()` convention — the latter used to run and cache as its unresolved wrapper.
-- `cachedict`: `Auto` sequences all load back as lists, and the contents of a tuple now resolve — a nested tuple used to load back as raw dump info, permanently so on the pickle path.
+- `steps`: `Fit` primitive — fit one artifact over a cohort of items and transform the items accordingly.
 
 ## 0.5.29 - 26-07-28
 

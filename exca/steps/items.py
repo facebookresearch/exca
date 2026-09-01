@@ -21,7 +21,6 @@ from . import identity
 
 if tp.TYPE_CHECKING:
     from .base import Step
-    from .fit import FitCohort
 
 
 class _Source(tp.Protocol):
@@ -129,7 +128,6 @@ class StepItems:
         upstream: tp.Sequence[Step] = (),
         pending: tp.Sequence[Step] = (),
         mode: identity.ModeType = "cached",
-        cohort: FitCohort | None = None,
     ) -> None:
         if uids is None:
             if not isinstance(source, dict):
@@ -142,7 +140,8 @@ class StepItems:
         self._upstream = tuple(upstream)
         self._pending = tuple(pending)
         self._mode = mode
-        self._cohort = cohort
+        self._total_size = len(set(self.uids))
+        self._cohort = False
 
     def __len__(self) -> int:
         return len(self.uids)
@@ -152,20 +151,18 @@ class StepItems:
         return step._dispatch(self)
 
     def _replace(self, **changes: tp.Any) -> StepItems:
-        """Copy with some parts changed; everything else (mode, cohort, ...) carries over.
-
-        Pass ``pending=()`` when *source* becomes computed results, or its steps
-        would run a second time.
-        """
+        """Copy with *changes* applied; pass ``pending=()`` if *source* holds results."""
         params: dict[str, tp.Any] = {
             "source": self._source,
             "uids": self.uids,
             "upstream": self._upstream,
             "pending": self._pending,
             "mode": self._mode,
-            "cohort": self._cohort,
         }
-        return StepItems(**{**params, **changes})
+        new = StepItems(**{**params, **changes})
+        new._total_size = self._total_size
+        new._cohort = self._cohort
+        return new
 
     def _append(self, step: Step) -> StepItems:
         """Append a single leaf step's computation and identity."""
