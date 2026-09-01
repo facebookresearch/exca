@@ -13,7 +13,7 @@ import pydantic
 
 from exca import utils as xkutils
 
-from . import backends, items, utils
+from . import backends, identity, items, utils
 from .base import Step
 
 
@@ -125,7 +125,7 @@ class Fit(Step):
     cohort: str | None = None
 
     _fitted: tp.Any = pydantic.PrivateAttr(None)
-    _fitted_for: str | None = pydantic.PrivateAttr(None)  # cohort of `_fitted`
+    _fitted_for: tuple[str, str] | None = pydantic.PrivateAttr(None)  # cohort, upstream
     _declared: str | None = pydantic.PrivateAttr(None)  # cohort handed by `run_many`
 
     def _resolve_step(self) -> Step:
@@ -161,12 +161,11 @@ class Fit(Step):
         if built is not self:
             return built._dispatch(batch)
         # before super(): a split ships the artifact along with the step
-        if self.cohort is None or self._fitted_for != self.cohort:
-            self._resolve_artifact(batch)
+        self._resolve_artifact(batch)
         return super()._dispatch(batch)
 
     def _resolve_artifact(self, batch: items.StepItems) -> None:
-        """Read the artifact for this step's cohort back, or fit it."""
+        """Read the artifact for this step's cohort back, or fit it (no-op if held)."""
         kind = type(self).__name__
         uid = self.cohort
         if uid is None:
@@ -174,10 +173,14 @@ class Fit(Step):
                 f"{kind} has no cohort to fit on or to read back: run it on a "
                 "FitCohort, or set its 'cohort' name"
             )
+        fitted_for = (uid, identity.step_uid(list(batch._upstream)))
+        if self._fitted_for == fitted_for:
+            return
         mode = backends._fold_modes(batch._mode, backends._effective_mode(self))
         # cohort cleared: all cohorts of this Fit share one folder, one entry each
         owner = self.model_copy(update={"infra": None, "cohort": None})
         owner._declared = None  # or it would resolve the cohort back in
+        owner._fitted = owner._fitted_for = None  # never read by _fit, and heavy
         infra = None if self.infra is None else self.infra.derive(mode=mode)
         artifact = _Artifact(owner=owner, infra=infra)
         upstream = tuple(batch._upstream)
@@ -203,7 +206,7 @@ class Fit(Step):
         )
         # dispatch, not lookup: goes through infra's mode and caching
         self._fitted = next(iter(artifact._dispatch(carrier)))
-        self._fitted_for = uid
+        self._fitted_for = fitted_for
 
 
 class _Artifact(Step):

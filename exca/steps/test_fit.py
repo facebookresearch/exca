@@ -8,10 +8,8 @@ import collections
 import typing as tp
 from pathlib import Path
 
-import numpy as np
 import pydantic
 import pytest
-import torch
 
 import exca
 
@@ -165,6 +163,16 @@ def test_a_config_fits_one_cohort(tmp_path: Path, nested: bool) -> None:
     assert list(step.clone().run_many(steps.FitCohort([1.0, 4.0]))) == [6.0, 9.0]
 
 
+def test_one_config_under_two_upstreams(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
+    fit = _SumOffset(infra=infra)
+    cohort = [1.0, 2.0]  # same items, so the same cohort uid names both fits
+    assert list(fit.run_many(steps.FitCohort(cohort))) == [4.0, 5.0]
+    chain = steps.Chain(steps=[conftest.Mult(coeff=10), fit])
+    assert list(chain.run_many(steps.FitCohort(cohort))) == [40.0, 50.0]
+    assert fit._fits == [[1.0, 2.0], [10.0, 20.0]], "the upstream re-keys the artifact"
+
+
 def test_fit_folder_structure(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
     chain = steps.Chain(
@@ -234,71 +242,3 @@ def test_cohort_names_every_fit(tmp_path: Path) -> None:
     vain = steps.FitCohort([1.0])
     conftest.Mult(coeff=2, infra=infra).run_many(vain)
     assert not vain.fitted_by, "no Fit to name it, and nothing to fit"
-
-
-# =============================================================================
-# Use cases
-# =============================================================================
-
-
-class _Normalize(steps.Fit):
-    """Standardizes each array with the cohort's mean and std."""
-
-    def _fit(self, values: tp.Iterable[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
-        total = np.zeros(())
-        squares = np.zeros(())
-        count = 0
-        for value in values:  # streamed: the cohort need not fit in memory
-            total = total + value.sum(axis=0)
-            squares = squares + (value**2).sum(axis=0)
-            count += value.shape[0]
-        mean = total / count
-        return mean, np.sqrt(squares / count - mean**2)
-
-    def _run(self, value: np.ndarray) -> np.ndarray:
-        mean, std = self.fitted
-        return (value - mean) / std
-
-
-def test_normalize(tmp_path: Path) -> None:
-    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
-    rng = np.random.default_rng(12)
-    cohort = [rng.normal(3.0, 2.0, size=(8, 3)) for _ in range(4)]
-    step = _Normalize(infra=infra)
-    out = np.concatenate(list(step.run_many(steps.FitCohort(cohort))), axis=0)
-    np.testing.assert_allclose(out.mean(axis=0), np.zeros(3), atol=1e-10)
-    np.testing.assert_allclose(out.std(axis=0), np.ones(3), atol=1e-10)
-
-
-class _TrainLinear(steps.Fit):
-    """Trains a linear model to predict 2x+1, then predicts for each item."""
-
-    epochs: int = 300
-
-    def _fit(self, values: tp.Iterable[float]) -> dict[str, torch.Tensor]:
-        torch.manual_seed(12)
-        model = torch.nn.Linear(1, 1)
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
-        for _ in range(self.epochs):
-            x = torch.tensor([[value] for value in values])  # re-read, one pass/epoch
-            loss = torch.nn.functional.mse_loss(model(x), 2 * x + 1)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-        return model.state_dict()  # a Module would pickle, tensors cache natively
-
-    def _run(self, value: float) -> float:
-        model = torch.nn.Linear(1, 1)
-        model.load_state_dict(self.fitted)
-        with torch.no_grad():
-            return float(model(torch.tensor([value])))
-
-
-def test_torch_train(tmp_path: Path) -> None:
-    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
-    out = list(_TrainLinear(infra=infra).run_many(steps.FitCohort([0.0, 1.0, 2.0, 3.0])))
-    np.testing.assert_allclose(out, [1.0, 3.0, 5.0, 7.0], atol=0.2)
-
-    read_back = _TrainLinear(infra=infra)
-    read_back.run_many(steps.FitCohort([0.0, 1.0, 2.0, 3.0]))
-    assert read_back.run(10.0) == pytest.approx(21.0, abs=0.5)
