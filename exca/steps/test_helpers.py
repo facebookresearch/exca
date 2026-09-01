@@ -217,13 +217,13 @@ def test_single_array_across_variants(
     monkeypatch.setattr(submitit, "AutoExecutor", _CapturingAutoExecutor)
     infra: tp.Any = {"backend": "Slurm", "folder": tmp_path}
 
-    class Wrapper(Step):
+    class ResolvedAdd(Step):
         value: float
 
         def _resolve_step(self) -> Step:
             return conftest.Add(value=self.value, infra=infra)
 
-    variant: tp.Any = Wrapper if resolved else conftest.Add
+    variant: tp.Any = ResolvedAdd if resolved else conftest.Add
     sweep = Parallel(steps=[variant(value=v) for v in (1.0, 2.0, 3.0)], infra=infra)
     sweep.run()
     [(_, params)] = _CapturingAutoExecutor.captured
