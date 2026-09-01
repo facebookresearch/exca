@@ -157,7 +157,7 @@ class Scatter(Step):
         if len(bodies) != 1:
             raise TypeError(
                 f"{type(self).__name__} must hold exactly one body Step field to "
-                f"scatter over (found {len(bodies)}); override _body if it holds more."
+                f"scatter over, found {sorted(subs)}; override _body to pick one."
             )
         return bodies[0]
 
