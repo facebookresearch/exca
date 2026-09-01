@@ -125,7 +125,7 @@ class Fit(Step):
     cohort: str | None = None
 
     _fitted: tp.Any = pydantic.PrivateAttr(None)
-    _fitted_for: tuple[str, str] | None = pydantic.PrivateAttr(None)  # cohort, upstream
+    _fitted_for: tuple[str, str] | None = pydantic.PrivateAttr(None)  # cohort, artifact
     _declared: str | None = pydantic.PrivateAttr(None)  # cohort handed by `run_many`
 
     def _resolve_step(self) -> Step:
@@ -173,9 +173,6 @@ class Fit(Step):
                 f"{kind} has no cohort to fit on or to read back: run it on a "
                 "FitCohort, or set its 'cohort' name"
             )
-        fitted_for = (uid, identity.step_uid(list(batch._upstream)))
-        if self._fitted_for == fitted_for:
-            return
         mode = backends._fold_modes(batch._mode, backends._effective_mode(self))
         # cohort cleared: all cohorts of this Fit share one folder, one entry each
         owner = self.model_copy(update={"infra": None, "cohort": None})
@@ -184,6 +181,9 @@ class Fit(Step):
         infra = None if self.infra is None else self.infra.derive(mode=mode)
         artifact = _Artifact(owner=owner, infra=infra)
         upstream = tuple(batch._upstream)
+        fitted_for = (uid, identity.step_uid([*upstream, artifact]))
+        if self._fitted_for == fitted_for:
+            return
         handle = artifact.lookup(_upstream=upstream, _uid=uid)
         status = handle.status
         if status is None or backends._must_recompute(status, mode):

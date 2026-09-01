@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import contextvars
 import dataclasses
 import datetime
 import logging
@@ -424,6 +425,11 @@ class _Claimed:
         self.close()
 
 
+_ACTIVE_GROUPS: contextvars.ContextVar[dict[int, list[ComputeBatch]]] = (
+    contextvars.ContextVar("exca_step_backend_groups", default={})
+)
+
+
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     """Base class for execution backends with integrated caching."""
 
@@ -441,7 +447,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     # Force/retry: recompute each (step_folder, uid) at most once per lifetime
     _recomputed: set[tuple[Path, str]] = pydantic.PrivateAttr(default_factory=set)
     _checked_configs: set[Path] = pydantic.PrivateAttr(default_factory=set)
-    _group: list[ComputeBatch] | None = pydantic.PrivateAttr(default=None)
 
     def __getstate__(self) -> dict[str, tp.Any]:
         recomputed = self._recomputed
@@ -450,6 +455,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             return super().__getstate__()
         finally:
             self._recomputed = recomputed
+
+    def _active_group(self) -> list[ComputeBatch] | None:
+        return _ACTIVE_GROUPS.get().get(id(self))
 
     def _pending_statuses(
         self,
@@ -591,15 +599,17 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         Carriers returned while grouping only hold results once the group ran.
         Nesting joins the enclosing group.
         """
-        if self._group is not None:  # nested sweep: the outer group submits it
+        group = self._active_group()
+        if group is not None:  # nested sweep: the outer group submits it
             yield
             return
-        group: list[ComputeBatch] = []
-        self._group = group
+        group = []
+        groups = _ACTIVE_GROUPS.get()
+        token = _ACTIVE_GROUPS.set({**groups, id(self): group})
         try:
             yield
         finally:
-            self._group = None
+            _ACTIVE_GROUPS.reset(token)
         with self._claim(group) as claimed:
             if claimed.ready:
                 self._execute(claimed.ready)
@@ -607,8 +617,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid."""
         cbatch = self._prepare(step, batch)
-        if self._group is not None:  # submitted when the group exits
-            self._group.append(cbatch)
+        group = self._active_group()
+        if group is not None:  # submitted when the group exits
+            group.append(cbatch)
             return cbatch.cached_items()
         with self._claim([cbatch]) as claimed:
             if claimed.ready:
@@ -930,8 +941,9 @@ class _PoolBackend(Backend):
         lazy carrier instead of blocking.
         """
         cbatch = self._prepare(step, batch)
-        if self._group is not None:  # submitted when the group exits
-            self._group.append(cbatch)
+        group = self._active_group()
+        if group is not None:  # submitted when the group exits
+            group.append(cbatch)
             return cbatch.cached_items()
         claimed = self._claim([cbatch])
         transferred = False

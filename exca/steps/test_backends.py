@@ -10,8 +10,10 @@ import contextlib
 import logging
 import stat
 import sys
+import threading
 import time
 import typing as tp
+from concurrent import futures
 from pathlib import Path
 
 import pydantic
@@ -344,6 +346,25 @@ def test_recomputed_per_batch(tmp_path: Path) -> None:
 
     key = (cb_ok.paths.step_folder, cb_ok.items.uids[0])
     assert key not in backend._recomputed, "cb_ok never ran, so it must be unmarked"
+
+
+def test_grouped_is_context_local(tmp_path: Path) -> None:
+    backend = backends.Cached(folder=tmp_path)
+    barrier = threading.Barrier(2)
+    groups: list[list[backends.ComputeBatch]] = []
+
+    def capture_group() -> None:
+        with backend._grouped():
+            group = backend._active_group()
+            assert group is not None
+            groups.append(group)
+            barrier.wait(timeout=5)
+
+    with futures.ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = [pool.submit(capture_group) for _ in range(2)]
+        for job in jobs:
+            job.result(timeout=5)
+    assert groups[0] is not groups[1]
 
 
 def test_recomputed_keyed_by_step(tmp_path: Path) -> None:

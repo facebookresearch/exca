@@ -248,7 +248,9 @@ class Step(exca.helpers.DiscriminatedModel):
         with cached._source.frozen_cache_folder():
             if not all(uid in cached._source for uid in uids):
                 return None
-        return cached.select(uids)
+        warm = cached.select(uids)
+        warm._cohort = False
+        return warm
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         """Resolve, then route *batch*: reuse/remember warm carrier, run inline or via backend."""
@@ -258,7 +260,7 @@ class Step(exca.helpers.DiscriminatedModel):
         standalone = (
             not batch._upstream and not batch._pending and batch._mode == "cached"
         )
-        if standalone:  # _output_items only valid with no upstream
+        if standalone and not batch._cohort:  # _output_items only valid with no upstream
             warm = self._warm_items(batch.uids)
             if warm is not None:
                 return warm

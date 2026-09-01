@@ -21,6 +21,7 @@ class _SumOffset(steps.Fit):
     """Adds the cohort's sum to each item, recording the cohorts it fit on."""
 
     broken: bool = False
+    scale: float = 1
 
     _fits: list[list[float]] = pydantic.PrivateAttr(default_factory=list)
 
@@ -33,7 +34,7 @@ class _SumOffset(steps.Fit):
             raise ValueError("Triggered an error")
         vals = list(values)
         self._fits.append(vals)
-        return sum(vals)
+        return self.scale * sum(vals)
 
     def _run(self, value: float) -> float:
         return value + self.fitted
@@ -67,6 +68,17 @@ def test_fit_cohort_then_novel_items(tmp_path: Path) -> None:
     assert forced._fits == [[1.0, 2.0, 3.0]], "force must refit instead of reading back"
 
 
+def test_fit_cohort_marker_is_request_scoped(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
+    upstream = conftest.Mult(coeff=2, infra=infra)
+    upstream.run_many(steps.FitCohort([1.0, 2.0]))
+    assert upstream._output_items is not None, "Fitting should warm cache as well"
+    chain = steps.Chain(steps=[upstream, _SumOffset(cohort="train", infra=infra)])
+    with pytest.raises(RuntimeError, match="handed no items"):
+        chain.run_many([1.0, 2.0])
+    assert list(chain.run_many(steps.FitCohort([1.0, 2.0]))) == [8.0, 10.0]
+
+
 def test_named_cohort(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
     step = _SumOffset(infra=infra, cohort="train")
@@ -83,6 +95,8 @@ def test_named_cohort(tmp_path: Path) -> None:
     infra["mode"] = "force"
     with pytest.raises(RuntimeError, match="drop the force mode"):
         _SumOffset(infra=infra, cohort="train").run(10.0)
+    copied = step.model_copy(update={"scale": 10})
+    assert list(copied.run_many(steps.FitCohort([1.0, 3.0]))) == [41.0, 43.0]
 
 
 def test_retry_of_a_failed_fit(tmp_path: Path) -> None:
@@ -138,13 +152,26 @@ def test_fit_with_distributed_items(
     assert fit._fits == [[2.0, 4.0, 6.0]], "the fit must see the whole cohort, once"
 
 
+@pytest.mark.parametrize(
+    "Variant,values,expected",
+    [
+        (_SumOffset, [1.0, 2.0, 3.0, 4.0], [11.0, 12.0, 13.0, 14.0]),
+        (_SumOffsetSequence, [1.0, 1.0, 4.0], [7.0, 7.0, 10.0]),
+    ],
+)
 @pytest.mark.parametrize("max_jobs", [1, 2])
-def test_fit_under_distributed_chain(tmp_path: Path, max_jobs: int) -> None:
+def test_fit_under_distributed_chain(
+    tmp_path: Path,
+    max_jobs: int,
+    Variant: type[_SumOffset],
+    values: list[float],
+    expected: list[float],
+) -> None:
     infra: tp.Any = {"folder": tmp_path, "backend": "ThreadPool", "max_jobs": max_jobs}
-    chain = steps.Chain(steps=[_SumOffset()], infra=infra)
-    cohort = steps.FitCohort([1.0, 2.0, 3.0, 4.0])
+    chain = steps.Chain(steps=[Variant()], infra=infra)
+    cohort = steps.FitCohort(values)
     if max_jobs == 1:  # one worker holds the whole cohort, so it can fit
-        list(chain.run_many(cohort))  # read: the pool is awaited lazily
+        assert list(chain.run_many(cohort)) == expected
     else:
         with pytest.raises(Exception, match="too few to fit"):
             list(chain.run_many(cohort))
@@ -163,13 +190,16 @@ def test_a_config_fits_one_cohort(tmp_path: Path, nested: bool) -> None:
     assert list(step.clone().run_many(steps.FitCohort([1.0, 4.0]))) == [6.0, 9.0]
 
 
-def test_one_config_under_two_upstreams(tmp_path: Path) -> None:
-    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
-    fit = _SumOffset(infra=infra)
+@pytest.mark.parametrize("cached", [False, True])
+def test_one_config_under_two_upstreams(tmp_path: Path, cached: bool) -> None:
+    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"} if cached else None
+    fit = _SumOffset(infra=infra, cohort=None if cached else "train")
     cohort = [1.0, 2.0]  # same items, so the same cohort uid names both fits
-    assert list(fit.run_many(steps.FitCohort(cohort))) == [4.0, 5.0]
+    first = fit.run_many(steps.FitCohort(cohort))
     chain = steps.Chain(steps=[conftest.Mult(coeff=10), fit])
-    assert list(chain.run_many(steps.FitCohort(cohort))) == [40.0, 50.0]
+    second = chain.run_many(steps.FitCohort(cohort))
+    assert list(first) == [4.0, 5.0]
+    assert list(second) == [40.0, 50.0]
     assert fit._fits == [[1.0, 2.0], [10.0, 20.0]], "the upstream re-keys the artifact"
 
 
