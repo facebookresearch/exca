@@ -18,7 +18,7 @@ import pytest
 
 import exca
 
-from . import backends, conftest, identity, items
+from . import backends, conftest, identity, items, utils
 from .base import Chain, Step
 
 # =============================================================================
@@ -229,18 +229,27 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
     assert step_none.infra is None, "explicit None should not use default"
 
 
-def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
-    """Folder should propagate to steps in nested chains."""
+def test_folder_propagation(tmp_path: Path) -> None:
+    class Opts(pydantic.BaseModel):
+        step: Step
+
+    class Held(Step):
+        opts: Opts
+
+        def _resolve_step(self) -> Step:
+            return self.opts.step
+
     infra: tp.Any = {"backend": "Cached"}  # No folder set
     inner_chain: Step = Chain(steps=[conftest.Add(value=1, infra=infra)])
+    held = Held(opts=Opts(step=conftest.Add(value=3, infra=infra)))
     outer_chain = Chain(
-        steps=[inner_chain, conftest.Mult(coeff=2.0, infra=infra)],
+        steps=[inner_chain, conftest.Mult(coeff=2.0, infra=infra), held],
         infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
     )
 
     # Folder cascades at construction time; running confirms the wiring.
     result = outer_chain.run(5.0)
-    assert result == 12.0  # (5 + 1) * 2
+    assert result == 15.0  # (5 + 1) * 2 + 3
 
     inner = outer_chain._step_sequence()[0]
     assert isinstance(inner, Chain)
@@ -248,6 +257,9 @@ def test_nested_chain_folder_propagation(tmp_path: Path) -> None:
     assert inner_step.infra is not None
     assert inner_step.infra.folder == tmp_path, (
         "folder should propagate to nested chain steps"
+    )
+    assert utils.get_infra_folder(held.opts.step) == tmp_path, (
+        "folder should propagate to a step held behind a plain config model"
     )
 
 

@@ -7,6 +7,7 @@
 import typing as tp
 from pathlib import Path
 
+import pydantic
 import pytest
 
 from . import conftest, utils
@@ -26,10 +27,12 @@ def test_show_named_chain_with_resolution() -> None:
     chain = Chain(steps=steps)
     expected = """\
 Chain
-├── load: Chain
-│   ├── Add  value=1.0
-│   └── Mult  coeff=5.0
-└── scale: Add  value=4.0"""
+└── steps
+    ├── load: Chain
+    │   └── steps
+    │       ├── Add  value=1.0
+    │       └── Mult  coeff=5.0
+    └── scale: Add  value=4.0"""
     assert chain.show() == expected
 
 
@@ -47,28 +50,42 @@ def test_show_seq_chain_with_infra() -> None:
     )
     expected = """\
 Chain  [Cached, /tmp/x]
-├── Func  function='exca.steps.test_utils._scale'  factor=3.0  src='/data/in'
-├── Mult  coeff=3.0  [Cached, /tmp/x]
-└── Chain
-    ├── AddWithTransforms  value=1.0
-    ├── Mult
-    └── Mult  coeff=3.0"""
+└── steps
+    ├── Func  function='exca.steps.test_utils._scale'  factor=3.0  src='/data/in'
+    ├── Mult  coeff=3.0  [Cached, /tmp/x]
+    └── Chain
+        └── steps
+            ├── AddWithTransforms  value=1.0
+            ├── Mult
+            └── Mult  coeff=3.0"""
     assert chain.show() == expected
 
 
 def test_show_non_chain_composite() -> None:
+    class Opts(pydantic.BaseModel):
+        lr: float = 0.1
+        inner: Step
+
     class Branch(Step):
         left: Step
-        right: Step
+        opts: Opts
+        mixed: list[Step | None] = []
 
         def _run(self, x: float) -> float:
             return x
 
-    b = Branch(left=conftest.Mult(coeff=2.0), right=conftest.Add(value=5.0))
+    b = Branch(
+        left=conftest.Mult(coeff=2.0),
+        opts=Opts(lr=0.5, inner=conftest.Add(value=1.0)),
+        mixed=[None, conftest.Mult(coeff=3.0)],
+    )
     expected = """\
 Branch
 ├── left: Mult
-└── right: Add  value=5.0"""
+├── opts  {'lr': 0.5}
+│   └── inner: Add  value=1.0
+└── mixed  [None]
+    └── Mult  coeff=3.0"""
     assert b.show() == expected
 
 

@@ -51,7 +51,7 @@ def propagate_folder(step: base.Step, parent_folder: Path) -> None:
     folder = parent_folder if own is None else own
     if step.infra is not None and step.infra.folder is None:
         step.infra.folder = folder
-    for sub in nested_steps(step):
+    for sub in nested_steps(step).values():
         propagate_folder(sub, folder)
 
 
@@ -126,44 +126,19 @@ def resolved_step(step: base.Step) -> base.Step:
     return built
 
 
-def nested_steps(step: base.Step) -> list[base.Step]:
-    """The step's direct sub-steps: every field holding a ``Step``, or a
-    non-empty list/tuple/dict of them."""
-    # Shallow (direct fields only), unlike utils.find_models' deep graph walk.
-    _, children = _labeled_nested_steps(step)
-    return [child for _, child in children]
+def nested_steps(step: base.Step) -> dict[str, base.Step]:
+    """Every ``Step`` the step's fields reach without crossing another ``Step``,
+    keyed by the dotted path (field, then keys and indices) it sits at."""
+    from . import base  # lazy — avoids circular import at module level
+
+    return utils.find_models(
+        dict(step), base.Step, include_private=False, stop_on_find=True
+    )
 
 
 # ---------------------------------------------------------------------------
 # show() helpers
 # ---------------------------------------------------------------------------
-
-
-def _labeled_nested_steps(
-    step: base.Step,
-) -> tuple[set[str], list[tuple[str | None, base.Step]]]:
-    """Sub-steps shaped for tree rendering: each paired with a label (``None``
-    for list/tuple entries, matching sequential Chain; the field/dict key
-    otherwise), plus the set of field names they were drawn from."""
-    from . import base  # lazy — avoids circular import at module level
-
-    # vars() + __pydantic_extra__ covers extra='allow' fields (outside __dict__).
-    all_vals = {**vars(step), **(step.__pydantic_extra__ or {})}
-    consumed: set[str] = set()
-    children: list[tuple[str | None, base.Step]] = []
-    for k, v in all_vals.items():
-        if k.startswith("_"):  # skip cached_property / private caches
-            continue
-        if isinstance(v, dict):
-            pairs = list(v.items())
-        elif isinstance(v, (list, tuple)):
-            pairs = [(None, x) for x in v]
-        else:
-            pairs = [(k, v)]
-        if pairs and all(isinstance(x, base.Step) for _, x in pairs):
-            consumed.add(k)
-            children.extend(pairs)
-    return consumed, children
 
 
 def _truncate(s: str, max_len: int = 40) -> str:
@@ -181,12 +156,11 @@ def step_label(step: base.Step) -> str:
     """One-line label: ClassName  key=val ...  [Backend, folder]"""
     parts = [type(step).__name__]
     disc = type(step)._exca_discriminator_key
-    consumed, _ = _labeled_nested_steps(step)
-    # Step-valued fields are rendered as a tree by step_lines; drop from inline.
-    skip = {"infra", disc} | consumed
+    # rendered as tree levels by step_lines
+    skip = {"infra", disc} | {p.split(".", 1)[0] for p in nested_steps(step)}
     # mode='json' fires field serializers (e.g. ImportString → dotted path).
-    js = step.model_dump(mode="json", exclude_defaults=True)
-    for k, v in js.items():
+    config = step.model_dump(mode="json", exclude_defaults=True)
+    for k, v in config.items():
         if k in skip:
             continue
         parts.append(f"{k}={_truncate(repr(v))}")
@@ -202,21 +176,45 @@ def step_label(step: base.Step) -> str:
 
 
 def step_lines(step: base.Step) -> list[str]:
-    """Render step as tree lines; follows _resolve_step and recurses into Step-valued fields."""
+    """The step's label, then one line per nested container and Step."""
     r = resolved_step(step)
     if r is not step:
         return step_lines(r)
-    lines = [step_label(step)]
-    _, children = _labeled_nested_steps(step)
-    for i, (key, sub) in enumerate(children):
-        is_last = i == len(children) - 1
-        connector = "└── " if is_last else "├── "
-        cont = "    " if is_last else "│   "
-        label_prefix = f"{key}: " if key is not None else ""
-        sub_lines = step_lines(sub)
-        lines.append(connector + label_prefix + sub_lines[0])
-        for sl in sub_lines[1:]:
-            lines.append(cont + sl)
+    tree: dict[str, tp.Any] = {}
+    for path, sub in nested_steps(step).items():
+        keys = path.split(".")
+        node = tree
+        for key in keys[:-1]:
+            node = node.setdefault(key, {})
+        node[keys[-1]] = sub
+    config = step.model_dump(mode="json", exclude_defaults=True)
+    return [step_label(step)] + _tree_lines(tree, config)
+
+
+def _leftovers(config: tp.Any, node: dict[str, tp.Any]) -> str:
+    """A container's config minus the entries rendered as its children."""
+    if isinstance(config, dict):
+        rest: tp.Any = {k: v for k, v in config.items() if k not in node}
+    elif isinstance(config, list):
+        rest = [v for i, v in enumerate(config) if str(i) not in node]
+    else:
+        return ""
+    return f"  {_truncate(repr(rest))}" if rest else ""
+
+
+def _tree_lines(node: dict[str, tp.Any], config: tp.Any) -> list[str]:
+    lines: list[str] = []
+    bare = all(key.isdigit() for key in node)  # index: not a name
+    for i, (key, val) in enumerate(node.items()):
+        if isinstance(val, dict):
+            own = config[int(key)] if isinstance(config, list) else config.get(key, {})
+            head, rest = key + _leftovers(own, val), _tree_lines(val, own)
+        else:
+            sub = step_lines(val)
+            head, rest = ("" if bare else f"{key}: ") + sub[0], sub[1:]
+        is_last = i == len(node) - 1
+        lines.append(("└── " if is_last else "├── ") + head)
+        lines.extend(("    " if is_last else "│   ") + line for line in rest)
     return lines
 
 

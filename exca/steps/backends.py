@@ -212,7 +212,7 @@ def _effective_mode(step: Step) -> identity.ModeType:
     if resolved is not step:
         return _effective_mode(resolved)
     own: identity.ModeType = "cached" if step.infra is None else step.infra.mode
-    sub_modes = [_effective_mode(sub) for sub in utils.nested_steps(step)]
+    sub_modes = [_effective_mode(sub) for sub in utils.nested_steps(step).values()]
     # own brackets both ends: the step reasserts its mode after its sub-steps.
     return _fold_modes(own, *sub_modes, own)
 
