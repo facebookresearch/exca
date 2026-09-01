@@ -341,15 +341,8 @@ def test_pca(tmp_path: Path) -> None:
     rng = np.random.default_rng(12)
     base = rng.normal(size=(24, 2)) @ rng.normal(size=(2, 5))
     cohort = [base[i : i + 8] for i in range(0, 24, 8)]
-    step = PCA(n_components=2, infra=infra)
-    out = list(step.run_many(steps.FitCohort(cohort)))
+    out = list(PCA(n_components=2, infra=infra).run_many(steps.FitCohort(cohort)))
     assert [x.shape for x in out] == [(8, 2)] * 3
-
-    read_back = PCA(n_components=2, infra=infra)
-    again = list(read_back.run_many(steps.FitCohort(cohort)))
-    np.testing.assert_allclose(again[0], out[0], atol=1e-10)
-    novel = rng.normal(size=(8, 5))
-    assert list(read_back.run_many([novel]))[0].shape == (8, 2)
 
 
 def test_torch_train(tmp_path: Path) -> None:

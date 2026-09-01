@@ -410,7 +410,7 @@ class Step(exca.helpers.DiscriminatedModel):
             if warm is not None:
                 return warm  # extra-fast path -> avoid StepItems + _dispatch overhead
         else:
-            cohort.uids = uids
+            cohort._uids = uids
             fit.declare_cohorts(self, cohort)
 
         boundary = items.StepItems(source=dict(zip(uids, values)), uids=uids)

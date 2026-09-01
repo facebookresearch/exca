@@ -35,7 +35,7 @@ class FitCohort:
 
     def __init__(self, items: tp.Iterable[tp.Any]) -> None:
         self.items = list(items)
-        self.uids: list[str] = []  # the declared cohort, set by run_many
+        self._uids: list[str] = []  # the declared cohort, set by run_many
         self.fitted_by: list[str] = []
 
     def __repr__(self) -> str:
@@ -69,9 +69,9 @@ def declare_cohorts(step: Step, cohort: FitCohort) -> None:
         if fit.cohort is not None and fit._declared is None:
             uid = fit.cohort  # a name given in the config is kept
         else:
-            uid = _fingerprint(fit._cohort_uids(cohort.uids))
+            uid = _fingerprint(fit._cohort_uids(cohort._uids))
             # the config that ran: this copy, or the one it resolved to
-            memo = tp.cast("Fit | None", fit._resolution_cache)
+            memo = tp.cast(Fit | None, fit._resolution_cache)
             ran = fit if fit.cohort is not None else memo
             if ran is not None and ran.cohort != uid:
                 raise RuntimeError(

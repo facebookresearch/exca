@@ -174,7 +174,7 @@ class Parallel(Step):
                     "Parallel requires one shared backend across itself and its "
                     f"steps; {self.infra!r} differs from {step.infra!r}"
                 )
-        # the very object: one grouped dispatch then covers every variant
+        # one infra instance: its _grouped() then batches every variant together
         self.steps = [s.model_copy(update={"infra": self.infra}) for s in self.steps]
 
     def _uid_steps(self) -> list[Step]:
