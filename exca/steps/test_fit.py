@@ -15,6 +15,7 @@ import exca
 
 from .. import steps
 from . import conftest
+from .patterns import Scatter
 
 
 class _SumOffset(steps.Fit):
@@ -162,6 +163,37 @@ def test_fit_under_distributed_chain(tmp_path: Path, max_jobs: int) -> None:
     else:
         with pytest.raises(Exception, match="too few to fit"):
             list(chain.run_many(cohort))
+
+
+class _ScatterValues(Scatter):
+    body: steps.Step
+
+    def branches(self, item: dict[str, float]) -> list[str]:
+        return list(item)
+
+    def take(self, item: dict[str, float], branch: str) -> float:
+        return item[branch]
+
+
+def test_fit_inside_scatter(tmp_path: Path) -> None:
+    cohort = [{"a": 1.0, "b": 2.0}, {"c": 3.0}]
+    expected = [{"a": 7.0, "b": 8.0}, {"c": 9.0}]
+    cache: tp.Any = {"folder": tmp_path / "cached", "backend": "Cached"}
+    scatter = _ScatterValues(body=_SumOffset(infra=cache))
+    assert list(scatter.run_many(steps.FitCohort(cohort))) == expected, (
+        "a complete Scatter must fit over all branches"
+    )
+
+    outer: tp.Any = {**cache, "backend": "ThreadPool", "max_jobs": 2}
+    chain = steps.Chain(steps=[scatter.clone()], infra=outer)
+    assert list(chain.run_many(steps.FitCohort(cohort))) == expected, (
+        "an incomplete Scatter may reuse an existing artifact"
+    )
+
+    cold: tp.Any = {**outer, "folder": tmp_path / "cold"}
+    chain = steps.Chain(steps=[_ScatterValues(body=_SumOffset())], infra=cold)
+    with pytest.raises(RuntimeError, match="handed no items"):
+        list(chain.run_many(steps.FitCohort(cohort)))
 
 
 @pytest.mark.parametrize("nested", [False, True])

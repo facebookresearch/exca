@@ -235,6 +235,8 @@ class Scatter(Step):
             upstream=branch_upstream,
             mode=batch._mode,
         )
+        if batch._cohort and len(set(batch.uids)) == batch._total_size:
+            carrier._cohort = True
         # one dispatch over all branches lets a backend submit them together
         dispatched = self._body()._dispatch(carrier)
         return batch._replace(
