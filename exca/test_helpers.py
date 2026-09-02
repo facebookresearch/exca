@@ -146,6 +146,16 @@ def test_discriminated_model_base_dispatch(
     assert isinstance(cls.model_validate(obj.model_dump()), expected_type)
 
 
+def test_discriminated_model_cache_invalidation() -> None:
+    assert "Hello" in BaseNamed._get_discriminated_subclasses()  # populate
+
+    class LateSub(BaseNamed):  # defined after populating
+        pass
+
+    assert "LateSub" in BaseNamed._get_discriminated_subclasses()
+    assert isinstance(BaseNamed(name="LateSub"), LateSub)  # type: ignore
+
+
 def test_discriminated_model_errors() -> None:
     with pytest.raises(ValueError) as e:
         _ = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore

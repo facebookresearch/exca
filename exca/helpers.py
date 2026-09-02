@@ -391,6 +391,7 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="forbid", validation_error_cause=True)
     _exca_discriminator_key: tp.ClassVar[str] = "type"
+    _exca_subclass_cache: tp.ClassVar[dict[str, type["DiscriminatedModel"]] | None] = None
 
     if not tp.TYPE_CHECKING:
 
@@ -403,7 +404,11 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     @classmethod
     def _get_discriminated_subclasses(cls) -> dict[str, type["DiscriminatedModel"]]:
-        """Map subclass __name__ → class for all subclasses sharing the same discriminator key."""
+        """Map from subclass __name__ to subclass, for the shared discriminator key."""
+        # __dict__ to get own class cache only, not its ancestor's
+        cached = cls.__dict__.get("_exca_subclass_cache")
+        if cached is not None:
+            return cached  # walking all subclasses is expensive at scale
         key = cls._exca_discriminator_key
         val_classes: dict[str, type[DiscriminatedModel]] = {}
         for s in _get_subclasses(cls) + [cls]:
@@ -415,6 +420,7 @@ class DiscriminatedModel(pydantic.BaseModel):
                 msg = f"2 subclasses from different modules are named {val!r}: {past} and {s}."
                 raise RuntimeError(msg)
             val_classes[val] = s
+        cls._exca_subclass_cache = val_classes
         return val_classes
 
     def __new__(cls, /, **kwargs: tp.Any) -> "DiscriminatedModel":
@@ -433,6 +439,10 @@ class DiscriminatedModel(pydantic.BaseModel):
     ) -> None:
         if discriminator_key is not None:
             cls._exca_discriminator_key = discriminator_key
+        for ancestor in cls.__mro__:
+            if issubclass(ancestor, DiscriminatedModel):
+                if "_exca_subclass_cache" in ancestor.__dict__:
+                    ancestor._exca_subclass_cache = None  # new class -> stale
         super().__init_subclass__(**kwargs)
 
     @classmethod
@@ -501,22 +511,19 @@ class DiscriminatedModel(pydantic.BaseModel):
             value = {key: value}  # -> instantiate corresponding class with default params
         options: list[str] = []
         if isinstance(value, dict):
-            # WARNING: we do not want to modify `value` which will come from the outer scope
-            # WARNING2: `sub_cls(**modified_value)` will trigger a recursion, and thus we need to remove the config key
+            # WARNING: we do not want to modify `value` (from the outer scope)
+            # WARNING2: `sub_cls(**modified_value)` triggers recursion -> remove config key
             value = value.copy()
             sub_cls_val = value.pop(key, None)
-            if sub_cls_val is not None:
+            if sub_cls_val is not None and sub_cls_val != cls.__name__:
                 val_classes = cls._get_discriminated_subclasses()
                 if sub_cls_val not in val_classes:
                     # https://docs.pydantic.dev/latest/concepts/validators/#raising-validation-errors
                     # -> should not use a KeyError for pydantic to handle unions in type
                     msg = f"Unknown subclass discriminator {sub_cls_val!r} for {cls}, available: {list(val_classes)}"
                     raise ValueError(msg)  # use ValueError
-                sub_cls = val_classes[sub_cls_val]
-                if sub_cls is not cls:
-                    return sub_cls(**value)  # type: ignore
-                # sub_cls is cls: fall through to handler below
-            else:
+                return val_classes[sub_cls_val](**value)  # type: ignore
+            elif sub_cls_val is None:
                 # Only suggest "forgot discriminator" if extras match some subclass's
                 # fields; otherwise it's a plain typo and the hint misleads.
                 extras = set(value) - set(cls.model_fields)
