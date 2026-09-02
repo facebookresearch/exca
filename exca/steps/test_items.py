@@ -32,6 +32,7 @@ def source_abc(request: pytest.FixtureRequest, tmp_path: Path) -> items.StepItem
 
 def test_step_items_iteration_and_select(source_abc: items.StepItems) -> None:
     assert list(source_abc) == [1, 2, 3]
+    assert list(source_abc) == [1, 2, 3], "re-iterable: one source read per pass"
     assert list(source_abc.uids) == ["a", "b", "c"]
     sub = source_abc.select(["c", "a"])
     assert list(sub) == [3, 1]

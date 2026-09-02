@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `steps`: `Fit` primitive — fit one artifact over a cohort of items and transform the items accordingly.
+
 ## 0.5.29 - 26-07-28
 
 - `ConfDict`: added `ConfDict` operations `ConfDict.ops.DELETE`, `ConfDict.ops.BEFORE`, and `ConfDict.ops.AFTER`; `ConfDict.ops.REPLACE` replaces `ConfDict.OVERRIDE`. [#310]

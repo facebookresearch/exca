@@ -245,7 +245,9 @@ class Step(exca.helpers.DiscriminatedModel):
         with cached._source.frozen_cache_folder():
             if not all(uid in cached._source for uid in uids):
                 return None
-        return cached.select(uids)
+        warm = cached.select(uids)
+        warm._cohort = False
+        return warm
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         """Resolve, then route *batch*: reuse/remember warm carrier, run inline or via backend."""
@@ -255,7 +257,7 @@ class Step(exca.helpers.DiscriminatedModel):
         standalone = (
             not batch._upstream and not batch._pending and batch._mode == "cached"
         )
-        if standalone:  # _output_items only valid with no upstream
+        if standalone and not batch._cohort:  # _output_items only valid with no upstream
             warm = self._warm_items(batch.uids)
             if warm is not None:
                 return warm
@@ -400,11 +402,33 @@ class Step(exca.helpers.DiscriminatedModel):
         if warm is not None:
             return warm  # extra-fast path -> avoid StepItems + _dispatch overhead
 
-        boundary = items.StepItems(
-            source=dict(zip(uids, values)),
-            uids=uids,
-        )
+        boundary = items.StepItems(source=dict(zip(uids, values)), uids=uids)
         return boundary.apply_step(self)
+
+    def fit_many(
+        self,
+        values: tp.Iterable[tp.Any] = (),
+        *,
+        cohort: str | None = None,
+    ) -> items.StepItems:
+        """Fit contained :class:`Fit` steps, then return their transformed inputs.
+
+        Parameters
+        ----------
+        values:
+            Cohort items. Omit to bind an existing named cohort.
+        cohort:
+            Cohort name. Unset, the item fingerprint identifies it.
+        """
+        from . import fit  # circular
+
+        built = utils.resolved_step(self)
+        values = list(values)
+        uids = [identity.materialize_uid(built, value) for value in values]
+        fit._declare_cohorts(self, uids, cohort)
+        boundary = items.StepItems(source=dict(zip(uids, values)), uids=uids)
+        boundary._cohort = bool(values)
+        return boundary.apply_step(built)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
         raise AttributeError("Step.forward() was removed; use run() instead")

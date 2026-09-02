@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import contextvars
 import dataclasses
 import datetime
 import logging
@@ -199,6 +200,11 @@ def _fold_modes(*modes: identity.ModeType) -> identity.ModeType:
     return acc
 
 
+def _must_recompute(status: LookupStatus, mode: identity.ModeType) -> bool:
+    """Whether a cached entry runs again under *mode* (a cached error still raises)."""
+    return mode == "force" or (mode == "retry" and status == "error")
+
+
 def _effective_mode(step: Step) -> identity.ModeType:
     """The mode in effect for ``step`` once its sub-steps are folded in."""
     from . import utils  # lazy — backends is imported by utils at module level
@@ -306,11 +312,22 @@ class ComputeBatch:
     def __getstate__(self) -> dict[str, tp.Any]:
         return {**self.__dict__, "info": CoordinationInfo()}
 
+    def _claimed_uids(self) -> list[str]:
+        claim = self.info.claim
+        if claim is None:
+            raise RuntimeError("ComputeBatch has no claim")
+        return list(claim.uids)
+
     def select(self, uids: tp.Sequence[str]) -> ComputeBatch:
         """Sub-batch over *uids*, sharing step/paths/cache; copies ``info``
         (avoid aliasing the parent's claim).
         """
         info = dataclasses.replace(self.info)
+        if info.claim is not None:
+            selected = set(uids)
+            info.claim = dataclasses.replace(
+                info.claim, uids=tuple(uid for uid in info.claim.uids if uid in selected)
+            )
         items_ = self.items.select(uids, mode=self.info.mode)
         return dataclasses.replace(self, items=items_, info=info)
 
@@ -323,9 +340,9 @@ class ComputeBatch:
 
     def cached_items(self) -> StepItems:
         """Lazy cache-backed carrier; use on a top-level batch, not a chunk."""
-        return items.StepItems(
+        return self.items._replace(
             source=self.cache_dict,
-            uids=self.items.uids,
+            pending=(),
             upstream=self.info.upstream,
             mode=self.info.mode,
         )
@@ -335,12 +352,15 @@ class ComputeBatch:
         folder = self.cache_dict.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
+        unique_uids = list(dict.fromkeys(self.items.uids))
+        with self.cache_dict.frozen_cache_folder():
+            run_uids = [uid for uid in unique_uids if uid not in self.cache_dict]
         result_items = self.step._run_items(self.items)
         written_uids: list[str] = []
         try:
             with self.cache_dict.write():
-                for i, result in enumerate(result_items):
-                    uid = self.items.uids[i]
+                for i, result in enumerate(result_items.read(run_uids)):
+                    uid = run_uids[i]
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
                         written_uids.append(uid)
@@ -419,6 +439,11 @@ class _Claimed:
         self.close()
 
 
+_ACTIVE_GROUPS: contextvars.ContextVar[dict[int, list[ComputeBatch]]] = (
+    contextvars.ContextVar("exca_step_backend_groups", default={})
+)
+
+
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     """Base class for execution backends with integrated caching."""
 
@@ -445,6 +470,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         finally:
             self._recomputed = recomputed
 
+    def _active_group(self) -> list[ComputeBatch] | None:
+        return _ACTIVE_GROUPS.get().get(id(self))
+
     def _pending_statuses(
         self,
         *,
@@ -467,7 +495,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 if status == "error":
                     _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
                 continue
-            elif mode == "force" or (mode == "retry" and status == "error"):
+            elif _must_recompute(status, mode):
                 pending[uid] = status
             elif status == "error":
                 _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
@@ -578,9 +606,35 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 ereg.clear(uids)
         self._checked_configs.discard(paths.step_folder)
 
+    @contextlib.contextmanager
+    def _grouped(self) -> tp.Iterator[None]:
+        """Hold back ``_run`` calls, then claim and execute them as one submission.
+
+        Carriers returned while grouping only hold results once the group ran.
+        Nesting joins the enclosing group.
+        """
+        group = self._active_group()
+        if group is not None:  # nested sweep: the outer group submits it
+            yield
+            return
+        group = []
+        groups = _ACTIVE_GROUPS.get()
+        token = _ACTIVE_GROUPS.set({**groups, id(self): group})
+        try:
+            yield
+        finally:
+            _ACTIVE_GROUPS.reset(token)
+        with self._claim(group) as claimed:
+            if claimed.ready:
+                self._execute(claimed.ready)
+
     def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid."""
         cbatch = self._prepare(step, batch)
+        group = self._active_group()
+        if group is not None:  # submitted when the group exits
+            group.append(cbatch)
+            return cbatch.cached_items()
         with self._claim([cbatch]) as claimed:
             if claimed.ready:
                 self._execute(claimed.ready)
@@ -628,9 +682,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 reg: inflight.InflightRegistry | None = None
                 if self._concurrent:
                     reg = inflight.InflightRegistry(cb.paths.step_folder)
-                cb = cb.select(list(pending))
+                uids = cb.items.uids if cb.items._cohort else pending
+                cb = cb.select(list(uids))
                 cb.info.claim = claimed.stack.enter_context(
-                    inflight.inflight_session(reg, set(pending))
+                    inflight.inflight_session(reg, pending)
                 )
                 claimed.batches.append(cb)
             claimed.ready = [
@@ -648,11 +703,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         or ``None`` if fully populated by a competitor.
         """
         mode = cbatch.info.mode
+        claimed_uids = cbatch._claimed_uids()
         pending_statuses = self._pending_statuses(
-            paths=cbatch.paths, uids=cbatch.items.uids, mode=mode
+            paths=cbatch.paths, uids=claimed_uids, mode=mode
         )
         inflight.after_wait_log(
-            cbatch.paths.step_uid, len(cbatch.items.uids), len(pending_statuses)
+            cbatch.paths.step_uid, len(claimed_uids), len(pending_statuses)
         )
         retry_count = sum(status == "error" for status in pending_statuses.values())
         if retry_count:
@@ -667,7 +723,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._clear_caches(paths=cbatch.paths, cd=cbatch.cache_dict, uids=clear_uids)
         if not pending_statuses:
             return None
-        return cbatch.select(list(pending_statuses))
+        if cbatch.info.claim is not None:
+            cbatch.info.claim = dataclasses.replace(
+                cbatch.info.claim, uids=tuple(pending_statuses)
+            )
+        uids = cbatch.items.uids if cbatch.items._cohort else pending_statuses
+        return cbatch.select(list(uids))
 
     def _mark_recomputed(self, cbatch: ComputeBatch) -> None:
         """Record *cbatch*'s uids as recomputed-this-lifetime.
@@ -677,7 +738,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """
         if cbatch.info.mode in ("force", "retry"):
             folder = cbatch.paths.step_folder
-            self._recomputed.update((folder, uid) for uid in cbatch.items.uids)
+            self._recomputed.update((folder, uid) for uid in cbatch._claimed_uids())
 
     def _execute(self, cbatches: list[ComputeBatch]) -> None:
         """Run *cbatches* (filtered+claimed) blocking; override for pools/arrays."""
@@ -709,7 +770,7 @@ class Cached(Backend):
             if log_folder is not None:
                 time = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
                 step_uids = ", ".join(cbatch.paths.step_uid for cbatch in cbatches)
-                n_items = sum(len(cbatch.items.uids) for cbatch in cbatches)
+                n_items = sum(len(cbatch._claimed_uids()) for cbatch in cbatches)
                 header = f"{time} - Running {n_items} items for steps: {step_uids}"
                 print(header)
                 print(header, file=sys.stderr)
@@ -749,10 +810,14 @@ class _SubmititBackend(Backend):
             if cbatch.info.claim is None:
                 raise RuntimeError("_execute runs only on claimed batches")
             self._mark_recomputed(cbatch)  # all tasks submitted together below
-        tasks = _tasks_from_batches(
-            [cb.shuffled() for cb in cbatches],
-            max_chunks=self.max_jobs,
-            min_items_per_chunk=self.min_items_per_job,
+        tasks = (
+            [cbatches]
+            if self.max_jobs == 1
+            else _tasks_from_batches(
+                [cb.select(cb._claimed_uids()).shuffled() for cb in cbatches],
+                max_chunks=self.max_jobs,
+                min_items_per_chunk=self.min_items_per_job,
+            )
         )
         # one array → one logs folder; jobs.db still records per step_folder
         executor = submitit.AutoExecutor(
@@ -769,13 +834,14 @@ class _SubmititBackend(Backend):
         for task, job in zip(tasks, jobs):
             for batch in task:
                 assert batch.info.claim is not None  # inherited from its variant
-                batch.info.claim.record_worker_info(job, uids=batch.items.uids)
+                uids = batch._claimed_uids()
+                batch.info.claim.record_worker_info(job, uids=uids)
                 folder = batch.paths.step_folder
-                by_folder.setdefault(folder, {})[job.job_id] = batch.items.uids
+                by_folder.setdefault(folder, {})[job.job_id] = uids
         for folder, records in by_folder.items():
             with jobregistry.JobRegistry(folder) as reg:
                 reg.record(records, cluster=executor.cluster)
-        n_items = sum(len(cb.items.uids) for cb in cbatches)
+        n_items = sum(len(cb._claimed_uids()) for cb in cbatches)
         msg = "Sent %s items for %s steps into %s jobs on cluster '%s' (eg: %s)"
         logger.info(
             msg, n_items, len(cbatches), len(tasks), self._CLUSTER, jobs[0].job_id
@@ -901,6 +967,10 @@ class _PoolBackend(Backend):
         lazy carrier instead of blocking.
         """
         cbatch = self._prepare(step, batch)
+        group = self._active_group()
+        if group is not None:  # submitted when the group exits
+            group.append(cbatch)
+            return cbatch.cached_items()
         claimed = self._claim([cbatch])
         transferred = False
         try:
@@ -912,13 +982,13 @@ class _PoolBackend(Backend):
                 uid: fut
                 for fut, task in task_futs.items()
                 for b in task
-                for uid in b.items.uids
+                for uid in b._claimed_uids()
             }
             ctx = _PoolContext(cbatch.cache_dict, cbatch.paths.step_uid, pool, claimed)
             transferred = True  # _PoolContext closes `claimed`, not the finally
-            return items.StepItems(
+            return cbatch.items._replace(
                 source=_PoolSource(uid_to_future, ctx),
-                uids=cbatch.items.uids,
+                pending=(),
                 upstream=cbatch.info.upstream,
                 mode=cbatch.info.mode,
             )
@@ -931,7 +1001,7 @@ class _PoolBackend(Backend):
         if submission is None:  # ran inline (single worker)
             return
         pool, task_futs = submission
-        n_items = sum(len(cb.items.uids) for cb in cbatches)
+        n_items = sum(len(cb._claimed_uids()) for cb in cbatches)
         with pool:
             try:
                 for f in futures.as_completed(task_futs):
@@ -949,7 +1019,7 @@ class _PoolBackend(Backend):
         its task->future map, or ``None`` if the work ran inline (single worker).
         """
         # one pool across variants: heterogeneous variants overlap (load balance)
-        n_items = sum(len(cb.items.uids) for cb in cbatches)
+        n_items = sum(len(cb._claimed_uids()) for cb in cbatches)
         for cbatch in cbatches:
             if cbatch.info.claim is None:
                 raise RuntimeError("_submit_pool runs only on claimed batches")
@@ -958,20 +1028,26 @@ class _PoolBackend(Backend):
         max_workers = min(n_items, cpus)
         if self.max_jobs is not None:
             max_workers = min(max_workers, self.max_jobs)
-        if max_workers <= 1:
-            for cbatch in cbatches:
+        one_task = self.max_jobs == 1
+        batches = (
+            cbatches if one_task else [cb.select(cb._claimed_uids()) for cb in cbatches]
+        )
+        if max_workers <= 1 and not (
+            one_task and any(cb.items._cohort for cb in cbatches)
+        ):
+            for cbatch in batches:
                 cbatch.run_and_cache()
             return None
         # ~3x as many tasks as workers, run in one pool
         tasks = _tasks_from_batches(
-            [cb.shuffled() for cb in cbatches],
-            max_chunks=3 * max_workers,
+            batches if one_task else [cb.shuffled() for cb in batches],
+            max_chunks=1 if one_task else 3 * max_workers,
             min_items_per_chunk=1,
         )
         for task in tasks:
             for batch in task:
                 assert batch.info.claim is not None  # inherited from its variant
-                batch.info.claim.record_worker_info(uids=batch.items.uids)
+                batch.info.claim.record_worker_info(uids=batch._claimed_uids())
         pool = utils.make_pool_executor(self._POOL_TYPE, max_workers)
         logger.info("Sent %s items for %s steps into a %s", n_items, len(cbatches), pool)
         task_futs = {pool.submit(_multi_run_and_cache, task): task for task in tasks}

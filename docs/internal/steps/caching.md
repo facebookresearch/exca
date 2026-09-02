@@ -94,6 +94,12 @@ whole batch set, so a sweep (many step variants dispatched together) packs
 into one submitit array (one pool for pool backends). `_mark_recomputed`
 records force/retry batches per attempt.
 
+`Backend._grouped()` is how a sweep gets there: inside it, `_run` only
+prepares and queues its batch, and the group is claimed and executed once
+on exit. `Parallel` uses it so its variants still go through the regular
+`Step._dispatch` (step resolution, `Fit` cohort resolution) instead of
+driving the backend primitives itself.
+
 The session locks `inflight.db` only — direct user calls to
 `LookupHandle.clear_cache()` race against in-flight workers. Results are
 not round-tripped through the job pickle (would be wasteful under

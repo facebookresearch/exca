@@ -133,6 +133,37 @@ at a time (never the full set in memory, never round-tripped through
 the job pickle). Execution order within a batch is non-deterministic;
 output order matches input order.
 
+## Fitting on the items
+
+A `Fit` step derives one artifact from many items, then transforms each item with it — normalization statistics, a PCA basis, a trained model. `fit_many` fits; `run_many` transforms with what is already fitted:
+
+```python
+class Normalize(steps.Fit):
+    def _fit(self, values):        # the cohort
+        stacked = np.concatenate(list(values))
+        return stacked.mean(0), stacked.std(0)
+
+    def _run(self, value):         # one item
+        mean, std = self.fitted
+        return (value - mean) / std
+
+
+norm = Normalize(infra={"backend": "Cached", "folder": cache})
+for value in norm.fit_many(train_paths):
+    train(value)                   # fitted on this cohort, then transformed
+for value in norm.run_many(test_paths):
+    evaluate(value)                # same artifact, novel items
+```
+
+`_fit` receives the cohort as an iterable it can stream, and iterate
+again (one upstream read per pass).
+
+The cohort's identity — the fingerprint of its items, or the name passed to `fit_many(..., cohort="train")` — settles before anything runs, and the step that runs is a copy carrying it, so the artifact and every downstream cache are scoped to it. Bind an existing named cohort with `fit_many(cohort="train")`. Another cohort or upstream takes another config, so `clone()` it.
+
+The fit runs where the step is dispatched from, ahead of any split,
+and is cached under `infra`. A `Fit` under a backend that shards the
+cohort raises rather than fitting on a shard.
+
 ## What's stable
 
 Pinned by tests — safe to rely on:

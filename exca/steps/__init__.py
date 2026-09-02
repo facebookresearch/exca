@@ -29,3 +29,4 @@ from . import backends
 from . import helpers as helpers
 from .base import Chain as Chain
 from .base import Step as Step
+from .fit import Fit as Fit

@@ -11,7 +11,7 @@ Core classes
 ------------
 
 .. autoclass:: exca.steps.Step
-    :members: run, run_many, lookup, clone, item_uid, CACHE_TYPE
+    :members: run, run_many, fit_many, lookup, clone, item_uid, CACHE_TYPE
 
 .. autoclass:: exca.steps.Chain
     :show-inheritance:
@@ -90,3 +90,12 @@ Helpers
 
 .. autoclass:: exca.steps.helpers.Func
     :members:
+
+
+Fitting over items
+------------------
+
+.. autoclass:: exca.steps.Fit
+    :show-inheritance:
+    :members: fitted, ARTIFACT_CACHE_TYPE
+    :private-members: _fit, _cohort_uids

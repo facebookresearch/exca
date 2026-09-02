@@ -140,6 +140,8 @@ class StepItems:
         self._upstream = tuple(upstream)
         self._pending = tuple(pending)
         self._mode = mode
+        self._total_size = len(set(self.uids))
+        self._cohort = False
 
     def __len__(self) -> int:
         return len(self.uids)
@@ -148,14 +150,25 @@ class StepItems:
         """Run *step* over the carrier, honoring its infra/caching (leaf or ``Chain``)."""
         return step._dispatch(self)
 
+    def _replace(self, **changes: tp.Any) -> StepItems:
+        """Copy with *changes* applied; pass ``pending=()`` if *source* holds results."""
+        params: dict[str, tp.Any] = {
+            "source": self._source,
+            "uids": self.uids,
+            "upstream": self._upstream,
+            "pending": self._pending,
+            "mode": self._mode,
+        }
+        new = StepItems(**{**params, **changes})
+        new._total_size = self._total_size
+        new._cohort = self._cohort
+        return new
+
     def _append(self, step: Step) -> StepItems:
         """Append a single leaf step's computation and identity."""
-        return StepItems(
-            source=self._source,
-            uids=self.uids,
+        return self._replace(
             upstream=self._upstream + tuple(step._uid_steps()),
             pending=self._pending + (step,),
-            mode=self._mode,
         )
 
     def select(
@@ -169,11 +182,9 @@ class StepItems:
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
         elif hasattr(source, "select"):  # subset lazy sources before pickle
             source = source.select(uids)
-        return StepItems(
+        return self._replace(
             source=source,
             uids=uids,
-            upstream=self._upstream,
-            pending=self._pending,
             mode=mode if mode is not None else self._mode,
         )
 

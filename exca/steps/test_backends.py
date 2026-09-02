@@ -10,8 +10,10 @@ import contextlib
 import logging
 import stat
 import sys
+import threading
 import time
 import typing as tp
+from concurrent import futures
 from pathlib import Path
 
 import pydantic
@@ -286,6 +288,30 @@ def test_pool_backend(tmp_path: Path, backend: str) -> None:
     assert step.lookup(1.0).paths.cache_folder.exists()
 
 
+def test_multiworker_cohort_chunks_do_not_duplicate_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = {str(i): i for i in range(10)}
+    batch = items.StepItems(source=source, uids=list(source))
+    batch._cohort = True
+    backend = backends.ThreadPool(folder=tmp_path, max_jobs=2)
+    cbatch = backend._prepare(conftest.Add(value=1, infra=backend), batch)
+    tasks: list[list[backends.ComputeBatch]] = []
+    monkeypatch.setattr(backends.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(backends, "_multi_run_and_cache", tasks.append)
+
+    with backend._claim([cbatch]) as claimed:
+        backend._execute(claimed.ready)
+
+    assert len(tasks) > 1, "multiworker cohort must be split"
+    task_size = 0
+    for task in tasks:
+        for cb in task:
+            assert isinstance(cb.items._source, dict)
+            task_size += len(cb.items._source)
+    assert task_size == len(source), "task sources must partition payload"
+
+
 class _PrintStep(Step):
     def _run(self, value: str) -> str:
         print(f"stdout:{value}")
@@ -344,6 +370,25 @@ def test_recomputed_per_batch(tmp_path: Path) -> None:
 
     key = (cb_ok.paths.step_folder, cb_ok.items.uids[0])
     assert key not in backend._recomputed, "cb_ok never ran, so it must be unmarked"
+
+
+def test_grouped_is_context_local(tmp_path: Path) -> None:
+    backend = backends.Cached(folder=tmp_path)
+    barrier = threading.Barrier(2)
+    groups: list[list[backends.ComputeBatch]] = []
+
+    def capture_group() -> None:
+        with backend._grouped():
+            group = backend._active_group()
+            assert group is not None
+            groups.append(group)
+            barrier.wait(timeout=5)
+
+    with futures.ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = [pool.submit(capture_group) for _ in range(2)]
+        for job in jobs:
+            job.result(timeout=5)
+    assert groups[0] is not groups[1]
 
 
 def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
