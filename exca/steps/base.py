@@ -22,9 +22,6 @@ from exca import utils as xkutils
 
 from . import backends, identity, items, utils
 
-if tp.TYPE_CHECKING:
-    from .fit import FitCohort
-
 logger = logging.getLogger(__name__)
 
 
@@ -381,43 +378,57 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         return next(iter(self.run_many([value])))
 
-    def run_many(self, values: tp.Iterable[tp.Any] | FitCohort) -> items.StepItems:
+    def run_many(self, values: tp.Iterable[tp.Any]) -> items.StepItems:
         """Execute the step over many inputs, one cache entry per input.
 
         Parameters
         ----------
         values:
-            Inputs to run; one result is produced per input, in order. Wrap them in a
-            :class:`~exca.steps.FitCohort` to let a :class:`~exca.steps.Fit` fit on them.
+            Inputs to run; one result is produced per input, in order.
 
         Returns
         -------
         StepItems
             Iterator yielding one result per input, in input order.
         """
-        from . import fit  # circular
-
         built = utils.resolved_step(self)
         if built is not self:
             return built.run_many(values)
 
-        cohort: FitCohort | None = None
-        if isinstance(values, fit.FitCohort):
-            cohort, values = values, values.items
         values = list(values)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]
 
-        if cohort is None:  # a declared cohort must reach the steps
-            warm = self._warm_items(uids)
-            if warm is not None:
-                return warm  # extra-fast path -> avoid StepItems + _dispatch overhead
-        else:
-            cohort._uids = uids
-            fit.declare_cohorts(self, cohort)
+        warm = self._warm_items(uids)
+        if warm is not None:
+            return warm  # extra-fast path -> avoid StepItems + _dispatch overhead
 
         boundary = items.StepItems(source=dict(zip(uids, values)), uids=uids)
-        boundary._cohort = cohort is not None
         return boundary.apply_step(self)
+
+    def fit_many(
+        self,
+        values: tp.Iterable[tp.Any] = (),
+        *,
+        cohort: str | None = None,
+    ) -> items.StepItems:
+        """Fit contained :class:`Fit` steps, then return their transformed inputs.
+
+        Parameters
+        ----------
+        values:
+            Cohort items. Omit to bind an existing named cohort.
+        cohort:
+            Cohort name. Unset, the item fingerprint identifies it.
+        """
+        from . import fit  # circular
+
+        built = utils.resolved_step(self)
+        values = list(values)
+        uids = [identity.materialize_uid(built, value) for value in values]
+        fit._declare_cohorts(self, uids, cohort)
+        boundary = items.StepItems(source=dict(zip(uids, values)), uids=uids)
+        boundary._cohort = bool(values)
+        return boundary.apply_step(built)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
         raise AttributeError("Step.forward() was removed; use run() instead")

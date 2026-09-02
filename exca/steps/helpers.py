@@ -11,7 +11,7 @@ import typing as tp
 
 import pydantic
 
-from . import fit, identity, items, utils
+from . import identity, items, utils
 from .base import Step
 
 
@@ -218,6 +218,14 @@ class Parallel(Step):
         self.run_many([value])
 
     def run_many(  # type: ignore[override]
-        self, values: tp.Iterable[tp.Any] | fit.FitCohort
+        self, values: tp.Iterable[tp.Any]
     ) -> list[None]:
         return list(super().run_many(values))
+
+    def fit_many(  # type: ignore[override]
+        self,
+        values: tp.Iterable[tp.Any] = (),
+        *,
+        cohort: str | None = None,
+    ) -> list[None]:
+        return list(super().fit_many(values, cohort=cohort))

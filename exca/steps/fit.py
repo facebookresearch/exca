@@ -17,31 +17,6 @@ from . import backends, identity, items, utils
 from .base import Step
 
 
-class FitCohort:
-    """The items a :class:`Fit` fits on, passed to ``run_many`` in their place.
-
-    .. warning:: Experimental -- API may change.
-
-    Parameters
-    ----------
-    items
-        Items to fit on, then transform.
-
-    Note
-    ----
-    ``fitted_by`` lists the steps the cohort identified, to check it was not
-    passed in vain.
-    """
-
-    def __init__(self, items: tp.Iterable[tp.Any]) -> None:
-        self.items = list(items)
-        self._uids: list[str] = []  # the declared cohort, set by run_many
-        self.fitted_by: list[str] = []
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}({len(self.items)} items)"
-
-
 def _fingerprint(ordered: tp.Sequence[str]) -> str:
     """Identity of a cohort that was not named, as ``<hash8>,<count>``."""
     digest = hashlib.sha256()
@@ -63,24 +38,37 @@ def _find_fits(step: Step, root: str = "") -> dict[str, Fit]:
     return found
 
 
-def declare_cohorts(step: Step, cohort: FitCohort) -> None:
+def _declare_cohorts(
+    step: Step, uids: tp.Sequence[str], cohort: str | None = None
+) -> None:
     """Name the cohort in every ``Fit`` of *step*, privately, before anything runs."""
-    for path, fit in _find_fits(step).items():
-        if fit.cohort is not None and fit._declared is None:
-            uid = fit.cohort  # a name given in the config is kept
+    found = _find_fits(step)
+    if not found:
+        raise TypeError(f"{type(step).__name__}.fit_many() requires at least one Fit")
+    for path, fit in found.items():
+        if cohort is not None and fit.cohort not in (None, cohort):
+            raise ValueError(
+                f"{type(fit).__name__} at {path or '.'} has cohort "
+                f"{fit.cohort!r}, incompatible with {cohort!r}"
+            )
+        if cohort is not None:
+            uid = cohort
+        elif fit.cohort is not None:
+            uid = fit.cohort
+        elif uids:
+            uid = _fingerprint(fit._cohort_uids(uids))
+        elif fit._declared is not None:
+            uid = fit._declared
         else:
-            uid = _fingerprint(fit._cohort_uids(cohort._uids))
-            # the config that ran: this copy, or the one it resolved to
-            memo = tp.cast(Fit | None, fit._resolution_cache)
-            ran = fit if fit.cohort is not None else memo
-            if ran is not None and ran.cohort != uid:
-                raise RuntimeError(
-                    f"{type(fit).__name__} at {path or '.'} already ran on cohort "
-                    f"{ran.cohort!r}: refitting in place is not supported, run "
-                    "clone() to fit another cohort"
-                )
-            fit._declared = uid
-        cohort.fitted_by.append(f"{path or '.'}({uid})")
+            raise ValueError("fit_many() without values requires a named cohort")
+        bound = fit.cohort if fit.cohort is not None else fit._declared
+        if bound is not None and bound != uid:
+            raise RuntimeError(
+                f"{type(fit).__name__} at {path or '.'} already uses cohort "
+                f"{bound!r}: refitting in place is not supported, use clone() "
+                f"for {uid!r}"
+            )
+        fit._declared = uid
 
 
 class Fit(Step):
@@ -98,12 +86,12 @@ class Fit(Step):
                 return value - self.fitted
 
         norm = Normalize(infra={"backend": "Cached", "folder": cache})
-        norm.run_many(FitCohort(train))  # fits on these, then transforms them
-        norm.run_many(test)              # transforms with the same artifact
+        norm.fit_many(train)  # fits on these, then transforms them
+        norm.run_many(test)   # transforms with the same artifact
 
-    Only a :class:`FitCohort` is fitted on; its name -- :attr:`cohort`, else the
-    fingerprint of its items -- scopes the artifact and every downstream cache.
-    Another cohort or upstream takes another config (:meth:`clone`).
+    Only :meth:`~exca.steps.Step.fit_many` fits; its cohort name, else the fingerprint
+    of its items, scopes the artifact and every downstream cache. Another cohort or
+    upstream takes another config (:meth:`clone`).
 
     The fit runs where the step is dispatched from, ahead of a backend splitting the
     batch, and is cached under ``infra``. The upstream is read twice (once for the
@@ -152,7 +140,7 @@ class Fit(Step):
         """The artifact :meth:`_fit` produced, for :meth:`_run` to transform with."""
         if self._fitted_for is None:
             raise RuntimeError(
-                f"{type(self).__name__} is not fitted: run it on a FitCohort first"
+                f"{type(self).__name__} is not fitted: call fit_many() first"
             )
         return self._fitted
 
@@ -170,8 +158,8 @@ class Fit(Step):
         uid = self.cohort
         if uid is None:
             raise RuntimeError(
-                f"{kind} has no cohort to fit on or to read back: run it on a "
-                "FitCohort, or set its 'cohort' name"
+                f"{kind} has no cohort to fit on or to read back: call fit_many(), "
+                "or set its 'cohort' name"
             )
         mode = backends._fold_modes(batch._mode, backends._effective_mode(self))
         # cohort cleared: all cohorts of this Fit share one folder, one entry each
@@ -196,7 +184,7 @@ class Fit(Step):
                 hint = "drop the force mode" if mode == "force" else "check its name"
                 raise RuntimeError(
                     f"{kind} must fit cohort {uid!r} but was handed no items to fit "
-                    f"on: run it on a FitCohort, or {hint}"
+                    f"on: pass values to fit_many(), or {hint}"
                 )
             # counts, not uids: a step re-keying items has its own uid space
             handed = len(set(batch.uids))

@@ -135,10 +135,7 @@ output order matches input order.
 
 ## Fitting on the items
 
-A `Fit` step derives one artifact from many items, then transforms
-each item with it — normalization statistics, a PCA basis, a trained
-model. Only a batch wrapped in a `FitCohort` is fitted on; any other
-call transforms with what is already fitted:
+A `Fit` step derives one artifact from many items, then transforms each item with it — normalization statistics, a PCA basis, a trained model. `fit_many` fits; `run_many` transforms with what is already fitted:
 
 ```python
 class Normalize(steps.Fit):
@@ -152,7 +149,7 @@ class Normalize(steps.Fit):
 
 
 norm = Normalize(infra={"backend": "Cached", "folder": cache})
-for value in norm.run_many(steps.FitCohort(train_paths)):
+for value in norm.fit_many(train_paths):
     train(value)                   # fitted on this cohort, then transformed
 for value in norm.run_many(test_paths):
     evaluate(value)                # same artifact, novel items
@@ -161,13 +158,7 @@ for value in norm.run_many(test_paths):
 `_fit` receives the cohort as an iterable it can stream, and iterate
 again (one upstream read per pass).
 
-The cohort's identity — the fingerprint of its items, or the name the
-config already carries (`Normalize(cohort="train")`) — settles before
-anything runs, and the step that runs is a copy carrying it, so the
-artifact and every downstream cache are scoped to it. A named cohort is
-recoverable from the config alone, for a pipeline that never presents
-the items it was fitted on. Another cohort or upstream takes another
-config, so `clone()` it.
+The cohort's identity — the fingerprint of its items, or the name passed to `fit_many(..., cohort="train")` — settles before anything runs, and the step that runs is a copy carrying it, so the artifact and every downstream cache are scoped to it. Bind an existing named cohort with `fit_many(cohort="train")`. Another cohort or upstream takes another config, so `clone()` it.
 
 The fit runs where the step is dispatched from, ahead of any split,
 and is cached under `infra`. A `Fit` under a backend that shards the
