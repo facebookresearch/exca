@@ -25,6 +25,7 @@ class _SumOffset(steps.Fit):
     scale: float = 1
 
     _fits: list[list[float]] = pydantic.PrivateAttr(default_factory=list)
+    _runs: list[float] = pydantic.PrivateAttr(default_factory=list)
 
     @classmethod
     def _exclude_from_cls_uid(cls) -> list[str]:
@@ -38,6 +39,7 @@ class _SumOffset(steps.Fit):
         return self.scale * sum(vals)
 
     def _run(self, value: float) -> float:
+        self._runs.append(value)
         return value + self.fitted
 
 
@@ -52,12 +54,14 @@ def test_fit_cohort_then_novel_items(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
     step = _SumOffset(infra=infra)
     exca.utils.recursive_freeze(step)  # as an enclosing config would
-    assert list(step.run_many(steps.FitCohort([1.0, 2.0, 3.0]))) == [7.0, 8.0, 9.0]
+    output = list(step.run_many(steps.FitCohort([1.0, 2.0, 3.0])))
+    assert output == [7.0, 8.0, 9.0], "cohort items use their fitted sum"
     assert step.run(10.0) == 16.0, "novel item must use the fitted sum"
     assert len(step._fits) == 1, "a second call must not refit"
 
     read_back = _SumOffset(infra=infra)
-    assert list(read_back.run_many(steps.FitCohort([1.0, 2.0, 3.0]))) == [7.0, 8.0, 9.0]
+    output = list(read_back.run_many(steps.FitCohort([1.0, 2.0, 3.0])))
+    assert output == [7.0, 8.0, 9.0], "cached artifact must reproduce outputs"
     assert not read_back._fits, "the artifact must be read back from the cache"
 
     with pytest.raises(RuntimeError, match="no cohort"):
@@ -77,18 +81,20 @@ def test_fit_cohort_marker_is_request_scoped(tmp_path: Path) -> None:
     chain = steps.Chain(steps=[upstream, _SumOffset(cohort="train", infra=infra)])
     with pytest.raises(RuntimeError, match="handed no items"):
         chain.run_many([1.0, 2.0])
-    assert list(chain.run_many(steps.FitCohort([1.0, 2.0]))) == [8.0, 10.0]
+    output = list(chain.run_many(steps.FitCohort([1.0, 2.0])))
+    assert output == [8.0, 10.0], "current request's cohort marker must reach Fit"
 
 
 def test_named_cohort(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
     step = _SumOffset(infra=infra, cohort="train")
-    assert list(step.run_many(steps.FitCohort([1.0, 3.0]))) == [5.0, 7.0]
+    output = list(step.run_many(steps.FitCohort([1.0, 3.0])))
+    assert output == [5.0, 7.0], "named cohort must fit and transform"
     assert step.cohort == "train", "a declared cohort must not rename it"
 
     configured = _SumOffset(infra=infra, cohort="train")
     assert configured.run(10.0) == 14.0, "the config name must recover it"
-    assert not configured._fits
+    assert not configured._fits, "recovering a named artifact must not refit"
 
     with pytest.raises(RuntimeError, match="must fit cohort 'test'"):
         _SumOffset(infra=infra, cohort="test").run(10.0)
@@ -97,7 +103,8 @@ def test_named_cohort(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="drop the force mode"):
         _SumOffset(infra=infra, cohort="train").run(10.0)
     scaled = step.clone(scale=10)
-    assert list(scaled.run_many(steps.FitCohort([1.0, 3.0]))) == [41.0, 43.0]
+    output = list(scaled.run_many(steps.FitCohort([1.0, 3.0])))
+    assert output == [41.0, 43.0], "cloned config must fit its own artifact"
 
 
 def test_retry_of_a_failed_fit(tmp_path: Path) -> None:
@@ -112,7 +119,8 @@ def test_retry_of_a_failed_fit(tmp_path: Path) -> None:
         _SumOffset(infra=infra, cohort="train").run(10.0)
 
     fixed = _SumOffset(infra=infra, cohort="train")
-    assert list(fixed.run_many(steps.FitCohort([1.0, 3.0]))) == [5.0, 7.0]
+    output = list(fixed.run_many(steps.FitCohort([1.0, 3.0])))
+    assert output == [5.0, 7.0], "retry must allow the repaired fit"
 
 
 @pytest.mark.parametrize(
@@ -149,17 +157,40 @@ def test_fit_with_distributed_items(
     chain = steps.Chain(
         steps=[conftest.Mult(coeff=2, infra=infra if on_upstream else local), fit]
     )
-    assert list(chain.run_many(steps.FitCohort([1.0, 2.0, 3.0]))) == [14.0, 16.0, 18.0]
+    output = list(chain.run_many(steps.FitCohort([1.0, 2.0, 3.0])))
+    assert output == [14.0, 16.0, 18.0], "distribution must preserve cohort results"
     assert fit._fits == [[2.0, 4.0, 6.0]], "the fit must see the whole cohort, once"
 
 
-@pytest.mark.parametrize("max_jobs", [1, 2])
-def test_fit_under_distributed_chain(tmp_path: Path, max_jobs: int) -> None:
-    infra: tp.Any = {"folder": tmp_path, "backend": "ThreadPool", "max_jobs": max_jobs}
+@pytest.mark.parametrize(
+    ("backend", "max_jobs"),
+    [("ThreadPool", 1), ("ProcessPool", 1), ("ThreadPool", 2)],
+)
+def test_fit_under_distributed_chain(tmp_path: Path, backend: str, max_jobs: int) -> None:
+    infra: tp.Any = {"folder": tmp_path, "backend": backend, "max_jobs": max_jobs}
     chain = steps.Chain(steps=[_SumOffset()], infra=infra)
     cohort = steps.FitCohort([1.0, 2.0, 3.0, 4.0])
     if max_jobs == 1:  # one worker holds the whole cohort, so it can fit
-        list(chain.run_many(cohort))  # read: the pool is awaited lazily
+        output = list(chain.run_many(cohort))
+        assert output == [11.0, 12.0, 13.0, 14.0], "one task keeps the cohort"
+        fit = _SumOffsetSequence()
+        sequence = steps.Chain(
+            steps=[conftest.Mult(coeff=2), fit, conftest.Add(value=1)],
+            infra=infra,
+        )
+        output = list(sequence.run_many(steps.FitCohort([1.0, 1.0, 4.0])))
+        assert output == [15.0, 15.0, 21.0], "enclosing backend preserves the sequence"
+        if backend == "ThreadPool":  # worker shares the observable Fit instance
+            assert fit._fits == [[2.0, 2.0, 8.0]], "fitting keeps repeated values"
+            runs = sorted(fit._runs)
+            assert runs == [2.0, 8.0], "transforming deduplicates cache keys"
+            fit._runs.clear()
+
+        sequence.lookup(4.0).clear_cache(recursive=False)
+        output = list(sequence.run_many(steps.FitCohort([1.0, 1.0, 4.0])))
+        assert output == [15.0, 15.0, 21.0], "partial cache keeps cohort semantics"
+        if backend == "ThreadPool":
+            assert fit._runs == [8.0], "only the missing cache key is transformed"
     else:
         with pytest.raises(Exception, match="too few to fit"):
             list(chain.run_many(cohort))
@@ -180,15 +211,13 @@ def test_fit_inside_scatter(tmp_path: Path) -> None:
     expected = [{"a": 7.0, "b": 8.0}, {"c": 9.0}]
     cache: tp.Any = {"folder": tmp_path / "cached", "backend": "Cached"}
     scatter = _ScatterValues(body=_SumOffset(infra=cache))
-    assert list(scatter.run_many(steps.FitCohort(cohort))) == expected, (
-        "a complete Scatter must fit over all branches"
-    )
+    output = list(scatter.run_many(steps.FitCohort(cohort)))
+    assert output == expected, "a complete Scatter must fit over all branches"
 
     outer: tp.Any = {**cache, "backend": "ThreadPool", "max_jobs": 2}
     chain = steps.Chain(steps=[scatter.clone()], infra=outer)
-    assert list(chain.run_many(steps.FitCohort(cohort))) == expected, (
-        "an incomplete Scatter may reuse an existing artifact"
-    )
+    output = list(chain.run_many(steps.FitCohort(cohort)))
+    assert output == expected, "an incomplete Scatter may reuse an existing artifact"
 
     cold: tp.Any = {**outer, "folder": tmp_path / "cold"}
     chain = steps.Chain(steps=[_ScatterValues(body=_SumOffset())], infra=cold)
@@ -203,10 +232,12 @@ def test_a_config_fits_one_cohort(tmp_path: Path, nested: bool) -> None:
     if nested:  # the chain keys its cache before the fit resolves
         step = steps.Chain(steps=[step], infra=infra)
 
-    assert list(step.run_many(steps.FitCohort([1.0, 2.0, 3.0]))) == [7.0, 8.0, 9.0]
+    output = list(step.run_many(steps.FitCohort([1.0, 2.0, 3.0])))
+    assert output == [7.0, 8.0, 9.0], "one config must fit its first cohort"
     with pytest.raises(RuntimeError, match="refitting in place"):
         step.run_many(steps.FitCohort([1.0, 4.0]))
-    assert list(step.clone().run_many(steps.FitCohort([1.0, 4.0]))) == [6.0, 9.0]
+    output = list(step.clone().run_many(steps.FitCohort([1.0, 4.0])))
+    assert output == [6.0, 9.0], "clone must fit another cohort independently"
 
 
 @pytest.mark.parametrize("cached", [False, True])
@@ -223,10 +254,10 @@ def test_fit_clone_for_another_upstream(tmp_path: Path, cached: bool) -> None:
     second = steps.Chain(steps=[conftest.Mult(coeff=10), cloned]).run_many(
         steps.FitCohort(cohort)
     )
-    assert list(first) == [4.0, 5.0]
-    assert list(second) == [40.0, 50.0]
-    assert fit._fits == [[1.0, 2.0]]
-    assert cloned._fits == [[10.0, 20.0]]
+    assert list(first) == [4.0, 5.0], "the original must keep its first upstream"
+    assert list(second) == [40.0, 50.0], "the clone must use its new upstream"
+    assert fit._fits == [[1.0, 2.0]], "the original must fit unscaled values"
+    assert cloned._fits == [[10.0, 20.0]], "the clone must fit scaled values"
 
 
 def test_fit_folder_structure(tmp_path: Path) -> None:
@@ -239,7 +270,8 @@ def test_fit_folder_structure(tmp_path: Path) -> None:
             conftest.Add(value=1, infra=infra),
         ]
     )
-    assert list(chain.run_many(steps.FitCohort([1.0, 1.0, 4.0]))) == [55.0, 55.0, 61.0]
+    output = list(chain.run_many(steps.FitCohort([1.0, 1.0, 4.0])))
+    assert output == [55.0, 55.0, 61.0], "stacked Fits must use both artifacts"
 
     mult = "type=Mult-b9b7a7a5"
     offset = f"{mult}/type=_SumOffset,cohort=ddcbb484,2-814895f3"
@@ -251,7 +283,7 @@ def test_fit_folder_structure(tmp_path: Path) -> None:
         sequence,  # as a sequence: the 3 items, and the cohort of the fit above
         f"{sequence}/value=1,type=Add-c1a6f4c8",  # downstream: scoped by both fits
         f"{offset}/type=_Artifact,owner.type=_SumOffsetSequence-8f5c57ef",
-    )
+    ), "artifact and downstream caches must use their respective cohort identities"
     [dumped] = tmp_path.glob("**/type=_Artifact*/cache/data/*")
     assert dumped.suffix == ".pkl", "only ARTIFACT_CACHE_TYPE dumps beside the entry"
 
@@ -269,11 +301,14 @@ def test_fit_variants_in_parallel(tmp_path: Path) -> None:
             _Keyed(infra=infra),
         ]
     )
-    assert sweep.run_many(steps.FitCohort([1.0, 1.0, 4.0])) == [None] * 3
+    output = sweep.run_many(steps.FitCohort([1.0, 1.0, 4.0]))
+    assert output == [None] * 3, "each Fit variant must consume the cohort"
     variants = tp.cast(list[_SumOffset], list(sweep.steps))
     fits = [v._fits for v in variants]
-    assert fits == [[[1.0, 4.0]], [[1.0, 1.0, 4.0]], [[1.0, 4.0]]], "one key each"
-    assert [v.lookup(4.0).result() for v in variants] == [9.0, 10.0, 9.0]
+    expected = [[[1.0, 4.0]], [[1.0, 1.0, 4.0]], [[1.0, 4.0]]]
+    assert fits == expected, "each variant must fit on its selected uid sequence"
+    output = [v.lookup(4.0).result() for v in variants]
+    assert output == [9.0, 10.0, 9.0], "variants cache their own results"
 
 
 def test_cohort_names_every_fit(tmp_path: Path) -> None:
@@ -290,7 +325,8 @@ def test_cohort_names_every_fit(tmp_path: Path) -> None:
         )
     )
     cohort = steps.FitCohort([1.0, 3.0])
-    assert list(chain.run_many(cohort)) == [34.0, 38.0]
+    output = list(chain.run_many(cohort))
+    assert output == [34.0, 38.0], "every discovered Fit contributes its artifact"
     named = [n.split("(")[0] for n in cohort.fitted_by]
     assert named == ["steps.offset", "steps.wrapped"], "even one a resolution builds"
     assert offset.cohort is None, "the config handed over is left as it was"

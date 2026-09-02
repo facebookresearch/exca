@@ -288,6 +288,30 @@ def test_pool_backend(tmp_path: Path, backend: str) -> None:
     assert step.lookup(1.0).paths.cache_folder.exists()
 
 
+def test_multiworker_cohort_chunks_do_not_duplicate_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = {str(i): i for i in range(10)}
+    batch = items.StepItems(source=source, uids=list(source))
+    batch._cohort = True
+    backend = backends.ThreadPool(folder=tmp_path, max_jobs=2)
+    cbatch = backend._prepare(conftest.Add(value=1, infra=backend), batch)
+    tasks: list[list[backends.ComputeBatch]] = []
+    monkeypatch.setattr(backends.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(backends, "_multi_run_and_cache", tasks.append)
+
+    with backend._claim([cbatch]) as claimed:
+        backend._execute(claimed.ready)
+
+    assert len(tasks) > 1, "multiworker cohort must be split"
+    task_size = 0
+    for task in tasks:
+        for cb in task:
+            assert isinstance(cb.items._source, dict)
+            task_size += len(cb.items._source)
+    assert task_size == len(source), "task sources must partition payload"
+
+
 class _PrintStep(Step):
     def _run(self, value: str) -> str:
         print(f"stdout:{value}")
