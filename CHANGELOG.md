@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- `ConfDict`: `ConfDict.ops.REPLACE` now resolves when applied onto a missing, `null` or empty target instead of staying in the config as data. Materializing a patch (`ConfDict(...)`, `from_yaml`, list items) still leaves its ops pending.
+- `ConfDict`: `ConfDict.ops.REPLACE` now resolves when applied onto a missing, `null` or empty target instead of staying in the config as data. Materializing a patch (`ConfDict(...)`, `from_yaml`, list items) still leaves its ops pending. [#322]
 
 ## 0.5.29 - 26-07-28
 
