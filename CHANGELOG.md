@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `ConfDict`: `ConfDict.ops.REPLACE` now resolves when applied onto a missing, `null` or empty target instead of staying in the config as data. Materializing a patch (`ConfDict(...)`, `from_yaml`, list items) still leaves its ops pending.
+
 ## 0.5.29 - 26-07-28
 
 - `ConfDict`: added `ConfDict` operations `ConfDict.ops.DELETE`, `ConfDict.ops.BEFORE`, and `ConfDict.ops.AFTER`; `ConfDict.ops.REPLACE` replaces `ConfDict.OVERRIDE`. [#310]

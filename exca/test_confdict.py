@@ -80,6 +80,21 @@ def test_update() -> None:
     assert data == {"a": {"b": {"e": 15}, "c": 1}}
 
 
+@pytest.mark.parametrize("base", [{}, {"a": None}, {"a": {}}, {"a": {"x": 1}}])
+def test_update_replace_resolves_on_any_target(base: dict[str, tp.Any]) -> None:
+    data = ConfDict(base)
+    data.update({"a": {ConfDict.ops.REPLACE: True, "y": 2}})
+    assert data["a"] == {"y": 2}
+
+
+def test_replace_stays_pending_until_the_patch_is_applied() -> None:
+    patch = ConfDict({"a": {ConfDict.ops.REPLACE: True, "y": 2}})
+    assert patch["a"] == {ConfDict.ops.REPLACE: True, "y": 2}
+    data = ConfDict({"a": {"x": 1}})
+    data.update(patch)
+    assert data["a"] == {"y": 2}
+
+
 def test_update_docstring_examples() -> None:
     parser = doctest.DocTestParser()
     runner = doctest.DocTestRunner()

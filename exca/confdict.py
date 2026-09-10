@@ -64,6 +64,15 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
+def _as_patch(mapping: Mapping | None, kwargs: dict[str, tp.Any]) -> dict[str, tp.Any]:
+    """Fold a positional mapping and keyword arguments into one patch"""
+    if mapping is not None:
+        if not isinstance(mapping, abc.Mapping):
+            mapping = dict(mapping)
+        kwargs.update(mapping)
+    return kwargs
+
+
 def _apply_move(obj: dict[str, tp.Any], key: str) -> None:
     sub = obj[key]
     present = [op for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in sub]
@@ -112,7 +121,7 @@ def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
     return obj
 
 
-def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
+def _set_item(obj: tp.Any, key: str, val: tp.Any, consume_ops: bool = True) -> None:
     """Internal recursive setitem on ConfDict/list"""
     p, *rest = key.split(".", maxsplit=1)
     if not rest:
@@ -153,15 +162,15 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
         if isinstance(sub, OrderedDict):
             patched = ConfDict(sub)
-            patched.update(val)  # degrades to dict
+            patched._update(val, consume_ops)  # degrades to dict
             sub.clear()
             sub.update(OrderedDict(patched.items()))
         elif not isinstance(sub, ConfDict):
             sub = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
             dict.__setitem__(obj, p, sub)
-            sub.update(val)
+            sub._update(val, consume_ops)
         else:
-            sub.update(val)
+            sub._update(val, consume_ops)
         _apply_move(obj, p)
     else:
         dict.__setitem__(obj, p, val)
@@ -192,7 +201,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
-        self.update(mapping, **kwargs)
+        self._update(_as_patch(mapping, kwargs), consume_ops=False)
 
     @classmethod
     def from_model(
@@ -281,7 +290,8 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         -----------
         - :code:`ConfDict.ops.DELETE` as value to a key deletes the key altogether.
         - :code:`ConfDict.ops.REPLACE` as key with True value replaces the whole
-          existing content with the new one instead of merging recursively.
+          existing content with the new one instead of merging recursively. It
+          always resolves, including onto a missing, null or empty target.
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
           relative to an existing sibling.
 
@@ -297,18 +307,23 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         >>> cfg
         {'b': {'x': 2, 'y': 12}, 'a': {'y': 4}}
         """
-        if mapping is not None:
-            if not isinstance(mapping, abc.Mapping):
-                mapping = dict(mapping)
-            kwargs.update(mapping)
-        if not kwargs:
+        self._update(_as_patch(mapping, kwargs), consume_ops=True)
+
+    def _update(self, patch: Mapping, consume_ops: bool) -> None:
+        """Merge *patch* into self, resolving its ops only when applying it.
+
+        Materializing a patch (:code:`__init__`, :code:`from_yaml`, list items)
+        leaves its ops pending for whichever config it later lands on.
+        """
+        patch = dict(patch)
+        if not patch:
             return
-        if self and kwargs.pop(ConfDict.ops.REPLACE, False):
+        if consume_ops and patch.pop(ConfDict.ops.REPLACE, False):
             self.clear()
-        for key, val in kwargs.items():
+        for key, val in patch.items():
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
-            _set_item(self, key, val)
+            _set_item(self, key, val, consume_ops)
 
     def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as
@@ -339,9 +354,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         out = _yaml.safe_load(yaml)
         if not isinstance(out, dict):
             raise TypeError(f"Cannot convert non-dict yaml:\n{out}\n(from {input_})")
-        conf = ConfDict()
-        conf.update(out)
-        return conf
+        return ConfDict(out)
 
     def to_yaml(self, filepath: Path | str | None = None) -> str:
         """Exports the ConfDict to yaml string
