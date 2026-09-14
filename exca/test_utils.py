@@ -8,6 +8,7 @@ import collections
 import concurrent.futures
 import datetime
 import os
+import stat
 import threading
 import typing as tp
 from pathlib import Path
@@ -672,3 +673,35 @@ def test_pool_executor_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     ex = utils.make_pool_executor("processpool", max_workers=2)
     assert isinstance(ex, concurrent.futures.ThreadPoolExecutor)
     ex.shutdown()
+
+
+def test_setup_shared_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path.chmod(0o750)
+    # macOS silently drops set-group-id on chmod, so record the requested mode
+    modes: list[int] = []
+    monkeypatch.setattr(Path, "chmod", lambda self, mode: modes.append(mode))
+    utils.setup_shared_folder(tmp_path)
+    assert modes == [0o2750], "set-group-id added, other bits untouched"
+
+
+@pytest.mark.parametrize(
+    "mode,mask,expected",
+    [
+        (0o700, 0o022, 0o755),  # directory stays traversable
+        (0o600, 0o022, 0o644),
+        (0o600, 0o002, 0o664),
+        (0o400, 0o022, 0o444),  # read-only source is not made writable
+        (0o600, 0o077, 0o600),  # private umask widens nothing
+    ],
+)
+def test_widen_to_umask(tmp_path: Path, mode: int, mask: int, expected: int) -> None:
+    fp = tmp_path / "sub" / "a_file"
+    fp.parent.mkdir()
+    fp.touch()
+    fp.chmod(mode)
+    previous = os.umask(mask)
+    try:
+        utils.widen_to_umask(tmp_path)
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(fp.stat().st_mode) == expected

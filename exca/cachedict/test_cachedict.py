@@ -136,12 +136,6 @@ def test_specialized_dump(
         assert files, "Some memmaps should stay open"
     del cache
     gc.collect()
-    # check permissions
-    octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
-    assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
-    for fp in tmp_path.rglob("*"):
-        octal_permissions = oct(fp.stat().st_mode)[-3:]
-        assert octal_permissions == "777", f"Wrong permissions for {fp}"
     # after del, all files should be closed
     files = proc.open_files()
     assert not files, "No file should remain open after del cache"
