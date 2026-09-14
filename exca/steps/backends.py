@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import contextvars
 import dataclasses
 import datetime
 import logging
@@ -282,15 +283,18 @@ class _CachedEntry:
         raise RuntimeError(f"No cached entry for {self._uid}")
 
 
+# cache entries claimed by the running work or its ancestors
+_HELD_ENTRIES: contextvars.ContextVar[frozenset[tuple[str, str]]] = (
+    contextvars.ContextVar("exca_held_entries", default=frozenset())
+)
+
+
 @dataclasses.dataclass
 class CoordinationInfo:
-    """Driver-only per-run state for a ``ComputeBatch``; stripped from the
-    worker pickle (``ComputeBatch.__getstate__``).
-    """
-
     mode: identity.ModeType = "cached"
     upstream: tuple[Step, ...] = ()  # this step + everything before it
     claim: inflight.InflightClaim | None = None
+    held_entries: frozenset[tuple[str, str]] = frozenset()  # {(folder, uid),...}
 
 
 @dataclasses.dataclass
@@ -303,8 +307,20 @@ class ComputeBatch:
     items: items.StepItems
     info: CoordinationInfo = dataclasses.field(default_factory=CoordinationInfo)
 
+    def claimed_uids(self) -> list[str]:
+        """This batch's uids claimed by its own session (entries held by an ancestor
+        are excluded, so their rows keep pointing at the ancestor's job)."""
+        claim = self.info.claim
+        if claim is None:
+            raise RuntimeError(f"batch was never claimed: {self.paths.step_uid}")
+        owned = set(claim.uids)
+        return [uid for uid in self.items.uids if uid in owned]
+
     def __getstate__(self) -> dict[str, tp.Any]:
-        return {**self.__dict__, "info": CoordinationInfo()}
+        return {
+            **self.__dict__,
+            "info": CoordinationInfo(held_entries=self.info.held_entries),
+        }
 
     def select(self, uids: tp.Sequence[str]) -> ComputeBatch:
         """Sub-batch over *uids*, sharing step/paths/cache; copies ``info``
@@ -335,9 +351,10 @@ class ComputeBatch:
         folder = self.cache_dict.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
-        result_items = self.step._run_items(self.items)
         written_uids: list[str] = []
+        token = _HELD_ENTRIES.set(self.info.held_entries)
         try:
+            result_items = self.step._run_items(self.items)
             with self.cache_dict.write():
                 for i, result in enumerate(result_items):
                     uid = self.items.uids[i]
@@ -366,6 +383,8 @@ class ComputeBatch:
                     for uid in inflight:
                         reg.record(uid, e, tb)
             raise
+        finally:
+            _HELD_ENTRIES.reset(token)
 
 
 def _multi_run_and_cache(batches: list[ComputeBatch]) -> None:
@@ -554,12 +573,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         # Other backends may have left inflight rows for this step folder.
         if paths.step_folder.exists():
             try:
+                held = _HELD_ENTRIES.get()
+                folder_key = str(paths.step_folder)
                 with inflight.InflightRegistry(paths.step_folder) as reg:
                     info = reg.get(uids)
                     jobs: dict[str, str] = {}
                     for uid, worker in info.items():
                         if worker.job_id is None or worker.job_folder is None:
                             continue  # not submitit
+                        if (folder_key, uid) in held:
+                            continue  # an ancestor's job — cancelling it kills us
                         # Slurm array tasks share a scheduler job; avoid per-task cancels.
                         job_id = worker.job_id.split("_", 1)[0]
                         jobs[job_id] = worker.job_folder
@@ -617,6 +640,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         if len(set(step_uids)) != len(step_uids):
             raise ValueError(f"one batch per step_uid required, got {step_uids}")
         claimed = _Claimed()
+        held = _HELD_ENTRIES.get()
         try:
             # sort by step_uid: concurrent dispatches claim in the same order
             for cb in sorted(cbatches, key=lambda cb: cb.paths.step_uid):
@@ -628,10 +652,16 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 reg: inflight.InflightRegistry | None = None
                 if self._concurrent:
                     reg = inflight.InflightRegistry(cb.paths.step_folder)
+                # ancestors already hold their entries: claiming them self-deadlocks
+                folder_key = str(cb.paths.step_folder)
+                request = {u for u in pending if (folder_key, u) not in held}
                 cb = cb.select(list(pending))
                 cb.info.claim = claimed.stack.enter_context(
-                    inflight.inflight_session(reg, set(pending))
+                    inflight.inflight_session(reg, request)
                 )
+                cb.info.held_entries = held
+                if reg is not None:  # registry-less claims hold nothing to inherit
+                    cb.info.held_entries |= {(folder_key, u) for u in cb.info.claim.uids}
                 claimed.batches.append(cb)
             claimed.ready = [
                 n
@@ -769,7 +799,7 @@ class _SubmititBackend(Backend):
         for task, job in zip(tasks, jobs):
             for batch in task:
                 assert batch.info.claim is not None  # inherited from its variant
-                batch.info.claim.record_worker_info(job, uids=batch.items.uids)
+                batch.info.claim.record_worker_info(job, uids=batch.claimed_uids())
                 folder = batch.paths.step_folder
                 by_folder.setdefault(folder, {})[job.job_id] = batch.items.uids
         for folder, records in by_folder.items():
@@ -971,7 +1001,7 @@ class _PoolBackend(Backend):
         for task in tasks:
             for batch in task:
                 assert batch.info.claim is not None  # inherited from its variant
-                batch.info.claim.record_worker_info(uids=batch.items.uids)
+                batch.info.claim.record_worker_info(uids=batch.claimed_uids())
         pool = utils.make_pool_executor(self._POOL_TYPE, max_workers)
         logger.info("Sent %s items for %s steps into a %s", n_items, len(cbatches), pool)
         task_futs = {pool.submit(_multi_run_and_cache, task): task for task in tasks}
