@@ -365,3 +365,11 @@ def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
     # retry both; a uid-only _recomputed would make the 2nd re-raise the 1st's error
     assert run(1.0, fail=False, mode="retry") == 3.0  # 2 + 1
     assert run(5.0, fail=False, mode="retry") == 7.0  # 2 + 5
+
+
+def test_nested_dispatch_on_shared_cell(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
+    inner = Chain(steps=[conftest.Mult(coeff=3.0, infra=infra)], infra=infra)
+    chain = Chain(steps=[conftest.Add(value=1.0), inner], infra=infra)
+    # identity flattens recursively: the 3 infras share one cache entry
+    assert chain.run(1.0) == 6.0
