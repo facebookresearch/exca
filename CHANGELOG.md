@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-- `DiscriminatedModel`: optimized look-up.
+- `DiscriminatedModel`: optimized look-up. [#313]
+- `steps`: fixed nested infra claim deadlock. [#323]
+
 
 ## 0.5.29 - 26-07-28
 
