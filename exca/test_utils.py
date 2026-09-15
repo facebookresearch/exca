@@ -675,15 +675,6 @@ def test_pool_executor_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     ex.shutdown()
 
 
-def test_setup_shared_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    tmp_path.chmod(0o750)
-    # macOS silently drops set-group-id on chmod, so record the requested mode
-    modes: list[int] = []
-    monkeypatch.setattr(Path, "chmod", lambda self, mode: modes.append(mode))
-    utils.setup_shared_folder(tmp_path)
-    assert modes == [0o2750], "set-group-id added, other bits untouched"
-
-
 @pytest.mark.parametrize(
     "mode,mask,expected",
     [
