@@ -9,6 +9,7 @@ import contextlib
 import copy
 import difflib
 import hashlib
+import itertools
 import logging
 import math
 import os
@@ -54,16 +55,26 @@ def best_effort_utime(folder: Path) -> None:
 
 
 def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> None:
-    """Make *folder* a shared root: descendants inherit its group via set-group-id.
+    """Make *folder* and everything below it writable by a group of users.
 
-    Run once on the top of a tree several users write to; the kernel then
-    applies the group to everything created underneath, which the umask cannot
-    do on its own. Pass *group* to reassign the folder's group beforehand.
+    Set-group-id on the directories makes the kernel apply the group to
+    everything created underneath from then on, which the umask cannot do on
+    its own, so this only needs to run once per tree (and again on content
+    written while the tree was not set up). Paths owned by other users are left
+    as they are, since only their owner may change them. Pass *group* to
+    (re)assign the group, eg. when your primary group is not the shared one.
     """
-    path = Path(folder)
-    if group is not None:
-        shutil.chown(path, group=group)
-    path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_ISGID)
+    mask = _umask()
+    for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
+        try:
+            if group is not None:
+                shutil.chown(path, group=group)
+            mode = _widened(path, mask)
+            if path.is_dir():
+                mode |= stat.S_ISGID
+            path.chmod(mode)
+        except (PermissionError, FileNotFoundError):
+            pass
 
 
 def widen_to_umask(folder: Path | str) -> None:
@@ -73,12 +84,22 @@ def widen_to_umask(folder: Path | str) -> None:
     the umask (``shutil.copytree``, archive extraction, etc), so the
     result matches what a freshly created file or folder would have got.
     """
+    mask = _umask()
+    for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
+        path.chmod(_widened(path, mask))
+
+
+def _umask() -> int:
     mask = os.umask(0)  # peek: no setter-only accessor exists
     os.umask(mask)
-    for path in (Path(folder), *Path(folder).rglob("*")):
-        mode = stat.S_IMODE(path.stat().st_mode)
-        owner = (mode >> 6) & 0o7
-        path.chmod(mode | (((owner << 3) | owner) & ~mask))
+    return mask
+
+
+def _widened(path: Path, mask: int) -> int:
+    """*path*'s mode with the owner's access bits mirrored to group and other."""
+    mode = stat.S_IMODE(path.stat().st_mode)
+    owner = (mode >> 6) & 0o7
+    return mode | (((owner << 3) | owner) & ~mask)
 
 
 def to_chunks(
