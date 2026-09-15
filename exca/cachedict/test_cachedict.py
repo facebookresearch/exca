@@ -391,3 +391,72 @@ def test_orphaned_cleanup_file_deleted_concurrently(tmp_path: Path) -> None:
         keys = list(cache.keys())
     assert keys == []
     assert reader._fp.name not in cache._jsonl_readers
+
+
+def test_filepath(tmp_path: Path) -> None:
+    cache: cd.CacheDict[np.ndarray] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    with cache.write():
+        cache["arr"] = np.array([1, 2, 3])
+    fp = cache.filepath("arr")
+    assert fp.is_absolute()
+    assert fp.exists()
+    assert tmp_path.resolve() in fp.parents
+    # a fresh view (empty _key_info) resolves by reloading keys from disk
+    cache2: cd.CacheDict[np.ndarray] = cd.CacheDict(folder=tmp_path)
+    assert cache2.filepath("arr") == fp
+    with pytest.raises(KeyError):
+        cache2.filepath("missing")
+
+
+def test_filepath_ram_only_raises() -> None:
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=None, keep_in_ram=True)
+    with pytest.raises(RuntimeError):
+        cache.filepath("x")
+
+
+def test_filepath_inline_value_raises(tmp_path: Path) -> None:
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    # simulate an entry whose info record carries no 'filename' (inline value)
+    cache._key_info["x"] = cd.DumpInfo(
+        jsonl=tmp_path / "w-info.jsonl", byte_range=(0, 0), content={"#type": "Json"}
+    )
+    with pytest.raises(ValueError, match="not backed by a single file"):
+        cache.filepath("x")
+
+
+def test_observe_access(tmp_path: Path) -> None:
+    folder = tmp_path / "sub"
+    seen: list[Path] = []
+    with cd.observe_access(seen.append):
+        cache: cd.CacheDict[np.ndarray] = cd.CacheDict(folder=folder)  # __init__
+        with cache.write():
+            cache["a"] = np.array([1])  # __setitem__
+        assert "a" in cache  # __contains__
+        assert set(cache.keys()) == {"a"}  # keys
+        _ = cache["a"]  # __getitem__
+    # every notification is for this cache's folder, and construction was seen
+    assert seen  # got at least the __init__ notification
+    assert set(seen) == {folder}
+    # a RAM-only cache (folder is None) never notifies
+    seen.clear()
+    with cd.observe_access(seen.append):
+        cd.CacheDict(folder=None, keep_in_ram=True)
+    assert seen == []
+    # after every scope exits, the registry is empty again
+    assert cd._access_observers == []
+
+
+def test_observe_access_nested_and_error_safe(tmp_path: Path) -> None:
+    outer: list[Path] = []
+    inner: list[Path] = []
+
+    def boom(_folder: Path) -> None:
+        raise RuntimeError("observer errors must never break caching")
+
+    with cd.observe_access(outer.append):
+        with cd.observe_access(boom):  # raising observer is swallowed
+            with cd.observe_access(inner.append):
+                cd.CacheDict(folder=tmp_path / "x")
+    assert (tmp_path / "x") in outer
+    assert (tmp_path / "x") in inner
+    assert cd._access_observers == []
