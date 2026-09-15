@@ -4,6 +4,7 @@
 
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
+- Cache files are no longer forced to `0o777` but follow your umask: set `umask 002`, and call `exca.utils.setup_shared_folder(folder)` once on a cache root shared with others (`infra.permissions` is deprecated and ignored). [#324]
 
 
 ## 0.5.29 - 26-07-28

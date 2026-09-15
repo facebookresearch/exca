@@ -180,7 +180,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         cache_folder = self.uid_folder()
         if cache_folder is None:
             return None
-        return inflight.InflightRegistry(cache_folder, permissions=self.permissions)
+        return inflight.InflightRegistry(cache_folder)
 
     # pylint: disable=unused-argument
     def apply(
