@@ -57,14 +57,22 @@ def best_effort_utime(folder: Path) -> None:
 def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> None:
     """Make *folder* and everything below it writable by a group of users.
 
-    Set-group-id on the directories makes the kernel apply the group to
-    everything created underneath from then on, which the umask cannot do on
-    its own, so this only needs to run once per tree (and again on content
-    written while the tree was not set up). Paths owned by other users are left
-    as they are, since only their owner may change them. Pass *group* to
-    (re)assign the group, eg. when your primary group is not the shared one.
+    - directories get set-group-id, so the kernel applies the group to
+      everything created underneath, which the umask cannot do on its own
+    - modes are widened up to the umask (:func:`widen_to_umask`)
+    - paths owned by another user are skipped: only their owner may change them
+
+    Run it once per tree, and again on content written before the setup.
+
+    Parameters
+    ----------
+    folder: Path | str
+        root of the shared tree
+    group: str | int | None
+        group to assign, eg. when your primary group is not the shared one
     """
-    mask = _umask()
+    mask = os.umask(0)  # peek: no setter-only accessor exists
+    os.umask(mask)
     for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
         try:
             if group is not None:
@@ -80,19 +88,13 @@ def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> N
 def widen_to_umask(folder: Path | str) -> None:
     """Mirror the owner's access bits to group and other, minus the umask.
 
-    Only ever widens. Use after tools that write their own modes regardless of
-    the umask (``shutil.copytree``, archive extraction, etc), so the
-    result matches what a freshly created file or folder would have got.
+    - only ever widens, to the mode a freshly created file/folder would have got
+    - use after tools writing their own modes (``shutil.copytree``, unarchiving)
     """
-    mask = _umask()
-    for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
-        path.chmod(_widened(path, mask))
-
-
-def _umask() -> int:
     mask = os.umask(0)  # peek: no setter-only accessor exists
     os.umask(mask)
-    return mask
+    for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
+        path.chmod(_widened(path, mask))
 
 
 def _widened(path: Path, mask: int) -> int:

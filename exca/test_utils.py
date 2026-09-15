@@ -678,7 +678,7 @@ def test_pool_executor_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     "mode,mask,expected",
     [
-        (0o700, 0o022, 0o755),  # directory stays traversable
+        (0o700, 0o022, 0o755),  # exec bit mirrored -> dirs stay traversable
         (0o600, 0o022, 0o644),
         (0o600, 0o002, 0o664),
         (0o400, 0o022, 0o444),  # read-only source is not made writable
