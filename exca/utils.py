@@ -16,6 +16,7 @@ import os
 import shutil
 import stat
 import sys
+import tempfile
 import time
 import typing as tp
 import uuid
@@ -40,6 +41,14 @@ T = tp.TypeVar("T", bound=pydantic.BaseModel)
 X = tp.TypeVar("X")
 
 
+def _current_umask() -> int:
+    # avoids os.umask peek: 0o777 race on concurrent creations
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "probe"  # mkdtemp forces 0o700 → probe with nested mkdir
+        probe.mkdir()
+        return 0o777 & ~stat.S_IMODE(probe.stat().st_mode)
+
+
 def best_effort_utime(folder: Path) -> None:
     """Advance *folder*'s mtime, tolerating EPERM on foreign-owned directories."""
     # dir mtime unchanged on file-append → must stamp explicitly
@@ -61,6 +70,7 @@ def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> N
       everything created underneath, which the umask cannot do on its own
     - modes are widened up to the umask (:func:`widen_to_umask`)
     - paths owned by another user are skipped: only their owner may change them
+    - symbolic links below *folder* are skipped
 
     Run it once per tree, and again on content written before the setup.
 
@@ -71,9 +81,11 @@ def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> N
     group: str | int | None
         group to assign, eg. when your primary group is not the shared one
     """
-    mask = os.umask(0)  # peek: no setter-only accessor exists
-    os.umask(mask)
-    for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
+    mask = _current_umask()
+    root = Path(folder).resolve()
+    for path in itertools.chain([root], root.rglob("*")):
+        if path.is_symlink():
+            continue
         try:
             if group is not None:
                 shutil.chown(path, group=group)
@@ -91,8 +103,7 @@ def widen_to_umask(folder: Path | str) -> None:
     - only ever widens, to the mode a freshly created file/folder would have got
     - use after tools writing their own modes (``shutil.copytree``, unarchiving)
     """
-    mask = os.umask(0)  # peek: no setter-only accessor exists
-    os.umask(mask)
+    mask = _current_umask()
     for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
         path.chmod(_widened(path, mask))
 

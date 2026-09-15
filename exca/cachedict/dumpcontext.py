@@ -206,12 +206,6 @@ class DumpContext:
             self._files.clear()
             self._created_files.clear()
 
-    def _ensure_parent(self, path: Path) -> None:
-        """Create parent directories."""
-        parent = path.parent
-        if parent != self.folder and not parent.exists():
-            parent.mkdir(parents=True, exist_ok=True)
-
     def shared_file(self, suffix: str) -> tuple[tp.IO[bytes], str]:
         """Open a shared file for appending. Returns (handle, relative_name).
         Content files go under DATA_DIR/; info files (-info.jsonl)
@@ -227,7 +221,7 @@ class DumpContext:
         name = basename if is_info else f"{self.DATA_DIR}/{basename}"
         if name not in self._files:
             path = self.folder / name
-            self._ensure_parent(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
             f = path.open("ab")
             self._stack.enter_context(f)
             self._files[name] = f
@@ -243,7 +237,7 @@ class DumpContext:
         basename = string_uid(self.key) + suffix
         name = f"{self.DATA_DIR}/{basename}"
         path = self.folder / name
-        self._ensure_parent(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         if path in self._created_files:
             # Same dump context tried to create this path twice: user error
             raise RuntimeError(
