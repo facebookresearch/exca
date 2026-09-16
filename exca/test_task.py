@@ -9,7 +9,6 @@ import importlib
 import logging
 import pickle
 import shutil
-import stat
 import sys
 import typing as tp
 import uuid
@@ -436,24 +435,10 @@ def test_changing_defaults(tmp_path: Path) -> None:
         _ = whenever.process()
 
 
-def test_uid_folder_permissions(tmp_path: Path) -> None:
-    infra: tp.Any = {"folder": tmp_path}
-    whatever = Whatever(param1=13, infra1=infra)
-    uid_folder = whatever.infra1.uid_folder()
-    assert uid_folder is not None
-    intermediate = uid_folder.parent
-    intermediate.mkdir(parents=True)
-    intermediate.chmod(0o700)
-    whatever.infra1.uid_folder(create=True)
-    assert stat.S_IMODE(intermediate.stat().st_mode) == 0o777
-
-
-def test_uid_folder_rejects_escape(tmp_path: Path) -> None:
+def test_version_rejects_escape(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path / "cache", "version": "x/../../escape"}
-    whatever = Whatever(param1=13, infra1=infra)
     with pytest.raises(ValueError, match="must not contain"):
-        whatever.infra1.uid_folder(create=True)
-    assert not (tmp_path / "escape").exists()
+        Whatever(param1=13, infra1=infra)
 
 
 class D2(pydantic.BaseModel):

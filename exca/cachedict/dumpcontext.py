@@ -114,13 +114,10 @@ class DumpContext:
     DATA_DIR = "data"
     INFO_SUFFIX = "-info.jsonl"
 
-    def __init__(
-        self, folder: str | Path, *, key: str = "", permissions: int | None = None
-    ) -> None:
+    def __init__(self, folder: str | Path, *, key: str = "") -> None:
         self.folder = Path(folder)
         self.key = key
         self.level: int = -1
-        self.permissions = permissions
         self.options = DumpOptions()
         # write state
         self._thread_id = threading.get_native_id()
@@ -198,21 +195,9 @@ class DumpContext:
         self._stack = contextlib.ExitStack()
         self._stack.__enter__()
         self.folder.mkdir(parents=True, exist_ok=True)
-        self._created_files.append(self.folder)  # re-chmod for shared caches
         return self
 
     def __exit__(self, *exc: tp.Any) -> None:
-        if self.permissions is not None:
-            for fp in self._created_files:
-                paths = [fp, *(fp.rglob("*") if fp.is_dir() else [])]
-                for path in paths:
-                    try:
-                        path.chmod(self.permissions)
-                    except FileNotFoundError:
-                        pass  # deleted mid-walk — nothing to fix
-                    except Exception:
-                        msg = "Failed to set permissions on %s"
-                        logger.warning(msg, path, exc_info=True)
         if self._stack is None:
             raise RuntimeError("DumpContext.__exit__ called without __enter__")
         try:
@@ -220,13 +205,6 @@ class DumpContext:
         finally:
             self._files.clear()
             self._created_files.clear()
-
-    def _ensure_parent(self, path: Path) -> None:
-        """Create parent directories and track them for permission setting."""
-        parent = path.parent
-        if parent != self.folder and not parent.exists():
-            parent.mkdir(parents=True, exist_ok=True)
-            self._created_files.append(parent)
 
     def shared_file(self, suffix: str) -> tuple[tp.IO[bytes], str]:
         """Open a shared file for appending. Returns (handle, relative_name).
@@ -243,7 +221,7 @@ class DumpContext:
         name = basename if is_info else f"{self.DATA_DIR}/{basename}"
         if name not in self._files:
             path = self.folder / name
-            self._ensure_parent(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
             f = path.open("ab")
             self._stack.enter_context(f)
             self._files[name] = f
@@ -259,7 +237,7 @@ class DumpContext:
         basename = string_uid(self.key) + suffix
         name = f"{self.DATA_DIR}/{basename}"
         path = self.folder / name
-        self._ensure_parent(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         if path in self._created_files:
             # Same dump context tried to create this path twice: user error
             raise RuntimeError(
@@ -395,20 +373,9 @@ class DumpContext:
                     "ctx.key must be set before dumping with a legacy DumperLoader"
                 )
             info = self._loaders[cls].dump(self.key, value)
-            self._track_legacy_files(info)
         else:
             info = cls.__dump_info__(self, value)
         return info, cls.__name__
-
-    def _track_legacy_files(self, info: tp.Any) -> None:
-        """Record files from legacy DumperLoader info dicts for permission setting.
-        New-style handlers track files at creation (keyed_filepath / shared_file)."""
-        if isinstance(info, dict):
-            if "filename" in info:
-                self._created_files.append(self.folder / info["filename"])
-            for val in info.values():
-                if isinstance(val, dict):
-                    self._track_legacy_files(val)
 
     def _resolve_type(self, info: dict[str, tp.Any]) -> tuple[tp.Any, dict[str, tp.Any]]:
         """Extract #type and #key from an info dict, return (cls, remaining_info).
