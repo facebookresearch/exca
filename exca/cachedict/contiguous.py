@@ -24,29 +24,31 @@ _VIEW_OPS = frozenset(
 
 
 class ContiguousMemmap:
-    """Proxy around a memmap view that reads data via file I/O.
+    """Lazy proxy for contiguous views of a memmap-backed array.
 
-    View operations (__getitem__ with basic indexing) delegate to the
-    underlying memmap — they only adjust pointers/strides, no page faults.
-    Data is materialized via file I/O only when explicitly consumed through
-    ``np.asarray()``.
+    Fancy indexing, non-contiguous slicing, arithmetic, and value-consuming
+    ndarray methods require materialization with ``np.asarray()``.
 
-    Non-contiguous access (fancy indexing, strided slicing) raises TypeError;
-    the caller should materialize first via ``np.asarray()``.
-
-    An optional *cache* ``threading.local`` (e.g. ``DumpContext._resource_cache``)
-    stores open file handles keyed by ``("ContiguousMemmap", path)``, isolated
-    per thread and per process (fork-safe).  When *cache* is ``None``, a
-    module-level fallback is used.
+    Parameters
+    ----------
+    arr : np.ndarray
+        Memmap-backed array.
+    cache : threading.local, optional
+        Thread-local file-handle cache. If None, a module-level fallback is used.
+    multiplier : np.ndarray or ContiguousMemmap, optional
+        Values broadcast to ``arr`` and multiplied when read.
     """
 
-    __slots__ = ("_arr", "_mm", "_cache")
+    __slots__ = ("_arr", "_mm", "_cache", "_multiplier")
 
-    def __init__(self, arr: np.ndarray, cache: threading.local | None = None) -> None:
-        # Walk the base chain to the root file-level memmap.
-        # Slicing a np.memmap produces another np.memmap whose .offset is
-        # copied (not recalculated); only the root's data pointer is
-        # consistent with its .offset for file seeks.
+    def __init__(
+        self,
+        arr: np.ndarray,
+        cache: threading.local | None = None,
+        *,
+        multiplier: np.ndarray | tp.Self | None = None,
+    ) -> None:
+        # root memmap: sliced views retain the parent's file offset
         mm: np.ndarray = arr
         while isinstance(getattr(mm, "base", None), np.ndarray):
             mm = mm.base  # type: ignore[assignment]
@@ -58,6 +60,9 @@ class ContiguousMemmap:
         self._arr = arr
         self._mm: np.memmap = mm
         self._cache = cache if cache is not None else _FILE_HANDLE_CACHE
+        if multiplier is not None:
+            multiplier = np.broadcast_to(np.asarray(multiplier), arr.shape)
+        self._multiplier: np.ndarray | None = multiplier
 
     def _byte_range(self, arr: np.ndarray) -> tuple[int, int]:
         """Return (byte_offset, byte_span) of *arr* relative to the root memmap."""
@@ -71,8 +76,14 @@ class ContiguousMemmap:
     def __len__(self) -> int:
         return len(self._arr)
 
+    @property
+    def dtype(self) -> np.dtype[tp.Any]:
+        if self._multiplier is None:
+            return self._arr.dtype
+        return np.result_type(self._arr.dtype, self._multiplier.dtype)
+
     def __repr__(self) -> str:
-        return f"ContiguousMemmap(shape={self._arr.shape}, dtype={self._arr.dtype})"
+        return f"ContiguousMemmap(shape={self._arr.shape}, dtype={self.dtype})"
 
     def __getitem__(self, key: tp.Any) -> tp.Any:
         keys = key if isinstance(key, tuple) else (key,)
@@ -82,16 +93,19 @@ class ContiguousMemmap:
                 "— use np.asarray(arr)[key] to read data first."
             )
         result = self._arr[key]
+        multiplier = None if self._multiplier is None else self._multiplier[key]
         if not isinstance(result, np.ndarray):
-            return result  # scalar
+            if multiplier is None:
+                return result
+            return np.multiply(result, multiplier, dtype=self.dtype)
         if result.size == 0:
-            return np.empty(result.shape, dtype=result.dtype)
+            return np.empty(result.shape, dtype=self.dtype)
         if any(s < 0 for s in result.strides):
             raise TypeError("Non-contiguous read — use np.asarray(arr)[key] instead.")
         _, span = self._byte_range(result)
         if span != result.size * result.dtype.itemsize:
             raise TypeError("Non-contiguous read — use np.asarray(arr)[key] instead.")
-        return ContiguousMemmap(result, self._cache)
+        return ContiguousMemmap(result, self._cache, multiplier=multiplier)
 
     def __array__(
         self, dtype: np.dtype[tp.Any] | None = None, copy: bool | None = None
@@ -122,6 +136,8 @@ class ContiguousMemmap:
             strides=self._arr.strides,
         )
         result = np.ascontiguousarray(view)
+        if self._multiplier is not None:
+            result = np.multiply(result, self._multiplier, dtype=self.dtype)
         if dtype is not None:
             result = result.astype(dtype)
         return result
@@ -142,14 +158,23 @@ class ContiguousMemmap:
         if name in _SAFE_ATTRS:
             return getattr(self._arr, name)
         if name in _VIEW_OPS:
+            if self._multiplier is not None and name not in ("T", "transpose"):
+                raise AttributeError(
+                    f"ContiguousMemmap with a multiplier does not support '.{name}' "
+                    f"directly — use np.asarray(arr).{name} instead."
+                )
             val = getattr(self._arr, name)
+            multiplier = (
+                None if self._multiplier is None else getattr(self._multiplier, name)
+            )
             if callable(val):
 
                 def _wrap(*a: tp.Any, **kw: tp.Any) -> "ContiguousMemmap":
-                    return ContiguousMemmap(val(*a, **kw), self._cache)
+                    mult = None if multiplier is None else multiplier(*a, **kw)
+                    return ContiguousMemmap(val(*a, **kw), self._cache, multiplier=mult)
 
                 return _wrap
-            return ContiguousMemmap(val, self._cache)
+            return ContiguousMemmap(val, self._cache, multiplier=multiplier)
         if hasattr(np.ndarray, name):
             raise AttributeError(
                 f"ContiguousMemmap does not support '.{name}' directly "

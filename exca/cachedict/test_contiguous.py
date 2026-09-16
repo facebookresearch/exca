@@ -15,12 +15,16 @@ from .contiguous import ContiguousMemmap
 from .dumpcontext import DumpContext
 
 
-def _make_cm(tmp_path: Path, arr: np.ndarray) -> ContiguousMemmap:
+def _make_cm(
+    tmp_path: Path,
+    arr: np.ndarray,
+    multiplier: np.ndarray | ContiguousMemmap | None = None,
+) -> ContiguousMemmap:
     """Dump an array via MemmapArray and return it wrapped as ContiguousMemmap."""
     ctx = DumpContext(tmp_path)
     with ctx:
         info = ctx.dump(arr, cache_type="MemmapArray")
-    return ContiguousMemmap(ctx.load(info))
+    return ContiguousMemmap(ctx.load(info), multiplier=multiplier)
 
 
 # =============================================================================
@@ -57,6 +61,25 @@ def test_roundtrip(tmp_path: Path) -> None:
     # empty slice returns plain ndarray
     empty = cm[2:2]
     assert isinstance(empty, np.ndarray) and empty.shape == (0, 30)
+
+
+def test_multiplier(tmp_path: Path) -> None:
+    stored = np.arange(12, dtype=np.float16).reshape(4, 3)
+    multiplier = np.array([[0.25], [2.0], [16.0], [0.5]], dtype=np.float32)
+    expected = stored * multiplier
+    cached_multiplier = _make_cm(tmp_path / "multiplier", multiplier)
+    cm = _make_cm(tmp_path / "data", stored, cached_multiplier)
+
+    assert cm.dtype == np.float32
+    assert isinstance(cm._multiplier, np.ndarray)
+    assert cm._multiplier.strides == (4, 0)
+    np.testing.assert_array_equal(np.asarray(cm), expected)
+    assert cm[2, 1] == expected[2, 1]
+
+    moved = np.moveaxis(cm, 0, -1)  # type: ignore[type-var]
+    np.testing.assert_array_equal(np.asarray(moved[..., 1:3]), expected.T[..., 1:3])
+    with pytest.raises(AttributeError, match="multiplier"):
+        cm.reshape(2, 6)
 
 
 # =============================================================================
