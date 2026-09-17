@@ -256,7 +256,7 @@ class CacheDict(tp.Generic[X]):
             except FileNotFoundError:
                 self._jsonl_readers.pop(name, None)
                 continue
-            logger.warning("Cleaning up orphaned files for %s", name)
+            logger.debug("Cleaning up orphaned files for %s", name)
             prefix = name.removesuffix("-info.jsonl")
             paths = [*self.folder.glob(f"{prefix}.*"), reader._fp]
             data_dir = self.folder / DumpContext.DATA_DIR
@@ -322,7 +322,11 @@ class CacheDict(tp.Generic[X]):
             if self.folder is not None:
                 utils.best_effort_utime(self.folder)
                 if self._deleted_in_scope:
-                    self._read_info_files(force=True)  # sweep emptied jsonl/data pairs
+                    try:
+                        self._read_info_files(force=True)  # sweep emptied jsonl pairs
+                    except Exception as e:
+                        # reclaim is opportunistic: never mask the body's exception
+                        logger.warning("Failed to sweep %s: %s", self.folder, e)
 
     @contextlib.contextmanager
     def writer(self) -> tp.Iterator["CacheDict[X]"]:

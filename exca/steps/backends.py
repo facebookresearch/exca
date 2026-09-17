@@ -367,10 +367,10 @@ class ComputeBatch:
                     "Clearing partial results after invalid _run_batch output: %s",
                     self.paths.step_uid,
                 )
-            with self.cache_dict.write(), self.cache_dict.frozen_cache_folder():
-                for uid in written_uids:
-                    if uid in self.cache_dict:
-                        del self.cache_dict[uid]
+                with self.cache_dict.write(), self.cache_dict.frozen_cache_folder():
+                    for uid in written_uids:
+                        if uid in self.cache_dict:
+                            del self.cache_dict[uid]
             if folder is not None:
                 e.add_note(f"  -> cache may be invalid: {folder}")
             raise
