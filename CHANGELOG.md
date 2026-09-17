@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+[breaking]
+
+- `CacheDict`: deletions require a `write()` context (like writes). [#326]
+- `DumpContext.shared_file`: content suffixes must start with `.`. [#326]
+
+[other]
+
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
 

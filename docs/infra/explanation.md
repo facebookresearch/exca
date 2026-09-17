@@ -137,7 +137,7 @@ cache = cachedict.CacheDict(folder=tmp_path, keep_in_ram=True)
 # the dictionary is empty:
 assert not cache
 
-# writes require a context manager for efficiency with multiple writes
+# writes and deletions require a context manager for efficiency with multiple writes
 x = np.random.rand(2, 12)
 with cache.write():
     cache["blublu"] = x

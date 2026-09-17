@@ -472,7 +472,7 @@ class Json:
             ) from e
         if len(raw) <= cls.MAX_INLINE_SIZE:
             return {"content": value}
-        f, name = ctx.shared_file("-data.jsonl")
+        f, name = ctx.shared_file(".data.jsonl")
         offset = f.tell()
         f.write(raw + b"\n")
         return {"filename": name, "offset": offset, "length": len(raw)}

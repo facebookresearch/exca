@@ -367,10 +367,10 @@ class ComputeBatch:
                     "Clearing partial results after invalid _run_batch output: %s",
                     self.paths.step_uid,
                 )
-            with self.cache_dict.frozen_cache_folder():
-                for uid in written_uids:
-                    if uid in self.cache_dict:
-                        del self.cache_dict[uid]
+                with self.cache_dict.write(), self.cache_dict.frozen_cache_folder():
+                    for uid in written_uids:
+                        if uid in self.cache_dict:
+                            del self.cache_dict[uid]
             if folder is not None:
                 e.add_note(f"  -> cache may be invalid: {folder}")
             raise
@@ -592,7 +592,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
         # Success first → a mid-clear crash leaves a recoverable cached
         # error rather than a stale success (fail closed).
-        with cd.frozen_cache_folder():
+        with cd.write(), cd.frozen_cache_folder():
             for uid in uids:
                 if uid in cd:
                     del cd[uid]
