@@ -139,7 +139,6 @@ class CacheDict(tp.Generic[X]):
         self._folder_modified = -1.0
         self._jsonl_readers: dict[str, JsonlReader] = {}
         self._jsonl_reading_allowance = float("inf")
-        self._deleted_in_scope = False
         # DumpContext for this folder (load/delete; writes use per-thread _write_ctx)
         self._dumper: DumpContext | None = None
         if self.folder is not None:
@@ -162,6 +161,8 @@ class CacheDict(tp.Generic[X]):
     def clear(self) -> None:
         self._ram_data.clear()
         self._key_info.clear()
+        self._jsonl_readers.clear()
+        self._folder_modified = -1.0
         if self.folder is None or not self.folder.exists():
             return
         # let's remove content but not the folder to keep same permissions
@@ -310,7 +311,7 @@ class CacheDict(tp.Generic[X]):
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
             self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
-        self._deleted_in_scope = False
+        self._local.deleted_in_scope = False
         try:
             if self._write_ctx is not None:
                 with self._write_ctx:
@@ -321,11 +322,10 @@ class CacheDict(tp.Generic[X]):
             self._write_ctx = None
             if self.folder is not None:
                 utils.best_effort_utime(self.folder)
-                if self._deleted_in_scope:
+                if self._local.deleted_in_scope:
                     try:
                         self._read_info_files(force=True)  # sweep emptied jsonl pairs
-                    except Exception as e:
-                        # reclaim is opportunistic: never mask the body's exception
+                    except Exception as e:  # must not mask the body's exception
                         logger.warning("Failed to sweep %s: %s", self.folder, e)
 
     @contextlib.contextmanager
@@ -343,7 +343,7 @@ class CacheDict(tp.Generic[X]):
         if not isinstance(key, str):
             raise TypeError(f"Non-string keys are not allowed (got {key!r})")
         if self.folder is not None and self._write_ctx is None:
-            raise RuntimeError("Cannot write outside of a writer context")
+            raise RuntimeError("Cannot write outside of a write() context")
         if self._folder_modified <= 0:
             _ = self.keys()
         if key in self._ram_data or key in self._key_info:
@@ -375,8 +375,8 @@ class CacheDict(tp.Generic[X]):
             del self._ram_data[key]
             return
         if self._write_ctx is None:
-            raise RuntimeError("Cannot delete outside of a writer context")
-        self._deleted_in_scope = True
+            raise RuntimeError("Cannot delete outside of a write() context")
+        self._local.deleted_in_scope = True
         if key not in self._key_info:
             _ = key in self  # populate _key_info from disk
         self._ram_data.pop(key, None)
