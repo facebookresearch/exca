@@ -273,8 +273,12 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             if to_remove:
                 msg = "Clearing %s items for %s (infra.mode=%s)"
                 logger.warning(msg, len(to_remove), self.uid(), self.mode)
-                for uid in to_remove:
-                    del cache[uid]
+                assert isinstance(cache, CacheDict), (
+                    f"to_remove is only filled when caching (got {type(cache)})"
+                )
+                with cache.write():
+                    for uid in to_remove:
+                        del cache[uid]
             missing = {x: y for x, y in items.items() if x not in state.recomputed}
             if isinstance(cache, CacheDict):
                 # dont record computed items if no cache

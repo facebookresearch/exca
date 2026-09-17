@@ -139,6 +139,7 @@ class CacheDict(tp.Generic[X]):
         self._folder_modified = -1.0
         self._jsonl_readers: dict[str, JsonlReader] = {}
         self._jsonl_reading_allowance = float("inf")
+        self._deleted_in_scope = False
         # DumpContext for this folder (load/delete; writes use per-thread _write_ctx)
         self._dumper: DumpContext | None = None
         if self.folder is not None:
@@ -185,24 +186,31 @@ class CacheDict(tp.Generic[X]):
         keys = set(self._ram_data) | set(self._key_info)
         return iter(keys)
 
-    def _read_info_files(self, max_workers: int = 4) -> None:
+    def _read_info_files(self, max_workers: int = 4, force: bool = False) -> None:
         """Load current info files.
 
         Each writer appends to its own JSONL file, so concurrent writes
         of the same key produce duplicate entries across files.  For
         duplicates, whichever file comes last in iterdir() order wins
         (non-deterministic); duplicates are kept so explicit deletion
-        clears every known copy."""
+        clears every known copy.
+
+        Parameters
+        ----------
+        max_workers:
+            Maximum number of threads reading the info files.
+        force:
+            Read even if the folder is frozen or looks unmodified.
+        """
         if self.folder is None or not self.folder.exists():
             return
         readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
-        if self._jsonl_reading_allowance <= readings:
-            # bypass reloading info files
-            return
+        if not force and self._jsonl_reading_allowance <= readings:
+            return  # bypass reloading info files
         modified = self.folder.lstat().st_mtime
         nothing_new = self._folder_modified == modified
         self._folder_modified = modified
-        if nothing_new:
+        if nothing_new and not force:
             logger.debug("Nothing new to read from info files")
             return  # nothing new!
         cpus = os.cpu_count()
@@ -297,11 +305,12 @@ class CacheDict(tp.Generic[X]):
 
     @contextlib.contextmanager
     def write(self) -> tp.Iterator["CacheDict[X]"]:
-        """Context manager for writing items to the cache."""
+        """Context manager for writing to (and deleting from) the cache."""
         if self._write_ctx is not None:
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
             self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
+        self._deleted_in_scope = False
         try:
             if self._write_ctx is not None:
                 with self._write_ctx:
@@ -312,6 +321,8 @@ class CacheDict(tp.Generic[X]):
             self._write_ctx = None
             if self.folder is not None:
                 utils.best_effort_utime(self.folder)
+                if self._deleted_in_scope:
+                    self._read_info_files(force=True)  # sweep emptied jsonl/data pairs
 
     @contextlib.contextmanager
     def writer(self) -> tp.Iterator["CacheDict[X]"]:
@@ -359,6 +370,9 @@ class CacheDict(tp.Generic[X]):
         if self._dumper is None:
             del self._ram_data[key]
             return
+        if self._write_ctx is None:
+            raise RuntimeError("Cannot delete outside of a writer context")
+        self._deleted_in_scope = True
         if key not in self._key_info:
             _ = key in self  # populate _key_info from disk
         self._ram_data.pop(key, None)
