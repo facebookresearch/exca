@@ -199,6 +199,10 @@ class Step(exca.helpers.DiscriminatedModel):
         Returns:
             self: normal step behavior (default, no resolution)
             Step: used directly (return a Chain to control its infra)
+
+        Must return ``self`` until the resolution is final: computing a uid
+        resolves the step, and the first non-self resolution is memoised and
+        freezes the step, so later config changes are silently ignored.
         """
         return self
 
@@ -298,6 +302,7 @@ class Step(exca.helpers.DiscriminatedModel):
         xkutils.mkdir_with_permissions(paths.step_folder, 0o777, root=paths.base_folder)
         return paths
 
+    # only reached by direct exports: step_uid/write_configs pre-resolve the tree
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
         if "has_resolve" not in self._step_flags:
             return None

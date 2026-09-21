@@ -61,8 +61,12 @@ def _compress_tail(segments: list[str], budget: int) -> str:
 
 def step_uid(steps: tp.Sequence[Step]) -> str:
     """Slash-joined per-step uid; compressed if over MAX_STEP_UID_LENGTH."""
+    from .utils import resolved_tree  # lazy — utils imports backends imports identity
+
     opts = {"exclude_defaults": True, "uid": True}
-    segments = [exca.ConfDict.from_model(s, **opts).to_uid() for s in steps]
+    segments = [
+        exca.ConfDict.from_model(resolved_tree(s), **opts).to_uid() for s in steps
+    ]
     full = "/".join(segments)
     if len(full) <= MAX_STEP_UID_LENGTH:
         return full
@@ -106,5 +110,8 @@ def write_configs(
     The config is the full computation path (aligned chain), so a chain
     and its last step write identical configs when sharing a folder.
     """
+    from .utils import resolved_tree  # lazy — utils imports backends imports identity
+
     step_folder.mkdir(exist_ok=True, parents=True)
-    utils.ConfigDump(model=list(aligned_steps)).check_and_write(step_folder, write=write)
+    resolved = [resolved_tree(s) for s in aligned_steps]
+    utils.ConfigDump(model=resolved).check_and_write(step_folder, write=write)

@@ -199,7 +199,8 @@ class Parallel(Step):
                 f"a step), got {self.infra!r}"
             )
         cbatches = []
-        for child in self.steps:
+        for step in self.steps:
+            child = utils.resolved_step(step)  # as _dispatch: run what identity keys on
             uids = [identity.materialize_uid(child, v) for v in batch]
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
             cbatches.append(self.infra._prepare(child, child_batch))

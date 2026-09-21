@@ -106,3 +106,10 @@ return `self` from `_resolve_step()`, so re-resolution is a no-op.
 - Fast path `None` if `"has_resolve"` not in `_step_flags`
 - `None` if `_resolve_step()` returns `self`
 - Otherwise delegates to the returned Step's `_exca_uid_dict_override()`
+
+This only covers a resolution that is itself a `Chain`, and only `uid.yaml`
+(`ConfigExporter` gates overrides on `uid and exclude_defaults`). The cache
+key and the three config files instead go through `utils.resolved_tree`,
+called by `identity.step_uid` / `identity.write_configs`: it replaces the
+step and every sub-step by its resolution, so all three exporters see the
+steps that actually run.

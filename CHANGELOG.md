@@ -11,6 +11,8 @@
 
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
+- `steps`: `uid.yaml`/`full-uid.yaml`/`config.yaml` and the cache uid all follow `_resolve_step`, sub-steps included. This moves the cache folder of a step resolving to a non-`Chain` step (it was keyed on its unresolved config).
+- `steps`: `Parallel` now runs each variant's `_resolve_step` resolution, like every other dispatch (it used to run the unresolved variant). Two variants resolving to the same step now raise (`one batch per step_uid required`) instead of running twice under separate keys.
 
 
 ## 0.5.29 - 26-07-28
