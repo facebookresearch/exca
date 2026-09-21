@@ -103,13 +103,10 @@ return `self` from `_resolve_step()`, so re-resolution is a no-op.
 ### 5. UID consistency via `_exca_uid_dict_override`
 
 `utils.py` is updated to support `None` return (opt-out). Step's override:
-- Fast path `None` if `"has_resolve"` not in `_step_flags`
 - `None` if `_resolve_step()` returns `self`
-- Otherwise delegates to the returned Step's `_exca_uid_dict_override()`
+- Otherwise the resolution's uid export
 
-This only covers a resolution that is itself a `Chain`, and only `uid.yaml`
-(`ConfigExporter` gates overrides on `uid and exclude_defaults`). The cache
-key and the three config files instead go through `utils.resolved_tree`,
-called by `identity.step_uid` / `identity.write_configs`: it replaces the
-step and every sub-step by its resolution, so all three exporters see the
-steps that actually run.
+`ConfigExporter` calls the override on sub-models too, so a nested resolution is
+keyed on what runs. Only `uid.yaml` and the cache key: overrides are gated on
+`uid and exclude_defaults`, so `full-uid.yaml`/`config.yaml` keep the declared
+config.

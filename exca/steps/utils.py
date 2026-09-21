@@ -126,31 +126,6 @@ def resolved_step(step: base.Step) -> base.Step:
     return built
 
 
-def resolved_tree(obj: tp.Any) -> tp.Any:
-    """``obj`` with every ``Step`` it contains replaced by its resolution
-    (``obj`` itself when nothing resolves). Identity and config exports must
-    see the steps that actually run, sub-steps included."""
-    from . import base  # lazy — avoids circular import at module level
-
-    if isinstance(obj, base.Step):
-        obj = resolved_step(obj)
-    if isinstance(obj, pydantic.BaseModel):
-        update = {}
-        for name in type(obj).model_fields:
-            val = getattr(obj, name)
-            sub = resolved_tree(val)
-            if sub is not val:
-                update[name] = sub
-        return obj.model_copy(update=update) if update else obj
-    if isinstance(obj, (dict, list, tuple)):
-        vals = list(obj.values()) if isinstance(obj, dict) else list(obj)
-        subs = [resolved_tree(v) for v in vals]
-        if all(s is v for s, v in zip(subs, vals)):
-            return obj
-        return type(obj)(zip(obj, subs)) if isinstance(obj, dict) else type(obj)(subs)
-    return obj
-
-
 def nested_steps(step: base.Step) -> dict[str, base.Step]:
     """Every ``Step`` the step's fields reach without crossing another ``Step``,
     keyed by the dotted path (field, then keys and indices) it sits at."""

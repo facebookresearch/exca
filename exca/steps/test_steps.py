@@ -451,12 +451,12 @@ def test_resolve_step_uid_consistency() -> None:
 
 
 class _Indirect(Step):
-    """Resolves to a plain Step (no Chain in between, so no uid override to rely on)."""
+    """Resolves to a plain Step: no Chain in between, so no uid override to rely on."""
 
     coeff: float = 2.0
 
     def _run(self, value: float) -> float:
-        return value  # wrong on purpose: a dispatch skipping resolution returns it
+        return value  # never multiplies: tells an unresolved run from a resolved one
 
     def _resolve_step(self) -> Step:
         return conftest.Mult(coeff=self.coeff, infra=self.infra)
@@ -465,25 +465,14 @@ class _Indirect(Step):
 class _Holder(Step):
     body: Step
 
-    def _run(self, value: float = 0) -> float:
+    def _run(self, value: float) -> float:
         return value
 
 
-def test_nested_resolution_drives_identity_and_configs(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    holder = _Holder(body=_Indirect(coeff=3, infra=infra))
-    equivalent = _Holder(body=conftest.Mult(coeff=3, infra=infra))
-    assert identity.step_uid([holder]) == identity.step_uid([equivalent]), (
-        "container uid must key on the sub-step resolution, not on the declaration"
-    )
-
-    folder = tmp_path / "configs"
-    identity.write_configs(folder, [holder])
-    for name in ("uid", "full-uid", "config"):
-        text = (folder / f"{name}.yaml").read_text("utf8")
-        assert "Indirect" not in text, f"{name}.yaml kept the unresolved step:\n{text}"
-    config = (folder / "config.yaml").read_text("utf8")
-    assert "Cached" in config, f"config.yaml must keep infra:\n{config}"
+def test_nested_resolution_drives_uid() -> None:
+    bodies: list[Step] = [_Indirect(coeff=3), conftest.Mult(coeff=3)]
+    uids = {identity.step_uid([_Holder(body=body)]) for body in bodies}
+    assert len(uids) == 1, f"uid keys on the declaration, not the resolution: {uids}"
 
 
 def test_parallel_caches_the_resolved_step_result(tmp_path: Path) -> None:
