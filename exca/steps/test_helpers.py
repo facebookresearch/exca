@@ -142,6 +142,11 @@ def test_run_caches_each_variant_under_own_identity(tmp_path: Path) -> None:
     assert [s.lookup(5.0).result() for s in sweep.steps] == [10.0, 15.0, 20.0]
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     assert conftest.Mult(coeff=3.0, infra=infra).lookup(5.0).cached()
+    Chain(steps=[_sweep(tmp_path)], infra=infra).run_many([1.0])  # allowed: no upstream
+    folders = conftest.extract_cache_folders(tmp_path)
+    assert any(f.startswith("type=Parallel") for f in folders), (
+        f"chain-leading Parallel must cache under its own identity, got {folders}"
+    )
 
 
 def test_generator_variants_no_items(tmp_path: Path) -> None:
@@ -163,6 +168,8 @@ def test_invalid_inputs_rejected(tmp_path: Path) -> None:
         Parallel(steps=conflicting, infra=infra)
     with pytest.raises(TypeError, match="parallel.steps"):
         _sweep(tmp_path).lookup(5.0)
+    with pytest.raises(TypeError, match="cannot be a Chain step"):
+        Chain(steps=[conftest.Add(value=100.0), _sweep(tmp_path)]).run_many([3.0])
 
 
 @pytest.mark.parametrize("folder_first", (True, False))

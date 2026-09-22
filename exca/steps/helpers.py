@@ -128,7 +128,7 @@ class Parallel(Step):
     The variants run together under one shared backend, each caching under its
     own identity. ``run`` is for effect — read results back per variant via
     ``parallel.steps[k].lookup(value)``. It has no composable output (yields
-    ``None`` per input), so use it standalone, not as a non-terminal chain step.
+    ``None`` per input), so it cannot be a ``Chain`` step — run it standalone.
 
     Example::
 
@@ -179,9 +179,6 @@ class Parallel(Step):
                     f"steps; {self.infra!r} differs from {step.infra!r}"
                 )
 
-    def _uid_steps(self) -> list[Step]:
-        return []  # no identity of its own
-
     def lookup(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:
         raise TypeError(
             "Parallel has no cache of its own; look up a variant instead, "
@@ -189,6 +186,11 @@ class Parallel(Step):
         )
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
+        if batch._upstream:
+            raise TypeError(
+                "Parallel has no output to pass on, so it cannot be a Chain step; "
+                "run it standalone."
+            )
         return self._run_items(batch)  # not infra._run(self): dispatch variants
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
