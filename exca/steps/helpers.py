@@ -128,7 +128,8 @@ class Parallel(Step):
     The variants run together under one shared backend, each caching under its
     own identity. ``run`` is for effect — read results back per variant via
     ``parallel.steps[k].lookup(value)``. It has no composable output (yields
-    ``None`` per input), so it cannot be a ``Chain`` step — run it standalone.
+    ``None`` per input), so it cannot consume another step's output — run it
+    standalone.
 
     Example::
 
@@ -188,8 +189,8 @@ class Parallel(Step):
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         if batch._upstream:
             raise TypeError(
-                "Parallel has no output to pass on, so it cannot be a Chain step; "
-                "run it standalone."
+                "Parallel has no output to pass on, so it cannot consume another "
+                "step's output; run it standalone."
             )
         return self._run_items(batch)  # not infra._run(self): dispatch variants
 

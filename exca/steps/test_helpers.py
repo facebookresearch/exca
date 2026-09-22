@@ -168,7 +168,7 @@ def test_invalid_inputs_rejected(tmp_path: Path) -> None:
         Parallel(steps=conflicting, infra=infra)
     with pytest.raises(TypeError, match="parallel.steps"):
         _sweep(tmp_path).lookup(5.0)
-    with pytest.raises(TypeError, match="cannot be a Chain step"):
+    with pytest.raises(TypeError, match="cannot consume another step's output"):
         Chain(steps=[conftest.Add(value=100.0), _sweep(tmp_path)]).run_many([3.0])
 
 

@@ -6,7 +6,7 @@
 
 - `CacheDict`: deletions require a `write()` context (like writes). [#326]
 - `DumpContext.shared_file`: content suffixes must start with `.`. [#326]
-- `steps`: `Parallel` can no longer be a `Chain` step. [#NNN]
+- `steps`: `Parallel` rejects input from an upstream step. [#328]
 
 [other]
 
