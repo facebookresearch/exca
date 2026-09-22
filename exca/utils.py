@@ -496,6 +496,16 @@ def recursive_freeze(obj: tp.Any) -> None:
             object.__setattr__(m, "model_config", mconfig)
 
 
+def _unfreeze(model: pydantic.BaseModel) -> None:
+    """Undo :func:`recursive_freeze` on *model* alone (not its submodels)."""
+    if hasattr(model, "__pydantic_setattr_handlers__"):
+        model.__dict__.pop("_setattr_handler", None)
+    elif model.model_config.get("frozen", False):
+        mconfig = copy.deepcopy(model.model_config)
+        mconfig["frozen"] = False
+        object.__setattr__(model, "model_config", mconfig)
+
+
 def find_models(
     obj: tp.Any,
     Type: type[T],

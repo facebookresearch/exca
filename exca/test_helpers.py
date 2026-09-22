@@ -156,6 +156,19 @@ def test_discriminated_model_cache_invalidation() -> None:
     assert isinstance(BaseNamed(name="LateSub"), LateSub)  # type: ignore
 
 
+def test_discriminated_model_unregistered() -> None:
+    class Internal(Hello, register=False):
+        pass
+
+    class SubInternal(Internal):
+        pass
+
+    with pytest.raises(ValueError, match="Unknown subclass discriminator 'Internal'"):
+        _ = Model(sub={"name": "Internal"})  # type: ignore
+    assert Internal().model_dump()["name"] == "Internal", "still serializes as itself"
+    assert isinstance(Model(sub={"name": "SubInternal"}).sub, SubInternal)  # type: ignore
+
+
 def test_discriminated_model_errors() -> None:
     with pytest.raises(ValueError) as e:
         _ = Model(sub={"name": "Earth", "string": "Hello"})  # type: ignore

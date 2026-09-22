@@ -200,6 +200,11 @@ def _fold_modes(*modes: identity.ModeType) -> identity.ModeType:
     return acc
 
 
+def _must_recompute(status: LookupStatus, mode: identity.ModeType) -> bool:
+    """Whether a cached entry runs again under *mode* (a cached error still raises)."""
+    return mode == "force" or (mode == "retry" and status == "error")
+
+
 def _effective_mode(step: Step) -> identity.ModeType:
     """The mode in effect for ``step`` once its sub-steps are folded in."""
     from . import utils  # lazy — backends is imported by utils at module level
@@ -339,9 +344,9 @@ class ComputeBatch:
 
     def cached_items(self) -> StepItems:
         """Lazy cache-backed carrier; use on a top-level batch, not a chunk."""
-        return items.StepItems(
+        return self.items._replace(
             source=self.cache_dict,
-            uids=self.items.uids,
+            pending=(),
             upstream=self.info.upstream,
             mode=self.info.mode,
         )
@@ -351,13 +356,19 @@ class ComputeBatch:
         folder = self.cache_dict.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
+        run_uids = self.items.uids
+        if self.items._fold_scope.pending:  # whole for the fold, compute what is missing
+            with self.cache_dict.frozen_cache_folder():
+                run_uids = [
+                    uid for uid in dict.fromkeys(run_uids) if uid not in self.cache_dict
+                ]
         written_uids: list[str] = []
         token = _HELD_ENTRIES.set(self.info.held_entries)
         try:
             result_items = self.step._run_items(self.items)
             with self.cache_dict.write():
-                for i, result in enumerate(result_items):
-                    uid = self.items.uids[i]
+                for i, result in enumerate(result_items.read(run_uids)):
+                    uid = run_uids[i]
                     if uid not in self.cache_dict:
                         self.cache_dict[uid] = result
                         written_uids.append(uid)
@@ -486,7 +497,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 if status == "error":
                     _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
                 continue
-            elif mode == "force" or (mode == "retry" and status == "error"):
+            elif _must_recompute(status, mode):
                 pending[uid] = status
             elif status == "error":
                 _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
@@ -655,7 +666,8 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 # ancestors already hold their entries: claiming them self-deadlocks
                 folder_key = str(cb.paths.step_folder)
                 request = {u for u in pending if (folder_key, u) not in held}
-                cb = cb.select(list(pending))
+                whole = cb.items._fold_scope.pending
+                cb = cb.select(cb.items.uids if whole else list(pending))
                 cb.info.claim = claimed.stack.enter_context(
                     inflight.inflight_session(reg, request)
                 )
@@ -697,6 +709,12 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._clear_caches(paths=cbatch.paths, cd=cbatch.cache_dict, uids=clear_uids)
         if not pending_statuses:
             return None
+        if cbatch.items._fold_scope.pending:  # claim only: the fold needs every uid
+            claim = cbatch.info.claim
+            if claim is not None:
+                kept = tuple(u for u in claim.uids if u in pending_statuses)
+                cbatch.info.claim = dataclasses.replace(claim, uids=kept)
+            return cbatch
         return cbatch.select(list(pending_statuses))
 
     def _mark_recomputed(self, cbatch: ComputeBatch) -> None:
@@ -946,9 +964,9 @@ class _PoolBackend(Backend):
             }
             ctx = _PoolContext(cbatch.cache_dict, cbatch.paths.step_uid, pool, claimed)
             transferred = True  # _PoolContext closes `claimed`, not the finally
-            return items.StepItems(
+            return cbatch.items._replace(
                 source=_PoolSource(uid_to_future, ctx),
-                uids=cbatch.items.uids,
+                pending=(),
                 upstream=cbatch.info.upstream,
                 mode=cbatch.info.mode,
             )

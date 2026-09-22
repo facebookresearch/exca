@@ -144,6 +144,27 @@ def test_run_caches_each_variant_under_own_identity(tmp_path: Path) -> None:
     assert conftest.Mult(coeff=3.0, infra=infra).lookup(5.0).cached()
 
 
+class _Doubling(Step):
+    """Resolves to a plain step, so the sweep must run the resolution, not self."""
+
+    coeff: float = 2.0
+
+    def _resolve_step(self) -> Step:
+        return conftest.Mult(coeff=self.coeff, infra=self.infra)
+
+    def _run(self, value: float = 0) -> float:
+        raise AssertionError("the unresolved step must never run")
+
+
+def test_run_dispatches_a_resolving_variant(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    sweep = Parallel(steps=[_Doubling(coeff=3.0)], infra=infra)
+    sweep.run_many([2.0])
+    assert conftest.Mult(coeff=3.0, infra=infra).lookup(2.0).result() == 6.0, (
+        "the variant's cache is keyed on its resolution, so that must be what ran"
+    )
+
+
 def test_generator_variants_no_items(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     sweep = Parallel(steps=[conftest.Add(value=v) for v in (1.0, 2.0)], infra=infra)

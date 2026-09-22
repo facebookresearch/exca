@@ -120,6 +120,14 @@ class Func(Step):
         return self.function(**kwargs)
 
 
+_FIT_IN_A_SWEEP = (
+    "Parallel cannot hold a fitting step ({paths}): variants are dispatched through "
+    "the shared backend, never through their own _dispatch, so a Fit inside one is "
+    "never handed the cohort. Fit each variant on its own (variant.fit_many(items)), "
+    "or put the Fit before the sweep, as Chain(steps=[Fit(...), Parallel(...)])"
+)
+
+
 class Parallel(Step):
     """Run a fixed set of step variants over one shared item set.
 
@@ -137,6 +145,11 @@ class Parallel(Step):
         sweep.run_many(inputs)                   # populates each variant's cache
         out = sweep.steps[0].lookup(inputs[0])   # read one variant back
 
+    A declared :class:`~exca.steps.Fit` variant is refused when the sweep is built,
+    one a variant only resolves to when the sweep runs but before it dispatches:
+    variants are dispatched through the shared backend, so one would be run without
+    its cohort.
+
     Parameters
     ----------
     steps:
@@ -146,10 +159,19 @@ class Parallel(Step):
     steps: tp.Sequence[Step]
 
     def model_post_init(self, __context: tp.Any) -> None:
+        from . import fit  # `fit` builds on this module
+
         super().model_post_init(__context)
         if not self.steps:
             raise ValueError("steps cannot be empty")
         self._unify_infra()
+        # not resolving: no folder has reached the variants yet, and resolving
+        # memoises and freezes what it reads. _run_items covers the resolutions.
+        found = fit._find_fits(self, resolve=False)
+        if found:
+            raise NotImplementedError(
+                _FIT_IN_A_SWEEP.format(paths=", ".join(sorted(found)))
+            )
 
     def _unify_infra(self) -> None:
         infras = [s.infra for s in self.steps if s.infra is not None]
@@ -192,17 +214,27 @@ class Parallel(Step):
         return self._run_items(batch)  # not infra._run(self): dispatch variants
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
+        from . import fit  # `fit` builds on this module
+
         assert self.infra is not None
+        # the resolutions the construction-time scan could not afford to build,
+        # refused here: the folder has propagated and nothing is dispatched yet
+        found = fit._find_fits(self)
+        if found:
+            raise NotImplementedError(
+                _FIT_IN_A_SWEEP.format(paths=", ".join(sorted(found)))
+            )
         if self.infra.folder is None:
             raise RuntimeError(
                 f"Parallel needs a cache folder; set infra.folder (on Parallel or "
                 f"a step), got {self.infra!r}"
             )
         cbatches = []
-        for child in self.steps:
-            uids = [identity.materialize_uid(child, v) for v in batch]
+        for variant in self.steps:
+            resolved = utils.resolved_step(variant)
+            uids = [identity.materialize_uid(resolved, v) for v in batch]
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
-            cbatches.append(self.infra._prepare(child, child_batch))
+            cbatches.append(self.infra._prepare(resolved, child_batch))
         with self.infra._claim(cbatches) as claimed:
             if claimed.ready:
                 self.infra._execute(claimed.ready)
@@ -215,6 +247,20 @@ class Parallel(Step):
 
     def run(self, value: tp.Any = identity.NoValue()) -> None:
         self.run_many([value])
+
+    def fit_many(  # type: ignore[override]
+        self, values: tp.Iterable[tp.Any] = (), *, cohort: str | None = None
+    ) -> list[None]:
+        """Run as :meth:`run_many`: a sweep holds no ``Fit`` (refused before it
+        dispatches), so it is an exact passthrough — see
+        :meth:`~exca.steps.Step.fit_many`. ``cohort`` is checked for shape and
+        then ignored: there is nothing here for a name to scope.
+        """
+        from . import fit  # `fit` builds on this module
+
+        if cohort is not None:
+            fit._check_name(cohort)  # as the declaration walk would
+        return self.run_many(values)
 
     def run_many(self, values: tp.Iterable[tp.Any]) -> list[None]:  # type: ignore[override]
         values = list(values)

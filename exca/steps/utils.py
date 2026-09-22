@@ -49,8 +49,10 @@ def propagate_folder(step: base.Step, parent_folder: Path) -> None:
     """
     own = get_infra_folder(step)
     folder = parent_folder if own is None else own
-    if step.infra is not None and step.infra.folder is None:
-        step.infra.folder = folder
+    for name in type(step).model_fields:  # `infra`, and e.g. `Fit.fit_infra`
+        backend = getattr(step, name)
+        if isinstance(backend, backends.Backend) and backend.folder is None:
+            backend.folder = folder
     for sub in nested_steps(step).values():
         propagate_folder(sub, folder)
 
@@ -60,15 +62,11 @@ def infra_validator_before(cls: type, obj: tp.Any) -> tp.Any:
     """Convert backend instances to dicts to prevent sharing."""
     if not isinstance(obj, dict):
         return obj
-    infra = obj.get("infra")
-    if infra is None:
-        return obj
-
-    if isinstance(infra, backends.Backend):
-        data = {k: getattr(infra, k) for k in infra.model_fields_set}
-        data[type(infra)._exca_discriminator_key] = type(infra).__name__
-        obj["infra"] = data
-
+    for key, value in list(obj.items()):  # `infra`, and e.g. `Fit.fit_infra`
+        if isinstance(value, backends.Backend):
+            data = {k: getattr(value, k) for k in value.model_fields_set}
+            data[type(value)._exca_discriminator_key] = type(value).__name__
+            obj[key] = data
     return obj
 
 

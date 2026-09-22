@@ -18,7 +18,7 @@ import pytest
 
 import exca
 
-from . import backends, conftest, identity, items, utils
+from . import backends, conftest, helpers, identity, items, utils
 from .base import Chain, Step
 
 # =============================================================================
@@ -448,6 +448,33 @@ def test_resolve_step_uid_consistency() -> None:
     step_uid = exca.ConfDict.from_model(step, uid=True, exclude_defaults=True).to_uid()
     chain_uid = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_uid()
     assert step_uid == chain_uid
+
+
+class _ResolvesToMult(Step):
+    def _run(self, value: float) -> float:
+        return value
+
+    def _resolve_step(self) -> Step:
+        return conftest.Mult(infra=self.infra)
+
+
+class _StepWithBody(Step):
+    body: Step
+
+    def _run(self, value: float) -> float:
+        return value
+
+
+def test_nested_resolution_drives_uid() -> None:
+    resolving_uid = identity.step_uid([_StepWithBody(body=_ResolvesToMult())])
+    assert resolving_uid == identity.step_uid([_StepWithBody(body=conftest.Mult())])
+
+
+def test_parallel_caches_the_resolved_step_result(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    sweep = helpers.Parallel(steps=[_ResolvesToMult()], infra=infra)
+    sweep.run(5.0)
+    assert sweep.steps[0].lookup(5.0).result() == 10.0
 
 
 def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
