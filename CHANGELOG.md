@@ -11,10 +11,7 @@
 
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
-- `steps`: `_resolve_step` cache keys now use the resolved step, preventing distinct resolutions from sharing a folder; affected entries recompute once.
-- `steps`: `Parallel` now runs resolved variants, so `parallel.steps[k].lookup(value).result()` finds their cached results.
-- `steps`: added `Fit`, a step fitting one artifact over a cohort of items then transforming each item with it, and `Step.fit_many(items)` to declare the items to fit on. The cohort scopes the artifact and every downstream cache; declaring `cohort="name"` on the step records the name, so a process that never presents the items recovers the artifact from the dumped config alone, while an unnamed cohort is recovered by re-presenting its items, and a `fit_many(items, cohort="name")` argument names the fit for that call only and is not recorded. `fit_many` is a plain `run_many` on a pipeline with no `Fit`, so pipelines with and without one stay comparable, and `fit.lookup(item).clear_cache(recursive=True)` also clears that cohort's artifact and frees its name, leaving the other cohorts of the same config intact, so clearing and rerunning refits that one. Not supported as a `Parallel` variant: a sweep reaching a `Fit` raises before it dispatches anything. [#TODO]
-- `DiscriminatedModel`: `class Sub(Base, register=False)` keeps a subclass out of the discriminator dispatch table, so no config can name it. [#TODO]
+- `steps`: added experimental `Fit`/`Step.fit_many` to cache one cohort-wide artifact for per-item transforms; named cohorts can be recovered from config. [#TODO]
 
 
 ## 0.5.29 - 26-07-28

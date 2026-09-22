@@ -121,10 +121,8 @@ class Func(Step):
 
 
 _FIT_IN_A_SWEEP = (
-    "Parallel cannot hold a fitting step ({paths}): variants are dispatched through "
-    "the shared backend, never through their own _dispatch, so a Fit inside one is "
-    "never handed the cohort. Fit each variant on its own (variant.fit_many(items)), "
-    "or put the Fit before the sweep, as Chain(steps=[Fit(...), Parallel(...)])"
+    "Parallel cannot contain Fit ({paths}); fit each variant separately, or place "
+    "Fit before Parallel in a Chain."
 )
 
 
@@ -145,10 +143,9 @@ class Parallel(Step):
         sweep.run_many(inputs)                   # populates each variant's cache
         out = sweep.steps[0].lookup(inputs[0])   # read one variant back
 
-    A declared :class:`~exca.steps.Fit` variant is refused when the sweep is built,
-    one a variant only resolves to when the sweep runs but before it dispatches:
-    variants are dispatched through the shared backend, so one would be run without
-    its cohort.
+    A :class:`~exca.steps.Fit` variant is refused before the sweep dispatches
+    anything: when the sweep is built if the variant declares it, when the sweep runs
+    if the variant only resolves to it.
 
     Parameters
     ----------
@@ -165,8 +162,7 @@ class Parallel(Step):
         if not self.steps:
             raise ValueError("steps cannot be empty")
         self._unify_infra()
-        # not resolving: no folder has reached the variants yet, and resolving
-        # memoises and freezes what it reads. _run_items covers the resolutions.
+        # not resolving: no folder has propagated yet, and resolving freezes what it reads
         found = fit._find_fits(self, resolve=False)
         if found:
             raise NotImplementedError(
@@ -217,8 +213,7 @@ class Parallel(Step):
         from . import fit  # `fit` builds on this module
 
         assert self.infra is not None
-        # the resolutions the construction-time scan could not afford to build,
-        # refused here: the folder has propagated and nothing is dispatched yet
+        # the resolutions the construction scan could not build; nothing dispatched yet
         found = fit._find_fits(self)
         if found:
             raise NotImplementedError(
@@ -251,10 +246,8 @@ class Parallel(Step):
     def fit_many(  # type: ignore[override]
         self, values: tp.Iterable[tp.Any] = (), *, cohort: str | None = None
     ) -> list[None]:
-        """Run as :meth:`run_many`: a sweep holds no ``Fit`` (refused before it
-        dispatches), so it is an exact passthrough — see
-        :meth:`~exca.steps.Step.fit_many`. ``cohort`` is checked for shape and
-        then ignored: there is nothing here for a name to scope.
+        """Run as :meth:`run_many`: a sweep holds no ``Fit``, so ``cohort`` is checked
+        for shape and then ignored.
         """
         from . import fit  # `fit` builds on this module
 

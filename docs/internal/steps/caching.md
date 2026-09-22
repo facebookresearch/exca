@@ -72,6 +72,20 @@ view via `CacheDict.__reduce__`.
 workers get a reduced copy and the driver picks up new entries via
 folder-mtime invalidation in `_read_info_files`.
 
+## Fit artifacts
+
+A `Fit`'s artifact is one cache entry of a private `_Artifact` step, keyed by the
+cohort key, so all cohorts of one `Fit` share a folder with one entry each. The
+artifact itself is dropped from the pickled `Fit` (`Fit.__getstate__`) and replaced
+by an `_ArtifactRef` (step uid + cohort + CacheDict), so apply workers reload it
+from the cache instead of paying its size per task.
+
+A named cohort also gets a `cohorts/<string_uid(name)>` record under the
+`_Artifact` step folder, holding the fingerprint of the items it was fitted on. It
+is created by writing a temp file and hard-linking it into place, so concurrent
+fits of one name race atomically and the loser reads the winner's record.
+`LookupHandle.clear_cache(recursive=True)` on the fit removes it with the artifact.
+
 ## Concurrency
 
 Two callers hitting the same `(step_uid, uid)` would race. The

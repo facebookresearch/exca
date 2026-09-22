@@ -21,6 +21,8 @@ adds a ``steps`` field (a ``Sequence[Step]`` or ``OrderedDict[str,
 Step]``). ``chain[i]`` and ``len(chain)`` index into the sub-steps;
 slicing returns a new ``Chain``.
 
+.. _fitting-a-cohort:
+
 Fitting a cohort
 ----------------
 
@@ -31,9 +33,22 @@ artifact already fitted:
 
 .. code-block:: python
 
+    from exca import steps
+
+    class Normalize(steps.Fit):
+        def _fit(self, values):  # the cohort, streamed
+            values = list(values)
+            return sum(values) / len(values)
+
+        def _run(self, value):  # one item
+            return value - self.fitted
+
+    cache = "/tmp/exca-fit-cache"
+    train, test = [1.0, 2.0, 3.0], [10.0]
+
     norm = Normalize(infra={"backend": "Cached", "folder": cache})
-    norm.fit_many(train)  # fits on train, then transforms it
-    norm.run_many(test)   # transforms with the same artifact
+    list(norm.fit_many(train))  # fits on train, then transforms it
+    list(norm.run_many(test))   # transforms with the same artifact
 
 The artifact is named by the fingerprint of the items it was fitted
 on, so the cohort scopes its cache and every downstream cache
@@ -44,32 +59,37 @@ fingerprint:
 
 .. code-block:: python
 
-    named = Normalize(infra=..., cohort="train2024")
-    named.fit_many(train)                               # fitting process
-    Normalize(infra=..., cohort="train2024").run(item)  # any later process
+    infra = {"backend": "Cached", "folder": cache}
+    named = Normalize(infra=infra, cohort="train2024")
+    list(named.fit_many(train))                              # fitting process
+    Normalize(infra=infra, cohort="train2024").run(test[0])  # any later process
 
 The name is part of the config, which is what makes the recovery
 above need nothing else. ``fit_many(..., cohort="train2024")`` asks
 for the same name for that call alone: it scopes the fit as it runs
 but is not recorded, so re-presenting those items to a config dumped
 from that run fits again under an automatic name, beside the named
-artifact. Use it to point an unnamed config at an existing cohort
-within one process; with no items it recovers that cohort and fits
-nothing:
+artifact. Use it to point an unnamed instance at an existing cohort
+when the caller supplies the name explicitly. That takes a *fresh*
+instance: the one that fitted is already bound to its own cohort, and
+with no items the fresh one recovers the named cohort and fits nothing:
 
 .. code-block:: python
 
-    norm.fit_many(cohort="train2024")  # recovers, fits nothing
-    norm.run_many(test)
+    recovered = Normalize(infra=infra)
+    list(recovered.fit_many(cohort="train2024"))  # recovers, fits nothing
+    list(recovered.run_many(test))
 
 A name stays bound to the items it was fitted on: handing it a
 different cohort raises rather than silently refitting.
 
-A failed call declares nothing: every ``Fit`` it touched is left as
-the call found it, so a field can be corrected and the call retried.
-The cache is not rolled back with it — in a chain whose second fold
-raises, the first fold's artifact stays on disk, and the retry reads
-it back instead of refitting.
+If ``fit_many`` raises before returning, every ``Fit`` it touched is
+restored to the declaration it held, so a field can be corrected and the
+call retried. Cache writes already made remain — in a chain whose second
+fit raises, the first fit's artifact stays on disk, and the retry reads it
+back instead of refitting. After ``fit_many`` returns, a failure while
+consuming the results leaves the fit declared and the completed outputs
+cached, as in ``run_many``.
 
 ``fit_many`` lives on every :class:`Step`, not just on ``Fit``, because a
 ``Chain``, a ``Scatter`` or any resolving step can contain one. On a
@@ -78,14 +98,19 @@ identities, same cache entries — so two pipelines differing only in a
 fitting step stay comparable at one call site, and a ``cohort`` name
 given to one is checked for shape and then ignored.
 
-A ``Parallel`` sweep is the exception: its variants are dispatched
-through the shared backend rather than through their own pipeline, so
-one holding a ``Fit`` would run without its cohort. Such a sweep is
-refused before it dispatches anything, however it is reached: when it
-is built if the variant declares the ``Fit``, when it runs if the
-variant only resolves to one. Fit each variant on
-its own, or put the ``Fit`` before the sweep —
-``Chain(steps=[Fit(...), Parallel(...)])``.
+Three costs to plan for:
+
+- **The upstream is read twice**, once for the fit and once per item,
+  so give an expensive upstream its own ``infra``.
+- **A cohort name needs a cache folder** to recover from: set ``infra``
+  or ``fit_infra`` on the fit itself. An enclosing container may supply
+  its folder, but does not create the backend.
+- **A fit cannot live inside a sweep or a sharding container.** A
+  ``Parallel`` variant holding one is refused before the sweep
+  dispatches anything, as is a fit under a backend that would hand it
+  a shard of the cohort. Fit each variant on its own, or put the
+  ``Fit`` before the sweep —
+  ``Chain(steps=[Fit(...), Parallel(...)])``.
 
 .. autoclass:: exca.steps.Fit
     :show-inheritance:

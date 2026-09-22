@@ -357,7 +357,7 @@ class ComputeBatch:
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
         run_uids = self.items.uids
-        if self.items._fold_scope.pending:  # whole for the fold, compute what is missing
+        if self.items._fit_scope.pending:  # whole batch in, only the missing computed
             with self.cache_dict.frozen_cache_folder():
                 run_uids = [
                     uid for uid in dict.fromkeys(run_uids) if uid not in self.cache_dict
@@ -666,7 +666,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 # ancestors already hold their entries: claiming them self-deadlocks
                 folder_key = str(cb.paths.step_folder)
                 request = {u for u in pending if (folder_key, u) not in held}
-                whole = cb.items._fold_scope.pending
+                whole = cb.items._fit_scope.pending
                 cb = cb.select(cb.items.uids if whole else list(pending))
                 cb.info.claim = claimed.stack.enter_context(
                     inflight.inflight_session(reg, request)
@@ -709,7 +709,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self._clear_caches(paths=cbatch.paths, cd=cbatch.cache_dict, uids=clear_uids)
         if not pending_statuses:
             return None
-        if cbatch.items._fold_scope.pending:  # claim only: the fold needs every uid
+        if cbatch.items._fit_scope.pending:  # claim only: a pending fit needs every uid
             claim = cbatch.info.claim
             if claim is not None:
                 kept = tuple(u for u in claim.uids if u in pending_statuses)

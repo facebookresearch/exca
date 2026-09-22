@@ -382,11 +382,6 @@ class DiscriminatedModel(pydantic.BaseModel):
 
         obj = Base(name="Child", value=3)  # returns a Child instance
 
-    An internal subclass can stay out of that dispatch table with
-    :code:`class Hidden(Base, register=False)`: it still serializes with its
-    discriminator key, but a config naming it is rejected. Its own subclasses
-    are registered again unless they opt out too.
-
     Note
     ----
     experimental feature
@@ -397,6 +392,7 @@ class DiscriminatedModel(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid", validation_error_cause=True)
     _exca_discriminator_key: tp.ClassVar[str] = "type"
     _exca_subclass_cache: tp.ClassVar[dict[str, type["DiscriminatedModel"]] | None] = None
+    # Read by _get_discriminated_subclasses; excludes this class only
     _exca_unregistered: tp.ClassVar[bool] = False
 
     if not tp.TYPE_CHECKING:
@@ -418,7 +414,7 @@ class DiscriminatedModel(pydantic.BaseModel):
         key = cls._exca_discriminator_key
         val_classes: dict[str, type[DiscriminatedModel]] = {}
         for s in _get_subclasses(cls) + [cls]:
-            # __dict__: `register=False` opts out the class only, not its subclasses
+            # __dict__: the opt-out covers the class only, not its subclasses
             if s._exca_discriminator_key != key or s.__dict__.get("_exca_unregistered"):
                 continue
             val = s.__name__
@@ -442,15 +438,10 @@ class DiscriminatedModel(pydantic.BaseModel):
 
     @classmethod
     def __init_subclass__(
-        cls,
-        discriminator_key: str | None = None,
-        register: bool = True,
-        **kwargs: tp.Any,
+        cls, discriminator_key: str | None = None, **kwargs: tp.Any
     ) -> None:
         if discriminator_key is not None:
             cls._exca_discriminator_key = discriminator_key
-        if not register:
-            cls._exca_unregistered = True
         for ancestor in cls.__mro__:
             if issubclass(ancestor, DiscriminatedModel):
                 if "_exca_subclass_cache" in ancestor.__dict__:

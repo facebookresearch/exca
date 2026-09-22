@@ -89,9 +89,8 @@ class Step(exca.helpers.DiscriminatedModel):
     _ITEM_UID_MAX_LENGTH: tp.ClassVar[int] = 256
     # Final cache-backed carrier reused by `run` when all requested uids exist.
     _output_items: items.StepItems | None = pydantic.PrivateAttr(None)
-    # folds this step contains, released when it is done dispatching; stamped by
-    # the declaration walk (see `steps.fit`) and pickled with the step
-    _fold_keys: frozenset[str] = pydantic.PrivateAttr(frozenset())
+    # pending fits this step contains; stamped by the declaration walk (`steps.fit`)
+    _fit_keys: frozenset[str] = pydantic.PrivateAttr(frozenset())
     _resolution_cache: Step | None = pydantic.PrivateAttr(
         None
     )  # see `utils.resolved_step`
@@ -252,7 +251,7 @@ class Step(exca.helpers.DiscriminatedModel):
         with cached._source.frozen_cache_folder():
             if not all(uid in cached._source for uid in uids):
                 return None
-        return cached.select(uids)._replace(fold_scope=items._FoldScope())
+        return cached.select(uids)._replace(fit_scope=items._FitScope())
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
         """Resolve, then route *batch*: reuse/remember warm carrier, run inline or via backend."""
@@ -262,8 +261,8 @@ class Step(exca.helpers.DiscriminatedModel):
         standalone = (
             not batch._upstream and not batch._pending and batch._mode == "cached"
         )
-        # a whole batch must reach its fold unnarrowed, which a warm carrier is not
-        if standalone and not batch._fold_scope.pending:  # _output_items: no upstream
+        # a warm carrier is narrowed, so it cannot serve a pending fit
+        if standalone and not batch._fit_scope.pending:  # _output_items: no upstream
             warm = self._warm_items(batch.uids)
             if warm is not None:
                 return warm
@@ -276,8 +275,7 @@ class Step(exca.helpers.DiscriminatedModel):
             )
         else:
             result = self.infra._run(self, batch)
-        # also on a cache hit, which skips the folds this step contains
-        batch._fold_scope.consume(self)
+        batch._fit_scope.consume(self)  # a cache hit skips the fits inside too
         if standalone and isinstance(result._source, exca.cachedict.CacheDict):
             self._output_items = result
             exca.utils.recursive_freeze(self)  # carrier relies on fixed identity
@@ -410,47 +408,44 @@ class Step(exca.helpers.DiscriminatedModel):
         pipelines differing only in a fitting step stay comparable at one call
         site, so a blanket ``fit_many`` needs no knowledge of what is inside.
 
-        A failed call declares nothing: every ``Fit`` is left as the call found
-        it, free to be reconfigured and retried. What already reached the cache
-        stays — in a chain whose second fold raises, the first fold's artifact is
-        on disk, and the retry reads it back instead of refitting.
+        Raising before returning restores every ``Fit`` to the declaration it
+        held, free to be reconfigured and retried; cache writes already made
+        remain. After returning, a failure while consuming the results leaves the
+        fit declared and the completed outputs cached, as in :meth:`run_many`.
 
         Parameters
         ----------
         values:
             The cohort's items. Omit to recover an already fitted named cohort.
         cohort:
-            Name the artifact for this call: it scopes the fit as it runs, but is
-            not recorded, so a config dumped from this run recovers nothing by
-            that name — handed those items again it quietly fits a second time,
-            under the automatic name and beside the named artifact. Unset, the
-            items' fingerprint names it. A pipeline with no ``Fit`` has nothing to
-            name, and ignores it.
+            Name the artifact for this call alone: it scopes the fit as it runs
+            but is not recorded in the config. Unset, the items' fingerprint names
+            it. A pipeline with no ``Fit`` has nothing to name, and ignores it.
 
         Returns
         -------
         StepItems
             Iterator yielding one result per input, in input order.
         """
-        return self._run_many(list(values), cohort=cohort, declare=True)
+        return self._run_many(list(values), cohort=cohort, declare_cohort=True)
 
     def _run_many(
         self,
         inputs: list[tp.Any],  # eager: uid computation needs all values upfront
         cohort: str | None = None,
-        declare: bool = False,
+        declare_cohort: bool = False,
     ) -> items.StepItems:
         """Shared body of :meth:`run_many` and :meth:`fit_many`."""
         built = utils.resolved_step(self)
         uids = [identity.materialize_uid(built, v) for v in inputs]
         plan = None
-        if declare:
+        if declare_cohort:
             from . import fit  # `fit` builds on this module
 
             # `self`, not `built`: a resolution already carries the last declaration
             plan = fit._plan_cohorts(self, uids, cohort)
         # a cohort nobody fits on, or nothing to fit on, is a plain run
-        scope = plan.fold_scope if plan is not None and uids else items._FoldScope()
+        scope = plan.fit_scope if plan is not None and uids else items._FitScope()
         if plan is not None:
             plan.install()
         try:
@@ -462,11 +457,11 @@ class Step(exca.helpers.DiscriminatedModel):
             boundary = items.StepItems(
                 source=dict(zip(uids, inputs)),
                 uids=uids,
-                fold_scope=scope,
+                fit_scope=scope,
             )
             return boundary.apply_step(built)
         except BaseException:
-            if plan is not None:  # a failed call must declare nothing
+            if plan is not None:
                 plan.restore()
             raise
 

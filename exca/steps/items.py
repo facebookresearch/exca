@@ -23,27 +23,21 @@ if tp.TYPE_CHECKING:
     from .base import Step
 
 
-class _FoldScope:
-    """The folds a carrier still owes, each named by its declaration path.
-
-    A backend keeps the uid set whole while a fold is pending, and every
-    dispatch boundary consumes the folds it contains (``Step._fold_keys``), so
-    whole-batch behavior ends after the last fold instead of persisting
-    downstream. Names are strings and boundaries carry their own, so a dispatch
-    that pickles the carrier into a worker still releases there.
-    """
+class _FitScope:
+    """A carrier's pending fits, by declaration path: any keeps its uids whole."""
 
     def __init__(self, keys: tp.Iterable[str] = ()) -> None:
+        # plain strings, so a boundary pickled into a worker still releases there
         self._pending = set(keys)
 
     @property
     def pending(self) -> bool:
-        """Whether a fold still needs every uid of the batch."""
+        """Whether a pending fit still needs every uid of the batch."""
         return bool(self._pending)
 
     def consume(self, step: Step) -> None:
-        """Drop the folds *step* contains; idempotent."""
-        self._pending.difference_update(step._fold_keys)
+        """Drop the fits *step* contains; idempotent."""
+        self._pending.difference_update(step._fit_keys)
 
 
 class _Source(tp.Protocol):
@@ -151,7 +145,7 @@ class StepItems:
         upstream: tp.Sequence[Step] = (),
         pending: tp.Sequence[Step] = (),
         mode: identity.ModeType = "cached",
-        fold_scope: _FoldScope | None = None,
+        fit_scope: _FitScope | None = None,
     ) -> None:
         if uids is None:
             if not isinstance(source, dict):
@@ -164,10 +158,7 @@ class StepItems:
         self._upstream = tuple(upstream)
         self._pending = tuple(pending)
         self._mode = mode
-        # while it holds a pending fold, these uids are an input to a fold (a
-        # `Fit` cohort): a backend must not narrow them to the subset it still
-        # has to compute
-        self._fold_scope = _FoldScope() if fold_scope is None else fold_scope
+        self._fit_scope = _FitScope() if fit_scope is None else fit_scope
 
     def __len__(self) -> int:
         return len(self.uids)
@@ -184,7 +175,7 @@ class StepItems:
             "upstream": self._upstream,
             "pending": self._pending,
             "mode": self._mode,
-            "fold_scope": self._fold_scope,
+            "fit_scope": self._fit_scope,
         }
         return StepItems(**{**params, **changes})
 

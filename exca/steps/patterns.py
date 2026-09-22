@@ -234,7 +234,7 @@ class Scatter(Step):
             uids=uids,
             upstream=branch_upstream,
             mode=batch._mode,
-            fold_scope=batch._fold_scope,
+            fit_scope=batch._fit_scope,
         )
         # one dispatch over all branches lets a backend submit them together
         dispatched = self._body()._dispatch(carrier)
