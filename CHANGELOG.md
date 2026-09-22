@@ -11,8 +11,6 @@
 
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
-- `steps`: `_resolve_step` cache keys now use the resolved step, preventing distinct resolutions from sharing a folder; affected entries recompute once.
-- `steps`: `Parallel` now runs resolved variants, so `parallel.steps[k].lookup(value).result()` finds their cached results.
 
 
 ## 0.5.29 - 26-07-28
