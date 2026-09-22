@@ -11,8 +11,8 @@
 
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
-- `steps`: a step resolving (`_resolve_step`) to a non-`Chain` step is keyed on its resolution, like one resolving to a `Chain`. Such steps change cache folder.
-- `steps`: `Parallel` runs each variant's resolution, as every other dispatch does.
+- `steps`: `_resolve_step` cache keys now use the resolved step, preventing distinct resolutions from sharing a folder; affected entries recompute once.
+- `steps`: `Parallel` now runs resolved variants, so `parallel.steps[k].lookup(value).result()` finds their cached results.
 
 
 ## 0.5.29 - 26-07-28

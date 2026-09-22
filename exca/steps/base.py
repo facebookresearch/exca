@@ -199,10 +199,6 @@ class Step(exca.helpers.DiscriminatedModel):
         Returns:
             self: normal step behavior (default, no resolution)
             Step: used directly (return a Chain to control its infra)
-
-        Must return ``self`` until the resolution is final: computing a uid
-        resolves the step, and the first non-self resolution is memoised and
-        freezes the step, so later config changes are silently ignored.
         """
         return self
 
