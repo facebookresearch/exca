@@ -672,3 +672,34 @@ def test_pool_executor_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     ex = utils.make_pool_executor("processpool", max_workers=2)
     assert isinstance(ex, concurrent.futures.ThreadPoolExecutor)
     ex.shutdown()
+
+
+class _PermModel(BaseModel):
+    param: int = 12
+
+
+def test_config_dump_permissions(tmp_path: Path) -> None:
+    import stat
+
+    folder = tmp_path / "step"
+    folder.mkdir()
+    # write=True writes uid/full-uid/config yamls; permissions chmods them
+    utils.ConfigDump(model=_PermModel(param=7)).check_and_write(
+        folder, write=True, permissions=0o777
+    )
+    written = list(folder.glob("*.yaml"))
+    assert written  # at least uid.yaml is written
+    for fp in written:
+        assert stat.S_IMODE(fp.stat().st_mode) == 0o777
+
+
+def test_config_dump_no_permissions_leaves_mode(tmp_path: Path) -> None:
+    import stat
+
+    folder = tmp_path / "step"
+    folder.mkdir()
+    utils.ConfigDump(model=_PermModel(param=7)).check_and_write(folder, write=True)
+    written = list(folder.glob("*.yaml"))
+    assert written
+    # without a permissions arg, files are not force-chmod-ed to 0o777
+    assert all(stat.S_IMODE(fp.stat().st_mode) != 0o777 for fp in written)

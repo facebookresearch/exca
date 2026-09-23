@@ -100,11 +100,17 @@ def write_configs(
     aligned_steps: tp.Sequence[Step],
     *,
     write: bool = True,
+    permissions: int | None = None,
 ) -> None:
     """Idempotent: writes/checks `uid.yaml`, `full-uid.yaml`, `config.yaml`.
 
     The config is the full computation path (aligned chain), so a chain
     and its last step write identical configs when sharing a folder.
+
+    When *permissions* is set, the written config yamls are chmod-ed to it
+    (best-effort), matching the permissions applied to the cache data files.
     """
     step_folder.mkdir(exist_ok=True, parents=True)
-    utils.ConfigDump(model=list(aligned_steps)).check_and_write(step_folder, write=write)
+    utils.ConfigDump(model=list(aligned_steps)).check_and_write(
+        step_folder, write=write, permissions=permissions
+    )
