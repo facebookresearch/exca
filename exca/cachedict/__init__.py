@@ -6,6 +6,7 @@
 
 from .core import METADATA_TAG as METADATA_TAG
 from .core import CacheDict as CacheDict
+from .core import observe_access as observe_access
 
 CacheDictWriter = CacheDict  # deprecated: use CacheDict directly
 from exca.dumperloader import MEMMAP_ARRAY_FILE_MAX_CACHE as MEMMAP_ARRAY_FILE_MAX_CACHE
