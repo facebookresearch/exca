@@ -127,9 +127,8 @@ class Parallel(Step):
 
     The variants run together under one shared backend, each caching under its
     own identity. ``run`` is for effect — read results back per variant via
-    ``parallel.steps[k].lookup(value)``. It has no composable output (yields
-    ``None`` per input), so it cannot consume another step's output — run it
-    standalone.
+    ``parallel.steps[k].lookup(value)``. It has no composable output, so it
+    cannot be a ``Chain`` step — run it standalone.
 
     Example::
 
@@ -187,12 +186,10 @@ class Parallel(Step):
         )
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        if batch._upstream:
-            raise TypeError(
-                "Parallel has no output to pass on, so it cannot consume another "
-                "step's output; run it standalone."
-            )
-        return self._run_items(batch)  # not infra._run(self): dispatch variants
+        raise TypeError(
+            "Parallel has no composable output, so it cannot be a Chain step; "
+            "call run or run_many directly"
+        )
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
         assert self.infra is not None
@@ -224,5 +221,5 @@ class Parallel(Step):
         values = list(values)
         uids = [identity.materialize_uid(self, v) for v in values]
         batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
-        self._dispatch(batch)
+        self._run_items(batch)
         return [None] * len(values)
