@@ -117,11 +117,6 @@ addopts = ["--ignore=build", "--ignore=dist"]
 [[tool.mypy.overrides]]
   module = ['pytest', 'setuptools', 'cloudpickle', 'mne', 'mne.*', 'nibabel', 'neuralset', 'pyarrow', 'pybv', 'excatest']
   ignore_missing_imports = true
-[[tool.mypy.overrides]]
-  # some packages we do not install
-  module = ['exca.dumperloader']
-  disable_error_code = ['import-not-found', 'valid-type']
-
 [tool.pydantic-mypy]
   init_forbid_extra = true
   init_typed = true

@@ -675,14 +675,34 @@ def test_pool_executor_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     ex.shutdown()
 
 
+def test_setup_shared_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "shared"
+    root.mkdir()
+    fp = root / "file"
+    fp.touch()
+    fp.chmod(0o600)
+    read_only = root / "read_only"
+    read_only.touch()
+    read_only.chmod(0o400)
+    monkeypatch.setattr(utils, "_current_umask", lambda: 0o077)
+    which = utils.shutil.which
+    monkeypatch.setattr(
+        utils.shutil, "which", lambda name: None if name == "setfacl" else which(name)
+    )
+    with pytest.warns(UserWarning, match="umask 002"):
+        utils.setup_shared_folder(root)
+    assert stat.S_IMODE(fp.stat().st_mode) == 0o660
+    assert stat.S_IMODE(read_only.stat().st_mode) == 0o440
+
+
 @pytest.mark.parametrize(
     "mode,mask,expected",
     [
-        (0o700, 0o022, 0o755),  # exec bit mirrored -> dirs stay traversable
+        (0o700, 0o022, 0o755),
         (0o600, 0o022, 0o644),
         (0o600, 0o002, 0o664),
-        (0o400, 0o022, 0o444),  # read-only source is not made writable
-        (0o600, 0o077, 0o600),  # private umask widens nothing
+        (0o400, 0o022, 0o444),
+        (0o600, 0o077, 0o600),
     ],
 )
 def test_widen_to_umask(tmp_path: Path, mode: int, mask: int, expected: int) -> None:

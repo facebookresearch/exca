@@ -12,7 +12,6 @@ import logging
 import shutil
 import string
 import typing as tp
-import warnings
 from pathlib import Path
 
 import pydantic
@@ -134,7 +133,6 @@ class BaseInfra(pydantic.BaseModel):
     logs: Path | str = "{folder}/logs/{user}/%j"
     # cache versioning
     version: str = "0"
-    permissions: int | None = None  # deprecated
 
     model_config = pydantic.ConfigDict(extra="forbid")
     # {factory} will be replaced by method name and version tag
@@ -195,12 +193,6 @@ class BaseInfra(pydantic.BaseModel):
     def model_post_init(self, log__: tp.Any) -> None:
         # Pydantic's private-attr hook would otherwise shadow SubmititMixin's hook.
         super().model_post_init(log__)
-        if "permissions" in self.model_fields_set:
-            warnings.warn(
-                "'permissions' is deprecated and ignored: modes follow the umask "
-                "(see exca.utils.setup_shared_folder for shared caches)",
-                DeprecationWarning,
-            )
         if ".." in Path(self.version).parts:
             raise ValueError(
                 f"version={self.version!r} must not contain '..': it is a path "

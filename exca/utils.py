@@ -13,8 +13,10 @@ import itertools
 import logging
 import math
 import os
+import shlex
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -42,22 +44,24 @@ X = tp.TypeVar("X")
 
 
 def _current_umask() -> int:
-    # avoids os.umask peek: 0o777 race on concurrent creations
+    """Read the process umask without changing it."""
     with tempfile.TemporaryDirectory() as tmp:
-        probe = Path(tmp) / "probe"  # mkdtemp forces 0o700 → probe with nested mkdir
+        probe = Path(tmp) / "probe"
         probe.mkdir()
-        return 0o777 & ~stat.S_IMODE(probe.stat().st_mode)
+        mode = stat.S_IMODE(probe.stat().st_mode)
+    return 0o777 & ~mode
 
 
 def best_effort_utime(path: Path, *, keep_mtime: bool = False) -> None:
     """Advance *path*'s atime, preserving mtime when requested."""
+    # dir mtime unchanged on file-append → must stamp explicitly
     now = time.time_ns()
     try:
         mtime = path.stat().st_mtime_ns if keep_mtime else now
         os.utime(path, ns=(now, mtime))
         return
     except OSError:
-        if keep_mtime:
+        if keep_mtime:  # the fallback moves mtime, invalidating JsonlReader's cache
             logger.debug("Failed to stamp %s", path, exc_info=True)
             return
     try:
@@ -67,55 +71,93 @@ def best_effort_utime(path: Path, *, keep_mtime: bool = False) -> None:
 
 
 def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> None:
-    """Make *folder* and everything below it writable by a group of users.
+    """Make a folder tree group-writable, including future files.
 
-    - directories get set-group-id, so the kernel applies the group to
-      everything created underneath, which the umask cannot do on its own
-    - modes are widened up to the umask (:func:`widen_to_umask`)
-    - paths owned by another user are skipped: only their owner may change them
-    - symbolic links below *folder* are skipped
-
-    Run it once per tree, and again on content written before the setup.
+    Symlinks and paths the caller cannot modify are skipped.
 
     Parameters
     ----------
     folder: Path | str
-        root of the shared tree
+        Root of the shared tree.
     group: str | int | None
-        group to assign, eg. when your primary group is not the shared one
+        Group name or ID to assign, or ``None`` to keep the current group.
     """
-    mask = _current_umask()
     root = Path(folder).resolve()
-    for path in itertools.chain([root], root.rglob("*")):
-        if path.is_symlink():
-            continue
-        try:
-            if group is not None:
-                shutil.chown(path, group=group)
-            mode = _widened(path, mask)
-            if path.is_dir():
-                mode |= stat.S_ISGID
-            path.chmod(mode)
-        except (PermissionError, FileNotFoundError):
-            pass
+    shared_mask = _current_umask() & 0o007
+    supports_setgid = not subprocess.run(
+        ["chmod", "g+s", str(root)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode
+    branches: list[str] = []
+    if group is not None:
+        group_name = shlex.quote(str(group))
+        script = shlex.quote(
+            'group=$1; mode=$2; shift 2; chgrp "$group" "$@"; status=$?; '
+            'chmod "$mode" "$@" || status=$?; exit "$status"'
+        )
+        repair = f"-exec sh -c {script} sh {group_name}"
+        mode = "g+u,g+s" if supports_setgid else "g+u"
+        branches.append(f"-type d ! -group {group_name} {repair} {mode} {{}} +")
+        branches.append(f"! -type d ! -group {group_name} {repair} g+u {{}} +")
+    branches.append("-exec chmod g+u {} +")
+    for mask, bit, change in (
+        (0o004, 0o400, "o+r"),
+        (0o002, 0o200, "o+w"),
+        (0o001, 0o100, "o+x"),
+    ):
+        if not shared_mask & mask:
+            branches.append(f"-perm -{bit:o} -exec chmod {change} {{}} +")
+    if supports_setgid:
+        branches.append("-type d ! -perm -2000 -exec chmod g+s {} +")
+
+    setfacl = shutil.which("setfacl")
+    if setfacl is not None:
+        acl = "d:g::rwx,d:m::rwx"
+        probe = subprocess.run(
+            [setfacl, "-m", acl, str(root)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if probe.returncode:
+            setfacl = None
+        else:
+            setfacl_command = shlex.quote(setfacl)
+            branches.append(f"-type d -exec {setfacl_command} -m {acl} {{}} +")
+
+    expression = " -false -o ".join(branches)
+    command = shlex.split(
+        f"find -P {shlex.quote(str(root))} -user {os.getuid()} ! -type l "
+        f"\\( {expression} -false \\)"
+    )
+    result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if result.returncode:
+        warnings.warn(f"Some permission updates failed under {root}", stacklevel=2)
+    if setfacl is None or result.returncode:
+        warnings.warn(
+            f"Future files under {root} may not be writable by teammates; "
+            "run 'umask 002' in the shell before launching jobs that write there",
+            stacklevel=2,
+        )
 
 
 def widen_to_umask(folder: Path | str) -> None:
-    """Mirror the owner's access bits to group and other, minus the umask.
-
-    - only ever widens, to the mode a freshly created file/folder would have got
-    - use after tools writing their own modes (``shutil.copytree``, unarchiving)
-    """
+    """Mirror owner access to group and other where allowed by the umask."""
     mask = _current_umask()
-    for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
-        path.chmod(_widened(path, mask))
+    root = Path(folder)
+    for path in itertools.chain((root,), root.rglob("*")):
+        path.chmod(_widened_mode(path, mask))
 
 
-def _widened(path: Path, mask: int) -> int:
+def _widened_mode(path: Path, mask: int) -> int:
     """*path*'s mode with the owner's access bits mirrored to group and other."""
     mode = stat.S_IMODE(path.stat().st_mode)
     owner = (mode >> 6) & 0o7
-    return mode | (((owner << 3) | owner) & ~mask)
+    group_mask = (mask >> 3) & 0o7
+    other_mask = mask & 0o7
+    group = owner & ~group_mask
+    other = owner & ~other_mask
+    return mode | (group << 3) | other
 
 
 def to_chunks(

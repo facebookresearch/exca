@@ -340,12 +340,6 @@ class Step(exca.helpers.DiscriminatedModel):
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         return backends.LookupHandle(paths, cd, backend=self.infra, uid=_uid)
 
-    def with_input(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # deprecated
-        raise AttributeError(
-            "with_input() was removed; pass the value directly to run(value) "
-            "or lookup(value)"
-        )
-
     def clear_cache(self) -> None:  # deprecated
         warnings.warn(
             "Step.clear_cache() is deprecated, use lookup().clear_cache() instead",

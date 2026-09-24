@@ -158,7 +158,6 @@ ROUNDTRIP_CASES: dict[str, tp.Any] = {
     "NumpyArray": np.array([[1, 2], [3, 4]], dtype=np.int32),
     "Json": 42,
     "Auto": {"arr": np.array([1.0, 2.0, 3.0]), "count": 42, "nested": {"a": 1}},
-    "String": "test string",  # legacy DumperLoader subclass through DumpContext
 }
 
 
@@ -172,12 +171,13 @@ def test_handler_roundtrip(tmp_path: Path, cache_type: str) -> None:
     _compare(ctx.load(info), value)
 
 
-def test_memmap_array_shared_file(tmp_path: Path) -> None:
-    """Multiple MemmapArray dumps share the same .data file."""
+def test_memmap_array(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
     a1 = np.array([1, 2, 3], dtype=np.int64)
     a2 = np.arange(12, dtype=np.float64).reshape(3, 4)
     with ctx:
+        with pytest.raises(ValueError, match="no size"):
+            ctx.dump(np.array([]), cache_type="MemmapArray")
         info1 = ctx.dump(a1, cache_type="MemmapArray")
         info2 = ctx.dump(a2, cache_type="MemmapArray")
     assert info1["filename"] == info2["filename"]
@@ -350,12 +350,10 @@ def test_auto_pure_data(tmp_path: Path, value: tp.Any) -> None:
 
 
 @pytest.mark.parametrize(
-    "value,expected_type,has_warning",
+    "value,expected_type",
     [
-        (np.array([1.0, 2.0]), "MemmapArray", False),
-        ({"arr": np.array([1.0]), "x": 1}, "Auto", False),
-        (_Opaque(), "Pickle", True),
-        ({"obj": _Opaque(), "x": 1}, "Pickle", True),
+        (np.array([1.0, 2.0]), "MemmapArray"),
+        ({"arr": np.array([1.0]), "x": 1}, "Auto"),
     ],
 )
 @pytest.mark.parametrize("cache_type", [None, "Auto"])
@@ -363,43 +361,27 @@ def test_auto_dispatch(
     tmp_path: Path,
     value: tp.Any,
     expected_type: str,
-    has_warning: bool,
     cache_type: str | None,
 ) -> None:
-    """Auto routes values to the correct handler type."""
     ctx = DumpContext(tmp_path, key="test")
     with ctx:
-        if has_warning:
-            with pytest.warns(DeprecationWarning):
-                info = ctx.dump(value, cache_type=cache_type)
-        else:
-            info = ctx.dump(value, cache_type=cache_type)
+        info = ctx.dump(value, cache_type=cache_type)
     assert info["#type"] == expected_type
 
 
-def test_datadict_legacy_load(tmp_path: Path) -> None:
-    """Verify Auto can load old DataDict format (via alias)."""
-    from exca.dumperloader import MemmapArrayFile
-    from exca.dumperloader import Pickle as LegacyPickle
+@pytest.mark.parametrize("cache_type", [None, "Auto"])
+def test_auto_rejects_unregistered(tmp_path: Path, cache_type: str | None) -> None:
+    ctx = DumpContext(tmp_path, key="test")
+    with ctx, pytest.raises(TypeError, match="not JSON-serializable"):
+        ctx.dump(_Opaque(), cache_type=cache_type)
 
-    ctx = DumpContext(tmp_path)
-    arr = np.array([1.0, 2.0], dtype=np.float64)
-    loader = MemmapArrayFile(tmp_path)
-    with loader.open():
-        arr_info = loader.dump("test", arr)
-    pkl_data = {"x": 42}
-    LegacyPickle.static_dump(tmp_path / "test-legacy.pkl", pkl_data)
-    legacy_info = {
-        "#type": "DataDict",
-        "optimized": {
-            "arr": {"cls": "MemmapArrayFile", "info": arr_info},
-        },
-        "pickled": {"filename": "test-legacy.pkl"},
-    }
-    loaded = ctx.load(legacy_info)
-    assert isinstance(loaded, dict)
-    np.testing.assert_array_almost_equal(loaded["arr"], arr)
-    assert loaded["x"] == 42
+
+def test_auto_pickle_accepts_unregistered(tmp_path: Path) -> None:
+    ctx = DumpContext(tmp_path, key="test")
+    with ctx:
+        info = ctx.dump(_Opaque(), cache_type="AutoPickle")
+    assert info["#type"] == "Pickle"
+    assert isinstance(ctx.load(info), _Opaque)
 
 
 # =============================================================================
@@ -442,6 +424,16 @@ def test_cached_and_invalidate(tmp_path: Path) -> None:
     ctx.invalidate("k")
     assert ctx.cached("k", factory) == "value"
     assert len(calls) == 2
+
+
+def test_resource_cache_limit_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", "1")
+    ctx = DumpContext(tmp_path)
+    assert ctx.cached("first", lambda: 1) == 1
+    assert ctx.cached("second", lambda: 2) == 2
+    assert ctx.cached("first", lambda: 3) == 3
 
 
 @DumpContext.register

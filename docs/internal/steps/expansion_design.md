@@ -48,8 +48,7 @@ class StudyLoader(Step):
 - **Auto-execute**: When used standalone, `run()` detects the resolution, and delegates
   to the returned Step/Chain.
 
-- **Chain resolution**: When this step appears inside a larger Chain, `with_input()` resolves
-  it so the built chain integrates into the parent chain.
+- **Chain resolution**: When this step appears inside a larger Chain, dispatch resolves it so the built chain integrates into the parent chain.
 
 - **UID consistency**: `_exca_uid_dict_override` on Step exports the resolution,
   so `StudyLoader(transforms=[T1])` and `Chain([StudyLoader(), T1])`
@@ -94,11 +93,9 @@ if built is not self:
     return built.run(value)
 ```
 
-### 4. Resolution in `Chain.with_input()`
+### 4. Resolution during dispatch
 
-A helper `_resolve_all()` resolves compound steps before serialization. This is the single
-resolution point; `_init()`, `_step_sequence()`, `_run()` stay untouched. Stripped copies
-return `self` from `_resolve_step()`, so re-resolution is a no-op.
+`Step._dispatch()` calls `resolved_step()` before routing work. Stripped copies return `self` from `_resolve_step()`, so re-resolution is a no-op.
 
 ### 5. UID consistency via `_exca_uid_dict_override`
 
