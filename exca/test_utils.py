@@ -681,11 +681,18 @@ def test_setup_shared_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     fp = root / "file"
     fp.touch()
     fp.chmod(0o600)
+    read_only = root / "read_only"
+    read_only.touch()
+    read_only.chmod(0o400)
     monkeypatch.setattr(utils, "_current_umask", lambda: 0o077)
-    monkeypatch.setattr(utils.shutil, "which", lambda _: None)
+    which = utils.shutil.which
+    monkeypatch.setattr(
+        utils.shutil, "which", lambda name: None if name == "setfacl" else which(name)
+    )
     with pytest.warns(UserWarning, match="umask 002"):
         utils.setup_shared_folder(root)
     assert stat.S_IMODE(fp.stat().st_mode) == 0o660
+    assert stat.S_IMODE(read_only.stat().st_mode) == 0o440
 
 
 @pytest.mark.parametrize(

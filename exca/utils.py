@@ -13,6 +13,7 @@ import itertools
 import logging
 import math
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -79,40 +80,61 @@ def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> N
     """
     root = Path(folder).resolve()
     shared_mask = _current_umask() & 0o007
-    directories: list[Path] = []
-    for path in itertools.chain((root,), root.rglob("*")):
-        if path.is_symlink():
-            continue
-        try:
-            if group is not None:
-                shutil.chown(path, group=group)
-            is_directory = path.is_dir()
-            mode = _widened_mode(path, shared_mask)
-            if is_directory:
-                mode |= stat.S_ISGID
-            path.chmod(mode)
-            if is_directory:
-                directories.append(path)
-        except (PermissionError, FileNotFoundError):
-            pass
-    if not directories:
-        return
+    supports_setgid = not subprocess.run(
+        ["chmod", "g+s", str(root)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode
+    branches: list[str] = []
+    if group is not None:
+        group_name = shlex.quote(str(group))
+        script = shlex.quote(
+            'group=$1; mode=$2; shift 2; chgrp "$group" "$@"; status=$?; '
+            'chmod "$mode" "$@" || status=$?; exit "$status"'
+        )
+        repair = f"-exec sh -c {script} sh {group_name}"
+        mode = "g+u,g+s" if supports_setgid else "g+u"
+        branches.append(f"-type d ! -group {group_name} {repair} {mode} {{}} +")
+        branches.append(f"! -type d ! -group {group_name} {repair} g+u {{}} +")
+    branches.append("-exec chmod g+u {} +")
+    for mask, bit, change in (
+        (0o004, 0o400, "o+r"),
+        (0o002, 0o200, "o+w"),
+        (0o001, 0o100, "o+x"),
+    ):
+        if not shared_mask & mask:
+            branches.append(f"-perm -{bit:o} -exec chmod {change} {{}} +")
+    if supports_setgid:
+        branches.append("-type d ! -perm -2000 -exec chmod g+s {} +")
+
     setfacl = shutil.which("setfacl")
     if setfacl is not None:
-        try:
-            for start in range(0, len(directories), 32):
-                batch = directories[start : start + 32]
-                paths = [str(path) for path in batch]
-                command = [setfacl, "-m", "d:g::rwx,d:m::rwx", *paths]
-                subprocess.run(command, check=True, capture_output=True)
-            return
-        except (OSError, subprocess.CalledProcessError):
-            pass
-    warnings.warn(
-        f"Future files under {root} may not be writable by teammates; "
-        "run 'umask 002' in the shell before launching jobs that write there",
-        stacklevel=2,
+        acl = "d:g::rwx,d:m::rwx"
+        probe = subprocess.run(
+            [setfacl, "-m", acl, str(root)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if probe.returncode:
+            setfacl = None
+        else:
+            setfacl_command = shlex.quote(setfacl)
+            branches.append(f"-type d -exec {setfacl_command} -m {acl} {{}} +")
+
+    expression = " -false -o ".join(branches)
+    command = shlex.split(
+        f"find -P {shlex.quote(str(root))} -user {os.getuid()} ! -type l "
+        f"\\( {expression} -false \\)"
     )
+    result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if result.returncode:
+        warnings.warn(f"Some permission updates failed under {root}", stacklevel=2)
+    if setfacl is None or result.returncode:
+        warnings.warn(
+            f"Future files under {root} may not be writable by teammates; "
+            "run 'umask 002' in the shell before launching jobs that write there",
+            stacklevel=2,
+        )
 
 
 def widen_to_umask(folder: Path | str) -> None:
