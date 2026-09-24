@@ -127,8 +127,8 @@ class Parallel(Step):
 
     The variants run together under one shared backend, each caching under its
     own identity. ``run`` is for effect — read results back per variant via
-    ``parallel.steps[k].lookup(value)``. It has no composable output (yields
-    ``None`` per input), so use it standalone, not as a non-terminal chain step.
+    ``parallel.steps[k].lookup(value)``. It has no composable output, so it
+    cannot be a ``Chain`` step — run it standalone.
 
     Example::
 
@@ -179,9 +179,6 @@ class Parallel(Step):
                     f"steps; {self.infra!r} differs from {step.infra!r}"
                 )
 
-    def _uid_steps(self) -> list[Step]:
-        return []  # no identity of its own
-
     def lookup(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:
         raise TypeError(
             "Parallel has no cache of its own; look up a variant instead, "
@@ -189,7 +186,10 @@ class Parallel(Step):
         )
 
     def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        return self._run_items(batch)  # not infra._run(self): dispatch variants
+        raise TypeError(
+            "Parallel has no composable output, so it cannot be a Chain step; "
+            "call run or run_many directly"
+        )
 
     def _run_items(self, batch: items.StepItems) -> items.StepItems:
         assert self.infra is not None
@@ -199,10 +199,11 @@ class Parallel(Step):
                 f"a step), got {self.infra!r}"
             )
         cbatches = []
-        for child in self.steps:
-            uids = [identity.materialize_uid(child, v) for v in batch]
+        for variant in self.steps:
+            resolved = utils.resolved_step(variant)
+            uids = [identity.materialize_uid(resolved, v) for v in batch]
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
-            cbatches.append(self.infra._prepare(child, child_batch))
+            cbatches.append(self.infra._prepare(resolved, child_batch))
         with self.infra._claim(cbatches) as claimed:
             if claimed.ready:
                 self.infra._execute(claimed.ready)
@@ -220,5 +221,5 @@ class Parallel(Step):
         values = list(values)
         uids = [identity.materialize_uid(self, v) for v in values]
         batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
-        self._dispatch(batch)
+        self._run_items(batch)
         return [None] * len(values)

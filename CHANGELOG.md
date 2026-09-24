@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
+[breaking]
+
+- `CacheDict`: deletions require a `write()` context (like writes). [#326]
+- `DumpContext.shared_file`: content suffixes must start with `.`. [#326]
+- `steps`: `Parallel` cannot be a `Chain` step; call it directly. [#328, #329]
+
+[other]
+
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
 - Cache files are no longer forced to `0o777` but follow your umask: set `umask 002`, and call `exca.utils.setup_shared_folder(folder)` once on a cache root shared with others (`infra.permissions` is deprecated and ignored). [#324]
+- `steps`: all backends now claim items in the inflight registry, deduplicating cached dispatches made inside workers. [#330]
 
 
 ## 0.5.29 - 26-07-28

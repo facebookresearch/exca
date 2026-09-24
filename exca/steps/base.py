@@ -298,12 +298,10 @@ class Step(exca.helpers.DiscriminatedModel):
         return paths
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
-        if "has_resolve" not in self._step_flags:
-            return None
         built = utils.resolved_step(self)
         if built is self:
             return None
-        return built._exca_uid_dict_override()
+        return exca.utils.ConfigExporter(uid=True, exclude_defaults=True).apply(built)
 
     def lookup(
         self,

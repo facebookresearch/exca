@@ -51,8 +51,8 @@ class StudyLoader(Step):
 - **Chain resolution**: When this step appears inside a larger Chain, `with_input()` resolves
   it so the built chain integrates into the parent chain.
 
-- **UID consistency**: `_exca_uid_dict_override` on Step delegates to the resolved Chain
-  representation, so `StudyLoader(transforms=[T1])` and `Chain([StudyLoader(), T1])`
+- **UID consistency**: `_exca_uid_dict_override` on Step exports the resolution,
+  so `StudyLoader(transforms=[T1])` and `Chain([StudyLoader(), T1])`
   produce the same UID.
 
 ### How caching works
@@ -103,6 +103,8 @@ return `self` from `_resolve_step()`, so re-resolution is a no-op.
 ### 5. UID consistency via `_exca_uid_dict_override`
 
 `utils.py` is updated to support `None` return (opt-out). Step's override:
-- Fast path `None` if `"has_resolve"` not in `_step_flags`
 - `None` if `_resolve_step()` returns `self`
-- Otherwise delegates to the returned Step's `_exca_uid_dict_override()`
+- Otherwise the resolution's uid export
+
+`ConfigExporter` applies overrides recursively: nested resolutions affect cache
+keys and `uid.yaml`; `full-uid.yaml`/`config.yaml` retain declared configs.

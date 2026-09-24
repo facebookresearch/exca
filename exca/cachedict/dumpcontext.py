@@ -210,14 +210,15 @@ class DumpContext:
         """Open a shared file for appending. Returns (handle, relative_name).
         Content files go under DATA_DIR/; info files (-info.jsonl)
         stay in the root folder. Reused across calls with the same suffix."""
-        if "." not in suffix:
-            raise ValueError(f"suffix must contain '.', got {suffix!r}")
+        is_info = suffix == self.INFO_SUFFIX
+        if not is_info and not suffix.startswith("."):
+            msg = f"suffix must start with '.' to be reclaimable, got {suffix!r}"
+            raise ValueError(msg)
         if self._stack is None:
             raise RuntimeError("DumpContext must be used as a context manager for writes")
         if threading.get_native_id() != self._thread_id:
             raise RuntimeError("DumpContext must not be shared across threads")
         basename = f"{self._prefix}{suffix}"
-        is_info = suffix == self.INFO_SUFFIX
         name = basename if is_info else f"{self.DATA_DIR}/{basename}"
         if name not in self._files:
             path = self.folder / name

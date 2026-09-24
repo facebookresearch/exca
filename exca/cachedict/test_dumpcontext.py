@@ -110,6 +110,8 @@ def test_shared_file_lifecycle(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
     with pytest.raises(RuntimeError, match="context manager"):
         ctx.shared_file(".data")
+    with pytest.raises(ValueError, match="must start with"):
+        ctx.shared_file("-data.jsonl")
     with ctx:
         f1, name1 = ctx.shared_file(".data")
         f2, name2 = ctx.shared_file(".data")

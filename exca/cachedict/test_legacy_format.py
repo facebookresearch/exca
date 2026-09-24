@@ -141,7 +141,8 @@ def test_legacy_external_static_roundtrip(tmp_path: Path) -> None:
     assert set(cache.keys()) == {"key1", "key2"}
     assert cache["key1"] == {"a": 1, "b": [2, 3]}
     assert cache["key2"] == "hello"
-    del cache["key1"]
+    with cache.write():
+        del cache["key1"]
     assert set(cache.keys()) == {"key2"}
     cache2: cd.CacheDict[tp.Any] = cd.CacheDict(folder=tmp_path)
     assert set(cache2.keys()) == {"key2"}
@@ -189,7 +190,8 @@ def test_mixed_old_and_new_format(tmp_path: Path) -> None:
     assert cache2["multiline"] == "line1\nline2\nline3"
     assert cache2["extra"] == "new value"
     # Delete an old item, verify new items survive
-    del cache2["hello"]
+    with cache2.write():
+        del cache2["hello"]
     cache3: cd.CacheDict[tp.Any] = cd.CacheDict(folder=dst)
     assert set(cache3.keys()) == {"multiline", "extra"}
 

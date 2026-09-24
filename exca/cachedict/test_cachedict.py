@@ -60,7 +60,10 @@ def test_array_cache(tmp_path: Path, in_ram: bool) -> None:
     cache2 = cd.CacheDict(folder=folder)
     assert isinstance(cache2["blublu"], np.ndarray)
     # del
-    del cache2["blublu"]
+    with pytest.raises(RuntimeError, match=r"write\(\) context"):
+        del cache2["blublu"]
+    with cache2.write():
+        del cache2["blublu"]
     assert set(cache2.keys()) == {"blabla"}
     # clear
     cache2.clear()
@@ -115,6 +118,10 @@ def test_specialized_dump(
         cache_type = cache_type[:-2]
         memmap_cache_size = 0
     proc = psutil.Process()
+    try:
+        proc.open_files()
+    except (psutil.AccessDenied, PermissionError) as e:
+        pytest.skip(f"psutil cannot list open files: {e}")
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path,
         keep_in_ram=keep_in_ram,
@@ -194,7 +201,8 @@ def test_info_jsonl_deletion(tmp_path: Path) -> None:
             assert out.startswith(b"{") and out.endswith(b"}\n")
     # remove one
     chosen = np.random.choice(keys)
-    del cache[chosen]
+    with cache.write():
+        del cache[chosen]
     assert len(cache) == 2
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert len(cache) == 2
@@ -209,7 +217,8 @@ def test_info_jsonl_deletion_removes_duplicate_entries(tmp_path: Path) -> None:
 
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert cache["x"] == 12
-    del cache["x"]
+    with cache.write():
+        del cache["x"]
 
     cache = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     assert "x" not in cache
@@ -293,10 +302,17 @@ def test_clone_is_view_only(tmp_path: Path) -> None:
         assert revived["k"] == 7
 
 
-@pytest.mark.parametrize("cache_type", ["MemmapArrayFile", "String"])
-def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
+@pytest.mark.parametrize("read_before_delete", [False, True])
+@pytest.mark.parametrize("cache_type", ["MemmapArrayFile", "String", "Json"])
+def test_orphaned_data_file_cleanup(
+    tmp_path: Path, cache_type: str, read_before_delete: bool
+) -> None:
     """Test that orphaned data files are cleaned up when all items are deleted."""
-    data: tp.Any = np.random.rand(3, 12) if cache_type == "MemmapArrayFile" else "hello"
+    data: tp.Any = {
+        "MemmapArrayFile": np.random.rand(3, 12),
+        "String": "hello",
+        "Json": {"blob": "x" * 50_000},  # above MAX_INLINE_SIZE -> shared data file
+    }[cache_type]
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, cache_type=cache_type
     )
@@ -305,13 +321,20 @@ def test_orphaned_data_file_cleanup(tmp_path: Path, cache_type: str) -> None:
         for c in "abc":
             ex.submit(_write_items, cache, [f"{c}1", f"{c}2"], data)
     assert len(list(tmp_path.glob("*-info.jsonl"))) == 3
-    # Delete all items from one writer, files still exist (cleanup is lazy)
-    for key in ["a1", "a2", "c1", "b2"]:
-        del cache[key]
-    assert len(list(tmp_path.glob("*-info.jsonl"))) == 3
-    # Trigger cleanup via keys() - orphaned pair should be deleted
+    if read_before_delete:
+        assert len(set(cache.keys())) == 6
+    with cache.write():
+        for key in ["a1", "a2", "c1", "b2"]:
+            del cache[key]
+    remaining = list(tmp_path.glob("*-info.jsonl"))
+    assert len(remaining) == 2, (
+        f"leaving write() should drop the emptied pair {remaining}"
+    )
+    live = {p.name.removesuffix("-info.jsonl") for p in remaining}
+    data_files = (tmp_path / "data").glob("*")
+    stale = [p.name for p in data_files if p.name.split(".")[0] not in live]
+    assert not stale, f"data files outliving their info file {stale}"
     assert set(cache.keys()) == {"b1", "c2"}
-    assert len(list(tmp_path.glob("*-info.jsonl"))) == 2
 
 
 @pytest.mark.parametrize(
@@ -361,9 +384,8 @@ def test_jsonl_edge_cases(tmp_path: Path, content: str, should_delete: bool) -> 
     # Write and delete an item to trigger reader initialization for our test file
     with cache.write():
         cache["x"] = np.array([1])
-    del cache["x"]
-    # Trigger cleanup
-    _ = list(cache.keys())
+    with cache.write():
+        del cache["x"]
     # Check result
     for fp in [jsonl, data_file]:
         if should_delete:

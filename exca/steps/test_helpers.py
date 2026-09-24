@@ -165,6 +165,16 @@ def test_invalid_inputs_rejected(tmp_path: Path) -> None:
         _sweep(tmp_path).lookup(5.0)
 
 
+def test_rejected_as_chain_step(tmp_path: Path) -> None:
+    for steps in (
+        [_sweep(tmp_path)],
+        [_sweep(tmp_path), conftest.Add(value=100.0)],
+        [conftest.Add(value=100.0), _sweep(tmp_path)],
+    ):
+        with pytest.raises(TypeError, match="cannot be a Chain step"):
+            Chain(steps=steps).run_many([3.0])
+
+
 @pytest.mark.parametrize("folder_first", (True, False))
 def test_backend_on_steps_is_adopted_with_folder(
     tmp_path: Path, folder_first: bool
