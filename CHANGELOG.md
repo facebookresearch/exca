@@ -15,10 +15,6 @@
 - `DumpContext.shared_file`: content suffixes must start with `.`. [#326]
 - `steps`: `Parallel` cannot be a `Chain` step; call it directly. [#328, #329]
 
-## Other
-
-- `DiscriminatedModel`: optimized look-up. [#313]
-- `steps`: fixed nested infra claim deadlock. [#323]
 
 ## 0.5.29 - 26-07-28
 
