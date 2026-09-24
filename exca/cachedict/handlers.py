@@ -462,4 +462,5 @@ class AutoPickle(Auto):
             return info
 
 
+DumpContext.HANDLERS["MemmapArrayFile"] = MemmapArray  # deprecated
 DumpContext.TYPE_DEFAULTS[ContiguousMemmap] = ContiguousMemmapArray

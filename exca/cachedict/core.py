@@ -15,6 +15,7 @@ import os
 import shutil
 import threading
 import typing as tp
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -312,6 +313,16 @@ class CacheDict(tp.Generic[X]):
                         self._read_info_files(force=True)  # sweep emptied jsonl pairs
                     except Exception as e:  # must not mask the body's exception
                         logger.warning("Failed to sweep %s: %s", self.folder, e)
+
+    @contextlib.contextmanager
+    def writer(self) -> tp.Iterator["CacheDict[X]"]:  # deprecated
+        warnings.warn(
+            "writer() is deprecated, use write() instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        with self.write():
+            yield self
 
     def __setitem__(self, key: str, value: X) -> None:
         if not isinstance(key, str):
