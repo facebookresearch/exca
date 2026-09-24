@@ -15,6 +15,7 @@ import math
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -68,7 +69,8 @@ def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> N
 
     - directories get set-group-id, so the kernel applies the group to
       everything created underneath, which the umask cannot do on its own
-    - modes are widened up to the umask (:func:`widen_to_umask`)
+    - owner access is mirrored to the group; other access follows the umask
+    - default ACLs preserve group access independently of future umasks
     - paths owned by another user are skipped: only their owner may change them
     - symbolic links below *folder* are skipped
 
@@ -81,20 +83,52 @@ def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> N
     group: str | int | None
         group to assign, eg. when your primary group is not the shared one
     """
+    if isinstance(group, str):
+        import grp
+
+        group = grp.getgrnam(group).gr_gid
     mask = _current_umask()
     root = Path(folder).resolve()
+    acl_folders: list[Path] = []
     for path in itertools.chain([root], root.rglob("*")):
         if path.is_symlink():
             continue
         try:
             if group is not None:
                 shutil.chown(path, group=group)
-            mode = _widened(path, mask)
-            if path.is_dir():
+            is_dir = path.is_dir()
+            mode = _widened(path, mask & 0o007)
+            if is_dir:
                 mode |= stat.S_ISGID
             path.chmod(mode)
+            if is_dir:
+                acl_folders.append(path)
         except (PermissionError, FileNotFoundError):
             pass
+    if not acl_folders:
+        return
+    command = shutil.which("setfacl")
+    if command is not None:
+        try:
+            for start in range(0, len(acl_folders), 32):
+                subprocess.run(
+                    [
+                        command,
+                        "-m",
+                        "d:g::rwx,d:m::rwx",
+                        *(str(x) for x in acl_folders[start : start + 32]),
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+            return
+        except (OSError, subprocess.CalledProcessError):
+            pass
+    warnings.warn(
+        f"Future files under {root} may not be writable by teammates; "
+        "run 'umask 002' in the shell before launching jobs that write there",
+        stacklevel=2,
+    )
 
 
 def widen_to_umask(folder: Path | str) -> None:

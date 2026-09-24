@@ -675,6 +675,19 @@ def test_pool_executor_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     ex.shutdown()
 
 
+def test_setup_shared_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "shared"
+    root.mkdir()
+    fp = root / "file"
+    fp.touch()
+    fp.chmod(0o600)
+    monkeypatch.setattr(utils, "_current_umask", lambda: 0o077)
+    monkeypatch.setattr(utils.shutil, "which", lambda _: None)
+    with pytest.warns(UserWarning, match="umask 002"):
+        utils.setup_shared_folder(root)
+    assert stat.S_IMODE(fp.stat().st_mode) == 0o660
+
+
 @pytest.mark.parametrize(
     "mode,mask,expected",
     [

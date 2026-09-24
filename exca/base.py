@@ -197,8 +197,8 @@ class BaseInfra(pydantic.BaseModel):
         super().model_post_init(log__)
         if "permissions" in self.model_fields_set:
             warnings.warn(
-                "'permissions' is deprecated and ignored: modes follow the umask "
-                "(see exca.utils.setup_shared_folder for shared caches)",
+                "'permissions' is deprecated and ignored: modes follow default ACLs "
+                "or the umask (see exca.utils.setup_shared_folder for shared caches)",
                 DeprecationWarning,
             )
         if ".." in Path(self.version).parts:
