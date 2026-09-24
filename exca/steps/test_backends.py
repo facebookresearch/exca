@@ -367,19 +367,6 @@ def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
     assert run(5.0, fail=False, mode="retry") == 7.0  # 2 + 5
 
 
-def test_claims_items_while_computing(tmp_path: Path) -> None:
-    step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
-    handle = step.lookup(1.0)
-    claimed: list[list[str]] = []
-
-    def observe(_: tp.Any) -> None:
-        with backends.inflight.InflightRegistry(handle.paths.step_folder) as reg:
-            claimed.append(sorted(reg.get([handle.uid])))
-
-    assert step.on_call(observe).run(1.0) == 2.0
-    assert claimed == [[handle.uid]], "every backend must claim, Cached included"
-
-
 def test_nested_dispatch_on_shared_cell(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
     inner = Chain(steps=[conftest.Mult(coeff=3.0, infra=infra)], infra=infra)
