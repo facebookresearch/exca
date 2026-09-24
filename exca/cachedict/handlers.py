@@ -126,20 +126,8 @@ class TorchTensor:
     def __load_from_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> tp.Any:
         import torch
 
-        if kwargs.get("dtype") is None:
-            # deprecated: legacy entries saved via torch.save
-            return torch.load(
-                ctx.folder / kwargs["filename"], map_location="cpu", weights_only=True
-            )  # type: ignore
         arr = MemmapArray.__load_from_info__(ctx, **kwargs)
         return torch.from_numpy(arr.copy())
-
-    @classmethod
-    def __delete_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> None:
-        if kwargs.get("dtype") is None:
-            # deprecated: legacy entries saved via torch.save
-            with utils.fast_unlink(ctx.folder / kwargs["filename"], missing_ok=True):
-                pass
 
 
 # =============================================================================
@@ -314,27 +302,24 @@ class MneRawBrainVision:
 
 
 # =============================================================================
-# Auto (universal handler, replaces DataDict)
+# Auto
 # =============================================================================
 
 
 @DumpContext.register(default_for=dict)
 class Auto:
     """Universal handler: recursively walks dicts/lists, dispatches registered
-    types to their handlers, and serializes the result via Json.  Falls back
-    to Pickle (with DeprecationWarning) when the result is not JSON-serializable.
+    types to their handlers, and serializes the result via Json.
 
     Info dict shapes:
-    - promoted:   {"#type": "Json"|"Pickle", ...}  — pure data, Auto adds no value
+    - promoted:   {"#type": "Json", ...}           — pure data, Auto adds no value
     - delegated:  {"#type": "MemmapArray"|..., ...} — single non-container value
     - inline:     {"content": <data>}               — mixed, small enough for inline
-    - shared:     {"content": {"#type": "Json"|"Pickle", ...}} — mixed, offloaded
+    - shared:     {"content": {"#type": "Json", ...}} — mixed, offloaded
 
     Note: ``#type`` is reserved in user dicts. If a dict contains a ``#type``
     key whose value is a registered handler, it is treated as a handler
-    reference. Non-handler ``#type`` values raise ``ValueError``.
-
-    Also loads legacy DataDict format (optimized/pickled)."""
+    reference. Non-handler ``#type`` values raise ``ValueError``."""
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
@@ -352,22 +337,9 @@ class Auto:
 
     @classmethod
     def _wrap(cls, ctx: DumpContext, result: tp.Any) -> dict[str, tp.Any]:
-        """Serialize processed result to a storage backend (Json or Pickle)."""
-        try:
-            info = Json.__dump_info__(ctx, result)
-            info["#type"] = "Json"
-            return info
-        except TypeError:
-            warnings.warn(
-                "Auto: result is not JSON-serializable, falling back to Pickle "
-                "(deprecated). Register handlers for non-JSON types or use "
-                "cache_type='AutoPickle'.",
-                DeprecationWarning,
-                stacklevel=5,
-            )
-            info = Pickle.__dump_info__(ctx, result)
-            info["#type"] = "Pickle"
-            return info
+        info = Json.__dump_info__(ctx, result)
+        info["#type"] = "Json"
+        return info
 
     @classmethod
     def _dump_value(cls, ctx: DumpContext, val: tp.Any, key: str) -> tp.Any:
@@ -394,8 +366,6 @@ class Auto:
 
     @classmethod
     def __load_from_info__(cls, ctx: DumpContext, **info: tp.Any) -> tp.Any:
-        if "optimized" in info or "pickled" in info:
-            return cls._load_legacy(ctx, info)
         content = info["content"]
         if isinstance(content, dict) and "#type" in content:
             data = ctx.load(content)
@@ -429,19 +399,6 @@ class Auto:
         if isinstance(val, list):
             return [cls._load_value(ctx, item) for item in val]
         return val
-
-    @classmethod
-    def _load_legacy(cls, ctx: DumpContext, info: dict[str, tp.Any]) -> dict[str, tp.Any]:
-        output: dict[str, tp.Any] = {}
-        for key, entry in info.get("optimized", {}).items():
-            entry_info = dict(entry["info"])
-            entry_info["#type"] = entry["cls"]
-            output[key] = ctx.load(entry_info)
-        if info.get("pickled"):
-            pickled = dict(info["pickled"])
-            pickled["#type"] = "Pickle"
-            output.update(ctx.load(pickled))
-        return output
 
 
 # =============================================================================
@@ -505,6 +462,4 @@ class AutoPickle(Auto):
             return info
 
 
-# Backward-compatible alias for released JSONL files
-DumpContext.HANDLERS["MemmapArrayFile"] = MemmapArray
 DumpContext.TYPE_DEFAULTS[ContiguousMemmap] = ContiguousMemmapArray

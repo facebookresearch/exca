@@ -5,6 +5,7 @@
 [breaking]
 
 - `CacheDict`: deletions require a `write()` context (like writes). [#326]
+- Removed deprecated compatibility paths: `CacheDict.writer()`, `CacheDictWriter`, `Step.with_input()`, `DumperLoader`, old handler names, `metadata=` JSONL, legacy `Auto` (`optimized`/`pickled`), `torch.save` tensor entries, and implicit `Auto` pickle fallback (use `AutoPickle`).
 - `DumpContext.shared_file`: content suffixes must start with `.`. [#326]
 - `steps`: `Parallel` cannot be a `Chain` step; call it directly. [#328, #329]
 

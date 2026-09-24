@@ -24,12 +24,9 @@ import socket
 import sys
 import threading
 import typing as tp
-import warnings
 from pathlib import Path
 
 import orjson
-
-from exca.dumperloader import DumperLoader
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +102,9 @@ class DumpContext:
     """Central orchestrator for serialization lifecycle.
 
     Manages shared file handles (write side), resource cache (read side),
-    and dispatches to both new-style handlers and legacy DumperLoaders.
+    and dispatches to registered handlers.
     """
 
-    # New-style handler registries (separate from DumperLoader.CLASSES)
     HANDLERS: dict[str, tp.Any] = {}
     TYPE_DEFAULTS: dict[type, tp.Any] = {}
     DATA_DIR = "data"
@@ -132,7 +128,6 @@ class DumpContext:
         # read-side cache (per-thread, fork-safe via _get_store)
         self._resource_cache: threading.local = threading.local()
         self._max_cache = int(os.environ.get("EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE", 100_000))
-        self._loaders: dict[type, DumperLoader] = {}  # legacy DumperLoader instances
 
     # -- Registration --
 
@@ -279,23 +274,10 @@ class DumpContext:
 
     @classmethod
     def _find_handler(cls, type_: type) -> tp.Any | None:
-        """Find a registered handler for a type, or None.
-        Checks TYPE_DEFAULTS first, then DumperLoader.DEFAULTS (legacy)."""
         _ensure_optional_defaults()
         try:
             for supported, handler in cls.TYPE_DEFAULTS.items():
                 if issubclass(type_, supported):
-                    return handler
-            for supported, handler in DumperLoader.DEFAULTS.items():
-                if issubclass(type_, supported):
-                    warnings.warn(
-                        f"Type {type_.__name__} matched via DumperLoader.DEFAULTS "
-                        f"(handler {handler.__name__}). Register a new-style handler "
-                        "with @DumpContext.register(default_for=...) instead; "
-                        "see docs/infra/serialization.md.",
-                        DeprecationWarning,
-                        stacklevel=3,
-                    )
                     return handler
         except TypeError:
             pass
@@ -326,11 +308,7 @@ class DumpContext:
 
     @staticmethod
     def _lookup(name: str) -> tp.Any:
-        """Look up a handler by name: HANDLERS first, then DumperLoader.CLASSES."""
-        cls = DumpContext.HANDLERS.get(name)
-        if cls is not None:
-            return cls
-        return DumperLoader.CLASSES[name]
+        return DumpContext.HANDLERS[name]
 
     def dump(self, value: tp.Any, *, cache_type: str | None = None) -> dict[str, tp.Any]:
         """Serialize a sub-value. Returns an info dict tagged with #type.
@@ -345,7 +323,8 @@ class DumpContext:
         ctx.level = self.level + 1
         if cache_type is not None:
             cls: tp.Any = self._lookup(cache_type)
-            info, type_name = ctx._dump_cls(cls, value)
+            info = cls.__dump_info__(ctx, value)
+            type_name = cls.__name__
         elif hasattr(value, "__dump_info__"):
             info = value.__dump_info__(ctx)
             type_name = type(value).__name__
@@ -356,7 +335,8 @@ class DumpContext:
             replacement = self.options.replace.get(cls.__name__)
             if replacement is not None:
                 cls = self._lookup(replacement)
-            info, type_name = ctx._dump_cls(cls, value)
+            info = cls.__dump_info__(ctx, value)
+            type_name = cls.__name__
         if "#key" in info:
             raise ValueError(
                 "__dump_info__ must not return '#key'; it is set by DumpContext"
@@ -372,45 +352,6 @@ class DumpContext:
                 )
         return info
 
-    def _dump_cls(self, cls: tp.Any, value: tp.Any) -> tuple[dict[str, tp.Any], str]:
-        """Dispatch to a registered class, handling both new-style handlers
-        and legacy DumperLoader subclasses."""
-        if isinstance(cls, type) and issubclass(cls, DumperLoader):
-            if self._stack is None:
-                raise RuntimeError(
-                    "DumpContext must be used as a context manager for writes"
-                )
-            if cls not in self._loaders:
-                warnings.warn(
-                    f"Writing via legacy DumperLoader {cls.__name__!r} is deprecated. "
-                    "Migrate to a @DumpContext.register handler; "
-                    "see docs/infra/serialization.md.",
-                    DeprecationWarning,
-                    stacklevel=3,
-                )
-                loader = cls(self.folder)
-                self._stack.enter_context(loader.open())
-                self._loaders[cls] = loader
-            if not self.key:
-                raise RuntimeError(
-                    "ctx.key must be set before dumping with a legacy DumperLoader"
-                )
-            info = self._loaders[cls].dump(self.key, value)
-            self._track_legacy_files(info)
-        else:
-            info = cls.__dump_info__(self, value)
-        return info, cls.__name__
-
-    def _track_legacy_files(self, info: tp.Any) -> None:
-        """Record files from legacy DumperLoader info dicts for permission setting.
-        New-style handlers track files at creation (keyed_filepath / shared_file)."""
-        if isinstance(info, dict):
-            if "filename" in info:
-                self._created_files.append(self.folder / info["filename"])
-            for val in info.values():
-                if isinstance(val, dict):
-                    self._track_legacy_files(val)
-
     def _resolve_type(self, info: dict[str, tp.Any]) -> tuple[tp.Any, dict[str, tp.Any]]:
         """Extract #type and #key from an info dict, return (cls, remaining_info).
         Applies ``options.replace`` before handler lookup."""
@@ -425,10 +366,6 @@ class DumpContext:
         if not isinstance(info, dict) or "#type" not in info:
             return info
         cls, info = self._resolve_type(info)
-        if isinstance(cls, type) and issubclass(cls, DumperLoader):
-            if cls not in self._loaders:
-                self._loaders[cls] = cls(self.folder)
-            return self._loaders[cls].load(**info)
         return cls.__load_from_info__(self, **info)
 
     def delete(self, info: tp.Any) -> None:

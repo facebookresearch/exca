@@ -45,9 +45,7 @@ Data files live in a `data/` subdirectory; info files stay in the cache root.
 `Auto` is the default when no specific handler matches. It recursively walks
 containers (dicts, lists, tuples), dispatches recognized types (e.g. numpy
 arrays) to their handlers, and serializes the remaining data via `Json`.
-If the result is not JSON-serializable, `Auto` currently falls back to
-`Pickle` with a deprecation warning. This fallback will eventually be removed;
-use `AutoPickle` explicitly if you need pickle support going forward.
+Use `AutoPickle` explicitly when the remaining data is not JSON-serializable.
 
 You can force a specific handler via `cache_type`:
 
@@ -189,13 +187,6 @@ Info dicts must not contain `#type` or `#key` — these are set by
 `DumpContext` automatically. Returning them from `__dump_info__` raises
 `ValueError`.
 
-## Backward compatibility
+## File paths
 
-`CacheDict` transparently reads caches written by older versions:
-
-- **Old JSONL format** (with `metadata=` header) is detected and parsed.
-- **Old handler names** (e.g. `MemmapArrayFile`) are aliased to current handlers.
-- **Old DataDict format** (`optimized`/`pickled` structure) is loaded via
-  a legacy path in the `Auto` handler.
-- **Flat file layout** (no `data/` subdirectory) is loaded correctly since
-  info dicts store relative paths.
+Info dicts store relative paths, so handlers can load files outside the `data/` subdirectory.

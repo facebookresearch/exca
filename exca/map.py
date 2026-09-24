@@ -207,17 +207,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             fields that must be removed from the uid of the cache (in addition to
             the ones already removed from the class uid)
         cache_type: str
-            name of the cache class to use (inferred by default)
-            this can for instance be used to enforce eg a memmap instead of loading arrays
-            The available options include:
-            - :code:`NumpyArray`:  stores numpy arrays as npy files (default for np.ndarray)
-            - :code:`NumpyMemmapArray`: similar to NumpyArray but reloads arrays as memmaps
-            - :code:`MemmapArrayFile`: stores multiple np.ndarray into a unique memmap file
-              (strongly advised in case of many arrays)
-            - :code:`PandasDataFrame`: stores pandas dataframes as csv (default for dataframes)
-            - :code:`ParquetPandasDataFrame`: stores pandas dataframes as parquet files
-            - :code:`TorchTensor`: stores torch.Tensor as .pt file (default for tensors)
-            - :code:`Pickle`: stores object as pickle file (fallback default)
+            serialization handler passed to :class:`CacheDict`
 
         Usage
         -----

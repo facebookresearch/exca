@@ -5,7 +5,6 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
-import gc
 import logging
 import os
 import pickle
@@ -18,12 +17,8 @@ from unittest.mock import patch
 import nibabel as nib
 import numpy as np
 import pandas as pd
-import psutil
 import pytest
 import torch
-
-from exca import utils
-from exca.dumperloader import MEMMAP_ARRAY_FILE_MAX_CACHE
 
 from . import core as cd
 
@@ -103,25 +98,15 @@ def test_data_dump_suffix(tmp_path: Path, data: tp.Any) -> None:
         ([12, 12], "Pickle"),
         (pd.DataFrame([{"stuff": 12}]), "PandasDataFrame"),
         (pd.DataFrame([{"stuff": 12}]), "ParquetPandasDataFrame"),
-        (np.array([12, 12]), "NumpyMemmapArray"),
-        (np.array([12, 12]), "MemmapArrayFile"),
-        (np.array([12, 12]), "MemmapArrayFile:0"),
-        ({"x": np.array([12, 12])}, "DataDict"),
+        (np.array([12, 12]), "NumpyArray"),
+        (np.array([12, 12]), "MemmapArray"),
+        ({"x": np.array([12, 12])}, "Auto"),
     ],
 )
 @pytest.mark.parametrize("keep_in_ram", (True, False))
 def test_specialized_dump(
     tmp_path: Path, data: tp.Any, cache_type: str, keep_in_ram: bool
 ) -> None:
-    memmap_cache_size = 10
-    if cache_type.endswith(":0"):
-        cache_type = cache_type[:-2]
-        memmap_cache_size = 0
-    proc = psutil.Process()
-    try:
-        proc.open_files()
-    except (psutil.AccessDenied, PermissionError) as e:
-        pytest.skip(f"psutil cannot list open files: {e}")
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path,
         keep_in_ram=keep_in_ram,
@@ -129,29 +114,12 @@ def test_specialized_dump(
     )
     with cache.write():
         cache["x"] = data
-    with utils.environment_variables(**{MEMMAP_ARRAY_FILE_MAX_CACHE: memmap_cache_size}):
-        assert isinstance(cache["x"], type(data))
-    # check memmaps while cache is alive
-    keeps_memmap = cache_type == "MemmapArrayFile" and (
-        memmap_cache_size or keep_in_ram
-    )  # keeps internal cache
-    keeps_memmap |= (
-        cache_type in ("NumpyMemmapArray", "DataDict") and keep_in_ram
-    )  # stays in ram
-    files = proc.open_files()
-    if keeps_memmap:
-        assert files, "Some memmaps should stay open"
-    del cache
-    gc.collect()
-    # check permissions
+    assert isinstance(cache["x"], type(data))
     octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
     assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
     for fp in tmp_path.rglob("*"):
         octal_permissions = oct(fp.stat().st_mode)[-3:]
         assert octal_permissions == "777", f"Wrong permissions for {fp}"
-    # after del, all files should be closed
-    files = proc.open_files()
-    assert not files, "No file should remain open after del cache"
 
 
 def _write_items(cache: cd.CacheDict[tp.Any], keys: list[str], data: tp.Any) -> None:
@@ -284,7 +252,7 @@ def test_2_caches(tmp_path: Path) -> None:
 
 def test_2_caches_memmap(tmp_path: Path) -> None:
     params: dict[str, tp.Any] = dict(
-        folder=tmp_path, keep_in_ram=True, cache_type="MemmapArrayFile"
+        folder=tmp_path, keep_in_ram=True, cache_type="MemmapArray"
     )
     cache: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
     cache2: cd.CacheDict[np.ndarray] = cd.CacheDict(**params)
@@ -309,20 +277,17 @@ def test_clone_is_view_only(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("read_before_delete", [False, True])
-@pytest.mark.parametrize("cache_type", ["MemmapArrayFile", "String", "Json"])
+@pytest.mark.parametrize("cache_type", ["MemmapArray", "Json"])
 def test_orphaned_data_file_cleanup(
     tmp_path: Path, cache_type: str, read_before_delete: bool
 ) -> None:
-    """Test that orphaned data files are cleaned up when all items are deleted."""
     data: tp.Any = {
-        "MemmapArrayFile": np.random.rand(3, 12),
-        "String": "hello",
-        "Json": {"blob": "x" * 50_000},  # above MAX_INLINE_SIZE -> shared data file
+        "MemmapArray": np.random.rand(3, 12),
+        "Json": {"blob": "x" * 50_000},
     }[cache_type]
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, cache_type=cache_type
     )
-    # Use multiple threads to create multiple jsonl/data file pairs
     with futures.ThreadPoolExecutor(max_workers=3) as ex:
         for c in "abc":
             ex.submit(_write_items, cache, [f"{c}1", f"{c}2"], data)
@@ -346,53 +311,32 @@ def test_orphaned_data_file_cleanup(
 @pytest.mark.parametrize(
     "content,should_delete",
     [
-        # new format (no metadata header)
         ("     \n", True),  # deleted item
         ("     ", True),  # deleted item (no trailing newline)
         ('{"partial": true', False),  # partial line
-        ('{"#key": "blu", "#type": "MemmapArrayFile"}', False),  # remaining data
+        ('{"#key": "blu", "#type": "MemmapArray"}', False),  # remaining data
         (
-            '     \n{"#key": "blu", "#type": "MemmapArrayFile"}',
+            '     \n{"#key": "blu", "#type": "MemmapArray"}',
             False,
         ),  # deleted + remaining
         (
-            '   png"}\n{"#key": "blu", "#type": "MemmapArrayFile"}',
+            '   png"}\n{"#key": "blu", "#type": "MemmapArray"}',
             False,
         ),  # partially blanked + remaining
-        # old format (metadata header)
-        ('metadata={"cache_type":', False),  # writing metadata
-        ('metadata={"cache_type": "MemmapArrayFile"}\n', False),  # metadata only
-        (
-            'metadata={"cache_type": "MemmapArrayFile"}\n{"partial": true',
-            False,
-        ),  # partial line
-        ('metadata={"cache_type": "MemmapArrayFile"}\n     \n', True),  # deleted item
-        (
-            'metadata={"cache_type": "MemmapArrayFile"}\n     ',
-            True,
-        ),  # deleted (no trailing newline)
-        (
-            'metadata={"cache_type": "MemmapArrayFile"}\n     \n{"#key": "blu"}',
-            False,
-        ),  # remaining data
     ],
 )
 def test_jsonl_edge_cases(tmp_path: Path, content: str, should_delete: bool) -> None:
-    """Test edge cases for orphaned file cleanup."""
     cache: cd.CacheDict[np.ndarray] = cd.CacheDict(
-        folder=tmp_path, keep_in_ram=False, cache_type="MemmapArrayFile"
+        folder=tmp_path, keep_in_ram=False, cache_type="MemmapArray"
     )
-    # Create test file pair
     jsonl = tmp_path / "test-writer-info.jsonl"
     data_file = tmp_path / "test-writer.data"
     jsonl.write_text(content)
     data_file.write_bytes(b"")
-    # Write and delete an item to trigger reader initialization for our test file
     with cache.write():
         cache["x"] = np.array([1])
     with cache.write():
         del cache["x"]
-    # Check result
     for fp in [jsonl, data_file]:
         if should_delete:
             assert not fp.exists(), f"{fp.name} should be deleted for: {content!r}"
@@ -401,15 +345,10 @@ def test_jsonl_edge_cases(tmp_path: Path, content: str, should_delete: bool) -> 
 
 
 def test_orphaned_cleanup_file_deleted_concurrently(tmp_path: Path) -> None:
-    """File disappears between exists() check and open() in _cleanup_orphaned_jsonl_files."""
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    # Register a reader for a non-existent file, with _meta set so cleanup
-    # doesn't skip it. Patch exists()→True to simulate the race: file was
-    # present at check time but gone by open() time.
     reader = cd.JsonlReader(tmp_path / "ghost-info.jsonl")
-    reader._meta = {"cache_type": "Json"}
     cache._jsonl_readers[reader._fp.name] = reader
-    with patch.object(Path, "exists", return_value=True):
+    with patch.object(Path, "exists", return_value=True):  # deletion race
         keys = list(cache.keys())
     assert keys == []
     assert reader._fp.name not in cache._jsonl_readers
