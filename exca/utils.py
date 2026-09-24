@@ -87,7 +87,7 @@ def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> N
             if group is not None:
                 shutil.chown(path, group=group)
             is_directory = path.is_dir()
-            mode = _widened(path, shared_mask)
+            mode = _widened_mode(path, shared_mask)
             if is_directory:
                 mode |= stat.S_ISGID
             path.chmod(mode)
@@ -100,7 +100,8 @@ def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> N
     setfacl = shutil.which("setfacl")
     if setfacl is not None:
         try:
-            for batch in itertools.batched(directories, 32):
+            for start in range(0, len(directories), 32):
+                batch = directories[start : start + 32]
                 paths = [str(path) for path in batch]
                 command = [setfacl, "-m", "d:g::rwx,d:m::rwx", *paths]
                 subprocess.run(command, check=True, capture_output=True)
@@ -119,10 +120,10 @@ def widen_to_umask(folder: Path | str) -> None:
     mask = _current_umask()
     root = Path(folder)
     for path in itertools.chain((root,), root.rglob("*")):
-        path.chmod(_widened(path, mask))
+        path.chmod(_widened_mode(path, mask))
 
 
-def _widened(path: Path, mask: int) -> int:
+def _widened_mode(path: Path, mask: int) -> int:
     """*path*'s mode with the owner's access bits mirrored to group and other."""
     mode = stat.S_IMODE(path.stat().st_mode)
     owner = (mode >> 6) & 0o7
