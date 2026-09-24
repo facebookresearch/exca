@@ -247,7 +247,7 @@ required for MapInfra parity or current step semantics.
 ### Safety Measures (from TaskInfra/MapInfra)
 
 - Config consistency checking (`identity.write_configs`)
-- Permissions on CacheDict (`permissions=0o777`)
+- Shared cache access follows the process umask
 - Force/retry one-shot tracking per Backend lifetime
 - Job lifecycle status — `LookupHandle.status` returns `"success"` /
   `"error"` / `"running"` / `None`

@@ -73,9 +73,8 @@ class AdvisoryRegistry:
     _SCHEMA: tp.ClassVar[str]  # passed to executescript(), multi-statement OK
     _LABEL: tp.ClassVar[str]  # short prefix in log messages
 
-    def __init__(self, folder: Path | str, permissions: int | None = 0o777) -> None:
+    def __init__(self, folder: Path | str) -> None:
         self.db_path = Path(folder) / self._DB_NAME
-        self.permissions = permissions
         self._conn: sqlite3.Connection | None = None
 
     def _connect(self, *, create: bool = False) -> sqlite3.Connection | None:
@@ -111,15 +110,6 @@ class AdvisoryRegistry:
         # WAL needs cross-host shared memory (broken on NFS) -> DELETE journal
         conn.execute("PRAGMA journal_mode=DELETE")
         conn.executescript(self._SCHEMA)
-        if self.permissions is not None:
-            try:
-                self.db_path.chmod(self.permissions)
-            except Exception:
-                logger.warning(
-                    "Failed to set permissions on %s",
-                    self.db_path,
-                    exc_info=True,
-                )
         self._conn = conn
         return conn
 

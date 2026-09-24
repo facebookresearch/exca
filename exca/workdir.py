@@ -18,6 +18,8 @@ from pathlib import Path
 import pydantic
 import yaml as _yaml
 
+from . import utils
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,6 +149,7 @@ class WorkDir(pydantic.BaseModel):
             if not out.exists():
                 if path.is_dir():
                     shutil.copytree(path, out, ignore=ignore)
+                    utils.widen_to_umask(out)  # copytree replicates source modes
                 else:
                     out.parent.mkdir(exist_ok=True, parents=True)
                     shutil.copyfile(path, out, follow_symlinks=True)

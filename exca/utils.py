@@ -9,11 +9,15 @@ import contextlib
 import copy
 import difflib
 import hashlib
+import itertools
 import logging
 import math
 import os
 import shutil
+import stat
+import subprocess
 import sys
+import tempfile
 import time
 import typing as tp
 import uuid
@@ -38,6 +42,15 @@ T = tp.TypeVar("T", bound=pydantic.BaseModel)
 X = tp.TypeVar("X")
 
 
+def _current_umask() -> int:
+    """Read the process umask without changing it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "probe"
+        probe.mkdir()
+        mode = stat.S_IMODE(probe.stat().st_mode)
+    return 0o777 & ~mode
+
+
 def best_effort_utime(folder: Path) -> None:
     """Advance *folder*'s mtime, tolerating EPERM on foreign-owned directories."""
     # dir mtime unchanged on file-append → must stamp explicitly
@@ -52,31 +65,73 @@ def best_effort_utime(folder: Path) -> None:
             pass
 
 
-def mkdir_with_permissions(
-    folder: Path | str,
-    permissions: int | None,
-    *,
-    root: Path | str,
-) -> None:
-    """Create a folder and chmod its directory chain within a root."""
-    root_path = Path(root)
-    folder_path = Path(folder)
-    parts = folder_path.relative_to(root_path).parts
-    if ".." in parts:
-        raise ValueError(f"Folder path must not contain '..': {folder}")
-    folder_path.mkdir(parents=True, exist_ok=True)
-    if permissions is None:
+def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> None:
+    """Make a folder tree group-writable, including future files.
+
+    Symlinks and paths the caller cannot modify are skipped.
+
+    Parameters
+    ----------
+    folder: Path | str
+        Root of the shared tree.
+    group: str | int | None
+        Group name or ID to assign, or ``None`` to keep the current group.
+    """
+    root = Path(folder).resolve()
+    shared_mask = _current_umask() & 0o007
+    directories: list[Path] = []
+    for path in itertools.chain((root,), root.rglob("*")):
+        if path.is_symlink():
+            continue
+        try:
+            if group is not None:
+                shutil.chown(path, group=group)
+            is_directory = path.is_dir()
+            mode = _widened_mode(path, shared_mask)
+            if is_directory:
+                mode |= stat.S_ISGID
+            path.chmod(mode)
+            if is_directory:
+                directories.append(path)
+        except (PermissionError, FileNotFoundError):
+            pass
+    if not directories:
         return
-    path = root_path
-    try:
-        path.chmod(permissions)
-        for part in parts:
-            path /= part
-            path.chmod(permissions)
-    except Exception as e:
-        logger.warning(
-            "Failed to set permission to %s on '%s'\n(%s)", permissions, path, e
-        )
+    setfacl = shutil.which("setfacl")
+    if setfacl is not None:
+        try:
+            for start in range(0, len(directories), 32):
+                batch = directories[start : start + 32]
+                paths = [str(path) for path in batch]
+                command = [setfacl, "-m", "d:g::rwx,d:m::rwx", *paths]
+                subprocess.run(command, check=True, capture_output=True)
+            return
+        except (OSError, subprocess.CalledProcessError):
+            pass
+    warnings.warn(
+        f"Future files under {root} may not be writable by teammates; "
+        "run 'umask 002' in the shell before launching jobs that write there",
+        stacklevel=2,
+    )
+
+
+def widen_to_umask(folder: Path | str) -> None:
+    """Mirror owner access to group and other where allowed by the umask."""
+    mask = _current_umask()
+    root = Path(folder)
+    for path in itertools.chain((root,), root.rglob("*")):
+        path.chmod(_widened_mode(path, mask))
+
+
+def _widened_mode(path: Path, mask: int) -> int:
+    """*path*'s mode with the owner's access bits mirrored to group and other."""
+    mode = stat.S_IMODE(path.stat().st_mode)
+    owner = (mode >> 6) & 0o7
+    group_mask = (mask >> 3) & 0o7
+    other_mask = mask & 0o7
+    group = owner & ~group_mask
+    other = owner & ~other_mask
+    return mode | (group << 3) | other
 
 
 def to_chunks(

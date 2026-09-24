@@ -8,6 +8,7 @@ import collections
 import concurrent.futures
 import datetime
 import os
+import stat
 import threading
 import typing as tp
 from pathlib import Path
@@ -672,3 +673,39 @@ def test_pool_executor_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     ex = utils.make_pool_executor("processpool", max_workers=2)
     assert isinstance(ex, concurrent.futures.ThreadPoolExecutor)
     ex.shutdown()
+
+
+def test_setup_shared_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "shared"
+    root.mkdir()
+    fp = root / "file"
+    fp.touch()
+    fp.chmod(0o600)
+    monkeypatch.setattr(utils, "_current_umask", lambda: 0o077)
+    monkeypatch.setattr(utils.shutil, "which", lambda _: None)
+    with pytest.warns(UserWarning, match="umask 002"):
+        utils.setup_shared_folder(root)
+    assert stat.S_IMODE(fp.stat().st_mode) == 0o660
+
+
+@pytest.mark.parametrize(
+    "mode,mask,expected",
+    [
+        (0o700, 0o022, 0o755),
+        (0o600, 0o022, 0o644),
+        (0o600, 0o002, 0o664),
+        (0o400, 0o022, 0o444),
+        (0o600, 0o077, 0o600),
+    ],
+)
+def test_widen_to_umask(tmp_path: Path, mode: int, mask: int, expected: int) -> None:
+    fp = tmp_path / "sub" / "a_file"
+    fp.parent.mkdir()
+    fp.touch()
+    fp.chmod(mode)
+    previous = os.umask(mask)
+    try:
+        utils.widen_to_umask(tmp_path)
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(fp.stat().st_mode) == expected
