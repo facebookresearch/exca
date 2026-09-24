@@ -445,9 +445,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _exclude_from_cls_uid(cls) -> list[str]:
         return ["."]  # force ignored in uid
 
-    # uses InflightRegistry when True (concurrent worker safety)
-    _concurrent: tp.ClassVar[bool] = False
-
     folder: Path | None = None
 
     mode: identity.ModeType = "cached"
@@ -649,9 +646,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 )
                 if not pending:
                     continue
-                reg: inflight.InflightRegistry | None = None
-                if self._concurrent:
-                    reg = inflight.InflightRegistry(cb.paths.step_folder)
+                reg = inflight.InflightRegistry(cb.paths.step_folder)
                 # ancestors already hold their entries: claiming them self-deadlocks
                 folder_key = str(cb.paths.step_folder)
                 request = {u for u in pending if (folder_key, u) not in held}
@@ -660,8 +655,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     inflight.inflight_session(reg, request)
                 )
                 cb.info.held_entries = held
-                if reg is not None:  # registry-less claims hold nothing to inherit
-                    cb.info.held_entries |= {(folder_key, u) for u in cb.info.claim.uids}
+                cb.info.held_entries |= {(folder_key, u) for u in cb.info.claim.uids}
                 claimed.batches.append(cb)
             claimed.ready = [
                 n
@@ -759,7 +753,6 @@ class _SubmititBackend(Backend):
     max_jobs: int = pydantic.Field(128, gt=0)
     min_items_per_job: int = pydantic.Field(1, gt=0)
 
-    _concurrent: tp.ClassVar[bool] = True
     _CLUSTER: tp.ClassVar[str | None] = None  # submitit cluster name
 
     def _submitit_params(self) -> dict[str, tp.Any]:
@@ -825,7 +818,6 @@ class SubmititDebug(_SubmititBackend):
     """Debug executor (inline but simulates submitit)."""
 
     _CLUSTER: tp.ClassVar[str | None] = "debug"
-    _concurrent: tp.ClassVar[bool] = False
 
 
 class Slurm(_SubmititBackend):
@@ -922,7 +914,6 @@ class _PoolSource:
 class _PoolBackend(Backend):
     """Base for concurrent.futures pool backends."""
 
-    _concurrent: tp.ClassVar[bool] = True
     max_jobs: int | None = pydantic.Field(128, gt=0)
     _POOL_TYPE: tp.ClassVar[str]
 
