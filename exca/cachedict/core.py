@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import threading
+import time
 import typing as tp
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +30,19 @@ X = tp.TypeVar("X")
 
 logger = logging.getLogger(__name__)
 METADATA_TAG = "metadata="
+RECORD_NAME = ".exca-use-record"
+
+
+def _record_use(folder: Path) -> None:
+    # fixed width: pwrite at 0 refreshes in place, never truncating
+    try:
+        fd = os.open(folder / RECORD_NAME, os.O_WRONLY | os.O_CREAT, 0o666)
+        try:
+            os.pwrite(fd, f"{time.time_ns():020d}\n".encode(), 0)
+        finally:
+            os.close(fd)
+    except OSError:
+        logger.debug("Failed to record use of %s", folder, exc_info=True)
 
 
 @dataclasses.dataclass
@@ -90,10 +104,6 @@ class CacheDict(tp.Generic[X]):
         If `None`, the type will be deduced automatically (Json for JSON-serializable values,
         or a type-specific handler for numpy arrays, tensors, etc.).
         Loading is handled using the cache_type specified in info files.
-    permissions: optional int
-        permissions for generated files
-        use os.chmod / path.chmod compatible numbers, or None to deactivate
-        eg: 0o777 for all rights to all users
 
     Usage
     -----
@@ -124,10 +134,8 @@ class CacheDict(tp.Generic[X]):
         folder: Path | str | None,
         keep_in_ram: bool = False,
         cache_type: None | str = None,
-        permissions: int | None = 0o777,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
-        self.permissions = permissions
         self.cache_type = cache_type
         self._keep_in_ram = keep_in_ram
         if self.folder is None and not keep_in_ram:
@@ -141,8 +149,9 @@ class CacheDict(tp.Generic[X]):
         self._jsonl_reading_allowance = float("inf")
         # DumpContext for this folder (load/delete; writes use per-thread _write_ctx)
         self._dumper: DumpContext | None = None
+        self._used_jsonls: set[Path] = set()
         if self.folder is not None:
-            self._dumper = DumpContext(self.folder, permissions=self.permissions)
+            self._dumper = DumpContext(self.folder)
         self._local = threading.local()  # per-thread write context, see _write_ctx
 
     def __repr__(self) -> str:
@@ -155,7 +164,7 @@ class CacheDict(tp.Generic[X]):
     def __reduce__(self) -> tp.Any:
         return (
             self.__class__,
-            (self.folder, self._keep_in_ram, self.cache_type, self.permissions),
+            (self.folder, self._keep_in_ram, self.cache_type),
         )
 
     def clear(self) -> None:
@@ -289,6 +298,11 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
+        if dinfo.jsonl not in self._used_jsonls:
+            if not self._used_jsonls:
+                _record_use(dinfo.jsonl.parent)
+            self._used_jsonls.add(dinfo.jsonl)
+            utils.best_effort_utime(dinfo.jsonl, keep_mtime=True)
         loaded = self._dumper.load(dinfo.content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
@@ -310,11 +324,12 @@ class CacheDict(tp.Generic[X]):
         if self._write_ctx is not None:
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
-            self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
+            self._write_ctx = DumpContext(self.folder)
         self._local.deleted_in_scope = False
         try:
             if self._write_ctx is not None:
                 with self._write_ctx:
+                    _record_use(self._write_ctx.folder)
                     yield self
             else:
                 yield self

@@ -9,11 +9,14 @@ import contextlib
 import copy
 import difflib
 import hashlib
+import itertools
 import logging
 import math
 import os
 import shutil
+import stat
 import sys
+import tempfile
 import time
 import typing as tp
 import uuid
@@ -38,45 +41,81 @@ T = tp.TypeVar("T", bound=pydantic.BaseModel)
 X = tp.TypeVar("X")
 
 
-def best_effort_utime(folder: Path) -> None:
-    """Advance *folder*'s mtime, tolerating EPERM on foreign-owned directories."""
-    # dir mtime unchanged on file-append → must stamp explicitly
-    # times=(t,t): owner-only, sub-jiffy; times=None: write-perm only (POSIX fallback)
-    t = time.time()
+def _current_umask() -> int:
+    # avoids os.umask peek: 0o777 race on concurrent creations
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "probe"  # mkdtemp forces 0o700 → probe with nested mkdir
+        probe.mkdir()
+        return 0o777 & ~stat.S_IMODE(probe.stat().st_mode)
+
+
+def best_effort_utime(path: Path, *, keep_mtime: bool = False) -> None:
+    """Advance *path*'s atime, preserving mtime when requested."""
+    now = time.time_ns()
     try:
-        os.utime(folder, times=(t, t))
-    except PermissionError:
+        mtime = path.stat().st_mtime_ns if keep_mtime else now
+        os.utime(path, ns=(now, mtime))
+        return
+    except OSError:
+        if keep_mtime:
+            logger.debug("Failed to stamp %s", path, exc_info=True)
+            return
+    try:
+        os.utime(path)
+    except OSError:
+        logger.debug("Failed to stamp %s", path, exc_info=True)
+
+
+def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> None:
+    """Make *folder* and everything below it writable by a group of users.
+
+    - directories get set-group-id, so the kernel applies the group to
+      everything created underneath, which the umask cannot do on its own
+    - modes are widened up to the umask (:func:`widen_to_umask`)
+    - paths owned by another user are skipped: only their owner may change them
+    - symbolic links below *folder* are skipped
+
+    Run it once per tree, and again on content written before the setup.
+
+    Parameters
+    ----------
+    folder: Path | str
+        root of the shared tree
+    group: str | int | None
+        group to assign, eg. when your primary group is not the shared one
+    """
+    mask = _current_umask()
+    root = Path(folder).resolve()
+    for path in itertools.chain([root], root.rglob("*")):
+        if path.is_symlink():
+            continue
         try:
-            os.utime(folder)
-        except PermissionError:
+            if group is not None:
+                shutil.chown(path, group=group)
+            mode = _widened(path, mask)
+            if path.is_dir():
+                mode |= stat.S_ISGID
+            path.chmod(mode)
+        except (PermissionError, FileNotFoundError):
             pass
 
 
-def mkdir_with_permissions(
-    folder: Path | str,
-    permissions: int | None,
-    *,
-    root: Path | str,
-) -> None:
-    """Create a folder and chmod its directory chain within a root."""
-    root_path = Path(root)
-    folder_path = Path(folder)
-    parts = folder_path.relative_to(root_path).parts
-    if ".." in parts:
-        raise ValueError(f"Folder path must not contain '..': {folder}")
-    folder_path.mkdir(parents=True, exist_ok=True)
-    if permissions is None:
-        return
-    path = root_path
-    try:
-        path.chmod(permissions)
-        for part in parts:
-            path /= part
-            path.chmod(permissions)
-    except Exception as e:
-        logger.warning(
-            "Failed to set permission to %s on '%s'\n(%s)", permissions, path, e
-        )
+def widen_to_umask(folder: Path | str) -> None:
+    """Mirror the owner's access bits to group and other, minus the umask.
+
+    - only ever widens, to the mode a freshly created file/folder would have got
+    - use after tools writing their own modes (``shutil.copytree``, unarchiving)
+    """
+    mask = _current_umask()
+    for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
+        path.chmod(_widened(path, mask))
+
+
+def _widened(path: Path, mask: int) -> int:
+    """*path*'s mode with the owner's access bits mirrored to group and other."""
+    mode = stat.S_IMODE(path.stat().st_mode)
+    owner = (mode >> 6) & 0o7
+    return mode | (((owner << 3) | owner) & ~mask)
 
 
 def to_chunks(

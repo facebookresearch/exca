@@ -110,9 +110,10 @@ class ExternalBatchDumper(DumperLoader):
         ("external", "ExternalStaticDumper"),
     ],
 )
-def test_legacy_jsonl_read(fixture_name: str, cache_type: str) -> None:
+def test_legacy_jsonl_read(fixture_name: str, cache_type: str, tmp_path: Path) -> None:
     expected = EXPECTED[fixture_name]
-    cache: cd.CacheDict[tp.Any] = cd.CacheDict(folder=FIXTURE_ROOT / fixture_name)
+    folder = shutil.copytree(FIXTURE_ROOT / fixture_name, tmp_path / fixture_name)
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(folder=folder)
     assert set(cache.keys()) == set(expected.keys())
     for key, exp_val in expected.items():
         loaded = cache[key]

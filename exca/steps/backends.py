@@ -554,7 +554,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 folder=cache_folder,
                 cache_type=cache_type,
                 keep_in_ram=self.keep_in_ram,
-                permissions=0o777,
             )
             self._cds[cache_folder] = cd
         return cd
