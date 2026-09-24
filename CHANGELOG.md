@@ -4,6 +4,7 @@
 
 [breaking]
 
+- Cache files follow the process umask instead of being forced to `0o777`; `permissions` options were removed. For shared caches, call `exca.utils.setup_shared_folder(folder)` once on the cache root; without default ACL support, also set `umask 002`. [#324]
 - `CacheDict`: deletions require a `write()` context (like writes). [#326]
 - Removed deprecated compatibility paths: `CacheDict.writer()`, `CacheDictWriter`, `Step.with_input()`, `DumperLoader`, old handler names, `metadata=` JSONL, legacy `Auto` (`optimized`/`pickled`), `torch.save` tensor entries, and implicit `Auto` pickle fallback (use `AutoPickle`).
 - `DumpContext.shared_file`: content suffixes must start with `.`. [#326]

@@ -26,20 +26,6 @@ Non-breaking behavior changes and internal cleanup can proceed without waiting.
 
 ## Infrastructure
 
-### Simplify permission handling
-- Shared filesystems (NFS) need explicit chmod on created folders and files
-  so other users/jobs can read/write cached results.
-- Old attempt on branch `set-permissions` (aborted — mixed into a large
-  refactor): added `PermissionSetter` utility in `utils.py`, a
-  `permissions: int | None = 0o777` field on `BaseInfra`/`Backend`/`CacheDict`,
-  and chmod calls after each mkdir/file-write.
-- Next attempt should:
-  - Extract the permission logic cleanly (standalone PR, no other refactors)
-  - Also handle submitit log/job folders (currently created by submitit
-    itself, which doesn't set permissions — may need upstream changes in
-    submitit or post-creation fixup)
-  - Consider a umask-based approach as an alternative to post-hoc chmod
-
 ## Internal cleanup (non-breaking, can do anytime)
 
 ### Reinvestigate `cache_type` default in `dump()` / `dump_entry()`

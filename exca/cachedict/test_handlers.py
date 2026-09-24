@@ -4,18 +4,15 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import gc
 from pathlib import Path
 
 import mne
 import numpy as np
 import pandas as pd
-import psutil
 import pytest
 import torch
 
 from . import dumpcontext, handlers
-from .core import CacheDict
 
 
 @pytest.mark.parametrize("cache_type", ["PandasDataFrame", "ParquetPandasDataFrame"])
@@ -88,41 +85,3 @@ def test_torch_view_roundtrip(tmp_path: Path) -> None:
 )
 def test_string_uid(string: str, expected: str) -> None:
     assert dumpcontext.string_uid(string) == expected
-
-
-def test_memmap_array_reload_after_append(tmp_path: Path) -> None:
-    ctx = dumpcontext.DumpContext(tmp_path, key="array")
-    x = np.random.rand(2, 3)
-    y = np.random.rand(3, 3).astype(np.float16)
-    with ctx:
-        with pytest.raises(ValueError, match="no size"):
-            ctx.dump(np.random.rand(0, 3), cache_type="MemmapArray")
-        x_info = ctx.dump(x, cache_type="MemmapArray")
-        y_info = ctx.dump(y, cache_type="MemmapArray")
-    reloaded_x = ctx.load(x_info)
-    with ctx:
-        z_info = ctx.dump(np.random.rand(5, 3), cache_type="MemmapArray")
-    assert x_info["filename"] == y_info["filename"] == z_info["filename"]
-    np.testing.assert_array_equal(reloaded_x, x)
-    np.testing.assert_array_equal(ctx.load(y_info), y)
-    assert ctx.load(z_info).shape == (5, 3)
-    np.testing.assert_array_equal(reloaded_x, x)
-
-
-def test_memmap_file_descriptor_lifecycle(tmp_path: Path) -> None:
-    process = psutil.Process()
-    try:
-        process.open_files()
-    except (psutil.AccessDenied, PermissionError) as error:
-        pytest.skip(f"psutil cannot list open files: {error}")
-    cache = CacheDict[np.ndarray](
-        folder=tmp_path, keep_in_ram=False, cache_type="MemmapArray"
-    )
-    with cache.write():
-        cache["array"] = np.arange(8)
-    data_path = tmp_path / cache._key_info["array"].content["filename"]
-    assert cache["array"].shape == (8,)
-    assert data_path in {Path(item.path) for item in process.open_files()}
-    del cache
-    gc.collect()
-    assert data_path not in {Path(item.path) for item in process.open_files()}

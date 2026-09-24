@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
+import gc
 import logging
 import os
 import pickle
@@ -17,6 +18,7 @@ from unittest.mock import patch
 import nibabel as nib
 import numpy as np
 import pandas as pd
+import psutil
 import pytest
 import torch
 
@@ -115,11 +117,25 @@ def test_specialized_dump(
     with cache.write():
         cache["x"] = data
     assert isinstance(cache["x"], type(data))
-    octal_permissions = oct(tmp_path.stat().st_mode)[-3:]
-    assert octal_permissions == "777", f"Wrong permissions for {tmp_path}"
-    for fp in tmp_path.rglob("*"):
-        octal_permissions = oct(fp.stat().st_mode)[-3:]
-        assert octal_permissions == "777", f"Wrong permissions for {fp}"
+
+
+def test_memmap_file_descriptor_lifecycle(tmp_path: Path) -> None:
+    process = psutil.Process()
+    try:
+        process.open_files()
+    except (psutil.AccessDenied, PermissionError) as error:
+        pytest.skip(f"psutil cannot list open files: {error}")
+    cache = cd.CacheDict[np.ndarray](
+        folder=tmp_path, keep_in_ram=False, cache_type="MemmapArray"
+    )
+    with cache.write():
+        cache["array"] = np.arange(8)
+    data_path = tmp_path / cache._key_info["array"].content["filename"]
+    assert cache["array"].shape == (8,)
+    assert data_path in {Path(item.path) for item in process.open_files()}
+    del cache
+    gc.collect()
+    assert data_path not in {Path(item.path) for item in process.open_files()}
 
 
 def _write_items(cache: cd.CacheDict[tp.Any], keys: list[str], data: tp.Any) -> None:

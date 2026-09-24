@@ -6,6 +6,7 @@
 
 import logging
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -71,6 +72,23 @@ def test_workdir_absolute(tmp_path: Path) -> None:
     with wdir.activate():
         assert Path(os.getcwd()).name == "new"
         assert Path("folder/a_file.py").exists()
+
+
+def test_workdir_widens_private_source(tmp_path: Path) -> None:
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    fp = folder / "a_file.py"
+    fp.touch()
+    fp.chmod(0o600)
+    folder.chmod(0o700)
+    mask = os.umask(0o022)
+    try:
+        wdir = workdir.WorkDir(folder=tmp_path / "new", copied=[folder])
+        with wdir.activate():
+            copied = Path("folder").absolute()
+    finally:
+        os.umask(mask)
+    assert stat.S_IMODE(copied.stat().st_mode) == 0o755, "copy must stay traversable"
 
 
 def test_double_workdir(tmp_path: Path) -> None:

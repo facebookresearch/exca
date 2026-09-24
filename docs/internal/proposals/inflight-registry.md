@@ -144,7 +144,7 @@ Located in `exca/cachedict/inflight.py`.
 class InflightRegistry:
     """Advisory SQLite registry of in-flight cache items."""
 
-    def __init__(self, folder: Path, permissions: int | None = 0o777) -> None:
+    def __init__(self, folder: Path) -> None:
         # DB at <folder>/inflight.db
         ...
 
@@ -287,8 +287,7 @@ where coordination matters — which is what `docs/internal/debug/concurrent-wri
 identified as the core problem.
 
 The DB file is visible (no leading dot) for easy manual deletion if needed. File
-permissions default to `0o777` (matching CacheDict's shared-access model) and are
-applied after DB creation.
+permissions follow the process umask.
 
 ## Same-PID Ownership
 

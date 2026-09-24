@@ -83,10 +83,6 @@ class CacheDict(tp.Generic[X]):
         If `None`, the type is deduced automatically, with `Json` used for
         JSON-compatible values.
         Loading is handled using the cache_type specified in info files.
-    permissions: optional int
-        permissions for generated files
-        use os.chmod / path.chmod compatible numbers, or None to deactivate
-        eg: 0o777 for all rights to all users
 
     Usage
     -----
@@ -117,10 +113,8 @@ class CacheDict(tp.Generic[X]):
         folder: Path | str | None,
         keep_in_ram: bool = False,
         cache_type: None | str = None,
-        permissions: int | None = 0o777,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
-        self.permissions = permissions
         self.cache_type = cache_type
         self._keep_in_ram = keep_in_ram
         if self.folder is None and not keep_in_ram:
@@ -135,7 +129,7 @@ class CacheDict(tp.Generic[X]):
         # DumpContext for this folder (load/delete; writes use per-thread _write_ctx)
         self._dumper: DumpContext | None = None
         if self.folder is not None:
-            self._dumper = DumpContext(self.folder, permissions=self.permissions)
+            self._dumper = DumpContext(self.folder)
         self._local = threading.local()  # per-thread write context, see _write_ctx
 
     def __repr__(self) -> str:
@@ -148,7 +142,7 @@ class CacheDict(tp.Generic[X]):
     def __reduce__(self) -> tp.Any:
         return (
             self.__class__,
-            (self.folder, self._keep_in_ram, self.cache_type, self.permissions),
+            (self.folder, self._keep_in_ram, self.cache_type),
         )
 
     def clear(self) -> None:
@@ -301,7 +295,7 @@ class CacheDict(tp.Generic[X]):
         if self._write_ctx is not None:
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
-            self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
+            self._write_ctx = DumpContext(self.folder)
         self._local.deleted_in_scope = False
         try:
             if self._write_ctx is not None:

@@ -122,16 +122,14 @@ def test_shared_file_lifecycle(tmp_path: Path) -> None:
     assert (tmp_path / name1).read_bytes() == b"hello"
 
 
-def test_context_permissions(tmp_path: Path) -> None:
+def test_context_creates_folder_lazily(tmp_path: Path) -> None:
     folder = tmp_path / "fresh"
-    ctx = DumpContext(folder, permissions=0o755)
+    ctx = DumpContext(folder)
     assert not folder.exists(), "construction must not materialise the folder"
     with ctx:
         f, name = ctx.shared_file(".data")
         f.write(b"test")
-    assert folder.is_dir()
-    assert oct(folder.stat().st_mode)[-3:] == "755"
-    assert oct((folder / name).stat().st_mode)[-3:] == "755"
+    assert (folder / name).read_bytes() == b"test"
 
 
 # =============================================================================
@@ -173,12 +171,13 @@ def test_handler_roundtrip(tmp_path: Path, cache_type: str) -> None:
     _compare(ctx.load(info), value)
 
 
-def test_memmap_array_shared_file(tmp_path: Path) -> None:
-    """Multiple MemmapArray dumps share the same .data file."""
+def test_memmap_array(tmp_path: Path) -> None:
     ctx = DumpContext(tmp_path)
     a1 = np.array([1, 2, 3], dtype=np.int64)
     a2 = np.arange(12, dtype=np.float64).reshape(3, 4)
     with ctx:
+        with pytest.raises(ValueError, match="no size"):
+            ctx.dump(np.array([]), cache_type="MemmapArray")
         info1 = ctx.dump(a1, cache_type="MemmapArray")
         info2 = ctx.dump(a2, cache_type="MemmapArray")
     assert info1["filename"] == info2["filename"]
