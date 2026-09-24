@@ -43,11 +43,12 @@ X = tp.TypeVar("X")
 
 
 def _current_umask() -> int:
-    # avoids os.umask peek: 0o777 race on concurrent creations
+    """Read the process umask without changing it."""
     with tempfile.TemporaryDirectory() as tmp:
-        probe = Path(tmp) / "probe"  # mkdtemp forces 0o700 → probe with nested mkdir
+        probe = Path(tmp) / "probe"
         probe.mkdir()
-        return 0o777 & ~stat.S_IMODE(probe.stat().st_mode)
+        mode = stat.S_IMODE(probe.stat().st_mode)
+    return 0o777 & ~mode
 
 
 def best_effort_utime(folder: Path) -> None:
@@ -65,62 +66,44 @@ def best_effort_utime(folder: Path) -> None:
 
 
 def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> None:
-    """Make *folder* and everything below it writable by a group of users.
+    """Make a folder tree group-writable, including future files.
 
-    - directories get set-group-id, so the kernel applies the group to
-      everything created underneath, which the umask cannot do on its own
-    - owner access is mirrored to the group; other access follows the umask
-    - default ACLs preserve group access independently of future umasks
-    - paths owned by another user are skipped: only their owner may change them
-    - symbolic links below *folder* are skipped
-
-    Run it once per tree, and again on content written before the setup.
+    Symlinks and paths the caller cannot modify are skipped.
 
     Parameters
     ----------
     folder: Path | str
-        root of the shared tree
+        Root of the shared tree.
     group: str | int | None
-        group to assign, eg. when your primary group is not the shared one
+        Group name or ID to assign, or ``None`` to keep the current group.
     """
-    if isinstance(group, str):
-        import grp
-
-        group = grp.getgrnam(group).gr_gid
-    mask = _current_umask()
     root = Path(folder).resolve()
-    acl_folders: list[Path] = []
-    for path in itertools.chain([root], root.rglob("*")):
+    shared_mask = _current_umask() & 0o007
+    directories: list[Path] = []
+    for path in itertools.chain((root,), root.rglob("*")):
         if path.is_symlink():
             continue
         try:
             if group is not None:
                 shutil.chown(path, group=group)
-            is_dir = path.is_dir()
-            mode = _widened(path, mask & 0o007)
-            if is_dir:
+            is_directory = path.is_dir()
+            mode = _widened(path, shared_mask)
+            if is_directory:
                 mode |= stat.S_ISGID
             path.chmod(mode)
-            if is_dir:
-                acl_folders.append(path)
+            if is_directory:
+                directories.append(path)
         except (PermissionError, FileNotFoundError):
             pass
-    if not acl_folders:
+    if not directories:
         return
-    command = shutil.which("setfacl")
-    if command is not None:
+    setfacl = shutil.which("setfacl")
+    if setfacl is not None:
         try:
-            for start in range(0, len(acl_folders), 32):
-                subprocess.run(
-                    [
-                        command,
-                        "-m",
-                        "d:g::rwx,d:m::rwx",
-                        *(str(x) for x in acl_folders[start : start + 32]),
-                    ],
-                    check=True,
-                    capture_output=True,
-                )
+            for batch in itertools.batched(directories, 32):
+                paths = [str(path) for path in batch]
+                command = [setfacl, "-m", "d:g::rwx,d:m::rwx", *paths]
+                subprocess.run(command, check=True, capture_output=True)
             return
         except (OSError, subprocess.CalledProcessError):
             pass
@@ -132,13 +115,10 @@ def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> N
 
 
 def widen_to_umask(folder: Path | str) -> None:
-    """Mirror the owner's access bits to group and other, minus the umask.
-
-    - only ever widens, to the mode a freshly created file/folder would have got
-    - use after tools writing their own modes (``shutil.copytree``, unarchiving)
-    """
+    """Mirror owner access to group and other where allowed by the umask."""
     mask = _current_umask()
-    for path in itertools.chain([Path(folder)], Path(folder).rglob("*")):
+    root = Path(folder)
+    for path in itertools.chain((root,), root.rglob("*")):
         path.chmod(_widened(path, mask))
 
 
@@ -146,7 +126,11 @@ def _widened(path: Path, mask: int) -> int:
     """*path*'s mode with the owner's access bits mirrored to group and other."""
     mode = stat.S_IMODE(path.stat().st_mode)
     owner = (mode >> 6) & 0o7
-    return mode | (((owner << 3) | owner) & ~mask)
+    group_mask = (mask >> 3) & 0o7
+    other_mask = mask & 0o7
+    group = owner & ~group_mask
+    other = owner & ~other_mask
+    return mode | (group << 3) | other
 
 
 def to_chunks(
