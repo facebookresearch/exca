@@ -52,18 +52,23 @@ def _current_umask() -> int:
     return 0o777 & ~mode
 
 
-def best_effort_utime(folder: Path) -> None:
-    """Advance *folder*'s mtime, tolerating EPERM on foreign-owned directories."""
+def best_effort_utime(path: Path, *, keep_mtime: bool = False) -> None:
+    """Advance *path*'s atime and mtime, leaving mtime alone if *keep_mtime*."""
     # dir mtime unchanged on file-append → must stamp explicitly
-    # times=(t,t): owner-only, sub-jiffy; times=None: write-perm only (POSIX fallback)
-    t = time.time()
+    # ns=(...): owner-only, sub-jiffy; times=None: write-perm only (POSIX fallback)
+    now = time.time_ns()
     try:
-        os.utime(folder, times=(t, t))
-    except PermissionError:
-        try:
-            os.utime(folder)
-        except PermissionError:
-            pass
+        mtime = path.stat().st_mtime_ns if keep_mtime else now
+        os.utime(path, ns=(now, mtime))
+        return
+    except OSError:
+        if keep_mtime:  # the fallback moves mtime, invalidating JsonlReader's cache
+            logger.debug("Failed to stamp %s", path, exc_info=True)
+            return
+    try:
+        os.utime(path)
+    except OSError:
+        logger.debug("Failed to stamp %s", path, exc_info=True)
 
 
 def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> None:
