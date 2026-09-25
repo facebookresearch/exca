@@ -166,6 +166,7 @@ class CacheDict(tp.Generic[X]):
         self._key_info.clear()
         self._jsonl_readers.clear()
         self._folder_modified = -1.0
+        self._recorded_jsonls.clear()
         if self.folder is None or not self.folder.exists():
             return
         # let's remove content but not the folder to keep same permissions
@@ -321,7 +322,6 @@ class CacheDict(tp.Generic[X]):
         try:
             if self._write_ctx is not None:
                 with self._write_ctx:
-                    _record_use(self._write_ctx.folder)
                     yield self
             else:
                 yield self

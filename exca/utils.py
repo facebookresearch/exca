@@ -55,6 +55,7 @@ def _current_umask() -> int:
 def best_effort_utime(path: Path, *, keep_mtime: bool = False) -> None:
     """Advance *path*'s atime and mtime, leaving mtime alone if *keep_mtime*."""
     # dir mtime unchanged on file-append → must stamp explicitly
+    # ns=(...): owner-only, sub-jiffy; times=None: write-perm only (POSIX fallback)
     now = time.time_ns()
     try:
         mtime = path.stat().st_mtime_ns if keep_mtime else now
