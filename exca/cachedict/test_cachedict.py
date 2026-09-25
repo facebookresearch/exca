@@ -9,6 +9,7 @@ import gc
 import logging
 import os
 import pickle
+import threading
 import time
 import typing as tp
 from concurrent import futures
@@ -368,3 +369,43 @@ def test_orphaned_cleanup_file_deleted_concurrently(tmp_path: Path) -> None:
         keys = list(cache.keys())
     assert keys == []
     assert reader._fp.name not in cache._jsonl_readers
+
+
+def test_value_read_records_use_of_its_index_only(tmp_path: Path) -> None:
+    cache: cd.CacheDict[tp.Any] = cd.CacheDict(
+        folder=tmp_path, cache_type="NumpyArray", keep_in_ram=False
+    )
+
+    def put(key: str) -> None:
+        with cache.write():
+            cache[key] = np.arange(4.0)
+
+    for key in ("a", "b"):  # a fresh thread writes its own index
+        thread = threading.Thread(target=put, args=(key,))
+        thread.start()
+        thread.join()
+    indexes = sorted(tmp_path.glob("*-info.jsonl"))
+    record = tmp_path / cd.LAST_USE_NAME
+    assert len(indexes) == 2, "each writer thread should own an index"
+
+    def backdate() -> int:
+        past = time.time_ns() - 10**10  # atime == mtime, else the kernel refreshes it
+        for index in indexes:
+            os.utime(index, ns=(past, past))
+        record.write_bytes(f"{past:020d}\n".encode())
+        return past
+
+    past = backdate()
+    warm: cd.CacheDict[tp.Any] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    assert "a" in warm
+    assert [i.stat().st_atime_ns for i in indexes] == [past, past], "warming is not use"
+    assert int(record.read_bytes()) == past, "warming is not use"
+
+    for expected, keys in enumerate((("a",), ("a", "b")), start=1):
+        past = backdate()
+        reader: cd.CacheDict[tp.Any] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+        for key in keys:
+            _ = reader[key]
+        stamped = sum(index.stat().st_atime_ns > past for index in indexes)
+        assert stamped == expected, f"reading {keys} should stamp {expected} index(es)"
+        assert int(record.read_bytes()) > past, "a value read must refresh the record"

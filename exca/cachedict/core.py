@@ -29,13 +29,13 @@ from .dumpcontext import DumpContext
 X = tp.TypeVar("X")
 
 logger = logging.getLogger(__name__)
-RECORD_NAME = ".exca-use-record"
+LAST_USE_NAME = ".exca-last-use"
 
 
 def _record_use(folder: Path) -> None:
     # fixed width: pwrite at 0 refreshes in place, never truncating
     try:
-        fd = os.open(folder / RECORD_NAME, os.O_WRONLY | os.O_CREAT, 0o666)
+        fd = os.open(folder / LAST_USE_NAME, os.O_WRONLY | os.O_CREAT, 0o666)
         try:
             os.pwrite(fd, f"{time.time_ns():020d}\n".encode(), 0)
         finally:
@@ -143,7 +143,7 @@ class CacheDict(tp.Generic[X]):
         self._jsonl_reading_allowance = float("inf")
         # DumpContext for this folder (load/delete; writes use per-thread _write_ctx)
         self._dumper: DumpContext | None = None
-        self._used_jsonls: set[Path] = set()
+        self._recorded_jsonls: set[Path] = set()  # one per writer, not per key
         if self.folder is not None:
             self._dumper = DumpContext(self.folder)
         self._local = threading.local()  # per-thread write context, see _write_ctx
@@ -290,10 +290,10 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
-        if dinfo.jsonl not in self._used_jsonls:
-            if not self._used_jsonls:
+        if dinfo.jsonl not in self._recorded_jsonls:  # index + payloads: one batch
+            if not self._recorded_jsonls:  # record is per folder, stamps per index
                 _record_use(dinfo.jsonl.parent)
-            self._used_jsonls.add(dinfo.jsonl)
+            self._recorded_jsonls.add(dinfo.jsonl)
             utils.best_effort_utime(dinfo.jsonl, keep_mtime=True)
         loaded = self._dumper.load(dinfo.content)
         if self._keep_in_ram:
