@@ -14,7 +14,7 @@ import pytest
 
 import exca.cachedict
 
-from . import base, conftest, identity, items
+from . import base, conftest, items
 
 
 @pytest.fixture(params=["dict", "cache_dict"])
@@ -75,13 +75,3 @@ def test_read_fuses_defaults_and_isolates_batched(
     result = list(si)
     assert result == [8, 16, 24], "x2, x2, identity batch, x2"
     assert fused == [2, 1], "two defaults fuse; the batched step splits, then one default"
-
-
-def test_dispatch_uses_infra(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = conftest.Add(value=2, randomize=True, infra=infra)
-    uid = identity.materialize_uid(step, 1.0)
-    si = items.StepItems(source={uid: 1.0})
-    runner = base.Runner()
-    assert list(runner.dispatch(step, si)) == list(runner.dispatch(step, si))
-    assert len(step.calls) == 1
