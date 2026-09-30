@@ -4,11 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Backend classes with integrated caching.
-
-Backend is the execution workhorse: it resolves cache paths, manages
-cache lookup / force / compute, and writes results through CacheDict.
-"""
+"""Backend classes with integrated caching."""
 
 from __future__ import annotations
 
@@ -21,6 +17,7 @@ import logging
 import os
 import random
 import sys
+import threading
 import traceback
 import typing as tp
 import warnings
@@ -28,471 +25,45 @@ from concurrent import futures
 from pathlib import Path
 
 import pydantic
-import submitit
+import submitit as submitit_lib
 
 import exca
-from exca import utils
+from exca import logconf, utils
 from exca.cachedict import inflight
 
 from . import errors, identity, items, jobregistry
 
-if tp.TYPE_CHECKING:
-    from .base import Step
-    from .items import StepItems  # bare name for annotations (field shadows `items`)
-
 logger = logging.getLogger(__name__)
 
 CacheStatus = tp.Literal["success", "error", None]
-LookupStatus = tp.Literal["success", "error", "running", None]
-
-
-@dataclasses.dataclass(frozen=True)
-class StepPaths:
-    """On-disk path layout for a step rooted at ``base_folder / step_uid``.
-
-    See `docs/internal/steps/caching.md` for the full tree.
-    """
-
-    base_folder: Path
-    step_uid: str
-    cache_type: str | None = None  # CacheDict format override (e.g. "Pickle")
-
-    @property
-    def step_folder(self) -> Path:
-        """Base folder for this step (contains cache/ and logs/)."""
-        return self.base_folder / self.step_uid
-
-    @property
-    def cache_folder(self) -> Path:
-        """CacheDict folder for results."""
-        return self.step_folder / "cache"
-
-    @property
-    def _logs_folder(self) -> str:
-        return str(self.step_folder / "logs" / "%j")
-
-
-class LookupHandle:
-    """Cache handle for a ``(step, value)`` pair.
-
-    Returned by :meth:`Step.lookup`. Provides read-only access to the
-    cache entry and its on-disk paths.
-    """
-
-    def __init__(
-        self,
-        paths: StepPaths | None = None,
-        cache_dict: exca.cachedict.CacheDict[tp.Any] | None = None,
-        backend: Backend | None = None,
-        uid: str = "",
-    ) -> None:
-        self._paths = paths
-        self._cache_dict = cache_dict
-        self._backend = backend
-        self.uid = uid
-        # Populated by container steps (Chain, etc.) at lookup time.
-        self._sub_handles: tuple[LookupHandle, ...] = ()
-
-    @property
-    def paths(self) -> StepPaths:
-        """On-disk path layout (:class:`StepPaths`) for this entry."""
-        if self._paths is None:
-            raise RuntimeError("no infra configured on this step")
-        return self._paths
-
-    @property
-    def cache_dict(self) -> exca.cachedict.CacheDict[tp.Any]:
-        """:class:`~exca.cachedict.CacheDict` for this entry."""
-        if self._cache_dict is None:
-            raise RuntimeError("no infra configured on this step")
-        return self._cache_dict
-
-    @property
-    def status(self) -> LookupStatus:
-        """Entry status: ``"success"``, ``"error"``, ``"running"``, or ``None``."""
-        if self._cache_dict is None or self._paths is None:
-            return None
-        if not self.uid:
-            raise RuntimeError("LookupHandle has no uid")
-        status = _CachedEntry.lookup(self._cache_dict, self.uid).status
-        if status is not None or not self.paths.cache_folder.exists():
-            return status
-        with inflight.InflightRegistry(self.paths.cache_folder) as reg:
-            info = reg.get([self.uid]).get(self.uid)
-        if info is not None and info.is_alive():
-            return "running"
-        return None
-
-    def cached(self) -> bool:
-        """True iff there is a cached success or error."""
-        return self.status in ("success", "error")
-
-    def result(self) -> tp.Any:
-        """Return the cached value, or re-raise a cached error."""
-        if not self.uid:
-            raise RuntimeError("LookupHandle has no uid")
-        entry = _CachedEntry.lookup(self.cache_dict, self.uid)
-        if entry.status is None:
-            raise RuntimeError(f"no cached result for {self.paths.step_uid}[{self.uid}]")
-        return entry.result()
-
-    def clear_cache(self, recursive: bool = True) -> None:
-        """Delete the cached result and associated files.
-
-        Parameters
-        ----------
-        recursive:
-            Also clear sub-step caches (e.g. inside a :class:`Chain`).
-        """
-        if recursive:
-            for sub in self._sub_handles:
-                sub.clear_cache()
-        if self._backend is not None:
-            self._backend._clear_caches(
-                paths=self.paths, cd=self.cache_dict, uids=[self.uid]
-            )
-
-    def job(self) -> submitit.Job[tp.Any] | None:
-        """Return the live inflight job, or latest submitit job recorded for logs."""
-        if self._backend is None or not self.paths.step_folder.exists():
-            return None
-        try:
-            with inflight.InflightRegistry(self.paths.step_folder) as reg:
-                info = reg.get([self.uid])
-            if self.uid in info:
-                return info[self.uid]._job  # type: ignore[attr-defined]
-            with jobregistry.JobRegistry(self.paths.step_folder) as reg:
-                job = reg.get([self.uid]).get(self.uid)
-            if job is not None:
-                # DebugJob needs the original submission, so only classes
-                # reconstructable from folder + job_id are available here.
-                classes = {"local": submitit.LocalJob, "slurm": submitit.SlurmJob}
-                cls = classes.get(job.cluster)
-                if cls is not None:
-                    return cls(folder=self.paths._logs_folder, job_id=job.job_id)
-        except Exception:
-            logger.debug(
-                "Failed to recover job for %s[%s]",
-                self.paths.step_uid,
-                self.uid,
-                exc_info=True,
-            )
-        return None
-
-
-def _fold_modes(*modes: identity.ModeType) -> identity.ModeType:
-    """Fold modes in pipeline order: ``force``/``retry`` persist forward,
-    ``read-only`` is local (resets on next step). ``force`` then ``read-only`` raises.
-    """
-    _rank = ("cached", "retry", "force").index
-    acc: identity.ModeType = "cached"
-    for m in modes:
-        if m == "read-only":
-            if acc == "force":
-                raise ValueError(
-                    "read-only mode conflicts with 'force' — would return stale results"
-                )
-            acc = "read-only"
-        elif acc == "read-only":
-            acc = m  # read-only doesn't persist
-        elif _rank(m) > _rank(acc):
-            acc = m
-    return acc
-
-
-def _effective_mode(step: Step) -> identity.ModeType:
-    """The mode in effect for ``step`` once its sub-steps are folded in."""
-    from . import utils  # lazy — backends is imported by utils at module level
-
-    resolved = utils.resolved_step(step)
-    if resolved is not step:
-        return _effective_mode(resolved)
-    own: identity.ModeType = "cached" if step.infra is None else step.infra.mode
-    sub_modes = [_effective_mode(sub) for sub in utils.nested_steps(step).values()]
-    # own brackets both ends: the step reasserts its mode after its sub-steps.
-    return _fold_modes(own, *sub_modes, own)
-
-
-@dataclasses.dataclass
-class _CachedEntry:
-    """Result of looking up an item in the cache: a ``status`` plus a
-    ``result()`` to materialise the cached value or re-raise the cached error."""
-
-    status: CacheStatus
-    _cd: exca.cachedict.CacheDict[tp.Any]
-    _uid: str
-    _err: BaseException | None = None  # pre-loaded; see `lookup`.
-
-    @classmethod
-    def lookup(
-        cls,
-        cd: exca.cachedict.CacheDict[tp.Any],
-        uid: str,
-    ) -> "_CachedEntry":
-        """Single-uid lookup with full error materialisation."""
-        # CacheDict success shadows any stale error row.
-        status = cls.lookup_statuses(cd, [uid])[uid]
-        if status != "error":
-            return cls(status, cd, uid)
-        if cd.folder is None:
-            return cls(None, cd, uid)
-        # Ugly but convenient: CacheDict folder is <step>/cache.
-        with errors.ErrorRegistry(cd.folder.parent) as reg:
-            err = reg.load(uid)
-        if err is None:
-            return cls(None, cd, uid)
-        err.add_note(
-            f"     reraising from cache {cd.folder}[{uid}]; use mode='retry' to recompute"
-        )
-        return cls("error", cd, uid, _err=err)
-
-    @staticmethod
-    def lookup_statuses(
-        cd: exca.cachedict.CacheDict[tp.Any],
-        uids: tp.Iterable[str],
-    ) -> dict[str, CacheStatus]:
-        """Bulk status check — one ErrorRegistry query instead of N."""
-        uids = list(dict.fromkeys(uids))  # dedup with order
-        folder = cd.folder
-        out: dict[str, CacheStatus] = {}
-        missing: list[str] = []
-        with cd.frozen_cache_folder():
-            for uid in uids:
-                if uid in cd:
-                    out[uid] = "success"
-                else:
-                    out[uid] = None
-                    missing.append(uid)
-        if missing and folder is not None and folder.exists():
-            # Ugly but convenient: CacheDict folder is <step>/cache.
-            with errors.ErrorRegistry(folder.parent) as reg:
-                # Cached errors raise on first hit, so they usually stay
-                # sparser than the queried uids.
-                for uid in reg.get(missing):
-                    out[uid] = "error"
-        return out
-
-    def result(self) -> tp.Any:
-        """Return the cached value or re-raise the cached error."""
-        if self.status == "success":
-            return self._cd[self._uid]
-        if self.status == "error":
-            if self._err is None:  # `lookup` always pre-loads on "error".
-                raise RuntimeError(f"_CachedEntry(error) missing _err for {self._uid}")
-            raise self._err
-        raise RuntimeError(f"No cached entry for {self._uid}")
-
-
-# cache entries claimed by the running work or its ancestors
-_HELD_ENTRIES: contextvars.ContextVar[frozenset[tuple[str, str]]] = (
-    contextvars.ContextVar("exca_held_entries", default=frozenset())
-)
-
-
-@dataclasses.dataclass
-class CoordinationInfo:
-    mode: identity.ModeType = "cached"
-    upstream: tuple[Step, ...] = ()  # this step + everything before it
-    claim: inflight.InflightClaim | None = None
-    held_entries: frozenset[tuple[str, str]] = frozenset()  # {(folder, uid),...}
-
-
-@dataclasses.dataclass
-class ComputeBatch:
-    """One step's items, run and cached together via ``step._run_items``."""
-
-    step: Step
-    paths: StepPaths
-    cache_dict: exca.cachedict.CacheDict[tp.Any]
-    items: items.StepItems
-    info: CoordinationInfo = dataclasses.field(default_factory=CoordinationInfo)
-
-    def claimed_uids(self) -> list[str]:
-        """This batch's uids claimed by its own session (entries held by an ancestor
-        are excluded, so their rows keep pointing at the ancestor's job)."""
-        claim = self.info.claim
-        if claim is None:
-            raise RuntimeError(f"batch was never claimed: {self.paths.step_uid}")
-        owned = set(claim.uids)
-        return [uid for uid in self.items.uids if uid in owned]
-
-    def __getstate__(self) -> dict[str, tp.Any]:
-        return {
-            **self.__dict__,
-            "info": CoordinationInfo(held_entries=self.info.held_entries),
-        }
-
-    def select(self, uids: tp.Sequence[str]) -> ComputeBatch:
-        """Sub-batch over *uids*, sharing step/paths/cache; copies ``info``
-        (avoid aliasing the parent's claim).
-        """
-        info = dataclasses.replace(self.info)
-        items_ = self.items.select(uids, mode=self.info.mode)
-        return dataclasses.replace(self, items=items_, info=info)
-
-    def shuffled(self) -> ComputeBatch:
-        """Same batch with its uids in random order."""
-        # competing runs pick items in different orders, reducing claim collisions
-        uids = list(self.items.uids)
-        random.shuffle(uids)
-        return self.select(uids)
-
-    def cached_items(self) -> StepItems:
-        """Lazy cache-backed carrier; use on a top-level batch, not a chunk."""
-        return items.StepItems(
-            source=self.cache_dict,
-            uids=self.items.uids,
-            upstream=self.info.upstream,
-            mode=self.info.mode,
-        )
-
-    # No return: the driver re-reads from cache rather than unpickle a (heavy) result.
-    def run_and_cache(self) -> None:
-        folder = self.cache_dict.folder
-        if folder is not None:
-            folder.mkdir(parents=True, exist_ok=True)
-        written_uids: list[str] = []
-        token = _HELD_ENTRIES.set(self.info.held_entries)
-        try:
-            result_items = self.step._run_items(self.items)
-            with self.cache_dict.write():
-                for i, result in enumerate(result_items):
-                    uid = self.items.uids[i]
-                    if uid not in self.cache_dict:
-                        self.cache_dict[uid] = result
-                        written_uids.append(uid)
-        except items.BatchProtocolError as e:
-            if written_uids:
-                logger.warning(
-                    "Clearing partial results after invalid _run_batch output: %s",
-                    self.paths.step_uid,
-                )
-                with self.cache_dict.write(), self.cache_dict.frozen_cache_folder():
-                    for uid in written_uids:
-                        if uid in self.cache_dict:
-                            del self.cache_dict[uid]
-            if folder is not None:
-                e.add_note(f"  -> cache may be invalid: {folder}")
-            raise
-        except Exception as e:
-            inflight: list[str] = getattr(e, "_inflight_uids", [])
-            if folder is not None and inflight:
-                e.add_note(f"  -> error recorded at {self.paths.step_uid}{inflight}")
-                tb = "".join(traceback.format_exception(e))
-                with errors.ErrorRegistry(folder.parent) as reg:
-                    for uid in inflight:
-                        reg.record(uid, e, tb)
-            raise
-        finally:
-            _HELD_ENTRIES.reset(token)
-
-
-def _multi_run_and_cache(batches: list[ComputeBatch]) -> None:
-    """``run_and_cache`` each batch of one worker task (a task may hold several)."""
-    for batch in batches:
-        logger.info(
-            "Running %s items for %s", len(batch.items.uids), batch.paths.step_uid
-        )
-        batch.run_and_cache()
-
-
-def _tasks_from_batches(
-    cbatches: list[ComputeBatch],
-    *,
-    max_chunks: int | None,
-    min_items_per_chunk: int,
-) -> list[list[ComputeBatch]]:
-    """Group the batches' items into worker tasks."""
-    labels = [i for i, cb in enumerate(cbatches) for _ in cb.items.uids]
-    cursors = [0] * len(cbatches)
-    tasks: list[list[ComputeBatch]] = []
-    for chunk in utils.to_chunks(
-        labels, max_chunks=max_chunks, min_items_per_chunk=min_items_per_chunk
-    ):
-        task: list[ComputeBatch] = []
-        for i, count in collections.Counter(chunk).items():
-            start = cursors[i]
-            task.append(cbatches[i].select(cbatches[i].items.uids[start : start + count]))
-            cursors[i] = start + count
-        tasks.append(task)
-    return tasks
-
-
-class _Claimed:
-    """Batches claimed under one ExitStack of inflight sessions; ``close``
-    releases every claim.
-    """
-
-    def __init__(self) -> None:
-        self.stack = contextlib.ExitStack()
-        self.batches: list[ComputeBatch] = []  # all claimed
-        self.ready: list[ComputeBatch] = []  # still-pending subset after recheck
-
-    def close(self) -> None:
-        self.stack.close()
-
-    def __enter__(self) -> _Claimed:
-        return self
-
-    def __exit__(self, *exc: tp.Any) -> None:
-        self.close()
+EntryKey = tuple[str, str]
 
 
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     """Base class for execution backends with integrated caching."""
 
-    @classmethod
-    def _exclude_from_cls_uid(cls) -> list[str]:
-        return ["."]  # force ignored in uid
-
     folder: Path | None = None
-
     mode: identity.ModeType = "cached"
     keep_in_ram: bool = False
-    # Force/retry: recompute each (step_folder, uid) at most once per lifetime
-    _recomputed: set[tuple[Path, str]] = pydantic.PrivateAttr(default_factory=set)
-    _checked_configs: set[Path] = pydantic.PrivateAttr(default_factory=set)
 
-    def __getstate__(self) -> dict[str, tp.Any]:
-        recomputed = self._recomputed
-        self._recomputed = set()
-        try:
-            return super().__getstate__()
-        finally:
-            self._recomputed = recomputed
+    def _submit(self, tasks: tp.Sequence[_WriteTask]) -> _Submission | None:
+        for task in tasks:
+            task()
+        return None
 
-    def _pending_statuses(
-        self,
-        *,
-        paths: StepPaths,
-        uids: tp.Iterable[str],
-        mode: identity.ModeType,
-    ) -> dict[str, CacheStatus]:
-        """Return cache statuses for uids that should run under *mode*."""
-        cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        statuses = _CachedEntry.lookup_statuses(cd, uids)
-        pending: dict[str, CacheStatus] = {}
-        for uid, status in statuses.items():
-            if status is None:
-                if mode == "read-only":
-                    raise RuntimeError(
-                        f"No cache in read-only mode: {paths.step_uid}[{uid}]"
-                    )
-                pending[uid] = status
-            elif (paths.step_folder, uid) in self._recomputed:
-                if status == "error":
-                    _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
-                continue
-            elif mode == "force" or (mode == "retry" and status == "error"):
-                pending[uid] = status
-            elif status == "error":
-                _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
-        return pending
+    def _submission_config(self) -> tuple[type[Backend], dict[str, tp.Any]]:
+        # DiscriminatedModel's serializer drops model_dump(exclude=...)
+        config = self.model_dump()
+        return type(self), {
+            name: value
+            for name, value in config.items()
+            if name not in Backend.model_fields
+        }
 
     @pydantic.field_validator("mode", mode="before")
     @classmethod
-    def _deprecate_force_forward(cls, v: str) -> str:
-        if v == "force-forward":
+    def _deprecate_force_forward(cls, value: str) -> str:
+        if value == "force-forward":
             warnings.warn(
                 '"force-forward" mode is deprecated, use "force" instead '
                 "(force now propagates to downstream steps)",
@@ -500,23 +71,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 stacklevel=2,
             )
             return "force"
-        return v
+        return value
 
-    # memoize so `keep_in_ram` survives. Keyed on cache_folder as a Step
-    # could be reused in other chain contexts, with different `step_uid`s.
-    _cds: dict[Path, exca.cachedict.CacheDict[tp.Any]] = pydantic.PrivateAttr(
-        default_factory=dict
-    )
-
-    def __eq__(self, other: tp.Any) -> bool:
-        """Compare backends by declared model fields."""
-        if not isinstance(other, Backend):
-            return NotImplemented
-        return type(self) is type(other) and all(
-            getattr(self, f) == getattr(other, f) for f in type(self).model_fields
-        )
-
-    def derive(self, backend: str | None = None, **kwargs: tp.Any) -> "Backend":
+    def derive(self, backend: str | None = None, **kwargs: tp.Any) -> Backend:
         """Return a new backend based on the current one's fields shared
         with the target backend.
 
@@ -534,179 +91,11 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             raise ValueError(f"Unknown backend {name!r}, available: {sorted(options)}")
         target = options[name]
         data = {
-            f: getattr(self, f)
-            for f in target.model_fields
-            if f in type(self).model_fields
+            field: getattr(self, field)
+            for field in target.model_fields
+            if field in type(self).model_fields
         }
-        return tp.cast("Backend", target(**{**data, **kwargs}))
-
-    def _cache_dict(
-        self, cache_folder: Path, *, cache_type: str | None
-    ) -> exca.cachedict.CacheDict[tp.Any]:
-        """Per-Backend CacheDict, memoised by cache_folder so `keep_in_ram`
-        and disk handles persist across `run()` calls."""
-        cd = self._cds.get(cache_folder)
-        if cd is None:
-            cd = exca.cachedict.CacheDict(
-                folder=cache_folder,
-                cache_type=cache_type,
-                keep_in_ram=self.keep_in_ram,
-            )
-            self._cds[cache_folder] = cd
-        return cd
-
-    def _clear_caches(
-        self,
-        *,
-        paths: StepPaths,
-        cd: exca.cachedict.CacheDict[tp.Any],
-        uids: tp.Iterable[str],
-    ) -> None:
-        """Drop everything cached for these uids (cd rows and error rows)."""
-        uids = list(dict.fromkeys(uids))
-        if not uids:
-            return
-        # Other backends may have left inflight rows for this step folder.
-        if paths.step_folder.exists():
-            try:
-                held = _HELD_ENTRIES.get()
-                folder_key = str(paths.step_folder)
-                with inflight.InflightRegistry(paths.step_folder) as reg:
-                    info = reg.get(uids)
-                    jobs: dict[str, str] = {}
-                    for uid, worker in info.items():
-                        if worker.job_id is None or worker.job_folder is None:
-                            continue  # not submitit
-                        if (folder_key, uid) in held:
-                            continue  # an ancestor's job — cancelling it kills us
-                        # Slurm array tasks share a scheduler job; avoid per-task cancels.
-                        job_id = worker.job_id.split("_", 1)[0]
-                        jobs[job_id] = worker.job_folder
-                    for job_id, folder in jobs.items():
-                        submitit.SlurmJob(job_id=job_id, folder=folder).cancel()
-            except Exception as e:
-                logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
-        # Success first → a mid-clear crash leaves a recoverable cached
-        # error rather than a stale success (fail closed).
-        with cd.write(), cd.frozen_cache_folder():
-            for uid in uids:
-                if uid in cd:
-                    del cd[uid]
-        if paths.step_folder.exists():
-            with errors.ErrorRegistry(paths.step_folder) as ereg:
-                ereg.clear(uids)
-        self._checked_configs.discard(paths.step_folder)
-
-    def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
-        """Execute *step* for uncached items, caching per uid."""
-        cbatch = self._prepare(step, batch)
-        with self._claim([cbatch]) as claimed:
-            if claimed.ready:
-                self._execute(claimed.ready)
-        return cbatch.cached_items()
-
-    def _prepare(self, step: Step, batch: items.StepItems) -> ComputeBatch:
-        """Resolve paths/cache/mode and force-clear before any claim is held."""
-        upstream = tuple(batch._upstream) + tuple(step._uid_steps())
-        paths = step._make_paths(upstream)
-        if paths.step_folder not in self._checked_configs:
-            identity.write_configs(paths.step_folder, upstream)
-            self._checked_configs.add(paths.step_folder)
-        cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        mode = _fold_modes(batch._mode, _effective_mode(step))
-
-        pending_statuses = self._pending_statuses(paths=paths, uids=batch.uids, mode=mode)
-        if pending_statuses:
-            paths.cache_folder.mkdir(parents=True, exist_ok=True)
-            if mode == "force":
-                to_clear = [
-                    uid for uid, status in pending_statuses.items() if status is not None
-                ]
-                if to_clear:
-                    msg = "Clearing %s items for %s (infra.mode=%s)"
-                    logger.warning(msg, len(to_clear), paths.step_uid, mode)
-                self._clear_caches(paths=paths, cd=cd, uids=set(pending_statuses))
-        # carries the full input set; _claim filters to pending
-        info = CoordinationInfo(mode=mode, upstream=upstream)
-        return ComputeBatch(step=step, paths=paths, cache_dict=cd, items=batch, info=info)
-
-    def _claim(self, cbatches: list[ComputeBatch]) -> _Claimed:
-        """Claim every batch's pending uids, recheck, and return a `_Claimed`."""
-        step_uids = [cb.paths.step_uid for cb in cbatches]
-        if len(set(step_uids)) != len(step_uids):
-            raise ValueError(f"one batch per step_uid required, got {step_uids}")
-        claimed = _Claimed()
-        held = _HELD_ENTRIES.get()
-        try:
-            # sort by step_uid: concurrent dispatches claim in the same order
-            for cb in sorted(cbatches, key=lambda cb: cb.paths.step_uid):
-                pending = self._pending_statuses(
-                    paths=cb.paths, uids=cb.items.uids, mode=cb.info.mode
-                )
-                if not pending:
-                    continue
-                reg = inflight.InflightRegistry(cb.paths.step_folder)
-                # ancestors already hold their entries: claiming them self-deadlocks
-                folder_key = str(cb.paths.step_folder)
-                request = {u for u in pending if (folder_key, u) not in held}
-                cb = cb.select(list(pending))
-                cb.info.claim = claimed.stack.enter_context(
-                    inflight.inflight_session(reg, request)
-                )
-                cb.info.held_entries = held
-                cb.info.held_entries |= {(folder_key, u) for u in cb.info.claim.uids}
-                claimed.batches.append(cb)
-            claimed.ready = [
-                n
-                for cb in claimed.batches
-                if (n := self._recheck_and_clear(cb)) is not None
-            ]
-        except BaseException:
-            claimed.close()
-            raise
-        return claimed
-
-    def _recheck_and_clear(self, cbatch: ComputeBatch) -> ComputeBatch | None:
-        """Recheck under the claim, clear stale entries, return narrowed batch
-        or ``None`` if fully populated by a competitor.
-        """
-        mode = cbatch.info.mode
-        pending_statuses = self._pending_statuses(
-            paths=cbatch.paths, uids=cbatch.items.uids, mode=mode
-        )
-        inflight.after_wait_log(
-            cbatch.paths.step_uid, len(cbatch.items.uids), len(pending_statuses)
-        )
-        retry_count = sum(status == "error" for status in pending_statuses.values())
-        if retry_count:
-            logger.warning(
-                "Retrying %s failed items for %s", retry_count, cbatch.paths.step_uid
-            )
-        clear_uids = [
-            uid
-            for uid, status in pending_statuses.items()
-            if mode == "force" or status == "error"
-        ]
-        self._clear_caches(paths=cbatch.paths, cd=cbatch.cache_dict, uids=clear_uids)
-        if not pending_statuses:
-            return None
-        return cbatch.select(list(pending_statuses))
-
-    def _mark_recomputed(self, cbatch: ComputeBatch) -> None:
-        """Record *cbatch*'s uids as recomputed-this-lifetime.
-
-        Per-batch, not all-at-once: a raising run leaves later batches
-        un-attempted → must stay unmarked.
-        """
-        if cbatch.info.mode in ("force", "retry"):
-            folder = cbatch.paths.step_folder
-            self._recomputed.update((folder, uid) for uid in cbatch.items.uids)
-
-    def _execute(self, cbatches: list[ComputeBatch]) -> None:
-        """Run *cbatches* (filtered+claimed) blocking; override for pools/arrays."""
-        for cbatch in cbatches:
-            self._mark_recomputed(cbatch)
-            cbatch.run_and_cache()
+        return tp.cast(Backend, target(**{**data, **kwargs}))
 
 
 class Cached(Backend):
@@ -719,195 +108,22 @@ class Cached(Backend):
 
     capture_logs: bool = False
 
-    def _execute(self, cbatches: list[ComputeBatch]) -> None:
-        if not cbatches:
-            return
+    def _submit(self, tasks: tp.Sequence[_WriteTask]) -> _Submission | None:
         log_folder = None
         if self.capture_logs:
-            paths = cbatches[0].paths
+            paths = tasks[0].paths
             log_folder = Path(paths._logs_folder.replace("%j", "main-process"))
-        from . import utils as step_utils  # circular
-
-        with step_utils.capture_logs(log_folder):
+        with _capture_logs(log_folder):
             if log_folder is not None:
                 time = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
-                step_uids = ", ".join(cbatch.paths.step_uid for cbatch in cbatches)
-                n_items = sum(len(cbatch.items.uids) for cbatch in cbatches)
+                step_uids = ", ".join(task.paths.step_uid for task in tasks)
+                n_items = sum(len(task.values.uids) for task in tasks)
                 header = f"{time} - Running {n_items} items for steps: {step_uids}"
                 print(header)
                 print(header, file=sys.stderr)
-            super()._execute(cbatches)
-
-
-class _SubmititBackend(Backend):
-    """Base for submitit backends."""
-
-    job_name: str | None = None
-    timeout_min: int | None = None
-    nodes: int | None = None
-    tasks_per_node: int | None = None
-    cpus_per_task: int | None = None
-    gpus_per_node: int | None = None
-    mem_gb: float | None = None
-    max_jobs: int = pydantic.Field(128, gt=0)
-    min_items_per_job: int = pydantic.Field(1, gt=0)
-
-    _CLUSTER: tp.ClassVar[str | None] = None  # submitit cluster name
-
-    def _submitit_params(self) -> dict[str, tp.Any]:
-        """Build the kwargs dict forwarded to ``AutoExecutor.update_parameters``."""
-        fields = set(type(self).model_fields) - set(Backend.model_fields)
-        skip = {"max_jobs", "min_items_per_job"}
-        params = {
-            k: getattr(self, k) for k in fields - skip if getattr(self, k) is not None
-        }
-        if "job_name" in params:
-            params["name"] = params.pop("job_name")
-        return params
-
-    def _execute(self, cbatches: list[ComputeBatch]) -> None:
-        # all batches → one executor.batch() → one slurm array
-        for cbatch in cbatches:
-            if cbatch.info.claim is None:
-                raise RuntimeError("_execute runs only on claimed batches")
-            self._mark_recomputed(cbatch)  # all tasks submitted together below
-        tasks = _tasks_from_batches(
-            [cb.shuffled() for cb in cbatches],
-            max_chunks=self.max_jobs,
-            min_items_per_chunk=self.min_items_per_job,
-        )
-        # one array → one logs folder; jobs.db still records per step_folder
-        executor = submitit.AutoExecutor(
-            folder=cbatches[0].paths._logs_folder, cluster=self._CLUSTER
-        )
-        params = self._submitit_params()
-        if self._CLUSTER in ("slurm", None):
-            params["slurm_array_parallelism"] = len(tasks)
-        executor.update_parameters(**params)
-        with submitit.helpers.clean_env(), executor.batch():
-            jobs = [executor.submit(_multi_run_and_cache, task) for task in tasks]
-        # a task may span variants: record each sub-batch against the shared job
-        by_folder: dict[Path, dict[str, tp.Sequence[str]]] = {}
-        for task, job in zip(tasks, jobs):
-            for batch in task:
-                assert batch.info.claim is not None  # inherited from its variant
-                batch.info.claim.record_worker_info(job, uids=batch.claimed_uids())
-                folder = batch.paths.step_folder
-                by_folder.setdefault(folder, {})[job.job_id] = batch.items.uids
-        for folder, records in by_folder.items():
-            with jobregistry.JobRegistry(folder) as reg:
-                reg.record(records, cluster=executor.cluster)
-        n_items = sum(len(cb.items.uids) for cb in cbatches)
-        msg = "Sent %s items for %s steps into %s jobs on cluster '%s' (eg: %s)"
-        logger.info(
-            msg, n_items, len(cbatches), len(tasks), self._CLUSTER, jobs[0].job_id
-        )
-        for job in jobs:
-            job.result()
-        logger.info("Finished processing %s items for %s steps", n_items, len(cbatches))
-
-
-class LocalProcess(_SubmititBackend):
-    """Subprocess execution + caching."""
-
-    _CLUSTER: tp.ClassVar[str | None] = "local"
-
-
-class SubmititDebug(_SubmititBackend):
-    """Debug executor (inline but simulates submitit)."""
-
-    _CLUSTER: tp.ClassVar[str | None] = "debug"
-
-
-class Slurm(_SubmititBackend):
-    """Slurm cluster execution + caching. Fails on non-slurm machines."""
-
-    constraint: str | None = None
-    partition: str | None = None
-    account: str | None = None
-    qos: str | None = None
-    additional_parameters: dict[str, int | str | float | bool] | None = None
-    # important to enable sub-jobs (may need rechecking with latest slurm):
-    use_srun: bool = False
-
-    _CLUSTER: tp.ClassVar[str | None] = "slurm"
-
-    def _submitit_params(self) -> dict[str, tp.Any]:
-        # submitit's AutoExecutor routes to slurm via "slurm_" prefix
-        params = super()._submitit_params()
-        slurm_only = set(Slurm.model_fields) - set(_SubmititBackend.model_fields)
-        for name in slurm_only:
-            if name in params:
-                params[f"slurm_{name}"] = params.pop(name)
-        return params
-
-
-class Auto(Slurm):
-    """Auto-detect executor (local or Slurm). Slurm fields only apply on slurm."""
-
-    _CLUSTER: tp.ClassVar[str | None] = None
-
-
-# holds the pool + claims past the dispatch call so `_PoolSource` reads lazily
-class _PoolContext:
-    def __init__(
-        self,
-        cache_dict: exca.cachedict.CacheDict[tp.Any],
-        step_uid: str,
-        pool: futures.Executor,
-        claimed: _Claimed,
-    ) -> None:
-        self.cd = cache_dict
-        self.step_uid = step_uid
-        self._pool: futures.Executor | None = pool
-        self._claimed: _Claimed | None = claimed
-
-    def _cleanup(self, *, wait: bool) -> None:
-        if self._pool is not None:
-            self._pool.shutdown(wait=wait)
-            self._pool = None
-        if self._claimed is not None:
-            self._claimed.close()
-            self._claimed = None
-
-    def close(self) -> None:
-        self._cleanup(wait=True)
-
-    def __del__(self) -> None:
-        self._cleanup(wait=False)
-
-
-class _PoolSource:
-    """Future-backed lazy source: ``__getitem__`` blocks until the uid's chunk
-    completes, then reads from the CacheDict."""
-
-    def __init__(
-        self,
-        uid_to_future: dict[str, futures.Future[None]],
-        ctx: _PoolContext,
-    ) -> None:
-        self._uid_to_future = uid_to_future
-        self._ctx = ctx
-
-    def __getitem__(self, uid: str) -> tp.Any:
-        fut = self._uid_to_future.get(uid)
-        if fut is not None:
-            fut.result()
-        try:
-            return self._ctx.cd[uid]
-        except KeyError:
-            raise RuntimeError(
-                f"Worker completed but cache missing: {self._ctx.step_uid}[{uid}]"
-            ) from None
-
-    def select(self, uids: tp.Sequence[str]) -> _PoolSource:
-        sub = {u: self._uid_to_future[u] for u in uids if u in self._uid_to_future}
-        return _PoolSource(sub, self._ctx)
-
-    def __reduce__(self) -> tp.Any:
-        for fut in set(self._uid_to_future.values()):
-            fut.result()
-        return self._ctx.cd.__reduce__()
+            for task in tasks:
+                task()
+        return None
 
 
 class _PoolBackend(Backend):
@@ -916,86 +132,34 @@ class _PoolBackend(Backend):
     max_jobs: int | None = pydantic.Field(128, gt=0)
     _POOL_TYPE: tp.ClassVar[str]
 
-    def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
-        """Single-step streaming: same submission as ``_execute``, returns a
-        lazy carrier instead of blocking.
-        """
-        cbatch = self._prepare(step, batch)
-        claimed = self._claim([cbatch])
-        transferred = False
-        try:
-            submission = self._submit_pool(claimed.ready) if claimed.ready else None
-            if submission is None:  # nothing pending, or ran inline
-                return cbatch.cached_items()
-            pool, task_futs = submission
-            uid_to_future = {
-                uid: fut
-                for fut, task in task_futs.items()
-                for b in task
-                for uid in b.items.uids
-            }
-            ctx = _PoolContext(cbatch.cache_dict, cbatch.paths.step_uid, pool, claimed)
-            transferred = True  # _PoolContext closes `claimed`, not the finally
-            return items.StepItems(
-                source=_PoolSource(uid_to_future, ctx),
-                uids=cbatch.items.uids,
-                upstream=cbatch.info.upstream,
-                mode=cbatch.info.mode,
-            )
-        finally:
-            if not transferred:
-                claimed.close()
-
-    def _execute(self, cbatches: list[ComputeBatch]) -> None:
-        submission = self._submit_pool(cbatches)
-        if submission is None:  # ran inline (single worker)
-            return
-        pool, task_futs = submission
-        n_items = sum(len(cb.items.uids) for cb in cbatches)
-        with pool:
-            try:
-                for f in futures.as_completed(task_futs):
-                    f.result()
-            except BaseException:
-                for f in task_futs:
-                    f.cancel()
-                raise
-        logger.info("Finished processing %s items for %s steps", n_items, len(cbatches))
-
-    def _submit_pool(
-        self, cbatches: list[ComputeBatch]
-    ) -> tuple[futures.Executor, dict[futures.Future[None], list[ComputeBatch]]] | None:
-        """Submit all *cbatches* to one pool (no waiting); returns the pool and
-        its task->future map, or ``None`` if the work ran inline (single worker).
-        """
+    def _submit(self, tasks: tp.Sequence[_WriteTask]) -> _Submission | None:
         # one pool across variants: heterogeneous variants overlap (load balance)
-        n_items = sum(len(cb.items.uids) for cb in cbatches)
-        for cbatch in cbatches:
-            if cbatch.info.claim is None:
-                raise RuntimeError("_submit_pool runs only on claimed batches")
-            self._mark_recomputed(cbatch)
-        cpus = max(1, (os.cpu_count() or 1) - 1)
-        max_workers = min(n_items, cpus)
-        if self.max_jobs is not None:
-            max_workers = min(max_workers, self.max_jobs)
-        if max_workers <= 1:
-            for cbatch in cbatches:
-                cbatch.run_and_cache()
+        n_items = sum(len(task.values.uids) for task in tasks)
+        workers = min(
+            n_items,
+            max(1, (os.cpu_count() or 1) - 1),
+            n_items if self.max_jobs is None else self.max_jobs,
+        )
+        if workers <= 1:
+            for task in tasks:
+                task()
             return None
         # ~3x as many tasks as workers, run in one pool
-        tasks = _tasks_from_batches(
-            [cb.shuffled() for cb in cbatches],
-            max_chunks=3 * max_workers,
-            min_items_per_chunk=1,
+        groups = _shard_tasks(tasks, max_chunks=3 * workers)
+        executor = utils.make_pool_executor(self._POOL_TYPE, workers)
+        logger.info(
+            "Sent %s items for %s steps into a %s",
+            n_items,
+            len(tasks),
+            executor,
         )
-        for task in tasks:
-            for batch in task:
-                assert batch.info.claim is not None  # inherited from its variant
-                batch.info.claim.record_worker_info(uids=batch.claimed_uids())
-        pool = utils.make_pool_executor(self._POOL_TYPE, max_workers)
-        logger.info("Sent %s items for %s steps into a %s", n_items, len(cbatches), pool)
-        task_futs = {pool.submit(_multi_run_and_cache, task): task for task in tasks}
-        return pool, task_futs
+        return _FutureSubmission.create(executor, groups)
+
+
+class ThreadPool(_PoolBackend):
+    """Thread pool execution + caching."""
+
+    _POOL_TYPE: tp.ClassVar[str] = "threadpool"
 
 
 class ProcessPool(_PoolBackend):
@@ -1004,7 +168,1122 @@ class ProcessPool(_PoolBackend):
     _POOL_TYPE: tp.ClassVar[str] = "processpool"
 
 
-class ThreadPool(_PoolBackend):
-    """Thread pool execution + caching."""
+class _SubmititInfra(Backend):
+    """Base for submitit backends."""
 
-    _POOL_TYPE: tp.ClassVar[str] = "threadpool"
+    _cluster: tp.ClassVar[tp.Literal["debug", "local", "slurm"] | None]
+
+    max_jobs: int = pydantic.Field(128, gt=0)
+    min_items_per_job: int = pydantic.Field(1, gt=0)
+    job_name: str | None = None
+    timeout_min: int | None = None
+    nodes: int | None = None
+    tasks_per_node: int | None = None
+    cpus_per_task: int | None = None
+    gpus_per_node: int | None = None
+    mem_gb: float | None = None
+
+    def _submitit_parameters(self, n_jobs: int) -> dict[str, tp.Any]:
+        """Build the kwargs dict forwarded to ``AutoExecutor.update_parameters``."""
+        generic = (
+            "timeout_min",
+            "nodes",
+            "tasks_per_node",
+            "cpus_per_task",
+            "gpus_per_node",
+            "mem_gb",
+        )
+        parameters = {
+            name: getattr(self, name)
+            for name in generic
+            if getattr(self, name) is not None
+        }
+        if self.job_name is not None:
+            parameters["name"] = self.job_name
+        return parameters
+
+    def _submit(self, tasks: tp.Sequence[_WriteTask]) -> _Submission:
+        groups = _shard_tasks(
+            tasks,
+            max_chunks=self.max_jobs,
+            min_items_per_chunk=self.min_items_per_job,
+        )
+        # one array → one logs folder; jobs.db still records per step_folder
+        folder = tasks[0].paths._logs_folder
+        executor = submitit_lib.AutoExecutor(folder=folder, cluster=self._cluster)
+        executor.update_parameters(**self._submitit_parameters(len(groups)))
+        jobs: list[tp.Any] = []
+        try:
+            with submitit_lib.helpers.clean_env(), executor.batch():
+                for group in groups:
+                    jobs.append(executor.submit(group))
+        except BaseException:
+            for job in jobs:
+                cancel = getattr(job, "cancel", None)
+                if cancel is not None:
+                    try:
+                        cancel()
+                    except BaseException:
+                        logger.warning(
+                            "Failed to cancel job %s after submission error",
+                            getattr(job, "job_id", None),
+                            exc_info=True,
+                        )
+            for job in jobs:
+                try:
+                    job.result()
+                except BaseException:
+                    logger.debug(
+                        "Submitted job %s failed during cleanup",
+                        getattr(job, "job_id", None),
+                        exc_info=True,
+                    )
+            raise
+        cluster = str(getattr(executor, "cluster", None) or self._cluster or "slurm")
+        n_items = sum(len(task.values.uids) for task in tasks)
+        logger.info(
+            "Sent %s items for %s steps into %s jobs on cluster '%s' (eg: %s)",
+            n_items,
+            len(tasks),
+            len(jobs),
+            cluster,
+            jobs[0].job_id,
+        )
+        return _JobSubmission(
+            jobs,
+            groups,
+            cluster=cluster,
+            job_folder=folder,
+        )
+
+
+class LocalProcess(_SubmititInfra):
+    """Subprocess execution + caching."""
+
+    _cluster = "local"
+
+
+class SubmititDebug(_SubmititInfra):
+    """Debug executor (inline but simulates submitit)."""
+
+    _cluster = "debug"
+
+
+class Slurm(_SubmititInfra):
+    """Slurm cluster execution + caching. Fails on non-slurm machines."""
+
+    _cluster: tp.ClassVar[tp.Literal["debug", "local", "slurm"] | None] = "slurm"
+
+    constraint: str | None = None
+    partition: str | None = None
+    account: str | None = None
+    qos: str | None = None
+    additional_parameters: dict[str, int | str | float | bool] | None = None
+    use_srun: bool = False
+
+    def _submitit_parameters(self, n_jobs: int) -> dict[str, tp.Any]:
+        parameters = super()._submitit_parameters(n_jobs)
+        for name in (
+            "constraint",
+            "partition",
+            "account",
+            "qos",
+            "additional_parameters",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                parameters[f"slurm_{name}"] = value
+        parameters["slurm_use_srun"] = self.use_srun
+        parameters["slurm_array_parallelism"] = n_jobs
+        return parameters
+
+
+class Auto(Slurm):
+    """Auto-detect executor (local or Slurm). Slurm fields only apply on slurm."""
+
+    _cluster = None
+
+
+@dataclasses.dataclass(frozen=True)
+class StepPaths:
+    """On-disk path layout for a step rooted at ``base_folder / step_uid``.
+
+    See `docs/internal/steps/caching.md` for the full tree.
+    """
+
+    base_folder: Path
+    step_uid: str
+    cache_type: str | None = None
+
+    @property
+    def step_folder(self) -> Path:
+        """Base folder for this step (contains cache/ and logs/)."""
+        return self.base_folder / self.step_uid
+
+    @property
+    def cache_folder(self) -> Path:
+        """CacheDict folder for results."""
+        return self.step_folder / "cache"
+
+    @property
+    def _logs_folder(self) -> str:
+        return str(self.step_folder / "logs" / "%j")
+
+    def _entry(self, uid: str) -> EntryKey:
+        return str(self.step_folder), uid
+
+
+def _fold_modes(*modes: identity.ModeType) -> identity.ModeType:
+    """Fold modes in pipeline order: ``force``/``retry`` persist forward,
+    ``read-only`` is local (resets on next step). ``force`` then ``read-only`` raises.
+    """
+    rank = ("cached", "retry", "force").index
+    mode: identity.ModeType = "cached"
+    for current in modes:
+        if current == "read-only":
+            if mode == "force":
+                raise ValueError(
+                    "read-only mode conflicts with 'force' — would return stale results"
+                )
+            mode = current
+        elif mode == "read-only":
+            mode = current
+        elif rank(current) > rank(mode):
+            mode = current
+    return mode
+
+
+def _cache_dict(
+    paths: StepPaths, keep_in_ram: bool = False
+) -> exca.cachedict.CacheDict[tp.Any]:
+    return exca.cachedict.CacheDict(
+        folder=paths.cache_folder,
+        cache_type=paths.cache_type,
+        keep_in_ram=keep_in_ram,
+    )
+
+
+class _CacheOwner:
+    def __init__(
+        self, paths: StepPaths, keep_in_ram: bool, *, staged: bool = False
+    ) -> None:
+        self.paths = paths
+        self.keep_in_ram = keep_in_ram
+        self.cache_dict = _cache_dict(paths, keep_in_ram)
+        self.attempted: set[str] = set()
+        self.staged = staged
+
+    def __getstate__(self) -> dict[str, tp.Any]:
+        state = self.__dict__.copy()
+        state["attempted"] = set()
+        return state
+
+    def cache_view(self) -> exca.cachedict.CacheDict[tp.Any]:
+        return (
+            _cache_dict(self.paths, self.keep_in_ram) if self.staged else self.cache_dict
+        )
+
+    def clear(self, uids: tp.Iterable[str]) -> None:
+        unique = tuple(dict.fromkeys(uids))
+        _clear(self.paths, self.cache_view(), unique)
+
+
+@dataclasses.dataclass
+class _CachedEntry:
+    """Result of looking up an item in the cache: a ``status`` plus a
+    ``result()`` to materialise the cached value or re-raise the cached error."""
+
+    status: CacheStatus
+    cache_dict: exca.cachedict.CacheDict[tp.Any]
+    uid: str
+    error: BaseException | None = None
+
+    @classmethod
+    def lookup(
+        cls, cache_dict: exca.cachedict.CacheDict[tp.Any], uid: str
+    ) -> _CachedEntry:
+        """Single-uid lookup with full error materialisation."""
+        status = cls.statuses(cache_dict, (uid,))[uid]
+        if status != "error":
+            return cls(status, cache_dict, uid)
+        assert cache_dict.folder is not None
+        with errors.ErrorRegistry(cache_dict.folder.parent) as registry:
+            error = registry.load(uid)
+        if error is None:
+            return cls(None, cache_dict, uid)
+        error.add_note(
+            f"     reraising from cache {cache_dict.folder}[{uid}]; "
+            "use mode='retry' to recompute"
+        )
+        return cls("error", cache_dict, uid, error)
+
+    @staticmethod
+    def statuses(
+        cache_dict: exca.cachedict.CacheDict[tp.Any], uids: tp.Iterable[str]
+    ) -> dict[str, CacheStatus]:
+        """Bulk status check — one ErrorRegistry query instead of N."""
+        unique = list(dict.fromkeys(uids))
+        out: dict[str, CacheStatus] = {}
+        missing: list[str] = []
+        with cache_dict.frozen_cache_folder():
+            for uid in unique:
+                if uid in cache_dict:
+                    out[uid] = "success"
+                else:
+                    out[uid] = None
+                    missing.append(uid)
+        folder = cache_dict.folder
+        if missing and folder is not None and folder.exists():
+            with errors.ErrorRegistry(folder.parent) as registry:
+                for uid in registry.get(missing):
+                    out[uid] = "error"
+        return out
+
+    def result(self) -> tp.Any:
+        """Return the cached value or re-raise the cached error."""
+        if self.status == "success":
+            return self.cache_dict[self.uid]
+        if self.status == "error":
+            if self.error is None:
+                raise RuntimeError(f"_CachedEntry(error) missing error for {self.uid}")
+            raise self.error
+        raise RuntimeError(f"No cached entry for {self.uid}")
+
+
+class LookupHandle:
+    """Cache handle for a ``(step, value)`` pair.
+
+    Returned by :meth:`Step.lookup`. Provides read-only access to the
+    cache entry and its on-disk paths.
+    """
+
+    def __init__(
+        self,
+        paths: StepPaths | None = None,
+        *,
+        uid: str = "",
+        owner: _CacheOwner | None = None,
+    ) -> None:
+        self.uid = uid
+        self._owner = (
+            _CacheOwner(paths, False) if owner is None and paths is not None else owner
+        )
+        self._sub_handles: tuple[LookupHandle, ...] = ()
+
+    @property
+    def paths(self) -> StepPaths:
+        """On-disk path layout (:class:`StepPaths`) for this entry."""
+        if self._owner is None:
+            raise RuntimeError("no infra configured on this step")
+        return self._owner.paths
+
+    @property
+    def cache_dict(self) -> exca.cachedict.CacheDict[tp.Any]:
+        """:class:`~exca.cachedict.CacheDict` for this entry."""
+        if self._owner is None:
+            raise RuntimeError("no infra configured on this step")
+        return self._owner.cache_view()
+
+    @property
+    def status(self) -> tp.Literal["success", "error", "running", None]:
+        """Entry status: ``"success"``, ``"error"``, ``"running"``, or ``None``."""
+        if self._owner is None:
+            return None
+        status = _CachedEntry.lookup(self.cache_dict, self.uid).status
+        if status is not None or not self.paths.step_folder.exists():
+            return status
+        with inflight.InflightRegistry(self.paths.step_folder) as registry:
+            info = registry.get([self.uid]).get(self.uid)
+        if info is not None and info.is_alive():
+            return "running"
+        return None
+
+    def cached(self) -> bool:
+        """True iff there is a cached success or error."""
+        return self.status in ("success", "error")
+
+    def result(self) -> tp.Any:
+        """Return the cached value, or re-raise a cached error."""
+        entry = _CachedEntry.lookup(self.cache_dict, self.uid)
+        if entry.status is None:
+            raise RuntimeError(f"no cached result for {self.paths.step_uid}[{self.uid}]")
+        return entry.result()
+
+    def _known_uids(self) -> set[str]:
+        if self._owner is None:
+            return set()
+        uids = set(self.cache_dict.keys())
+        if self.paths.step_folder.exists():
+            with errors.ErrorRegistry(self.paths.step_folder) as registry:
+                uids.update(registry.get())
+            with inflight.InflightRegistry(self.paths.step_folder) as registry:
+                uids.update(registry.get())
+        return uids
+
+    def _cancel_job(self) -> None:
+        if self._owner is None or not self.paths.step_folder.exists():
+            return
+        if self.paths._entry(self.uid) in _HELD_ENTRIES.get():
+            return  # an ancestor's job — cancelling it kills us
+        try:
+            with inflight.InflightRegistry(self.paths.step_folder) as registry:
+                worker = registry.get([self.uid]).get(self.uid)
+            if worker is None or worker.job_id is None:
+                return
+            if worker.job_id == inflight._LOCAL_JOB_ID:
+                if not worker.is_alive():
+                    return
+                with jobregistry.JobRegistry(self.paths.step_folder) as registry:
+                    info = registry.get([self.uid]).get(self.uid)
+                if (
+                    info is None
+                    or worker.claimed_at is None
+                    or info.submitted_at < worker.claimed_at
+                ):
+                    return
+            elif worker.job_folder is None:
+                return  # not submitit
+            else:
+                # Slurm array tasks share a scheduler job; avoid per-task cancels.
+                job_id = worker.job_id.split("_", 1)[0]
+                submitit_lib.SlurmJob(job_id=job_id, folder=worker.job_folder).cancel()
+                return
+            job = self.job()
+            if job is not None:
+                job.cancel()
+        except Exception as exc:
+            logger.warning(
+                "Failed to cancel %s%s: %s",
+                self.paths.step_uid,
+                [self.uid],
+                exc,
+            )
+
+    def clear_cache(self, recursive: bool = True) -> None:
+        """Delete the cached result and associated files.
+
+        Parameters
+        ----------
+        recursive:
+            Also clear sub-step caches (e.g. inside a :class:`Chain`).
+        """
+        handles = [self]
+        if recursive:
+            for handle in handles:
+                handles.extend(handle._sub_handles)
+        grouped: dict[EntryKey, list[LookupHandle]] = {}
+        for handle in handles:
+            if handle._owner is not None:
+                entry = handle.paths._entry(handle.uid)
+                grouped.setdefault(entry, []).append(handle)
+        groups = tuple(grouped.values())
+        for group in reversed(groups):
+            group[0]._cancel_job()
+        for group in reversed(groups):
+            owner = group[0]._owner
+            assert owner is not None
+            owner.clear((group[0].uid,))
+            for handle in group[1:]:
+                duplicate = handle._owner
+                if duplicate is not None and duplicate is not owner:
+                    duplicate.cache_dict = _cache_dict(
+                        duplicate.paths, duplicate.keep_in_ram
+                    )
+
+    def job(self) -> submitit_lib.Job[tp.Any] | None:
+        """Return the live inflight job, or latest submitit job recorded for logs."""
+        if self._owner is None or not self.paths.step_folder.exists():
+            return None
+        try:
+            with inflight.InflightRegistry(self.paths.step_folder) as registry:
+                live = registry.get([self.uid]).get(self.uid)
+            if live is not None and live._job is not None:  # type: ignore[attr-defined]
+                return live._job  # type: ignore[attr-defined, no-any-return]
+            if (
+                live is not None
+                and live.job_id not in (None, inflight._LOCAL_JOB_ID)
+                and live.job_folder is not None
+            ):
+                return submitit_lib.SlurmJob(folder=live.job_folder, job_id=live.job_id)
+            with jobregistry.JobRegistry(self.paths.step_folder) as registry:
+                info = registry.get([self.uid]).get(self.uid)
+            if info is not None:
+                classes = {
+                    "local": submitit_lib.LocalJob,
+                    "slurm": submitit_lib.SlurmJob,
+                }
+                cls = classes.get(info.cluster)
+                if cls is not None:
+                    folder = info.job_folder
+                    if folder is None:
+                        folder = self.paths._logs_folder
+                    return cls(folder=folder, job_id=info.job_id)
+        except Exception:
+            logger.debug(
+                "Failed to recover job for %s[%s]",
+                self.paths.step_uid,
+                self.uid,
+                exc_info=True,
+            )
+        return None
+
+
+# cache entries claimed by the running work or its ancestors
+_HELD_ENTRIES: contextvars.ContextVar[frozenset[EntryKey]] = contextvars.ContextVar(
+    "exca_held_entries", default=frozenset()
+)
+_STAGED_READS: contextvars.ContextVar[list[tuple[_CacheOwner, str]] | None] = (
+    contextvars.ContextVar("exca_staged_reads", default=None)
+)
+
+
+def _release(entries: tp.Iterable[tuple[_CacheOwner, str]]) -> None:
+    grouped: dict[_CacheOwner, list[str]] = {}
+    for owner, uid in entries:
+        grouped.setdefault(owner, []).append(uid)
+    for owner, uids in grouped.items():
+        cache_dict = owner.cache_view()
+        with cache_dict.write(), cache_dict.frozen_cache_folder():
+            for uid in dict.fromkeys(uids):
+                if uid in cache_dict:
+                    del cache_dict[uid]
+        owner.cache_dict = owner.cache_view()
+
+
+def _clear(
+    paths: StepPaths,
+    cache_dict: exca.cachedict.CacheDict[tp.Any],
+    uids: tp.Iterable[str],
+) -> None:
+    """Drop everything cached for these uids (cd rows and error rows)."""
+    unique = list(dict.fromkeys(uids))
+    # Success first → a mid-clear crash leaves a recoverable cached
+    # error rather than a stale success (fail closed).
+    with cache_dict.write(), cache_dict.frozen_cache_folder():
+        for uid in unique:
+            if uid in cache_dict:
+                del cache_dict[uid]
+    if paths.step_folder.exists():
+        with errors.ErrorRegistry(paths.step_folder) as registry:
+            registry.clear(unique)
+
+
+@dataclasses.dataclass(frozen=True)
+class _WriteTask:
+    paths: StepPaths
+    values: items.StepItems
+    held_entries: frozenset[EntryKey]
+
+    @property
+    def entries(self) -> tuple[EntryKey, ...]:
+        return tuple(self.paths._entry(uid) for uid in self.values.uids)
+
+    def select(self, uids: tp.Sequence[str]) -> _WriteTask:
+        selected = tuple(uids)
+        if self.values._work_unit is not None and selected != self.values.uids:
+            raise ValueError(
+                f"work unit cannot be split ({len(self.values.uids)} -> {len(selected)})"
+            )
+        selected_set = set(selected)
+        return _WriteTask(
+            self.paths,
+            self.values.select(selected),
+            frozenset(entry for entry in self.held_entries if entry[1] in selected_set),
+        )
+
+    def __call__(self) -> None:
+        cache_dict = _cache_dict(self.paths)
+        self.paths.cache_folder.mkdir(parents=True, exist_ok=True)
+        written: list[str] = []
+        token = _HELD_ENTRIES.set(self.held_entries)
+        reads: list[tuple[_CacheOwner, str]] = []
+        read_token = _STAGED_READS.set(reads)
+        try:
+            with cache_dict.write():
+                pending = tuple(uid for uid in self.values.uids if uid not in cache_dict)
+                values = self.values.select(pending)
+                if pending:
+                    for uid, result in zip(
+                        pending,
+                        values.read(pending),
+                        strict=True,
+                    ):
+                        if uid not in cache_dict:
+                            cache_dict[uid] = result
+                            written.append(uid)
+            unit = values._work_unit
+            release_uids = set(values.uids if unit is None else unit.compute_uids)
+            _release(entry for entry in reads if entry[1] in release_uids)
+        except items.BatchProtocolError as exc:
+            _clear(self.paths, cache_dict, written)
+            exc.add_note(f"  -> cache may be invalid: {cache_dict.folder}")
+            raise
+        except Exception as exc:
+            active: list[str] = getattr(exc, "_inflight_uids", [])
+            if active:
+                exc.add_note(f"  -> error recorded at {self.paths.step_uid}{active}")
+                text = "".join(traceback.format_exception(exc))
+                with errors.ErrorRegistry(self.paths.step_folder) as registry:
+                    for uid in active:
+                        registry.record(uid, exc, text)
+            raise
+        finally:
+            _HELD_ENTRIES.reset(token)
+            _STAGED_READS.reset(read_token)
+
+
+@dataclasses.dataclass(frozen=True)
+class _TaskGroup:
+    tasks: tuple[_WriteTask, ...]
+
+    @property
+    def entries(self) -> tuple[EntryKey, ...]:
+        return tuple(entry for task in self.tasks for entry in task.entries)
+
+    def __call__(self) -> None:
+        for task in self.tasks:
+            logger.info(
+                "Running %s items for %s", len(task.values.uids), task.paths.step_uid
+            )
+            task()
+
+
+def _shard_tasks(
+    tasks: tp.Sequence[_WriteTask],
+    *,
+    max_chunks: int,
+    min_items_per_chunk: int = 1,
+) -> list[_TaskGroup]:
+    # competing runs pick items in different orders, reducing claim collisions
+    tasks = [
+        task
+        if task.values._work_unit is not None
+        else task.select(random.sample(task.values.uids, len(task.values.uids)))
+        for task in tasks
+    ]
+    labels = [
+        index
+        for index, task in enumerate(tasks)
+        for _ in ((None,) if task.values._work_unit is not None else task.values.uids)
+    ]
+    cursors = [0] * len(tasks)
+    groups: list[_TaskGroup] = []
+    for chunk in utils.to_chunks(
+        labels,
+        max_chunks=max_chunks,
+        min_items_per_chunk=min_items_per_chunk,
+    ):
+        selected: list[_WriteTask] = []
+        for index, count in collections.Counter(chunk).items():
+            task = tasks[index]
+            if task.values._work_unit is not None:
+                selected.append(task)
+                continue
+            start = cursors[index]
+            selected.append(task.select(task.values.uids[start : start + count]))
+            cursors[index] += count
+        groups.append(_TaskGroup(tuple(selected)))
+    return groups
+
+
+class _CacheTxn:
+    def __init__(
+        self, owner: _CacheOwner, values: items.StepItems, mode: identity.ModeType
+    ) -> None:
+        self.owner = owner
+        self.values = values
+        self.mode = mode
+        self._stack = contextlib.ExitStack()
+        self._claim: inflight.InflightClaim | None = None
+        self._closed = False
+
+    def pending_uids(self, statuses: dict[str, CacheStatus]) -> list[str]:
+        mode = self.mode
+        if mode == "read-only":
+            missing = [uid for uid, status in statuses.items() if status is None]
+            if missing:
+                raise RuntimeError(
+                    f"No cache in read-only mode: "
+                    f"{self.owner.paths.step_uid}[{missing[0]}]"
+                )
+        for uid, status in statuses.items():
+            attempted = uid in self.owner.attempted
+            if status == "error" and (mode not in ("retry", "force") or attempted):
+                _CachedEntry.lookup(self.owner.cache_view(), uid).result()
+        if mode == "force":
+            return [
+                uid
+                for uid, status in statuses.items()
+                if uid not in self.owner.attempted or status is None
+            ]
+        if mode == "retry":
+            return [
+                uid
+                for uid, status in statuses.items()
+                if status != "success"
+                and (uid not in self.owner.attempted or status is None)
+            ]
+        return [uid for uid, status in statuses.items() if status is None]
+
+    def prepare(self) -> list[_WriteTask]:
+        statuses = _CachedEntry.statuses(self.owner.cache_view(), self.values.uids)
+        pending = self.pending_uids(statuses)
+        if not pending:
+            return []
+        self.owner.paths.step_folder.mkdir(parents=True, exist_ok=True)
+        if self.mode == "force":
+            clear_count = sum(statuses[uid] is not None for uid in pending)
+            if clear_count:
+                logger.warning(
+                    "Clearing %s items for %s (infra.mode=%s)",
+                    clear_count,
+                    self.owner.paths.step_uid,
+                    self.mode,
+                )
+            self.owner.clear(pending)
+        held = _HELD_ENTRIES.get()
+        requested = {uid for uid in pending if self.owner.paths._entry(uid) not in held}
+        claimed: tuple[str, ...] = ()
+        if requested:
+            registry = inflight.InflightRegistry(self.owner.paths.step_folder)
+            claim = self._stack.enter_context(
+                inflight.inflight_session(registry, requested, reentrant=False)
+            )
+            self._claim = claim
+            claimed = tuple(claim.uids)
+            claim.record_worker_info(uids=claimed)
+            registry.close()
+        statuses = _CachedEntry.statuses(self.owner.cache_view(), pending)
+        pending = self.pending_uids(statuses)
+        if not pending:
+            return []
+        if self.mode in ("force", "retry"):
+            if self.mode == "retry":
+                retry_count = sum(statuses[uid] == "error" for uid in pending)
+                if retry_count:
+                    logger.warning(
+                        "Retrying %s failed items for %s",
+                        retry_count,
+                        self.owner.paths.step_uid,
+                    )
+            self.owner.clear(pending)
+            self.owner.attempted.update(pending)
+        task_held = held | {self.owner.paths._entry(uid) for uid in claimed}
+        return [
+            _WriteTask(
+                self.owner.paths,
+                self.values.select(pending),
+                frozenset(task_held),
+            )
+        ]
+
+    def stamp(
+        self,
+        job_id: str | None,
+        job_folder: str | None,
+        uids: tp.Sequence[str],
+    ) -> None:
+        if self._claim is None:
+            return
+        with inflight.InflightRegistry(self.owner.paths.step_folder) as registry:
+            registry.update_worker_info(
+                list(uids),
+                job_id=job_id,
+                job_folder=job_folder,
+            )
+
+    def hand_off(self, job: submitit_lib.SlurmJob, uids: tp.Sequence[str]) -> bool:
+        if self._claim is None:
+            return False
+        return self._claim.hand_off(job, uids)
+
+    def resume_ownership(self) -> None:
+        if self._claim is not None:
+            self._claim._handed.clear()
+
+    def close(self) -> None:
+        if not self._closed:
+            self._stack.close()
+            self._closed = True
+
+
+def _close_transactions(txns: tp.Iterable[_CacheTxn]) -> None:
+    cleanup_error: BaseException | None = None
+    for txn in reversed(tuple(txns)):
+        try:
+            txn.close()
+        except BaseException as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+            else:
+                logger.warning(
+                    "Additional submission cleanup failure",
+                    exc_info=True,
+                )
+    if cleanup_error is not None:
+        raise cleanup_error
+
+
+class _Submission:
+    def hold(self, txns: tp.Iterable[_CacheTxn]) -> None:
+        raise NotImplementedError
+
+    def wait(self, entry: EntryKey) -> None:
+        raise NotImplementedError
+
+
+class _CompletionCallback:
+    def __init__(self, submission: _FutureSubmission) -> None:
+        self.submission: _FutureSubmission | None = submission
+
+    def __call__(self, future: futures.Future[None]) -> None:
+        submission = self.submission
+        if submission is None:
+            return
+        try:
+            submission._completed(future)
+        finally:
+            self.submission = None
+
+
+class _FutureSubmission(_Submission):
+    @classmethod
+    def create(
+        cls,
+        executor: futures.Executor,
+        tasks: tp.Sequence[_TaskGroup],
+    ) -> _FutureSubmission:
+        task_futures: dict[futures.Future[None], _TaskGroup] = {}
+        try:
+            for task in tasks:
+                task_futures[executor.submit(task)] = task
+        except BaseException:
+            for future in task_futures:
+                future.cancel()
+            executor.shutdown(wait=True)
+            raise
+        return cls(executor, task_futures)
+
+    def __init__(
+        self,
+        executor: futures.Executor,
+        task_futures: dict[futures.Future[None], _TaskGroup],
+    ) -> None:
+        self.executor = executor
+        self.futures = frozenset(task_futures)
+        self._txns: list[_CacheTxn] = []
+        self._lock = threading.Lock()
+        self._owned = False
+        self._closed = False
+        self.n_items = len(
+            {entry for task in task_futures.values() for entry in task.entries}
+        )
+        self.n_steps = len(
+            {task.paths for group in task_futures.values() for task in group.tasks}
+        )
+        self.entry_to_future = {
+            entry: future
+            for future, task in task_futures.items()
+            for entry in task.entries
+        }
+        for future in task_futures:
+            future.add_done_callback(_CompletionCallback(self))
+
+    def hold(self, txns: tp.Iterable[_CacheTxn]) -> None:
+        with self._lock:
+            if self._owned:
+                raise RuntimeError("submission already owns cache transactions")
+            self._txns.extend(txns)
+            self._owned = True
+        self.settle()
+
+    def _completed(self, future: futures.Future[None]) -> None:
+        if not future.cancelled() and future.exception() is not None:
+            self._cancel_siblings(future)
+        self.settle()
+
+    def wait(self, entry: EntryKey) -> None:
+        future = self.entry_to_future.get(entry)
+        if future is None:
+            return
+        try:
+            future.result()
+        except BaseException:
+            self._cancel_siblings(future)
+            raise
+        finally:
+            self.settle()
+
+    def done(self) -> bool:
+        return all(future.done() for future in self.futures)
+
+    def settle(self) -> None:
+        with self._lock:
+            if self._closed or not self._owned or not self.done():
+                return
+            self._closed = True
+            txns = tuple(self._txns)
+            self._txns.clear()
+        cleanup_error: BaseException | None = None
+        try:
+            self._close_resources()
+        except BaseException as exc:
+            cleanup_error = exc
+        try:
+            _close_transactions(txns)
+        except BaseException as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+            else:
+                logger.warning(
+                    "Additional submission cleanup failure",
+                    exc_info=True,
+                )
+        if cleanup_error is not None:
+            raise cleanup_error
+
+    def _cancel_siblings(self, failed: futures.Future[None]) -> None:
+        for future in self.futures:
+            if future is not failed:
+                future.cancel()
+
+    def _close_resources(self) -> None:
+        self.executor.shutdown(wait=False)
+        if all(
+            not future.cancelled() and future.exception() is None
+            for future in self.futures
+        ):
+            logger.info(
+                "Finished processing %s items for %s steps",
+                self.n_items,
+                self.n_steps,
+            )
+
+
+class _JobSubmission(_Submission):
+    def __init__(
+        self,
+        jobs: tp.Sequence[tp.Any],
+        tasks: tp.Sequence[_TaskGroup],
+        *,
+        cluster: str,
+        job_folder: str,
+    ) -> None:
+        self.jobs = tuple(jobs)
+        self.tasks = tuple(tasks)
+        self.cluster = cluster
+        self.job_folder = job_folder
+        self.entry_to_index = {
+            entry: index
+            for index, task in enumerate(self.tasks)
+            for entry in task.entries
+        }
+
+    def hold(self, txns: tp.Iterable[_CacheTxn]) -> None:
+        owned = tuple(txns)
+        by_paths = {txn.owner.paths: txn for txn in owned}
+        handed = self.cluster == "slurm"
+        error: BaseException | None = None
+        try:
+            for job, group in zip(self.jobs, self.tasks):
+                for task in group.tasks:
+                    txn = by_paths[task.paths]
+                    if self.cluster == "slurm":
+                        current = txn.hand_off(job, task.values.uids)
+                        handed = current and handed
+                    else:
+                        txn.stamp(
+                            inflight._LOCAL_JOB_ID,
+                            None,
+                            task.values.uids,
+                        )
+                    with jobregistry.JobRegistry(task.paths.step_folder) as registry:
+                        registry.record(
+                            {str(job.job_id): task.values.uids},
+                            cluster=self.cluster,
+                            job_folder=self.job_folder,
+                        )
+            if self.cluster == "slurm" and not handed:
+                logger.warning(
+                    "Inflight handoff incomplete; forgetting advisory rows for "
+                    "submitted Slurm jobs"
+                )
+                for txn in owned:
+                    txn.resume_ownership()
+            elif self.cluster != "slurm":
+                self._wait_all()
+                for txn in owned:
+                    txn.resume_ownership()
+                self._log_finished()
+                self.entry_to_index.clear()
+        except BaseException as exc:
+            error = exc
+            for txn in owned:
+                txn.resume_ownership()
+            self._cancel_all()
+            self._drain()
+        try:
+            _close_transactions(owned)
+        except BaseException:
+            if error is None:
+                raise
+            logger.warning(
+                "Failed to close cache transactions after hold error",
+                exc_info=True,
+            )
+        if error is not None:
+            raise error
+
+    def _wait_all(self) -> None:
+        for index, job in enumerate(self.jobs):
+            try:
+                job.result()
+            except BaseException:
+                self._cancel_siblings(index)
+                raise
+
+    def wait(self, entry: EntryKey) -> None:
+        index = self.entry_to_index.get(entry)
+        if index is None:
+            return
+        try:
+            self.jobs[index].result()
+        except BaseException:
+            self._cancel_siblings(index)
+            raise
+
+    def _cancel_siblings(self, failed: int) -> None:
+        for index, job in enumerate(self.jobs):
+            if index == failed:
+                continue
+            self._cancel(job)
+
+    def _cancel_all(self) -> None:
+        for job in self.jobs:
+            self._cancel(job)
+
+    def _cancel(self, job: tp.Any) -> None:
+        cancel = getattr(job, "cancel", None)
+        if cancel is not None:
+            try:
+                cancel()
+            except BaseException as exc:
+                logger.warning(
+                    "Failed to cancel job %s: %s",
+                    getattr(job, "job_id", None),
+                    exc,
+                )
+
+    def _drain(self) -> None:
+        for job in self.jobs:
+            try:
+                job.result()
+            except BaseException:
+                logger.debug(
+                    "Submitted job %s failed during hold cleanup",
+                    getattr(job, "job_id", None),
+                    exc_info=True,
+                )
+
+    def _log_finished(self) -> None:
+        paths = {task.paths for group in self.tasks for task in group.tasks}
+        logger.info(
+            "Finished processing %s items for %s steps",
+            len(self.entry_to_index),
+            len(paths),
+        )
+
+
+class _CacheSource:
+    def __init__(
+        self,
+        owner: _CacheOwner,
+        uids: tp.Sequence[str],
+        submission: _Submission | None,
+    ) -> None:
+        self.owner = owner
+        self.uids = tuple(uids)
+        self.submission = submission
+
+    def select(self, uids: tp.Sequence[str]) -> _CacheSource:
+        return _CacheSource(self.owner, uids, self.submission)
+
+    def _wait(self, uid: str) -> None:
+        submission = self.submission
+        if submission is None:
+            return
+        try:
+            submission.wait(self.owner.paths._entry(uid))
+        except Exception:
+            entry = _CachedEntry.lookup(self.owner.cache_view(), uid)
+            if entry.status is None:
+                entry = _CachedEntry.lookup(_cache_dict(self.owner.paths), uid)
+            if entry.status != "success":
+                raise
+
+    def __getitem__(self, uid: str) -> tp.Any:
+        self._wait(uid)
+        entry = _CachedEntry.lookup(self.owner.cache_view(), uid)
+        if entry.status is None:
+            # owner view may predate a same-mtime worker write
+            entry = _CachedEntry.lookup(_cache_dict(self.owner.paths), uid)
+        result = entry.result()
+        sink = _STAGED_READS.get()
+        if sink is not None and self.owner.staged:
+            sink.append((self.owner, uid))
+        return result
+
+    def __reduce__(self) -> tp.Any:
+        for uid in self.uids:
+            self._wait(uid)
+        return _CacheSource, (self.owner, self.uids, None)
+
+
+class _StreamTee:
+    def __init__(self, stream: tp.TextIO, file: tp.TextIO) -> None:
+        self._stream = stream
+        self._file = file
+
+    def write(self, data: str) -> int:
+        self._stream.write(data)
+        self._file.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        self._stream.flush()
+        self._file.flush()
+
+    def __getattr__(self, name: str) -> tp.Any:
+        return getattr(self._stream, name)
+
+
+@contextlib.contextmanager
+def _capture_logs(log_folder: Path | None) -> tp.Iterator[None]:
+    """Tee stdout/stderr and log records into ``log_folder``, serially.
+
+    Writes ``log.stdout``/``log.stderr`` (overwrites) while still passing
+    output through to the console. No-op if ``log_folder`` is None.
+    """
+    if log_folder is None:
+        yield
+        return
+    log_folder.mkdir(parents=True, exist_ok=True)
+    files: dict[str, tp.TextIO] = {}
+    streams = (
+        ("stdout", sys.stdout, contextlib.redirect_stdout),
+        ("stderr", sys.stderr, contextlib.redirect_stderr),
+    )
+    with contextlib.ExitStack() as stack:
+        for name, stream, redirect in streams:
+            file = stack.enter_context(
+                (log_folder / f"log.{name}").open("w", encoding="utf8", buffering=1)
+            )
+            files[name] = file
+            # process-global swap → concurrent callers would clobber each other
+            stack.enter_context(redirect(_StreamTee(stream, file)))
+        handler = logging.StreamHandler(files["stderr"])
+        handler.setFormatter(logconf._formatter)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(handler)
+        stack.callback(root_logger.removeHandler, handler)
+        yield

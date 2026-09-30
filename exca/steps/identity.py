@@ -17,21 +17,18 @@ import re
 import typing as tp
 from pathlib import Path
 
+import pydantic
+
 import exca
 from exca import utils
 
 if tp.TYPE_CHECKING:
     from .base import Step
 
-
-# Cache key for the no-input case (generators). Read by `materialize_uid`.
 _NOINPUT_UID = "__exca_no_input__"
-
 # OS PATH_MAX is 1024 (macOS) / 4096 (Linux); sqlite limit is 512.
 MAX_STEP_UID_LENGTH = 350
 STEP_UID_TAIL_BUDGET = MAX_STEP_UID_LENGTH // 5
-
-
 ModeType = tp.Literal["cached", "force", "read-only", "retry"]
 
 
@@ -42,54 +39,50 @@ class NoValue:
 def _compress_tail(segments: list[str], budget: int) -> str:
     """Collapse multiple UID segments into one directory-name-sized string."""
     full = "/".join(segments)
-    h = hashlib.md5(full.encode()).hexdigest()[:8]
+    digest = hashlib.md5(full.encode()).hexdigest()[:8]
     types = [
-        m.group(1) if (m := re.search(r"type=(\w+)", seg)) else seg[:20]
-        for seg in segments
+        match.group(1) if (match := re.search(r"type=(\w+)", segment)) else segment[:20]
+        for segment in segments
     ]
-    n = len(types)
-    suffix = f"-{n}-{h}"
+    suffix = f"-{len(types)}-{digest}"
     label = "+".join(types)
     max_label = budget - len(suffix)
     if len(label) > max_label:
         keep = max_label - 3
         head = keep // 2
-        tail = keep - head
-        label = label[:head] + "..." + label[-tail:]
+        label = label[:head] + "..." + label[-(keep - head) :]
     return f"{label}{suffix}"
 
 
-def step_uid(steps: tp.Sequence[Step]) -> str:
+def step_uid(steps: tp.Sequence[pydantic.BaseModel]) -> str:
     """Slash-joined per-step uid; compressed if over MAX_STEP_UID_LENGTH."""
-    opts = {"exclude_defaults": True, "uid": True}
-    segments = [exca.ConfDict.from_model(s, **opts).to_uid() for s in steps]
+    options = {"exclude_defaults": True, "uid": True}
+    segments = [exca.ConfDict.from_model(step, **options).to_uid() for step in steps]
     full = "/".join(segments)
     if len(full) <= MAX_STEP_UID_LENGTH:
         return full
     head: list[str] = []
     used = 0
-    for seg in segments:
-        needed = (1 if head else 0) + len(seg)
+    for segment in segments:
+        needed = (1 if head else 0) + len(segment)
         if used + needed + 1 + STEP_UID_TAIL_BUDGET > MAX_STEP_UID_LENGTH:
             break
-        head.append(seg)
+        head.append(segment)
         used += needed
-    tail_segments = segments[len(head) :]
-    return "/".join(head + [_compress_tail(tail_segments, STEP_UID_TAIL_BUDGET)])
+    return "/".join(head + [_compress_tail(segments[len(head) :], STEP_UID_TAIL_BUDGET)])
 
 
-def materialize_uid(step: Step, value: tp.Any) -> str:
-    """Per-value uid: calls ``step.item_uid``, falls back to UidMaker."""
-    custom = step.item_uid(value)
+def materialize_uid(flow: Step, value: tp.Any) -> str:
+    """Per-value uid: calls ``flow.item_uid``, falls back to UidMaker."""
+    custom = flow.item_uid(value)
     if custom is not None:
-        if isinstance(value, NoValue) and "pure_generator" not in step._step_flags:
+        if isinstance(value, NoValue) and not flow._is_pure_generator():
             raise TypeError(
-                f"{type(step).__name__} returns a custom item_uid for NoValue "
-                f"but accepts optional input — cache collisions would occur "
-                f"when the step receives real input"
+                f"{type(flow).__name__} returns a custom item_uid for NoValue "
+                "but accepts optional input — cache collisions would occur "
+                "when the step receives real input"
             )
-        # avoid cluttering cache
-        return utils.ShortItemUid._shorten(custom, step._ITEM_UID_MAX_LENGTH)
+        return utils.ShortItemUid._shorten(custom, flow._ITEM_UID_MAX_LENGTH)
     if isinstance(value, NoValue):
         return _NOINPUT_UID
     return exca.confdict.UidMaker(value).format()
@@ -97,7 +90,7 @@ def materialize_uid(step: Step, value: tp.Any) -> str:
 
 def write_configs(
     step_folder: Path,
-    aligned_steps: tp.Sequence[Step],
+    aligned_steps: tp.Sequence[pydantic.BaseModel],
     *,
     write: bool = True,
 ) -> None:

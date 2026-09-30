@@ -79,27 +79,25 @@ Default returns `self`. Return type: `Step`.
 ### 2. `_step_flags` ClassVar
 
 Computed once at class definition via `__pydantic_init_subclass__`. A `frozenset[str]` with
-possible values: `"has_run"`, `"has_generator"`, `"has_resolve"`.
+possible values: `"has_run"`, `"has_resolve"`, `"batched"`,
+`"generator"`, and `"pure_generator"`.
 
-Replaces per-call `_is_generator()` introspection for Step (Chain still overrides
-instance-level). Validation in `model_post_init`: at least one of `"has_run"` or
-`"has_resolve"` must be present.
+Validation in `model_post_init` requires `"has_run"` or
+`"has_resolve"` unless `_apply` is overridden.
 
-### 3. `Step.run()` delegation
+### 3. Runner resolution
 
-```python
-built = self._resolve_step()
-if built is not self:
-    return built.run(value)
-```
+`Runner._resolve()` resolves to a fixed point before item uid
+materialization or evaluation. A distinct resolution is frozen and
+memoized on the declaration; self-resolution remains mutable until a
+warm cached carrier is retained.
 
-### 4. Resolution during dispatch
+Stripped copies return `self` from `_resolve_step()`, so re-resolution
+is a no-op.
 
-`Step._dispatch()` calls `resolved_step()` before routing work. Stripped copies return `self` from `_resolve_step()`, so re-resolution is a no-op.
+### 4. UID consistency via `_exca_uid_dict_override`
 
-### 5. UID consistency via `_exca_uid_dict_override`
-
-`utils.py` is updated to support `None` return (opt-out). Step's override:
+Step's config-export override returns:
 - `None` if `_resolve_step()` returns `self`
 - Otherwise the resolution's uid export
 

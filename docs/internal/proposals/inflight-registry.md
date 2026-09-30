@@ -1,5 +1,8 @@
 # SQLite-Backed Inflight Item Registry
 
+> Historical proposal. Its signatures, integration points, and wait-before-return
+> lifecycle are not current; see `docs/internal/steps/caching.md`.
+
 ## Problem
 
 The previous `JobChecker` (`exca/map.py`) had a documented TOCTOU race
@@ -80,7 +83,7 @@ Two strategies based on what's available:
   `DebugExecutor`, `ProcessPoolExecutor`, `ThreadPoolExecutor` (all same-host).
   The `no_job_timeout` fallback applies only while `job_id IS NULL`.
 
-## Core Flow
+## Core lifecycle
 
 All callers use the `inflight_session()` context manager, which encapsulates the
 full lifecycle:
@@ -219,15 +222,15 @@ def inflight_session(
 - `_method_override_futures()`: same `inflight_session` pattern with cache refresh.
 - Uses `pid=os.getpid()` (default), no `job_id` (all same-host).
 
-### Steps Backend
+### Steps
 
-- `Backend.run()`: wraps compute for pending uids in `inflight_session`.
-- Registry is only created for backends with `_REQUIRES_INFLIGHT = True`
-  (defaults to True; `Cached` overrides to False — inline work needs no claim).
-- Submitit backends record each submitted chunk with
-  `claim.record_worker_info(job, uids=chunk.uids)`.
-- Pool backends record local liveness per chunk with
-  `claim.record_worker_info(uids=chunk.uids)`.
+- `_CacheTxn.prepare()` rechecks pending uids inside
+  `inflight_session()` and retains the claim until its submission
+  settles.
+- Every Backend uses the same transaction path, including inline
+  `Cached`.
+- Pool claims record local liveness. Submitit submissions stamp Slurm
+  job ids and folders on each task's claimed uids.
 
 ## All-or-Nothing Claim
 

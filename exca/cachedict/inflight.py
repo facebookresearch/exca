@@ -204,18 +204,19 @@ class InflightRegistry(registry.AdvisoryRegistry):
         self,
         item_uids: list[str],
         pid: int | None = None,
+        *,
+        reentrant: bool = True,
     ) -> list[str]:
-        """Atomically claim all requested items, or none (except pre-owned).
+        """Atomically claim all requested items, or none.
 
         All-or-nothing semantics enforced at the database level via
-        ROLLBACK: if any item is held by a live worker with a different
-        PID, the entire transaction is rolled back and no new claims are
-        written. This prevents partial-claim hold-and-wait deadlocks
-        across concurrent sessions with overlapping item sets.
+        ROLLBACK: if any item is held by another live owner, the entire
+        transaction is rolled back and no new claims are written. Same-PID
+        rows count as pre-owned only when ``reentrant`` is true.
 
         Returns the list of item_uids actually claimed. On success this
         equals *item_uids*. On rollback it contains only items already
-        owned by *pid* (re-entrant / nested calls).
+        owned by *pid* when ``reentrant`` is true.
         """
         if not item_uids:
             return []
@@ -227,7 +228,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
         existing = self.get(item_uids)
         alive_cache: dict[WorkerInfo, bool] = {}
         for info in existing.values():
-            if info.pid != pid and info not in alive_cache:
+            if (info.pid != pid or not reentrant) and info not in alive_cache:
                 alive_cache[info] = info.is_alive()
 
         # Phase 2: short transaction — only SELECT + INSERT, no I/O.
@@ -246,7 +247,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
             for uid in item_uids:
                 if uid in fresh:
                     owner = fresh[uid]
-                    if owner.pid == pid:
+                    if owner.pid == pid and reentrant:
                         pre_owned.append(uid)
                         continue
                     if alive_cache.get(owner, True):
@@ -273,31 +274,49 @@ class InflightRegistry(registry.AdvisoryRegistry):
         *,
         job_id: str | None = None,
         job_folder: str | None = None,
-    ) -> None:
+        pid: int | None = None,
+    ) -> int:
         """Set ``job_id`` (Slurm id or ``_LOCAL_JOB_ID``) and optional
         ``job_folder`` on already-claimed rows."""
         if not item_uids:
-            return
+            return 0
 
-        def _do(conn: sqlite3.Connection) -> None:
+        def _do(conn: sqlite3.Connection) -> int:
             conn.execute("BEGIN")
-            conn.executemany(
-                "UPDATE inflight SET job_id = ?, job_folder = ? WHERE item_uid = ?",
-                [(job_id, job_folder, uid) for uid in item_uids],
+            guard = "" if pid is None else " AND pid = ?"
+            cursor = conn.executemany(
+                "UPDATE inflight SET job_id = ?, job_folder = ? "
+                f"WHERE item_uid = ?{guard}",
+                [
+                    (job_id, job_folder, uid)
+                    if pid is None
+                    else (job_id, job_folder, uid, pid)
+                    for uid in item_uids
+                ],
             )
             conn.execute("COMMIT")
+            return cursor.rowcount
 
-        self._safe_execute("update", None, _do)
+        count = self._safe_execute("update", 0, _do)
         msg = "Updated worker info for %d items (job_id=%s)"
-        logger.debug(msg, len(item_uids), job_id)
+        logger.debug(msg, count, job_id)
+        return count
 
-    def release(self, item_uids: list[str]) -> None:
+    def release(self, item_uids: list[str], *, pid: int | None = None) -> None:
         """Remove items from the registry (done or failed)."""
         if not item_uids:
             return
 
         def _do(conn: sqlite3.Connection) -> None:
-            registry.bulk_delete(conn, "inflight", "item_uid", item_uids)
+            if pid is None:
+                registry.bulk_delete(conn, "inflight", "item_uid", item_uids)
+                return
+            conn.execute("BEGIN")
+            conn.executemany(
+                "DELETE FROM inflight WHERE item_uid = ? AND pid = ?",
+                [(uid, pid) for uid in item_uids],
+            )
+            conn.execute("COMMIT")
 
         self._safe_execute("release", None, _do)
         logger.debug("Released %d items", len(item_uids))
@@ -323,6 +342,8 @@ class InflightRegistry(registry.AdvisoryRegistry):
     def wait_for_inflight(
         self,
         item_uids: list[str],
+        *,
+        reentrant: bool = True,
     ) -> None:
         """Block until the given items are no longer in-flight.
 
@@ -331,8 +352,8 @@ class InflightRegistry(registry.AdvisoryRegistry):
         the registry or the owning process dies. Items reclaimed from dead
         workers are released here, so the next ``claim`` picks them up.
 
-        Items owned by the current process (``os.getpid()``) are silently
-        skipped to prevent self-deadlock in re-entrant / nested calls.
+        Items owned by the current process (``os.getpid()``) are skipped
+        only when ``reentrant`` is true.
         """
         if not item_uids:
             return
@@ -351,7 +372,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
         # so we wait once per job instead of once per item.
         waited_jobs: set[str] = set()
         for uid, info in list(inflight.items()):
-            if info.pid == my_pid:
+            if info.pid == my_pid and reentrant:
                 remaining.discard(uid)
                 continue
             if info.job_id is not None and info.job_folder is not None:
@@ -372,7 +393,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
                 if uid not in inflight:
                     continue
                 info = inflight[uid]
-                if info.pid == my_pid:
+                if info.pid == my_pid and reentrant:
                     continue
                 if info not in alive_cache:
                     alive_cache[info] = info.is_alive()
@@ -413,6 +434,7 @@ class InflightClaim:
 
     uids: tuple[str, ...]
     waited: bool = False
+    _handed: set[str] = dataclasses.field(default_factory=set, repr=False, compare=False)
     _reg: InflightRegistry | None = dataclasses.field(
         default=None, repr=False, compare=False
     )
@@ -431,20 +453,41 @@ class InflightClaim:
         else:
             self._reg.update_worker_info(item_uids, job_id=_LOCAL_JOB_ID)
 
+    def hand_off(self, job: submitit.SlurmJob, uids: tp.Sequence[str]) -> bool:
+        if self._reg is None:
+            return False
+        job_id = getattr(job, "job_id", None)
+        paths = getattr(job, "paths", None)
+        job_folder = None if paths is None else getattr(paths, "folder", None)
+        if job_id is None or job_folder is None:
+            return False
+        item_uids = list(uids)
+        count = self._reg.update_worker_info(
+            item_uids,
+            job_id=str(job_id),
+            job_folder=str(job_folder),
+            pid=os.getpid(),
+        )
+        if count == len(item_uids):
+            self._handed.update(item_uids)
+            return True
+        return False
+
 
 @contextlib.contextmanager
 def inflight_session(
     reg: InflightRegistry | None,
     item_uids: tp.Collection[str],
+    *,
+    reentrant: bool = True,
 ) -> tp.Iterator[InflightClaim]:
     """Wait for in-flight items, claim available ones, release+close on exit.
 
     When *reg* is ``None`` (no cache folder), yields an unblocked claim
     so that callers never need a ``None`` guard.
 
-    Self-deadlock is prevented internally: ``wait_for_inflight`` skips items
-    owned by the current PID, and ``claim`` treats same-PID rows as already
-    ours.
+    With ``reentrant=True``, same-PID rows are skipped while waiting and
+    treated as pre-owned while claiming. With ``reentrant=False``, they block.
 
     Callers should call ``claim.record_worker_info`` inside the ``with``
     block to stamp claimed items with a liveness signal.
@@ -455,18 +498,20 @@ def inflight_session(
     item_uids = list(item_uids)
     pid = os.getpid()
     existing = reg.get(item_uids)
-    waited = any(info.pid != pid for info in existing.values())
+    waited = any(info.pid != pid or not reentrant for info in existing.values())
     # Track items already owned by this PID before we start, so that
     # the finally block only releases items this session actually inserted
     # (not items inherited from an outer / re-entrant session).
-    pre_owned: set[str] = {uid for uid, info in existing.items() if info.pid == pid}
+    pre_owned: set[str] = {
+        uid for uid, info in existing.items() if info.pid == pid and reentrant
+    }
     # Retry loop: wait for inflight items, then claim. claim() uses
     # all-or-nothing semantics (ROLLBACK if any item is held by a live
     # worker), so no partial claims are ever written — no release needed
     # on retry, and no hold-and-wait deadlock is possible.
     while True:
-        reg.wait_for_inflight(item_uids)
-        claimed = reg.claim(item_uids, pid=pid)
+        reg.wait_for_inflight(item_uids, reentrant=reentrant)
+        claimed = reg.claim(item_uids, pid=pid, reentrant=reentrant)
         if len(claimed) == len(item_uids):
             break
         # claim() rolled back — some items held by live workers that
@@ -479,6 +524,8 @@ def inflight_session(
     try:
         yield claim
     finally:
-        to_release = [uid for uid in claim.uids if uid not in pre_owned]
-        reg.release(to_release)
+        to_release = [
+            uid for uid in claim.uids if uid not in pre_owned and uid not in claim._handed
+        ]
+        reg.release(to_release, pid=pid)
         reg.close()

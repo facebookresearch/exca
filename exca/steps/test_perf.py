@@ -11,6 +11,7 @@
 # - Step: ~15 us/item
 
 import cProfile
+import gc
 import pstats
 import sys
 import tempfile
@@ -25,7 +26,7 @@ import pytest
 
 import exca
 
-from . import backends, base
+from . import backends, base, items
 
 
 def _make_array(item: int, shape: tuple[int, ...]) -> np.ndarray:
@@ -49,6 +50,37 @@ class ArrayOp(base.Step):
 
     def _run(self, value: np.ndarray) -> np.ndarray:
         return (value + self.add) * self.scale
+
+
+class Bump(base.Step):
+    def _run(self, value: int) -> int:
+        return value + 1
+
+
+class ResolvedArray(base.Step):
+    calls: tp.ClassVar[int] = 0
+    shape: tuple[int, ...] = (32, 32)
+
+    def _resolve_step(self) -> base.Step:
+        type(self).calls += 1
+        return base.Chain(
+            steps=[
+                MakeArray(shape=self.shape),
+                ArrayOp(add=1.5),
+                ArrayOp(scale=3.0),
+            ],
+            infra=self.infra,
+        )
+
+
+def _calls_per_scalar_run(chain: base.Step, value: tp.Any = 0) -> int:
+    chain.run(value)
+    profiler = cProfile.Profile()
+    profiler.enable()
+    chain.run(value)
+    profiler.disable()
+    stats = pstats.Stats(profiler).stats  # type: ignore[attr-defined]
+    return sum(entry[1] for entry in stats.values())
 
 
 class MapArray(pydantic.BaseModel):
@@ -83,6 +115,8 @@ class PerfWorkload:
                 infra=infra,
             )
         infra = backends.Cached(folder=folder, keep_in_ram=False)
+        if self.name == "resolved":
+            return ResolvedArray(shape=self.shape, infra=infra)
         first = MakeArray(shape=self.shape)
         if self.name == "two-caches":
             first = MakeArray(shape=self.shape, infra=infra)
@@ -138,7 +172,7 @@ class PerfWorkload:
 def test_perf_workloads_are_equivalent(tmp_path: Path, batched: bool) -> None:
     workloads = [
         PerfWorkload(name, tmp_path, batched=batched)
-        for name in ("map", "one-cache", "two-caches")
+        for name in ("map", "one-cache", "two-caches", "resolved")
     ]
     out = [
         np.stack(workload.run(workload.build(), batched=True)) for workload in workloads
@@ -148,21 +182,74 @@ def test_perf_workloads_are_equivalent(tmp_path: Path, batched: bool) -> None:
 
 def test_warm_scalar_step_cache_is_close_to_mapinfra(tmp_path: Path) -> None:
     times: dict[str, float] = {}
+    ResolvedArray.calls = 0
+    gc_enabled = gc.isenabled()
+    gc.disable()  # collection phase: import/test-order dependent, not per workload
+    try:
+        for name in ("map", "one-cache", "resolved"):
+            workload = PerfWorkload(name, tmp_path / name, state="warm")
+            obj = workload.build()
+            workload.run(obj)
+            start = time.perf_counter()
+            workload.run(obj)
+            times[name] = (time.perf_counter() - start) / 100
+    finally:
+        if gc_enabled:
+            gc.enable()
 
-    for name in ("map", "one-cache"):
-        workload = PerfWorkload(name, tmp_path / name, state="warm")
-        obj = workload.build()
-        workload.run(obj)
-        start = time.perf_counter()
-        workload.run(obj)
-        times[name] = (time.perf_counter() - start) / 100
+    assert all(times[name] < 2 * times["map"] for name in ("one-cache", "resolved")), (
+        times
+    )
+    assert ResolvedArray.calls == 1
 
-    assert times["one-cache"] < 2 * times["map"], times
+
+def test_warm_scalar_run_does_not_walk_the_chain(tmp_path: Path) -> None:
+    counts = {
+        depth: _calls_per_scalar_run(
+            base.Chain(
+                steps=[Bump() for _ in range(depth)],
+                infra=backends.Cached(folder=tmp_path / str(depth), keep_in_ram=False),
+            )
+        )
+        for depth in (4, 64)
+    }
+    assert counts[64] == counts[4], (
+        f"a warm scalar run costs {counts[64] - counts[4]} extra calls for 60 extra "
+        f"Steps: {counts}; the warm carrier already fixes every per-Step fact"
+    )
+
+
+def test_scalar_planning_calls_per_step_do_not_grow() -> None:
+    small = _calls_per_scalar_run(base.Chain(steps=[Bump() for _ in range(16)]))
+    big = _calls_per_scalar_run(base.Chain(steps=[Bump() for _ in range(64)]))
+    per_step = (big - small) / 48
+    assert per_step <= 26.0, f"{per_step} Python calls per Step to plan one scalar run"
+
+
+def test_deep_ordinary_chain_is_one_group_read_once() -> None:
+    class CountingInputs(dict):
+        gets: tp.ClassVar[int] = 0
+
+        def __getitem__(self, uid: str) -> tp.Any:
+            type(self).gets += 1
+            return super().__getitem__(uid)
+
+    depth = 64
+    inputs = CountingInputs(item=0)
+    chain = base.Chain(steps=[Bump() for _ in range(depth)])
+    output = base.Runner().evaluate(chain, items.StepItems(source=inputs, uids=("item",)))
+
+    source = output._source
+    assert isinstance(source, items._StepSource)
+    assert len(source.steps) == depth
+    assert source.inputs._source is inputs
+    assert list(output) == [depth]
+    assert CountingInputs.gets == 1
 
 
 if __name__ == "__main__":
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("perf-profiles")
-    for name in ("map", "one-cache", "two-caches"):
+    for name in ("map", "one-cache", "two-caches", "resolved"):
         for state in ("cold", "populated", "warm"):
             for shape in ((32, 32), (512, 512)):
                 for batched in (False, True):

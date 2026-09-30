@@ -46,6 +46,23 @@ Re-running with overlapping inputs reuses the cache entries from the
 previous call. `run(value)` is sugar over `run_many([value])`,
 returning the single result.
 
+## StepItems
+
+Direct construction is keyword-only and requires both `source` and
+`uids`. The uids are copied into an immutable tuple:
+
+```python
+from exca import steps
+
+batch = steps.items.StepItems(source={"a": 1, "b": 2}, uids=["a", "b"])
+assert batch.uids == ("a", "b")
+assert list(batch.select(["b"]).read(["b"])) == [2]
+```
+
+`select(uids)` returns a carrier for that ordered subset; `read(uids)`
+reads the requested values in order. Assigning to `uids` or applying
+list mutations is unsupported.
+
 ## Per-input identity: `item_uid`
 
 By default, cache keys come from the input value via Exca's uid
@@ -127,11 +144,25 @@ for embedding in step.run_many(paths):           # M items → up to 16 jobs
 ```
 
 Each worker runs `_run_batch` on its sub-batch and writes results
-to the shared cache. With a distributed backend the driver waits for
-all jobs, then the returned iterator reads results from the cache one
-at a time (never the full set in memory, never round-tripped through
-the job pickle). Execution order within a batch is non-deterministic;
-output order matches input order.
+to the shared cache. Base `Backend` (including
+`infra={"folder": cache}`), `Cached`, and a pool using one worker
+finish inside `run_many()` and raise failures there. Multi-worker
+pools and Slurm return a `StepItems` carrier before work completes;
+reading or serializing a value waits for its job and raises its failure.
+`LocalProcess`, `SubmititDebug`, and Auto when it selects local
+execution wait for every submitted job before returning. Auto on
+Slurm follows Slurm behavior. While Slurm work is pending,
+`lookup(value).status` is `"running"` and `lookup(value).result()`
+raises until the work completes.
+
+Slurm handoff metadata is advisory. If recording it is incomplete,
+`run_many()` still returns the lazy carrier and forgets its driver
+claim; another call may duplicate work, while durable cache entries
+remain authoritative.
+
+Results are read from the cache one at a time, never as a full set or
+through job result pickles. Execution order within a batch is
+non-deterministic; output order matches input order.
 
 ## What's stable
 

@@ -18,7 +18,7 @@ import pytest
 
 import exca
 
-from . import backends, conftest, helpers, identity, items, utils
+from . import backends, conftest, helpers, identity, items
 from .base import Chain, Step
 
 # =============================================================================
@@ -66,14 +66,14 @@ def test_clone_updates_nested_named_steps() -> None:
 
 
 def test_chain_is_generator() -> None:
-    """Chain._is_generator checks first step."""
+    """Chain._is_pure_generator checks first step."""
     # Chain with generator first step
     gen_chain = Chain(steps=[conftest.RandomGenerator(), conftest.Mult(coeff=2.0)])
-    assert gen_chain._is_generator()
+    assert gen_chain._is_pure_generator()
 
     # Chain with transformer first step
     trans_chain = Chain(steps=[conftest.Mult(coeff=2.0), conftest.Add(randomize=True)])
-    assert not trans_chain._is_generator()
+    assert not trans_chain._is_pure_generator()
 
 
 def test_transformer_cache_lookup_with_value(tmp_path: Path) -> None:
@@ -90,6 +90,42 @@ def test_transformer_cache_lookup_with_value(tmp_path: Path) -> None:
     assert step.lookup(5.0).cached()
     step.lookup(5.0).clear_cache()
     assert not step.lookup(5.0).cached()
+
+
+def test_deprecated_clear_cache_and_removed_forward(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(infra=infra)
+    step.run()
+    with pytest.warns(DeprecationWarning, match=r"use lookup\(\)\.clear_cache"):
+        step.clear_cache()
+    assert not step.lookup().cached()
+    with pytest.raises(AttributeError, match=r"use run\(\) instead"):
+        step.forward(1.0)
+
+
+def test_variant_transactions_close_in_reverse_folder_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    variants = [conftest.Add(value=v, infra=infra) for v in range(4)]
+    folders = sorted(str(v.lookup().paths.step_folder) for v in variants)
+    variants.sort(key=lambda v: str(v.lookup().paths.step_folder), reverse=True)
+    events: list[tuple[str, str]] = []
+    for name in ("prepare", "close"):
+        method = getattr(backends._CacheTxn, name)
+
+        def record(txn: tp.Any, _name: str = name, _method: tp.Any = method) -> tp.Any:
+            events.append((_name, str(txn.owner.paths.step_folder)))
+            return _method(txn)
+
+        monkeypatch.setattr(backends._CacheTxn, name, record)
+    for _ in range(2):  # submission, then all-cached without submission
+        events.clear()
+        outputs = helpers.run_variants(variants)
+        assert events == [("prepare", f) for f in folders] + [
+            ("close", f) for f in reversed(folders)
+        ]
+        assert [list(out) for out in outputs] == [[v.value] for v in variants]
 
 
 @pytest.mark.parametrize(
@@ -127,7 +163,7 @@ def test_chain_hash_and_uid(with_infra: bool, tmp_path: Path) -> None:
     expected_hash = (
         "type=Add,value=12-725c0018/coeff=3,type=Mult-4c6b8f5f/type=Add,value=12-725c0018"
     )
-    assert identity.step_uid(chain._uid_steps()) == expected_hash
+    assert identity.step_uid(chain._identity_steps()) == expected_hash
 
     # UID export to YAML
     yaml = exca.ConfDict.from_model(chain, uid=True, exclude_defaults=True).to_yaml()
@@ -191,7 +227,7 @@ def test_infra_not_shared(tmp_path: Path) -> None:
     step1 = conftest.Add(value=1, infra=infra)
     step2 = conftest.Add(value=2, infra=infra)
     # Each step should have its own infra instance (not shared)
-    assert step1.infra is not step2.infra, "Infra instances should not be shared"
+    assert step1.infra is not step2.infra, "Backend instances should not be shared"
 
 
 @pytest.mark.parametrize("target_backend", ["LocalProcess", "Cached", "Slurm"])
@@ -219,9 +255,9 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
     assert step.infra.folder is not None, "folder (Backend field) should propagate"
     assert step.infra.folder == tmp_path, "folder (Backend field) should propagate"
     assert step.infra.mode == "force", "explicitly set mode should be preserved"
-    # timeout_min propagates if target type has it (LocalProcess, Slurm share it via _SubmititBackend)
+    # timeout_min propagates if target type has it (LocalProcess, Slurm share it via _SubmititInfra)
     if target_backend in ("LocalProcess", "Slurm"):
-        assert isinstance(step.infra, backends._SubmititBackend)
+        assert isinstance(step.infra, backends._SubmititInfra)
         assert step.infra.timeout_min == 30, "shared field should propagate"
 
     # Explicit None should bypass default
@@ -229,38 +265,25 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
     assert step_none.infra is None, "explicit None should not use default"
 
 
-def test_folder_propagation(tmp_path: Path) -> None:
-    class Opts(pydantic.BaseModel):
-        step: Step
-
-    class Held(Step):
-        opts: Opts
-
-        def _resolve_step(self) -> Step:
-            return self.opts.step
-
-    infra: tp.Any = {"backend": "Cached"}  # No folder set
-    inner_chain: Step = Chain(steps=[conftest.Add(value=1, infra=infra)])
-    held = Held(opts=Opts(step=conftest.Add(value=3, infra=infra)))
-    outer_chain = Chain(
-        steps=[inner_chain, conftest.Mult(coeff=2.0, infra=infra), held],
-        infra={"backend": "Cached", "folder": tmp_path},  # type: ignore
+def test_folder_inheritance_uses_parent_context(tmp_path: Path) -> None:
+    child = conftest.Mult(coeff=2.0, infra=backends.Cached())
+    folders = (tmp_path / "a", tmp_path / "b")
+    pipelines = tuple(
+        Chain(steps=[child], infra=backends.Cached(folder=folder)) for folder in folders
     )
 
-    # Folder cascades at construction time; running confirms the wiring.
-    result = outer_chain.run(5.0)
-    assert result == 15.0  # (5 + 1) * 2 + 3
-
-    inner = outer_chain._step_sequence()[0]
-    assert isinstance(inner, Chain)
-    inner_step = inner._step_sequence()[0]
-    assert inner_step.infra is not None
-    assert inner_step.infra.folder == tmp_path, (
-        "folder should propagate to nested chain steps"
-    )
-    assert utils.get_infra_folder(held.opts.step) == tmp_path, (
-        "folder should propagate to a step held behind a plain config model"
-    )
+    assert all(pipeline._step_sequence()[0] is child for pipeline in pipelines)
+    assert child.infra is not None and child.infra.folder is None
+    for pipeline, folder in zip(pipelines, folders, strict=True):
+        assert pipeline.run(5.0) == 10.0
+        handle = pipeline.lookup(5.0)
+        assert handle.result() == 10.0
+        [child_handle] = handle._sub_handles
+        assert child_handle.paths.base_folder == folder
+    assert child.calls == [5.0, 5.0]
+    assert child.infra.folder is None
+    with pytest.raises(RuntimeError, match="no folder and none is inherited"):
+        child.lookup(5.0)
 
 
 @pytest.mark.parametrize("kind", ["step", "chain"])
@@ -382,18 +405,31 @@ def test_resolve_step_must_override_run_or_resolve() -> None:
         BadStep()
 
 
+def test_removed_run_items_hook_fails_at_subclass_creation() -> None:
+    with pytest.raises(
+        TypeError,
+        match=r"BadStep\._run_items was removed; "
+        r"override _apply\(self, runner, items\) instead",
+    ):
+
+        class BadStep(Step):
+            def _run_items(self, values: items.StepItems) -> items.StepItems:
+                return values
+
+
 def test_step_flags() -> None:
-    """_step_flags and _is_generator are computed correctly at class definition."""
+    """_step_flags is computed at class definition; _is_pure_generator follows
+    resolution."""
     expected: dict[type[Step], tuple[set[str], bool]] = {
         conftest.Mult: ({"has_run"}, False),
         conftest.RandomGenerator: ({"has_run", "generator", "pure_generator"}, True),
-        conftest.Add: ({"has_run", "generator"}, True),
-        conftest.AddWithTransforms: ({"has_run", "generator", "has_resolve"}, True),
+        conftest.Add: ({"has_run", "generator"}, False),
+        conftest.AddWithTransforms: ({"has_run", "generator", "has_resolve"}, False),
         conftest.PureResolver: ({"has_resolve"}, False),
     }
-    for cls, (flags, is_gen) in expected.items():
+    for cls, (flags, pure_gen) in expected.items():
         assert cls._step_flags == flags, cls.__name__
-        assert cls()._is_generator() is is_gen, cls.__name__
+        assert cls()._is_pure_generator() is pure_gen, cls.__name__
     assert _NumYield._step_flags == {"has_run", "batched"}
 
 
@@ -470,11 +506,48 @@ def test_nested_resolution_drives_uid() -> None:
     assert resolving_uid == identity.step_uid([_StepWithBody(body=conftest.Mult())])
 
 
-def test_parallel_caches_the_resolved_step_result(tmp_path: Path) -> None:
+def test_variant_caches_the_resolved_step_result(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    sweep = helpers.Parallel(steps=[_ResolvesToMult()], infra=infra)
-    sweep.run(5.0)
-    assert sweep.steps[0].lookup(5.0).result() == 10.0
+    variant = _ResolvesToMult(infra=infra)
+    helpers.run_variants([variant], [5.0])
+    assert variant.lookup(5.0).result() == 10.0
+
+
+class _Scope(Step):
+    owner: dict[str, tp.Any]
+
+    def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
+        return {**self.owner, "type": f"{self.owner['type']}._run"}
+
+    def _run(self, value: float) -> float:
+        return Step.model_validate(self.owner)._run(value)
+
+
+class _Facade(Step):
+    coeff: float = 2.0
+
+    def _run(self, value: float) -> float:
+        return value * self.coeff
+
+    def _resolve_step(self) -> Step:
+        owner = {"type": type(self).__name__, "coeff": self.coeff}
+        return Chain(steps=[_Scope(owner=owner)], infra=self.infra)
+
+    def _exca_uid_dict_override(self) -> None:
+        return None
+
+
+def test_extractor_facade_keeps_declaration_identity(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "keep_in_ram": True}
+    facade = _Facade(coeff=3.0, infra=infra)
+    declared = exca.ConfDict.from_model(facade, uid=True, exclude_defaults=True)
+    assert declared == {"type": "_Facade", "coeff": 3.0}
+    assert facade.run(2.0) == 6.0
+    assert facade.lookup(2.0).result() == facade.run(2.0)
+    fresh = facade.clone()
+    assert exca.ConfDict.from_model(fresh, uid=True, exclude_defaults=True) == declared
+    assert fresh.lookup(2.0).result() == 6.0, "equal declaration must hit the cache"
+    assert "type=_Facade._run" in fresh.lookup(2.0).paths.step_uid
 
 
 def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
@@ -485,7 +558,7 @@ def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
         transforms=[conftest.Mult(coeff=2, infra=force_infra)],
     )
     chain = Chain(steps=[inner], infra=chain_infra)
-    assert backends._effective_mode(chain) == "force", "Did not resolve Mult mode"
+    assert chain._fold_mode("cached") == "force", "Did not resolve Mult mode"
 
 
 # =============================================================================
@@ -673,6 +746,54 @@ def test_custom_hierarchy_roundtrip() -> None:
     assert data["steps"][0]["name"] == "CustomMult"
     restored = CustomStep.model_validate(data)
     assert type(restored) is CustomChain
+
+
+def test_custom_discriminator_chain_roundtrip(tmp_path: Path) -> None:
+    flow = CustomStep.model_validate(
+        [
+            {
+                "name": "CustomMult",
+                "coeff": 2,
+                "infra": {"backend": "Cached", "folder": tmp_path},
+            },
+            {"name": "CustomMult"},
+        ]
+    )
+
+    assert isinstance(flow, CustomChain)
+    restored = CustomStep.model_validate(flow.model_dump())
+    assert isinstance(restored, CustomChain)
+    assert restored.run(2) == 8
+    yaml = exca.ConfDict.from_model(flow).to_yaml()
+    from_yaml = CustomStep.model_validate(exca.ConfDict.from_yaml(yaml))
+    assert isinstance(from_yaml, CustomChain)
+    assert from_yaml.model_dump() == flow.model_dump()
+
+
+@pytest.mark.parametrize(
+    "root, chain",
+    [
+        (Step, Chain(steps={"a": conftest.Mult(coeff=3), "b": conftest.Mult()})),
+        (
+            CustomStep,
+            CustomChain(
+                steps=collections.OrderedDict(a=CustomMult(coeff=3), b=CustomMult())
+            ),
+        ),
+    ],
+)
+def test_named_chain_roundtrips(root: type[Step], chain: Chain) -> None:
+    key = root._exca_discriminator_key
+    data = chain.model_dump()
+    assert type(data["steps"]) is dict
+    assert data[key] == type(chain).__name__
+    assert data["steps"]["a"][key] == type(chain["a"]).__name__
+    for restored in (root.model_validate(data), pickle.loads(pickle.dumps(chain))):
+        assert type(restored) is type(chain)
+        assert isinstance(restored, Chain)
+        assert type(restored.steps) is collections.OrderedDict
+        assert restored.model_dump() == data
+        assert restored.run(1.0) == 6.0
 
 
 # =============================================================================

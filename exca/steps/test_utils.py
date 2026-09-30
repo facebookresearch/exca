@@ -10,7 +10,7 @@ from pathlib import Path
 import pydantic
 import pytest
 
-from . import conftest, utils
+from . import conftest
 from .base import Chain, Step
 from .helpers import Func
 
@@ -90,25 +90,34 @@ Branch
 
 
 def test_resolved_step_convergence_error() -> None:
-    class BadStep(Step):
+    class _NeverConverges(Step):
         def _resolve_step(self) -> Step:
             return type(self)()  # never converges
 
     with pytest.raises(RuntimeError, match="did not converge"):
-        utils.resolved_step(BadStep())
+        _NeverConverges().run()
+
+
+def test_self_resolution_keeps_step_mutable() -> None:
+    step = conftest.AddWithTransforms(value=1)
+    assert step.run(1.0) == 2.0
+    step.transforms = [conftest.Mult(coeff=3)]
+    assert step.run(1.0) == 6.0
+    with pytest.raises(RuntimeError, match="instance was frozen"):
+        step.value = 2
 
 
 @pytest.mark.parametrize(
     "raw, expected",
     [
-        ("short", "short"),
-        ("x" * 40, "x" * 40),
-        ("a" * 41, "a" * 18 + "..." + "a" * 19),
+        ("short", "'short'"),
+        ("x" * 38, "'" + "x" * 38 + "'"),
+        ("a" * 39, "'" + "a" * 17 + "..." + "a" * 18 + "'"),
         (
-            "'foo.bar.baz.deeply_nested_function_name'",
+            "foo.bar.baz.deeply_nested_function_name",
             "'foo.bar.baz.deepl...sted_function_name'",
         ),
     ],
 )
-def test_truncate(raw: str, expected: str) -> None:
-    assert utils._truncate(raw) == expected
+def test_show_truncates_long_values(raw: str, expected: str) -> None:
+    assert Func(function=_scale, src=Path(raw)).show().endswith(f"src={expected}")

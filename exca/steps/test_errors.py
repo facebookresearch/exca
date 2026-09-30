@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
+import pickle
 import sqlite3
 import typing as tp
 from pathlib import Path
@@ -12,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from exca import cachedict
-from exca.steps import backends, conftest, errors
+from exca.steps import backends, base, conftest, errors, items
 
 
 def test_error_registry_lifecycle(tmp_path: Path) -> None:
@@ -61,14 +62,14 @@ def test_lookup_statuses_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         cd["ok"] = 1
     with errors.ErrorRegistry(tmp_path) as reg:
         reg.record("err", ValueError("boom"), "tb")
-    statuses = backends._CachedEntry.lookup_statuses(cd, ["ok", "err", "miss"])
+    statuses = backends._CachedEntry.statuses(cd, ["ok", "err", "miss"])
     assert statuses == {"ok": "success", "err": "error", "miss": None}
 
     def fail_registry(*args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:
         raise AssertionError("success-only lookup should not open ErrorRegistry")
 
     monkeypatch.setattr(errors, "ErrorRegistry", fail_registry)
-    statuses = backends._CachedEntry.lookup_statuses(cd, ["ok"])
+    statuses = backends._CachedEntry.statuses(cd, ["ok"])
     assert statuses == {"ok": "success"}
 
 
@@ -142,9 +143,12 @@ def test_rechecks_error_after_inflight_wait(
 
     @contextlib.contextmanager
     def record_error_after_claim(
-        reg: backends.inflight.InflightRegistry | None, item_uids: tp.Collection[str]
+        reg: backends.inflight.InflightRegistry | None,
+        item_uids: tp.Collection[str],
+        *,
+        reentrant: bool,
     ) -> tp.Iterator[backends.inflight.InflightClaim]:
-        with original(reg, item_uids) as claim:
+        with original(reg, item_uids, reentrant=reentrant) as claim:
             with errors.ErrorRegistry(handle.paths.step_folder) as ereg:
                 ereg.record(handle.uid, ValueError("from other worker"), "tb")
             yield claim
@@ -212,6 +216,22 @@ def test_cached_as_note_survives_pickle(tmp_path: Path) -> None:
     notes = getattr(exc_info.value, "__notes__", [])
     assert any("error recorded at" in n for n in notes), "missing record note"
     assert any("mode='retry'" in n for n in notes), "missing retry note"
+
+
+def test_batch_protocol_error_note_survives_pickle(tmp_path: Path) -> None:
+    class UnderYield(base.Step):
+        def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+            for value in values:
+                yield value
+                return
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = UnderYield(infra=infra)
+    with pytest.raises(items.BatchProtocolError) as exc_info:
+        list(step.run_many([1, 2]))
+    restored = pickle.loads(pickle.dumps(exc_info.value))
+    notes = getattr(restored, "__notes__", [])
+    assert any("cache may be invalid" in note for note in notes)
 
 
 def test_orphan_errors_db_self_heals_on_recompute(tmp_path: Path) -> None:

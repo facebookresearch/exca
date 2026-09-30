@@ -4,99 +4,70 @@
 
 ## Overview
 
-The `steps` module provides a pipeline implementation where **each Step
-has its own infrastructure** (execution backend + caching), rather than
-having infrastructure only at the Chain level. `Chain` is itself a
-`Step`, enabling nested compositions.
+Each Step can have its own execution backend and cache. `Chain` is
+itself a Step, so compositions can be nested and use the same public
+API.
 
 ## Goals
 
 1. **Per-step infrastructure**: Each step can specify its own compute backend and caching
 2. **Composability**: Chains are Steps, enabling nested compositions
 3. **Unified API**: Same interface for Steps and Chains
-4. **Clean inheritance**: All backends inherit from `Backend`, all have caching
+4. **Clean execution boundary**: Backends submit prepared cache-writing tasks
 5. **User-friendly**: Use dict syntax for infra, no need to import backend classes
 6. **Error caching**: Both results and errors are cached for reproducibility
 
-## Core Concepts
+## Core concepts
 
-### Step (Base Class)
+### Step
 
-A `Step` is the fundamental unit that:
-- Produces output via `_run()` (generator) or `_run(input) -> output` (transformer)
-- Has an optional `infra` for execution backend and caching
-- Uses `run(value)` as the main entry point (handles caching/backend)
-- Detects generator vs transformer via signature inspection
+A Step produces output through `_run()` or `_run(input)`, optionally
+amortized through `_run_batch(values)`. `run()` and `run_many()` apply
+resolution, cache boundaries, and execution backends. `_resolve_step()`
+may return another Step, including a Chain.
 
-### NoValue Sentinel
+### StepItems
 
-`NoValue` is a sentinel class (in `identity.py`) used to distinguish
-"no input provided" from `None`. `run()` with no argument passes
-`NoValue()` internally; cache operations use it for generator steps.
+`StepItems` is the carrier between stages. Construction is keyword-only
+and requires `source` and `uids`; `uids` is stored as an immutable
+tuple. Iteration and `read()` are lazy, while `select()` preserves the
+requested uid order.
 
-### Backend (Discriminated Model)
+### NoValue
 
-`Backend` is a discriminated model with `discriminator_key="backend"`.
-It receives `StepItems` batches from `Step._dispatch`, decides which
-item uids need work, and returns `StepItems` backed by CacheDict.
+`NoValue` distinguishes no input from `None`. Calling `run()` without
+an argument creates one no-input item.
 
-- **Cached**: Inline execution + caching (base class for all)
-- **LocalProcess**: Subprocess execution via submitit
-- **SubmititDebug**: Debug executor (inline but simulates submitit)
-- **Slurm**: Cluster execution via submitit
-- **Auto**: Auto-detect executor (inherits from Slurm)
+### Backend
 
-All backends have:
-- `folder`: Path for cache storage (optional, can be propagated from Chain)
-- `mode`: Execution mode (cached/force/read-only/retry)
-- `keep_in_ram`: keep cached values in a per-Backend RAM dict
+`Backend` is discriminated by `"backend"` and carries `folder`, `mode`,
+and `keep_in_ram`. Concrete backends are `Cached`, `ThreadPool`,
+`ProcessPool`, `LocalProcess`, `SubmititDebug`, `Slurm`, and `Auto`.
+They submit `_WriteTask` objects prepared by cache transactions; they
+do not own cache state.
 
 Cache serialization format comes from `Step.CACHE_TYPE` (class-level),
 not from the backend.
 
-### Cache Status
+### Runner and cache transactions
 
-Lookup status can be in four states:
-- `"success"`: Result cached successfully
-- `"error"`: Error cached (will be re-raised on load)
-- `"running"`: No cached result/error, but a live worker owns the item
-- `None`: No cache exists and no live worker owns the item
+`Runner` is internal execution plumbing. It resolves Steps, computes
+their aligned identity and paths, creates `_CacheTxn` boundaries, and
+returns cache-backed `StepItems`. A `_Submission` applies the
+backend-specific transaction lifecycle described in `caching.md`.
 
 ### Chain
 
-A `Chain` is a specialized `Step` that composes multiple steps
-sequentially. It shares a cache entry with its last step (same
-`step_uid`).
+A Chain applies its Steps sequentially. It adds no identity segment of
+its own and shares its final cache boundary with the final Step.
 
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                         Step                               │
-│  ┌──────────┐  ┌──────────────────────┐  ┌─────────────┐  │
-│  │  config  │  │   infra (Backend)    │  │  _run()     │  │
-│  │ (params) │  │  (discriminated)     │  │  -> output  │  │
-│  └──────────┘  └──────────────────────┘  └─────────────┘  │
-│                                                            │
-│  Identity: step_uid + uid computed by `identity` module    │
-│  from (aligned_steps, value) at call time.                 │
-│                                                            │
-│  lookup(value) → LookupHandle (cache introspection handle) │
-│  _dispatch: routes inline or through the configured Backend │
-└────────────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────────────┐
-│           Backend (discriminated by "backend")             │
-│                                                            │
-│  Backend (base)                                            │
-│  - folder, mode, keep_in_ram                               │
-│  - _run(step, batch) / _execute(...) / _clear_caches(...)   │
-│        │                                                   │
-│   ┌────┴────┬────────────┬─────────────┐                   │
-│   ▼         ▼            ▼             ▼                   │
-│ Cached   LocalProcess  Slurm         Auto                  │
-│ (inline) (subprocess)  (cluster)     (auto-detect)         │
-└────────────────────────────────────────────────────────────┘
+inputs → StepItems → Runner → Step._apply
+                         └→ _CacheTxn → _WriteTask → Backend._submit
+                                                    └→ _Submission
+returned StepItems ← _CacheSource ← CacheDict / errors.db
 ```
 
 ## API
@@ -110,16 +81,20 @@ class Step(DiscriminatedModel):
 
     def _run(self, ...) -> Any:          # override: computation
     def _run_batch(self, values) -> Iterator[Any]:
-    def _resolve_step(self) -> "Step":   # override: decompose into chain
+    def _resolve_step(self) -> Step:     # override: decompose into chain
     def run(self, value=NoValue()) -> Any:
+    def run_many(self, values) -> StepItems:
     def lookup(self, value=NoValue()) -> LookupHandle:
 ```
+
+`Step.clear_cache()` remains as a deprecated shortcut for
+`lookup().clear_cache()`. `Step.forward()` raises with the migration to
+`run()`.
 
 ### LookupHandle
 
 ```python
 class LookupHandle:
-    # public properties (raise RuntimeError if unconfigured)
     paths: StepPaths
     cache_dict: CacheDict
     status: Literal["success", "error", "running", None]
@@ -130,30 +105,24 @@ class LookupHandle:
     def job(self) -> submitit.Job | None: ...
 ```
 
-`lookup()` always returns a `LookupHandle` — null-object when unconfigured.
-`Chain.lookup()` overrides to populate `_sub_handles` with child
-handles (prefix-walked). `clear_cache(recursive=True)` walks
-`_sub_handles` first, so the same method works for Step (leaf) and
-any container (Chain, future Parallel, etc.).
+`lookup()` always returns a handle, including an unconfigured
+null-object handle. Chain lookup includes child handles.
+`clear_cache(recursive=True)` cancels and clears the full child tree
+leaf-first.
 
 ### Chain
 
 ```python
 class Chain(Step):
-    steps: Sequence[Step] | OrderedDict[str, Step]
-    def lookup(...) -> LookupHandle:     # overrides: populates _sub_handles
+    steps: Sequence[Step] | Mapping[str, Step]
 ```
 
-### Step Resolution (`_resolve_step`)
+### Variant helper
 
-A Step can override `_resolve_step()` to decompose itself into a
-chain of steps. This replaces manual Chain construction for steps
-that present a single interface but internally run a pipeline.
-
-**Class-level flags** (`_step_flags: ClassVar[frozenset[str]]`):
-- Computed at class definition via `__pydantic_init_subclass__`
-- Values: `"has_run"`, `"has_generator"`, `"has_resolve"`
-- Validation at instantiation: at least `"has_run"` or `"has_resolve"` must be set
+`helpers.run_variants(steps, values)` prepares one transaction per
+variant and submits all compatible tasks together. Each variant owns
+its infra and receives one returned `StepItems`; omitting `values`
+runs every variant once without input.
 
 ## Execution Modes
 
@@ -164,96 +133,29 @@ that present a single interface but internally run a pipeline.
 | `read-only` | Return cached result, raise error if not cached |
 | `retry` | Return cached if success, clear and recompute if error |
 
-## Usage Examples
+## Execution lifecycle
 
-### Simple Step with Caching
+1. `Runner.run()` resolves the declaration to a fixed point.
+2. Inputs are materialized; the first resolved Step produces each item
+   uid, which all downstream Steps retain.
+3. `Runner.evaluate()` calls `Step._apply()` directly when no infra is
+   configured.
+4. At an infra boundary, Runner builds `_CacheTxn` over lazy
+   `StepItems`, prepares transactions in sorted folder order, and asks
+   the Backend to submit only missing work.
+5. The returned carrier reads through `_CacheSource`; the submission
+   applies the backend-specific ownership rules from `caching.md`.
 
-```python
-class Multiply(Step):
-    coeff: float = 2.0
-    def _run(self, value: float) -> float:
-        return value * self.coeff
+Chains apply these rules to each child. Inline per-item Steps fuse into
+one lazy source until a batch or cache boundary.
 
-step = Multiply(coeff=3.0, infra={"backend": "Cached", "folder": "/tmp/cache"})
-result = step.run(5.0)       # 15.0
-q = step.lookup(5.0)
-assert q.cached()
-q.clear_cache()
-```
-
-### Generator Step
-
-```python
-class LoadData(Step):
-    path: str
-    def _run(self) -> np.ndarray:       # no input = generator
-        return np.load(self.path)
-
-step = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
-data = step.run()
-q = step.lookup()
-assert q.cached()
-```
-
-### Chain with Mixed Infrastructure
-
-```python
-pipeline = Chain(
-    steps=[
-        LoadData(path="/data/train.csv"),
-        Train(epochs=50, infra={"backend": "Slurm", "gpus_per_node": 8}),
-    ],
-    infra={"backend": "Cached", "folder": "/cache/pipeline"},
-)
-result = pipeline.run()
-```
-
-### Error Caching and Retry
-
-```python
-step = MyStep(infra={"backend": "Cached", "folder": "/cache"})
-try:
-    step.run(bad_input)           # raises and caches error
-except ValueError:
-    pass
-step.run(bad_input)               # re-raises from cache
-
-step.infra.mode = "retry"
-step.run(bad_input)               # clears error, recomputes
-```
-
-## Execution Flow
-
-When `step.run(value)` is called:
-
-1. Resolve via `_resolve_step()` to a fixed point. If non-self,
-   delegate to the resolved step.
-2. Eagerly materialize values and uids (a scalar `run(value)` is the
-   one-input case of `run_many`), then build the initial `StepItems`.
-3. `_dispatch(batch)` runs inline when no backend folder is configured;
-   otherwise it calls `Backend._run(step, batch)`.
-4. Backend handles cache modes, inflight coordination, and job
-   submission. See `caching.md`.
-
-For chains: `Chain._walk_steps` resolves child steps and dispatches each
-one sequentially. `StepItems` carries the original item uid sequence plus
-the accumulated upstream identity so downstream cache hits can skip
-upstream execution.
-
-Uid-only or lazy item construction would let cache-only runs avoid
-rebuilding expensive inputs. That is a useful future optimization, but not
-required for MapInfra parity or current step semantics.
-
-### Safety Measures (from TaskInfra/MapInfra)
+## Identity and safety
 
 - Config consistency checking (`identity.write_configs`)
 - Shared cache access follows the process umask
-- Force/retry one-shot tracking per Backend lifetime
-- Job lifecycle status — `LookupHandle.status` returns `"success"` /
-  `"error"` / `"running"` / `None`
-- Concurrent submission detection — `JobRegistry` / `jobs.db`
-  records the latest submitit job per uid (advisory; see
-  `caching.md`)
+- Force/retry one-shot tracking per root Step runtime cache owner
+- Lookup status from cached entries plus the inflight registry
+- Recursive cache clear over child handles
+- `jobs.db` as advisory post-mortem log metadata
 - Short item uids — `Step._ITEM_UID_MAX_LENGTH` (default 256)
-  truncates oversize `item_uid()` returns via
-  `ShortItemUid._shorten` (prefix..N..suffix-md5)
+  bounds path components while retaining a hash
