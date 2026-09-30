@@ -56,8 +56,9 @@ class Runner:
             )
         else:
             result = step.infra._run(self, step, batch)
-        if standalone and isinstance(result._source, exca.cachedict.CacheDict):
-            step._output_items = (result, backends._effective_mode(step))
+        keep = standalone and isinstance(result._source, exca.cachedict.CacheDict)
+        if keep and backends._effective_mode(step) != "force":  # warm skips recompute
+            step._output_items = result
             exca.utils.recursive_freeze(step)  # carrier relies on fixed identity
         return result
 
@@ -136,10 +137,8 @@ class Step(exca.helpers.DiscriminatedModel):
     CACHE_TYPE: tp.ClassVar[str | None] = None  # ``None`` = auto-dispatch.
     # in ``materialize_uid``, avoids large keys cluttering the cache.
     _ITEM_UID_MAX_LENGTH: tp.ClassVar[int] = 256
-    # Final cache-backed carrier (+ mode) reused by `run` when all requested uids exist.
-    _output_items: tuple[items.StepItems, identity.ModeType] | None = (
-        pydantic.PrivateAttr(None)
-    )
+    # Final cache-backed carrier reused by `run` when all requested uids exist.
+    _output_items: items.StepItems | None = pydantic.PrivateAttr(None)
     _resolution_cache: Step | None = pydantic.PrivateAttr(
         None
     )  # see `utils.resolved_step`
@@ -289,12 +288,8 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def _warm_items(self, uids: tp.Sequence[str]) -> items.StepItems | None:
         """Reuse a prior run's cache-backed carrier for *uids*, or ``None``."""
-        if self._output_items is None:
-            return None
-        cached, mode = self._output_items
-        if not isinstance(cached._source, exca.cachedict.CacheDict):
-            return None
-        if mode == "force" and not all(uid in cached.uids for uid in uids):
+        cached = self._output_items
+        if cached is None or not isinstance(cached._source, exca.cachedict.CacheDict):
             return None
         with cached._source.frozen_cache_folder():
             if not all(uid in cached._source for uid in uids):
