@@ -146,7 +146,8 @@ def test_scatter_pickle_scales_linearly() -> None:
     def chunk_size(n: int) -> int:
         source = {str(i): {str(i): float(i)} for i in range(n)}
         scat = ScatterDict(body=conftest.Mult(coeff=2.0))
-        carrier = scat._run_items(items.StepItems(source=source, uids=list(source)))
+        batch = items.StepItems(source=source, uids=list(source))
+        carrier = scat._run_items(base.Runner(), batch)
         return len(pickle.dumps(carrier.select(carrier.uids[:10])))
 
     ratio = chunk_size(10_000) / chunk_size(100)

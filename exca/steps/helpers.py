@@ -11,11 +11,10 @@ import typing as tp
 
 import pydantic
 
-from . import identity, items, utils
-from .base import Step
+from . import base, identity, items, utils
 
 
-class Func(Step):
+class Func(base.Step):
     """Wrap a plain function as a Step.
 
     Parameters
@@ -120,7 +119,7 @@ class Func(Step):
         return self.function(**kwargs)
 
 
-class Parallel(Step):
+class Parallel(base.Step):
     """Run a fixed set of step variants over one shared item set.
 
     .. warning:: Experimental — API may change.
@@ -143,7 +142,7 @@ class Parallel(Step):
         The step variants to run.
     """
 
-    steps: tp.Sequence[Step]
+    steps: tp.Sequence[base.Step]
 
     def model_post_init(self, __context: tp.Any) -> None:
         super().model_post_init(__context)
@@ -185,13 +184,13 @@ class Parallel(Step):
             "e.g. parallel.steps[k].lookup(value)"
         )
 
-    def _dispatch(self, batch: items.StepItems) -> items.StepItems:
+    def _uid_steps(self) -> tp.NoReturn:
         raise TypeError(
             "Parallel has no composable output, so it cannot be a Chain step; "
             "call run or run_many directly"
         )
 
-    def _run_items(self, batch: items.StepItems) -> items.StepItems:
+    def _run_items(self, runner: base.Runner, batch: items.StepItems) -> items.StepItems:
         assert self.infra is not None
         if self.infra.folder is None:
             raise RuntimeError(
@@ -203,16 +202,11 @@ class Parallel(Step):
             resolved = utils.resolved_step(variant)
             uids = [identity.materialize_uid(resolved, v) for v in batch]
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
-            cbatches.append(self.infra._prepare(resolved, child_batch))
+            cbatches.append(self.infra._prepare(runner, resolved, child_batch))
         with self.infra._claim(cbatches) as claimed:
             if claimed.ready:
                 self.infra._execute(claimed.ready)
-        return items.StepItems(
-            source={uid: None for uid in batch.uids},
-            uids=batch.uids,
-            upstream=batch._upstream,
-            mode=batch._mode,
-        )
+        return items.StepItems(source={uid: None for uid in batch.uids}, uids=batch.uids)
 
     def run(self, value: tp.Any = identity.NoValue()) -> None:
         self.run_many([value])
@@ -221,5 +215,5 @@ class Parallel(Step):
         values = list(values)
         uids = [identity.materialize_uid(self, v) for v in values]
         batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
-        self._run_items(batch)
+        self._run_items(base.Runner(), batch)
         return [None] * len(values)

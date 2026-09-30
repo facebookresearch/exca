@@ -71,16 +71,17 @@ def test_read_fuses_defaults_and_isolates_batched(
     monkeypatch.setattr(items, "_FusedRun", spy)
     si = items.StepItems(source={"a": 1, "b": 2, "c": 3})
     for step in (conftest.Mult(), conftest.Mult(), _Batched(), conftest.Mult()):
-        si = si.apply_step(step)
+        si = base.Runner().dispatch(step, si)
     result = list(si)
     assert result == [8, 16, 24], "x2, x2, identity batch, x2"
     assert fused == [2, 1], "two defaults fuse; the batched step splits, then one default"
 
 
-def test_apply_step_uses_infra(tmp_path: Path) -> None:
+def test_dispatch_uses_infra(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.Add(value=2, randomize=True, infra=infra)
     uid = identity.materialize_uid(step, 1.0)
     si = items.StepItems(source={uid: 1.0})
-    assert list(si.apply_step(step)) == list(si.apply_step(step))
+    runner = base.Runner()
+    assert list(runner.dispatch(step, si)) == list(runner.dispatch(step, si))
     assert len(step.calls) == 1

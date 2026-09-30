@@ -37,8 +37,7 @@ from exca.cachedict import inflight
 from . import errors, identity, items, jobregistry
 
 if tp.TYPE_CHECKING:
-    from .base import Step
-    from .items import StepItems  # bare name for annotations (field shadows `items`)
+    from .base import Runner, Step
 
 logger = logging.getLogger(__name__)
 
@@ -291,8 +290,6 @@ _HELD_ENTRIES: contextvars.ContextVar[frozenset[tuple[str, str]]] = (
 
 @dataclasses.dataclass
 class CoordinationInfo:
-    mode: identity.ModeType = "cached"
-    upstream: tuple[Step, ...] = ()  # this step + everything before it
     claim: inflight.InflightClaim | None = None
     held_entries: frozenset[tuple[str, str]] = frozenset()  # {(folder, uid),...}
 
@@ -305,6 +302,7 @@ class ComputeBatch:
     paths: StepPaths
     cache_dict: exca.cachedict.CacheDict[tp.Any]
     items: items.StepItems
+    runner: Runner  # context of `step`, with the step's folded mode
     info: CoordinationInfo = dataclasses.field(default_factory=CoordinationInfo)
 
     def claimed_uids(self) -> list[str]:
@@ -327,8 +325,7 @@ class ComputeBatch:
         (avoid aliasing the parent's claim).
         """
         info = dataclasses.replace(self.info)
-        items_ = self.items.select(uids, mode=self.info.mode)
-        return dataclasses.replace(self, items=items_, info=info)
+        return dataclasses.replace(self, items=self.items.select(uids), info=info)
 
     def shuffled(self) -> ComputeBatch:
         """Same batch with its uids in random order."""
@@ -336,15 +333,6 @@ class ComputeBatch:
         uids = list(self.items.uids)
         random.shuffle(uids)
         return self.select(uids)
-
-    def cached_items(self) -> StepItems:
-        """Lazy cache-backed carrier; use on a top-level batch, not a chunk."""
-        return items.StepItems(
-            source=self.cache_dict,
-            uids=self.items.uids,
-            upstream=self.info.upstream,
-            mode=self.info.mode,
-        )
 
     # No return: the driver re-reads from cache rather than unpickle a (heavy) result.
     def run_and_cache(self) -> None:
@@ -354,7 +342,7 @@ class ComputeBatch:
         written_uids: list[str] = []
         token = _HELD_ENTRIES.set(self.info.held_entries)
         try:
-            result_items = self.step._run_items(self.items)
+            result_items = self.step._run_items(self.runner, self.items)
             with self.cache_dict.write():
                 for i, result in enumerate(result_items):
                     uid = self.items.uids[i]
@@ -597,23 +585,26 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                 ereg.clear(uids)
         self._checked_configs.discard(paths.step_folder)
 
-    def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
+    def _run(self, runner: Runner, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid."""
-        cbatch = self._prepare(step, batch)
+        cbatch = self._prepare(runner, step, batch)
         with self._claim([cbatch]) as claimed:
             if claimed.ready:
                 self._execute(claimed.ready)
-        return cbatch.cached_items()
+        return items.StepItems(source=cbatch.cache_dict, uids=cbatch.items.uids)
 
-    def _prepare(self, step: Step, batch: items.StepItems) -> ComputeBatch:
+    def _prepare(
+        self, runner: Runner, step: Step, batch: items.StepItems
+    ) -> ComputeBatch:
         """Resolve paths/cache/mode and force-clear before any claim is held."""
-        upstream = tuple(batch._upstream) + tuple(step._uid_steps())
-        paths = step._make_paths(upstream)
+        paths = runner.paths(step)
+        paths.step_folder.mkdir(parents=True, exist_ok=True)
         if paths.step_folder not in self._checked_configs:
-            identity.write_configs(paths.step_folder, upstream)
+            aligned = runner.prefix + tuple(step._uid_steps())
+            identity.write_configs(paths.step_folder, aligned)
             self._checked_configs.add(paths.step_folder)
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        mode = _fold_modes(batch._mode, _effective_mode(step))
+        mode = _fold_modes(runner.mode, _effective_mode(step))
 
         pending_statuses = self._pending_statuses(paths=paths, uids=batch.uids, mode=mode)
         if pending_statuses:
@@ -627,8 +618,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
                     logger.warning(msg, len(to_clear), paths.step_uid, mode)
                 self._clear_caches(paths=paths, cd=cd, uids=set(pending_statuses))
         # carries the full input set; _claim filters to pending
-        info = CoordinationInfo(mode=mode, upstream=upstream)
-        return ComputeBatch(step=step, paths=paths, cache_dict=cd, items=batch, info=info)
+        runner = dataclasses.replace(runner, mode=mode)
+        return ComputeBatch(
+            step=step, paths=paths, cache_dict=cd, items=batch, runner=runner
+        )
 
     def _claim(self, cbatches: list[ComputeBatch]) -> _Claimed:
         """Claim every batch's pending uids, recheck, and return a `_Claimed`."""
@@ -641,7 +634,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             # sort by step_uid: concurrent dispatches claim in the same order
             for cb in sorted(cbatches, key=lambda cb: cb.paths.step_uid):
                 pending = self._pending_statuses(
-                    paths=cb.paths, uids=cb.items.uids, mode=cb.info.mode
+                    paths=cb.paths, uids=cb.items.uids, mode=cb.runner.mode
                 )
                 if not pending:
                     continue
@@ -670,7 +663,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         """Recheck under the claim, clear stale entries, return narrowed batch
         or ``None`` if fully populated by a competitor.
         """
-        mode = cbatch.info.mode
+        mode = cbatch.runner.mode
         pending_statuses = self._pending_statuses(
             paths=cbatch.paths, uids=cbatch.items.uids, mode=mode
         )
@@ -698,7 +691,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         Per-batch, not all-at-once: a raising run leaves later batches
         un-attempted → must stay unmarked.
         """
-        if cbatch.info.mode in ("force", "retry"):
+        if cbatch.runner.mode in ("force", "retry"):
             folder = cbatch.paths.step_folder
             self._recomputed.update((folder, uid) for uid in cbatch.items.uids)
 
@@ -916,17 +909,17 @@ class _PoolBackend(Backend):
     max_jobs: int | None = pydantic.Field(128, gt=0)
     _POOL_TYPE: tp.ClassVar[str]
 
-    def _run(self, step: Step, batch: items.StepItems) -> items.StepItems:
+    def _run(self, runner: Runner, step: Step, batch: items.StepItems) -> items.StepItems:
         """Single-step streaming: same submission as ``_execute``, returns a
         lazy carrier instead of blocking.
         """
-        cbatch = self._prepare(step, batch)
+        cbatch = self._prepare(runner, step, batch)
         claimed = self._claim([cbatch])
         transferred = False
         try:
             submission = self._submit_pool(claimed.ready) if claimed.ready else None
             if submission is None:  # nothing pending, or ran inline
-                return cbatch.cached_items()
+                return items.StepItems(source=cbatch.cache_dict, uids=cbatch.items.uids)
             pool, task_futs = submission
             uid_to_future = {
                 uid: fut
@@ -937,10 +930,7 @@ class _PoolBackend(Backend):
             ctx = _PoolContext(cbatch.cache_dict, cbatch.paths.step_uid, pool, claimed)
             transferred = True  # _PoolContext closes `claimed`, not the finally
             return items.StepItems(
-                source=_PoolSource(uid_to_future, ctx),
-                uids=cbatch.items.uids,
-                upstream=cbatch.info.upstream,
-                mode=cbatch.info.mode,
+                source=_PoolSource(uid_to_future, ctx), uids=cbatch.items.uids
             )
         finally:
             if not transferred:
