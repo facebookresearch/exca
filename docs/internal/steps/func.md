@@ -40,11 +40,12 @@ class Func(Step):
 3. Validate that every extra field matches a non-input parameter of the function.
 4. Type-check extras against annotations via `pydantic.TypeAdapter`.
 
-### `_is_generator` override
+### `_is_pure_generator` override
 
-The class-level `_step_flags` has `"has_run"` (since `Func._run != Step._run`) but
-NOT `"has_generator"` (because `Func._run(self, *args)` uses `*args`).
-`_is_generator` is overridden to check `self._resolved_input == ""` at runtime.
+The class-level `_step_flags` has `"has_run"` but not
+`"pure_generator"` because `Func._run(self, *args)` accepts positional
+arguments. `_is_pure_generator` checks `self._resolved_input == ""` at
+runtime.
 
 ### Serialization
 

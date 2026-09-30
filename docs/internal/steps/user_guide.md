@@ -65,7 +65,7 @@ class LoadData(Step):
 
 loader = LoadData(path="data.npy", infra={"backend": "Cached", "folder": "/cache"})
 data = loader.run()  # No input needed
-loader.has_cache()       # Cache operations work directly
+loader.lookup().cached()  # Cache operations use a LookupHandle
 ```
 
 ### Chains
@@ -178,7 +178,7 @@ pipeline = Chain(
 )
 ```
 
-> **Note:** When a `Chain` has a folder set but a substep's infra doesn't, the folder is automatically propagated to that substep.
+> **Note:** A `Chain` supplies its folder as runtime context to folderless substeps without mutating their config. Chain lookup returns the final result and recursively clears contextual child entries; direct child lookup requires the child to declare a folder.
 
 ---
 

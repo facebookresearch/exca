@@ -122,18 +122,13 @@ step.run(5.0)  # computes, stores on disk
 step.run(5.0)  # cache hit, no recompute
 ```
 
-In a chain, put `infra` on **expensive** steps; leave cheap steps
-without. A chain can also carry its own `infra` — when it does,
-the chain becomes the **remote-compute scope** (the whole chain
-runs as one job) and its cache cell coincides with the last
-step's. The chain auto-propagates its folder to sub-steps with an
-`infra` but no folder.
+In a chain, put `infra` on **expensive** steps; leave cheap steps without. A chain can also carry its own `infra` — when it does, the chain becomes the **remote-compute scope** (the whole chain runs as one job) and its cache cell coincides with the last step's. The chain supplies its folder as runtime context to cached substeps without one; it does not mutate their `infra.folder`. `chain.lookup(...)` returns the chain's final result and recursively clears contextual child entries. To inspect a child result directly, give the child its own folder.
 
 ```python
 chain = steps.Chain(
     steps=[
         LoadValue(path="value.txt",
-                 infra={"backend": "Cached"}),    # folder propagated
+                 infra={"backend": "Cached"}),    # inherits chain context
         Multiply(coeff=3.0),                       # not cached
     ],
     infra={"backend": "Cached", "folder": cache},  # chain root
@@ -142,7 +137,7 @@ chain = steps.Chain(
 print(chain.show())  # tree view for debugging
 # Chain  [Cached, /cache]
 # └── steps
-#     ├── LoadValue  path='value.txt'  [Cached, /cache]
+#     ├── LoadValue  path='value.txt'  [Cached]
 #     └── Multiply  coeff=3.0
 ```
 

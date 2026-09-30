@@ -51,6 +51,38 @@ def test_inflight_lifecycle(tmp_path: Path) -> None:
     reg.close()
 
 
+def test_guarded_update_and_release(tmp_path: Path) -> None:
+    pid = os.getpid()
+    other_pid = 2**20 + 7
+    reg = inflight.InflightRegistry(tmp_path)
+    assert reg.claim(["a", "b"], pid=pid) == ["a", "b"]
+    assert reg.claim(["other"], pid=other_pid) == ["other"]
+
+    assert reg.update_worker_info([], job_id="job", pid=pid) == 0
+    assert reg.update_worker_info(["a", "b"], job_id="wrong", pid=other_pid) == 0
+    assert reg.update_worker_info(["a", "b"], job_id="job", pid=pid) == 2
+    assert reg.update_worker_info(["a", "other", "missing"], job_id="new", pid=pid) == 1
+    assert reg.get(["a", "b", "other"])["other"].job_id is None
+
+    reg.release(["a"], pid=other_pid)
+    assert "a" in reg.get(["a"])
+    reg.release(["a"], pid=pid)
+    assert reg.get(["a"]) == {}
+    reg.close()
+
+
+def test_session_release_preserves_replacement_owner(tmp_path: Path) -> None:
+    pid = os.getpid()
+    replacement_pid = 2**20 + 7
+    with inflight.inflight_session(inflight.InflightRegistry(tmp_path), ["item"]):
+        with inflight.InflightRegistry(tmp_path) as replacement:
+            replacement.release(["item"], pid=pid)
+            assert replacement.claim(["item"], pid=replacement_pid) == ["item"]
+
+    with inflight.InflightRegistry(tmp_path) as registry:
+        assert registry.get(["item"])["item"].pid == replacement_pid
+
+
 def test_inflight_session(tmp_path: Path) -> None:
     """inflight_session: None passthrough, claim/release lifecycle, exception
     safety, local job_id marker, and re-entrant nesting."""
@@ -242,9 +274,14 @@ def test_inflight_session_retries_lost_claim(
     original_wait = inflight.InflightRegistry.wait_for_inflight
     original_is_alive = inflight.WorkerInfo.is_alive
 
-    def wait_then_inject(self: inflight.InflightRegistry, item_uids: list[str]) -> None:
+    def wait_then_inject(
+        self: inflight.InflightRegistry,
+        item_uids: list[str],
+        *,
+        reentrant: bool = True,
+    ) -> None:
         nonlocal wait_calls
-        original_wait(self, item_uids)
+        original_wait(self, item_uids, reentrant=reentrant)
         wait_calls += 1
         if wait_calls == 1:
             rival = inflight.InflightRegistry(tmp_path)

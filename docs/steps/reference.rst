@@ -11,7 +11,9 @@ Core classes
 ------------
 
 .. autoclass:: exca.steps.Step
-    :members: run, run_many, lookup, clone, item_uid, CACHE_TYPE
+    :members: run, run_many, clone, item_uid, CACHE_TYPE
+
+.. automethod:: exca.steps.Step.lookup(value=NoValue())
 
 .. autoclass:: exca.steps.Chain
     :show-inheritance:
@@ -24,14 +26,15 @@ slicing returns a new ``Chain``.
 Batched execution
 -----------------
 
-.. autoclass:: exca.steps.items.StepItems
+.. autoclass:: exca.steps.items.StepItems(*, source, uids)
+    :members: select, read
 
 .. autoexception:: exca.steps.items.BatchProtocolError
 
 Cache lookup
 ------------
 
-.. autoclass:: exca.steps.backends.LookupHandle
+.. autoclass:: exca.steps.backends.LookupHandle()
     :members:
 
 ``LookupHandle.paths`` exposes a ``StepPaths`` dataclass with two
@@ -66,6 +69,9 @@ accept:
 .. autoclass:: exca.steps.backends.Cached
     :show-inheritance:
 
+``Cached(capture_logs=True)`` writes main-process stdout and stderr
+under the step's ``logs/main-process`` folder.
+
 .. autoclass:: exca.steps.backends.LocalProcess
     :show-inheritance:
 
@@ -87,6 +93,8 @@ accept:
 
 Helpers
 -------
+
+.. autofunction:: exca.steps.helpers.run_variants
 
 .. autoclass:: exca.steps.helpers.Func
     :members:

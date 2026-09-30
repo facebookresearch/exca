@@ -10,13 +10,23 @@ Test guidelines live in .cursor/rules/testing.mdc (general) and
 .cursor/rules/steps-testing.mdc (steps-specific conventions).
 """
 
+from __future__ import annotations
+
+import contextlib
 import random
+import threading
+import types
 import typing as tp
+from concurrent import futures
 from pathlib import Path
 
 import pydantic
+import pytest
+import submitit
 
-from . import base, identity
+from exca.cachedict import inflight
+
+from . import backends, base, identity
 
 # =============================================================================
 # Test utilities
@@ -27,6 +37,149 @@ def extract_cache_folders(folder: Path) -> tuple[str, ...]:
     """Extract all cache folder paths relative to base folder."""
     caches = (str(x.relative_to(folder))[:-6] for x in folder.rglob("**/cache"))
     return tuple(sorted(caches))
+
+
+class _FakeSlurmState:
+    def __init__(self, task: tp.Callable[[], None]) -> None:
+        self.task = task
+        self.gate = threading.Event()
+        self.done = threading.Event()
+        self.result_entered = threading.Event()
+        self.cancelled = False
+        self.error: BaseException | None = None
+        self.thread = threading.Thread(target=self.run)
+        self.thread.start()
+
+    def run(self) -> None:
+        if not self.gate.wait(10):
+            self.error = TimeoutError("fake Slurm gate timed out")
+        elif self.cancelled:
+            self.error = futures.CancelledError()
+        else:
+            try:
+                self.task()
+            except BaseException as exc:
+                self.error = exc
+        self.done.set()
+
+
+class _FakeSlurmJob:
+    states: tp.ClassVar[dict[str, _FakeSlurmState]] = {}
+    next_id: tp.ClassVar[int] = 0
+
+    def __init__(self, folder: str | Path, job_id: str) -> None:
+        if job_id not in self.states:
+            raise KeyError(job_id)
+        self.job_id = job_id
+        self.paths = types.SimpleNamespace(folder=Path(folder))
+
+    @classmethod
+    def submit(cls, task: tp.Callable[[], None], folder: str | Path) -> _FakeSlurmJob:
+        job_id = f"fake-{cls.next_id}"
+        cls.next_id += 1
+        cls.states[job_id] = _FakeSlurmState(task)
+        return cls(folder, job_id)
+
+    @property
+    def _state(self) -> _FakeSlurmState:
+        return self.states[self.job_id]
+
+    @property
+    def state(self) -> str:
+        if not self.done():
+            return "RUNNING"
+        if self._state.cancelled:
+            return "CANCELLED"
+        return "FAILED" if self._state.error is not None else "COMPLETED"
+
+    def done(self) -> bool:
+        return self._state.done.is_set()
+
+    def result(self) -> None:
+        self._state.result_entered.set()
+        assert self._state.done.wait(10)
+        if self._state.error is not None:
+            raise self._state.error
+
+    def wait(self) -> None:
+        self.result()
+
+    def cancel(self) -> None:
+        self._state.cancelled = True
+        self._state.gate.set()
+
+    def release(self) -> None:
+        self._state.gate.set()
+
+
+class _FakeSlurmExecutor:
+    captured: tp.ClassVar[list[_FakeSlurmExecutor]] = []
+
+    def __init__(self, folder: str | Path, cluster: str | None = None) -> None:
+        self.folder = Path(folder)
+        self.cluster = cluster or "slurm"
+        self.jobs: list[_FakeSlurmJob] = []
+        self.parameters: dict[str, tp.Any] = {}
+        type(self).captured.append(self)
+
+    def update_parameters(self, **kwargs: tp.Any) -> None:
+        self.parameters = kwargs
+
+    def batch(self) -> contextlib.nullcontext[None]:
+        return contextlib.nullcontext()
+
+    def submit(self, task: tp.Callable[[], None]) -> _FakeSlurmJob:
+        job = _FakeSlurmJob.submit(task, self.folder)
+        self.jobs.append(job)
+        return job
+
+    @classmethod
+    def all_jobs(cls) -> list[_FakeSlurmJob]:
+        return [job for executor in cls.captured for job in executor.jobs]
+
+    @classmethod
+    def release_all(cls) -> None:
+        for job in cls.all_jobs():
+            job.release()
+
+
+def _return_promptly(call: tp.Callable[[], tp.Any]) -> tp.Any:
+    outputs: list[tp.Any] = []
+    errors: list[BaseException] = []
+    returned = threading.Event()
+
+    def run() -> None:
+        try:
+            outputs.append(call())
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert returned.wait(0.5), "run_many blocked on submitted Slurm jobs"
+    thread.join(10)
+    if errors:
+        raise errors[0]
+    return outputs[0]
+
+
+@pytest.fixture
+def fake_slurm(monkeypatch: pytest.MonkeyPatch) -> tp.Iterator[None]:
+    _FakeSlurmJob.states = {}
+    _FakeSlurmJob.next_id = 0
+    _FakeSlurmExecutor.captured = []
+    monkeypatch.setattr(submitit, "AutoExecutor", _FakeSlurmExecutor)
+    monkeypatch.setattr(submitit, "SlurmJob", _FakeSlurmJob)
+    monkeypatch.setattr(inflight, "_has_sacct", lambda: True)
+    monkeypatch.setattr(inflight.random, "uniform", lambda *args: 0)
+    monkeypatch.setattr(backends.random, "sample", lambda seq, size: list(seq))
+    yield
+    for state in _FakeSlurmJob.states.values():
+        state.gate.set()
+    for state in _FakeSlurmJob.states.values():
+        state.thread.join(10)
 
 
 class RecordingStep(base.Step):

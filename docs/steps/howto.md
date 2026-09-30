@@ -56,6 +56,28 @@ def shift(x: float, *, by: float) -> float:
 steps.helpers.Func(function=shift, input_param="x", by=1.5).run(2.0)  # 3.5
 ```
 
+## Run Step variants together
+
+Replace a `Parallel` wrapper with variants that own their infra:
+
+```python notest
+# Before
+sweep = steps.helpers.Parallel(steps=variants, infra=infra)
+sweep.run_many(values)
+
+# After
+variants = [Score(alpha=alpha, infra=infra) for alpha in alphas]
+outputs = steps.helpers.run_variants(variants, values)
+results = [list(output) for output in outputs]  # waits for Slurm
+```
+
+`outputs` contains one `StepItems` per variant. Variants may use
+different folders, modes, and `keep_in_ram` values, but submission
+settings such as backend resources must match; incompatibility is
+rejected before inputs are consumed. Variants must resolve to distinct
+cache addresses. For no-input Steps, omit `values`:
+`steps.helpers.run_variants(variants)`.
+
 ## Override `item_uid` for opaque inputs
 
 When a Step is called via `run_many`, the framework needs a stable
@@ -89,8 +111,7 @@ See {doc}`items` for the full story on per-input identity.
 ## Declare a default cache format with `CACHE_TYPE`
 
 When a Step always produces the same data type, set `CACHE_TYPE`
-on the class to fix the serialization format. The class default
-cascades to `infra.cache_type` automatically:
+on the class to fix the serialization format:
 
 ```python
 import pandas as pd
@@ -111,9 +132,8 @@ FetchTable(
 ).run()                                 # stored as .parquet
 ```
 
-A `Chain` propagates the last step's `CACHE_TYPE` to its own
-`infra.cache_type` when the chain itself has an `infra` — so the
-chain's cache cell uses the same format as the last step's.
+A `Chain` uses the last step's `CACHE_TYPE` for its own cache cell
+unless the Chain class declares one explicitly.
 
 ## Build a custom Step hierarchy (different discriminator key)
 
@@ -253,6 +273,8 @@ step.run(v)   # loads from disk, keeps in RAM
 step.run(v)   # served from RAM
 ```
 
-The RAM cache is per-`Backend` instance and is wiped in lockstep
-with disk by `clear_cache()` and `mode="force"`. Cross-process
-workers get a fresh view (no shared RAM).
+The RAM cache belongs to the root Step declaration's runtime
+owner. Reusing one Step declaration preserves its RAM view across
+calls; two declarations that share a `Backend` instance do not.
+`clear_cache()` and `mode="force"` clear that owner's disk and RAM
+entries together. Cross-process workers get a fresh view.

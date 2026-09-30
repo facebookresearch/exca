@@ -11,8 +11,27 @@ import typing as tp
 
 import pydantic
 
-from . import identity, items, utils
+from . import base, identity, items
 from .base import Step
+
+
+def run_variants(
+    steps: tp.Sequence[Step],
+    values: tp.Iterable[tp.Any] = (identity.NoValue(),),
+) -> list[items.StepItems]:
+    """Run Step variants together under one submission.
+
+    Each variant supplies its own infra. Variants may differ in cache folder,
+    mode, and RAM policy, but their submission settings must match. Variants
+    must resolve to distinct cache addresses. Omitting ``values`` runs each
+    variant once without input.
+
+    Returns
+    -------
+    list[items.StepItems]
+        One result carrier per variant, in variant order.
+    """
+    return base.Runner().run_variants(steps, values)
 
 
 class Func(Step):
@@ -40,7 +59,7 @@ class Func(Step):
     """
 
     if tp.TYPE_CHECKING:
-        # pylint: disable=super-init-not-called
+
         def __init__(self, **kwargs: tp.Any) -> None: ...
 
     model_config = pydantic.ConfigDict(extra="allow")
@@ -54,63 +73,61 @@ class Func(Step):
     )
 
     @pydantic.field_serializer("function")
-    def _serialize_function(self, func: tp.Callable[..., tp.Any], _info: tp.Any) -> str:
-        return self._func_ta.dump_python(func, mode="json")
+    def _serialize_function(self, function: tp.Callable[..., tp.Any], _: tp.Any) -> str:
+        return self._func_ta.dump_python(function, mode="json")
 
     @classmethod
     def _exclude_from_cls_uid(cls) -> list[str]:
         return super()._exclude_from_cls_uid() + ["input_param"]
 
     def model_post_init(self, __context: tp.Any) -> None:
-        sig = inspect.signature(self.function)
-        params = list(sig.parameters.values())
-        param_map = {p.name: p for p in params}
-
-        reserved = set(type(self).model_fields)
-        conflicts = reserved & set(param_map)
+        signature = inspect.signature(self.function)
+        parameters = list(signature.parameters.values())
+        parameter_map = {parameter.name: parameter for parameter in parameters}
+        conflicts = set(type(self).model_fields) & set(parameter_map)
         if conflicts:
             raise ValueError(
-                f"{self.function.__name__} has parameters {conflicts} that conflict"
-                f" with Func fields; rename them"
+                f"{self.function.__name__} has parameters {conflicts} that conflict "
+                "with Func fields; rename them"
             )
-
         if self.input_param is not None:
             resolved = self.input_param
-            if resolved not in param_map:
+            if resolved not in parameter_map:
                 raise ValueError(
-                    f"input_param {resolved!r} not in signature of {self.function.__name__}"
+                    f"input_param {resolved!r} not in signature of "
+                    f"{self.function.__name__}"
                 )
         else:
             required = [
-                p.name
-                for p in params
-                if p.default is inspect.Parameter.empty
-                and p.kind
-                not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+                parameter.name
+                for parameter in parameters
+                if parameter.default is inspect.Parameter.empty
+                and parameter.kind
+                not in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                )
             ]
             if len(required) > 1:
                 raise ValueError(
-                    f"{self.function.__name__} has {len(required)} required parameters"
-                    f" {required}; set input_param explicitly"
+                    f"{self.function.__name__} has {len(required)} required "
+                    f"parameters {required}; set input_param explicitly"
                 )
             resolved = required[0] if required else ""
         self._resolved_input = resolved
-
-        extras = dict(self.model_extra or {})
-        for name, value in extras.items():
+        for name, value in (self.model_extra or {}).items():
             if name == resolved:
-                raise ValueError(f"Extra field '{name}' conflicts with input parameter")
-            if name not in param_map:
+                raise ValueError(f"Extra field {name!r} conflicts with input parameter")
+            if name not in parameter_map:
                 raise ValueError(
-                    f"Extra field '{name}' is not a parameter of {self.function.__name__}"
+                    f"Extra field {name!r} is not a parameter of {self.function.__name__}"
                 )
-            annotation = param_map[name].annotation
+            annotation = parameter_map[name].annotation
             if annotation is not inspect.Parameter.empty:
                 pydantic.TypeAdapter(annotation).validate_python(value)
-
         super().model_post_init(__context)
 
-    def _is_generator(self) -> bool:
+    def _is_pure_generator(self) -> bool:
         return self._resolved_input == ""
 
     def _run(self, *args: tp.Any) -> tp.Any:
@@ -118,108 +135,3 @@ class Func(Step):
         if self._resolved_input:
             kwargs[self._resolved_input] = args[0]
         return self.function(**kwargs)
-
-
-class Parallel(Step):
-    """Run a fixed set of step variants over one shared item set.
-
-    .. warning:: Experimental — API may change.
-
-    The variants run together under one shared backend, each caching under its
-    own identity. ``run`` is for effect — read results back per variant via
-    ``parallel.steps[k].lookup(value)``. It has no composable output, so it
-    cannot be a ``Chain`` step — run it standalone.
-
-    Example::
-
-        variants = [MyStep(param=p) for p in params]
-        sweep = Parallel(steps=variants, infra={"backend": "Slurm", "folder": cache})
-        sweep.run_many(inputs)                   # populates each variant's cache
-        out = sweep.steps[0].lookup(inputs[0])   # read one variant back
-
-    Parameters
-    ----------
-    steps:
-        The step variants to run.
-    """
-
-    steps: tp.Sequence[Step]
-
-    def model_post_init(self, __context: tp.Any) -> None:
-        super().model_post_init(__context)
-        if not self.steps:
-            raise ValueError("steps cannot be empty")
-        self._unify_infra()
-
-    def _unify_infra(self) -> None:
-        infras = [s.infra for s in self.steps if s.infra is not None]
-        if self.infra is not None:
-            infras.append(self.infra)
-        if not infras:
-            raise ValueError(
-                "Parallel needs an infra (on itself or its steps) to coordinate "
-                "a sweep — there is nothing to dispatch otherwise"
-            )
-        if self.infra is None:
-            self.infra = type(infras[0]).model_validate(infras[0].model_dump())
-        base = next((i.folder for i in infras if i.folder is not None), None)
-        if self.infra.folder is None:
-            self.infra.folder = base
-        infra_dict = self.infra.model_dump()
-        self.steps = [
-            s if s.infra is not None else s.clone({"infra": infra_dict})
-            for s in self.steps
-        ]
-        if base is not None:
-            utils.propagate_folder(self, base)
-        for step in self.steps:
-            if step.infra != self.infra:
-                raise ValueError(
-                    "Parallel requires one shared backend across itself and its "
-                    f"steps; {self.infra!r} differs from {step.infra!r}"
-                )
-
-    def lookup(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:
-        raise TypeError(
-            "Parallel has no cache of its own; look up a variant instead, "
-            "e.g. parallel.steps[k].lookup(value)"
-        )
-
-    def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        raise TypeError(
-            "Parallel has no composable output, so it cannot be a Chain step; "
-            "call run or run_many directly"
-        )
-
-    def _run_items(self, batch: items.StepItems) -> items.StepItems:
-        assert self.infra is not None
-        if self.infra.folder is None:
-            raise RuntimeError(
-                f"Parallel needs a cache folder; set infra.folder (on Parallel or "
-                f"a step), got {self.infra!r}"
-            )
-        cbatches = []
-        for variant in self.steps:
-            resolved = utils.resolved_step(variant)
-            uids = [identity.materialize_uid(resolved, v) for v in batch]
-            child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
-            cbatches.append(self.infra._prepare(resolved, child_batch))
-        with self.infra._claim(cbatches) as claimed:
-            if claimed.ready:
-                self.infra._execute(claimed.ready)
-        return items.StepItems(
-            source={uid: None for uid in batch.uids},
-            uids=batch.uids,
-            upstream=batch._upstream,
-            mode=batch._mode,
-        )
-
-    def run(self, value: tp.Any = identity.NoValue()) -> None:
-        self.run_many([value])
-
-    def run_many(self, values: tp.Iterable[tp.Any]) -> list[None]:  # type: ignore[override]
-        values = list(values)
-        uids = [identity.materialize_uid(self, v) for v in values]
-        batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
-        self._run_items(batch)
-        return [None] * len(values)

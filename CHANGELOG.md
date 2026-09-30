@@ -8,13 +8,25 @@
 - `CacheDict`: deletions require a `write()` context (like writes). [#326]
 - Removed deprecated compatibility paths: `DumperLoader`, legacy handler classes, legacy `Auto` (`optimized`/`pickled`), `torch.save` tensor entries, and implicit `Auto` pickle fallback (use `AutoPickle`). [#331]
 - `DumpContext.shared_file`: content suffixes must start with `.`. [#326]
-- `steps`: `Parallel` cannot be a `Chain` step; call it directly. [#328, #329]
+- `steps.helpers.Parallel` removed; use `steps.helpers.run_variants(variants, values)`. Variants carry their own infra, may differ in folder/mode/RAM policy, must share submission settings, and results are one `StepItems` per variant.
+- `StepItems(*, source, uids)` now requires `uids`; `upstream`, `pending`, `mode`, `apply_step`, and `select(..., mode=)` were removed.
+- `StepItems.uids` is now an immutable tuple; mutate-by-assignment/list operations are unsupported.
+- Private Step hook `_run_items` was replaced by `_apply(runner, items)`; `_dispatch`, `_warm_items`, `_make_paths`, `_is_generator`, and `lookup(_upstream=)` were removed. `_uid_steps` became `_identity_steps`, `_infer_cache_type` became `_cache_type`, and Scatter identity rewrites belong in `_branch_runner`.
+- `LookupHandle` construction is internal; direct `cache_dict`/`backend` constructor arguments were removed and `uid` is keyword-only.
+- Internal `ComputeBatch`, `CoordinationInfo`, and the private `exca.steps.utils` module were removed.
+- Recreate persisted `Step`, `StepItems`, and `LookupHandle` pickles, and drain/recreate queued `LocalProcess`, `Slurm`, and `ProcessPool` work before upgrading.
+- Chain folders no longer mutate folderless child Steps. Those children execute in the Chain's folder context but require their own folder for direct lookup.
 
 ### Other
 
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
 - `steps`: all backends now claim items in the inflight registry, deduplicating cached dispatches made inside workers. [#330]
+- `LookupHandle.status` reads running state from the step folder registry.
+- `jobs.db` records and migrates each job's log folder.
+- Cached and single-worker execution raises eagerly; multi-worker pools and Slurm return lazy `StepItems`, while local submitit execution blocks and drains.
+- Incomplete Slurm inflight handoff fails open: submitted work remains readable, and a concurrent call may duplicate it.
+- Step RAM cache ownership is per root Step declaration, not per shared `Backend` instance.
 
 
 ## 0.5.29 - 26-07-28

@@ -7,15 +7,24 @@
 """Tests for caching behavior (modes, cache paths, intermediate caches)."""
 
 import contextlib
+import copy
+import gc
+import logging
 import pickle
+import threading
+import time
 import typing as tp
+import weakref
 from collections import defaultdict
+from concurrent import futures
 from pathlib import Path
 
 import pytest
 
-from . import backends, conftest, identity
-from .base import Chain, Step
+from exca.cachedict import inflight
+
+from . import backends, conftest, identity, jobregistry
+from .base import Chain, Runner, Step
 
 # =============================================================================
 # Basic caching
@@ -78,6 +87,20 @@ def test_intermediate_cache(tmp_path: Path) -> None:
     assert result1 == result2  # Same because generator cached
 
 
+def test_child_lookup_requires_parent_context(tmp_path: Path) -> None:
+    child_infra: tp.Any = {"backend": "Cached"}
+    chain_infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    child = conftest.Mult(infra=child_infra)
+    chain = Chain(steps=[child], infra=chain_infra)
+    assert chain.run(2.0) == 4.0
+    inherited = chain._step_sequence()[0]
+    assert inherited.infra is not None and inherited.infra.folder is None
+    [child_handle] = chain.lookup(2.0)._sub_handles
+    assert child_handle.cached()
+    with pytest.raises(RuntimeError, match="no folder and none is inherited"):
+        inherited.lookup(2.0)
+
+
 def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     """When both chain and last step have infra, they share cache folder and cache_type."""
 
@@ -94,9 +117,50 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
     # Chain shares cache with last step; cache_type cascades from CACHE_TYPE.
     chain_handle = chain.lookup()
     assert chain_handle.cached()
+    first, last = chain._step_sequence()
+    last_handle = Runner(folder=tmp_path, prefix=first._end()).lookup(last)
+    assert last_handle.paths == chain_handle.paths
+    assert last_handle.cache_dict.cache_type == chain_handle.cache_dict.cache_type
 
 
-def test_cached_run_freezes_config_and_clone_resets(tmp_path: Path) -> None:
+@pytest.mark.parametrize("backend", ["Cached", "ProcessPool"])
+def test_prefix_identity_run_lookup_and_process(
+    tmp_path: Path,
+    backend: str,
+) -> None:
+    infra: tp.Any = {"backend": backend, "folder": tmp_path}
+    if backend == "ProcessPool":
+        infra["max_jobs"] = 2
+    first = conftest.Mult(infra=infra)
+    second = conftest.Mult(infra=infra)
+    chain = Chain(steps=[first, second])
+
+    assert chain.run(2) == 8
+    second_handle = Runner(prefix=first._end()).lookup(second, 2)
+    assert second_handle.result() == 8
+    assert first.lookup(2).paths != second_handle.paths
+
+    nested_infra: tp.Any = {**infra, "folder": tmp_path / "nested"}
+    child_infra: tp.Any = {
+        name: value for name, value in nested_infra.items() if name != "folder"
+    }
+    nested = Chain(
+        steps=[conftest.Mult(), conftest.Mult(infra=child_infra)],
+        infra=nested_infra,
+    )
+    assert nested.run(2) == nested.run(2) == 8
+
+
+def test_upstream_identity_invalidates_downstream(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    first = conftest.Mult(infra=infra)
+    second = conftest.Mult(infra=infra)
+
+    assert Chain(steps=[conftest.Mult(coeff=2), first, second]).run(1) == 8
+    assert Chain(steps=[conftest.Mult(coeff=3), first, second]).run(1) == 12
+
+
+def test_warm_flow_freezes_config_and_roundtrip_resets(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = conftest.Add(value=1.0, infra=infra)
     assert step.run(1.0) == 2.0
@@ -107,6 +171,33 @@ def test_cached_run_freezes_config_and_clone_resets(tmp_path: Path) -> None:
     cloned = step.clone(value=2.0)
     cloned.value = 3.0
     assert cloned.run(1.0) == 4.0
+    restored = type(step).model_validate(step.model_dump())
+    restored.value = 4.0
+    assert restored.run(1.0) == 5.0
+
+
+@pytest.mark.parametrize("action", ["lookup", "failed-run"])
+def test_flow_without_warm_cache_allows_identity_change(
+    tmp_path: Path,
+    action: str,
+) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(value=1.0, fail_on="all", infra=infra)
+    old_paths = step.lookup(1.0).paths
+    if action == "failed-run":
+        with pytest.raises(ValueError, match="Triggered an error"):
+            step.run(1.0)
+
+    step.value = 2.0
+    assert step.lookup(1.0).paths != old_paths
+    step.fail_on = None
+    assert step.run(1.0) == 3.0
+
+
+def test_identity_does_not_freeze_config() -> None:
+    step = conftest.Add(value=1.0)
+    identity.step_uid(step._end())
+    step.value = 2.0
 
 
 # =============================================================================
@@ -230,6 +321,30 @@ def test_mode_retry_short_circuits_on_success(tmp_path: Path) -> None:
     assert step.calls == []
 
 
+def test_force_and_retry_logging(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger=backends.__name__)
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = conftest.Add(value=1, infra=infra)
+    assert step.run(2) == 3
+    assert step.clone({"infra.mode": "force"}).run(2) == 3
+
+    retry_infra: tp.Any = {**infra, "folder": tmp_path / "retry"}
+    failing = conftest.Add(
+        value=1,
+        fail_on="all",
+        infra=retry_infra,
+    )
+    with pytest.raises(ValueError):
+        failing.run(2)
+    assert failing.clone({"fail_on": None, "infra.mode": "retry"}).run(2) == 3
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Clearing 1 items" in message for message in messages)
+    assert any("Retrying 1 failed items" in message for message in messages)
+
+
 @pytest.mark.parametrize("chain", [True, False])
 def test_mode_force(tmp_path: Path, chain: bool) -> None:
     """Force recomputes once, then uses cache."""
@@ -255,7 +370,7 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
     assert restored.run() != out3, "pickle starts a fresh backend lifetime"
 
 
-def test_force_clears_after_inflight_claim(
+def test_force_clears_before_and_after_inflight_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     Versioned.calls = []
@@ -263,28 +378,133 @@ def test_force_clears_after_inflight_claim(
     assert Versioned(infra=infra).run() == 1000
 
     events: list[str] = []
-    original_clear = backends.Backend._clear_caches
+    original_clear = backends._CacheOwner.clear
     original_session = backends.inflight.inflight_session
 
-    def paused_clear(self: backends.Backend, **kwargs: tp.Any) -> None:
+    def paused_clear(
+        self: backends._CacheOwner,
+        uids: tp.Iterable[str],
+    ) -> None:
         events.append("clear")
-        original_clear(self, **kwargs)
+        original_clear(self, uids)
 
     @contextlib.contextmanager
     def paused_session(
-        reg: backends.inflight.InflightRegistry | None, item_uids: tp.Collection[str]
+        reg: backends.inflight.InflightRegistry | None,
+        item_uids: tp.Collection[str],
+        *,
+        reentrant: bool = True,
     ) -> tp.Iterator[backends.inflight.InflightClaim]:
         events.append("claim")
-        with original_session(reg, item_uids) as claimed:
+        with original_session(reg, item_uids, reentrant=reentrant) as claimed:
             yield claimed
 
-    monkeypatch.setattr(backends.Backend, "_clear_caches", paused_clear)
+    monkeypatch.setattr(backends._CacheOwner, "clear", paused_clear)
     monkeypatch.setattr(backends.inflight, "inflight_session", paused_session)
     force_infra: tp.Any = {**infra, "mode": "force"}
 
     assert Versioned(infra=force_infra).run() == 2000
     assert events == ["clear", "claim", "clear"]
     assert Versioned.calls == [None, None]
+
+
+def test_overlapping_force_preclear_preserves_first_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Blocking(Step):
+        calls: tp.ClassVar[list[int]] = []
+        armed: tp.ClassVar[bool] = False
+        started: tp.ClassVar[threading.Barrier]
+        release: tp.ClassVar[threading.Event]
+
+        def _run(self, value: int) -> int:
+            type(self).calls.append(value)
+            if type(self).armed:
+                type(self).started.wait(5)
+                assert type(self).release.wait(5)
+            return value * 2
+
+    monkeypatch.setattr(backends.os, "cpu_count", lambda: 8)
+    infra: tp.Any = {
+        "backend": "ThreadPool",
+        "folder": tmp_path,
+        "max_jobs": 2,
+    }
+    step = Blocking(infra=infra)
+    assert list(step.run_many([1, 2])) == [2, 4]
+
+    forced = step.clone({"infra.mode": "force"})
+    Blocking.calls = []
+    Blocking.armed = True
+    Blocking.started = threading.Barrier(3)
+    Blocking.release = threading.Event()
+    precleared = threading.Event()
+    wait_entered = threading.Event()
+    allow_wait = threading.Event()
+    clear_count = 0
+    clear_lock = threading.Lock()
+    original_clear = backends._CacheOwner.clear
+    original_wait = backends.inflight.InflightRegistry.wait_for_inflight
+
+    def signal_second_preclear(
+        self: backends._CacheOwner, uids: tp.Iterable[str]
+    ) -> None:
+        nonlocal clear_count
+        original_clear(self, uids)
+        with clear_lock:
+            clear_count += 1
+            if clear_count == 3:
+                precleared.set()
+
+    def hold_second_wait(
+        self: backends.inflight.InflightRegistry,
+        uids: list[str],
+        *,
+        reentrant: bool = True,
+    ) -> None:
+        if precleared.is_set():
+            wait_entered.set()
+            assert allow_wait.wait(5)
+        original_wait(self, uids, reentrant=reentrant)
+
+    monkeypatch.setattr(backends._CacheOwner, "clear", signal_second_preclear)
+    monkeypatch.setattr(
+        backends.inflight.InflightRegistry,
+        "wait_for_inflight",
+        hold_second_wait,
+    )
+    first = forced.run_many([1, 2])
+    Blocking.started.wait(5)
+    outputs: list[tp.Any] = []
+    failures: list[BaseException] = []
+
+    def overlap() -> None:
+        try:
+            outputs.append(forced.run_many([1, 2]))
+        except BaseException as exc:
+            failures.append(exc)
+
+    thread = threading.Thread(target=overlap)
+    thread.start()
+    assert precleared.wait(5)
+    assert wait_entered.wait(5)
+    Blocking.armed = False
+    Blocking.release.set()
+    first_values = list(first)
+    allow_wait.set()
+    thread.join(5)
+
+    assert not thread.is_alive()
+    assert failures == []
+    [second] = outputs
+    assert first_values == [2, 4]
+    assert list(first) == [2, 4]
+    assert list(second) == [2, 4]
+    assert sorted(Blocking.calls) == [1, 2]
+    paths = forced.lookup(1).paths
+    uids = [identity.materialize_uid(forced, value) for value in (1, 2)]
+    with inflight.InflightRegistry(paths.step_folder) as registry:
+        assert registry.get(uids) == {}
 
 
 @pytest.mark.parametrize("chain_backend", ["Cached", "ThreadPool"])
@@ -430,6 +650,59 @@ def test_retry_on_grandchild(tmp_path: Path) -> None:
     assert outer.run() == 12.0  # (0 + 1) * 10 + 2
 
 
+class _CountedStep(Step):
+    calls: tp.ClassVar[int] = 0
+    fail: bool = False
+
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return super()._exclude_from_cls_uid() + ["fail"]
+
+    def _run(self, value: int) -> int:
+        type(self).calls += 1
+        if self.fail:
+            raise ValueError("failed")
+        return value + type(self).calls
+
+
+def test_nested_cache_modes_fold_and_recompute_once(tmp_path: Path) -> None:
+    _CountedStep.calls = 0
+    inner = _CountedStep(infra=backends.Cached(folder=tmp_path / "force-inner"))
+    assert inner.run(1) == 2
+    forced = Chain(
+        steps=[inner],
+        infra=backends.Cached(folder=tmp_path / "force-outer", mode="force"),
+    )
+    result = forced.run(1)
+    assert result == 3
+    assert forced.run(1) == result
+    assert _CountedStep.calls == 2
+
+    _CountedStep.calls = 0
+    failing = _CountedStep(
+        fail=True,
+        infra=backends.Cached(folder=tmp_path / "retry-inner"),
+    )
+    with pytest.raises(ValueError, match="failed"):
+        failing.run(2)
+    retry = Chain(
+        steps=[failing.clone(fail=False)],
+        infra=backends.Cached(folder=tmp_path / "retry-outer", mode="retry"),
+    )
+    assert retry.run(2) == 4
+    assert retry.run(2) == 4
+    assert _CountedStep.calls == 2
+
+    read_only = _CountedStep(
+        infra=backends.Cached(folder=tmp_path / "read-only-inner", mode="read-only"),
+    )
+    with pytest.raises(RuntimeError, match="read-only"):
+        Chain(
+            steps=[read_only],
+            infra=backends.Cached(folder=tmp_path / "read-only-outer"),
+        ).run(3)
+
+
 # =============================================================================
 # Cache folder structure
 # =============================================================================
@@ -509,6 +782,108 @@ def test_clear_cache_recursive(tmp_path: Path) -> None:
     assert out3 != pytest.approx(out1, abs=1e-9)  # New random value
 
 
+def test_recursive_clear_deduplicates_shared_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    infra: tp.Any = {
+        "backend": "Cached",
+        "folder": tmp_path,
+        "keep_in_ram": True,
+    }
+    child = conftest.Mult(coeff=2.0, infra=infra)
+    chain = Chain(steps=[child], infra=infra)
+    assert chain.run(3.0) == 6.0
+    root = chain.lookup(3.0)
+    [child_handle] = root._sub_handles
+    entry = root.paths._entry(root.uid)
+    assert child_handle.paths._entry(child_handle.uid) == entry
+    assert root.result() == child_handle.result() == 6.0
+    cleared: list[backends.EntryKey] = []
+    original = backends._CacheOwner.clear
+
+    def clear(
+        self: backends._CacheOwner,
+        uids: tp.Iterable[str],
+    ) -> None:
+        unique = tuple(uids)
+        cleared.extend(self.paths._entry(uid) for uid in unique)
+        original(self, unique)
+
+    monkeypatch.setattr(backends._CacheOwner, "clear", clear)
+    root.clear_cache()
+
+    assert cleared == [entry]
+    assert root.status is child_handle.status is None
+
+
+@pytest.mark.parametrize("recursive", [False, True])
+def test_clear_cache_cancels_live_jobs_before_delete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recursive: bool,
+) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    chain = Chain(
+        steps=[conftest.RandomGenerator(infra=infra), conftest.Mult(coeff=10)],
+        infra=infra,
+    )
+    chain.run()
+    root = chain.lookup()
+    handles = [root]
+    for handle in handles:
+        handles.extend(handle._sub_handles)
+    by_entry = {
+        handle.paths._entry(handle.uid): handle
+        for handle in handles
+        if handle._owner is not None
+    }
+    root_entry = root.paths._entry(root.uid)
+    target_entries = set(by_entry) if recursive else {root_entry}
+    targets = [by_entry[entry] for entry in target_entries]
+
+    class Job:
+        def __init__(self, handle: backends.LookupHandle) -> None:
+            self.handle = handle
+            self.cancelled = False
+
+        def cancel(self) -> None:
+            assert all(handle.cached() for handle in targets)
+            self.cancelled = True
+
+        def finish(self) -> None:
+            if not self.cancelled:
+                with self.handle.cache_dict.write():
+                    self.handle.cache_dict[self.handle.uid] = 0
+
+    jobs = {entry: Job(handle) for entry, handle in by_entry.items()}
+    job_ids = {entry: f"job-{index}" for index, entry in enumerate(by_entry)}
+    jobs_by_id = {job_ids[entry]: job for entry, job in jobs.items()}
+    for entry, handle in by_entry.items():
+        with inflight.InflightRegistry(handle.paths.step_folder) as inflight_reg:
+            assert inflight_reg.claim([handle.uid]) == [handle.uid]
+            inflight_reg.update_worker_info([handle.uid], job_id=inflight._LOCAL_JOB_ID)
+        with jobregistry.JobRegistry(handle.paths.step_folder) as job_reg:
+            job_reg.record(
+                {job_ids[entry]: [handle.uid]},
+                cluster="local",
+                job_folder=str(tmp_path),
+            )
+
+    def local_job(**kwargs: tp.Any) -> tp.Any:
+        return jobs_by_id[kwargs["job_id"]]
+
+    monkeypatch.setattr(backends.submitit_lib, "LocalJob", local_job)
+    root.clear_cache(recursive=recursive)
+    for entry in target_entries:
+        jobs[entry].finish()
+
+    assert {entry for entry, job in jobs.items() if job.cancelled} == target_entries
+    assert {entry for entry, handle in by_entry.items() if handle.cached()} == set(
+        by_entry
+    ) - target_entries
+
+
 def test_keep_in_ram(tmp_path: Path) -> None:
     """Backend integration of `keep_in_ram`: `clear_cache` and `force` wipe
     the RAM entry along with the disk row. (External rmtree is *not* a
@@ -526,6 +901,143 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     step = step.clone({"infra.mode": "force"})
     out3 = step.run()
     assert out3 != out2
+
+
+def test_keep_in_ram_owner_clears_stale_value(tmp_path: Path) -> None:
+    _CountedStep.calls = 0
+    flow = _CountedStep(infra=backends.Cached(folder=tmp_path, keep_in_ram=True))
+
+    assert flow.run(1) == 2
+    first = flow.lookup(1)
+    assert first.result() == 2
+    assert first.cache_dict is flow.lookup(1).cache_dict
+    first.clear_cache()
+    assert flow.run(1) == 3
+
+
+def test_cache_owner_resets_across_config_roundtrips(
+    tmp_path: Path,
+) -> None:
+    flow = conftest.Mult(infra=backends.Cached(folder=tmp_path, keep_in_ram=True))
+    owner = flow.lookup(1)._owner
+    assert owner is not None
+    owner.attempted.add("item")
+
+    assert flow.lookup(1)._owner is owner
+    assert pickle.loads(pickle.dumps(owner)).attempted == set()
+    cloned = flow.clone(coeff=3)
+    cloned.coeff = 4
+    cloned.coeff = flow.coeff
+    cloned_owner = cloned.lookup(1)._owner
+    assert cloned_owner is not None and cloned_owner is not owner
+    assert cloned_owner.attempted == set()
+    for copied in (
+        flow.model_copy(),
+        flow.model_copy(deep=True),
+        copy.copy(flow),
+        copy.deepcopy(flow),
+    ):
+        copied_owner = copied.lookup(1)._owner
+        assert copied_owner is not None and copied_owner is not owner
+        assert copied_owner.attempted == set()
+    roundtripped = conftest.Mult.model_validate(flow.model_dump())
+    assert roundtripped == flow
+    roundtripped.coeff = 5
+    roundtripped.coeff = flow.coeff
+    roundtripped_owner = roundtripped.lookup(1)._owner
+    assert roundtripped_owner is not None and roundtripped_owner is not owner
+    assert roundtripped_owner.attempted == set()
+    restored = pickle.loads(pickle.dumps(flow))
+    restored_owner = restored.lookup(1)._owner
+    assert restored_owner is not None and restored_owner.attempted == set()
+
+
+def test_cache_owner_publication_is_atomic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = threading.Barrier(2)
+    constructors = 0
+    constructor_lock = threading.Lock()
+
+    class RacingOwner(backends._CacheOwner):
+        def __init__(
+            self,
+            paths: backends.StepPaths,
+            keep_in_ram: bool,
+        ) -> None:
+            nonlocal constructors
+            with constructor_lock:
+                constructors += 1
+            time.sleep(0.05)
+            super().__init__(paths, keep_in_ram)
+
+    monkeypatch.setattr(backends, "_CacheOwner", RacingOwner)
+    _CountedStep.calls = 0
+    flow = _CountedStep(infra=backends.Cached(folder=tmp_path, mode="force"))
+
+    def run() -> int:
+        start.wait(timeout=5)
+        return flow.run(1)
+
+    with futures.ThreadPoolExecutor(max_workers=2) as executor:
+        runs = [executor.submit(run) for _ in range(2)]
+        assert [run.result(timeout=10) for run in runs] == [2, 2]
+
+    assert _CountedStep.calls == 1
+    assert constructors == 1
+    assert flow.lookup(1).cache_dict is flow.lookup(1).cache_dict
+
+
+def test_flow_runtime_does_not_retain_declaration(tmp_path: Path) -> None:
+    flow = conftest.Mult(infra=backends.Cached(folder=tmp_path))
+    handle = flow.lookup(1)
+    flow_ref = weakref.ref(flow)
+    runtime = flow._runtime
+
+    del flow
+    gc.collect()
+
+    assert flow_ref() is None
+    assert handle._owner is not None
+    assert handle._owner in runtime.owners.values()
+
+
+def test_flow_runtimes_do_not_serialize_owner_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = threading.Barrier(2)
+
+    class RacingOwner(backends._CacheOwner):
+        def __init__(
+            self,
+            paths: backends.StepPaths,
+            keep_in_ram: bool,
+        ) -> None:
+            entered.wait(timeout=5)
+            super().__init__(paths, keep_in_ram)
+
+    monkeypatch.setattr(backends, "_CacheOwner", RacingOwner)
+    flows = [
+        conftest.Mult(coeff=coeff, infra=backends.Cached(folder=tmp_path))
+        for coeff in (2, 3)
+    ]
+    with futures.ThreadPoolExecutor(max_workers=2) as executor:
+        handles = list(executor.map(lambda flow: flow.lookup(1), flows))
+
+    assert handles[0]._owner is not handles[1]._owner
+
+
+def test_inline_abandonment_settles_claim(tmp_path: Path) -> None:
+    flow = conftest.Mult(infra=backends.Cached(folder=tmp_path))
+    output = flow.run_many([3])
+    uid = output.uids[0]
+
+    assert flow.lookup(3).result() == 6
+    paths = flow.lookup(3).paths
+    with inflight.InflightRegistry(paths.step_folder) as registry:
+        assert uid not in registry.get([uid])
 
 
 # =============================================================================
@@ -570,14 +1082,17 @@ def test_composed_head_warms_without_standalone_run(
     head = Chain(steps=[conftest.Add(value=1)], infra=infra)
 
     dispatches = 0
-    original = backends.Backend._run
+    original = backends.Cached._submit
 
-    def counting_run(self: backends.Backend, step: Step, batch: tp.Any) -> tp.Any:
+    def counting_submit(
+        self: backends.Cached,
+        tasks: tp.Sequence[backends._WriteTask],
+    ) -> backends._Submission | None:
         nonlocal dispatches
         dispatches += 1
-        return original(self, step, batch)
+        return original(self, tasks)
 
-    monkeypatch.setattr(backends.Backend, "_run", counting_run)
+    monkeypatch.setattr(backends.Cached, "_submit", counting_submit)
     assert Chain(steps=[head, conftest.Mult(coeff=2)]).run(0) == 2.0
     assert dispatches == 1, "first composition must dispatch the head to the backend"
     assert Chain(steps=[head, conftest.Mult(coeff=3)]).run(0) == 3.0
@@ -640,9 +1155,11 @@ def test_force_mode_uses_earlier_cache(tmp_path: Path) -> None:
     assert dict(call_counts) == {"A": 1, "B": 1, "C": 1}
 
     # All cached sub-steps use the no-input key.
-    for i, step in enumerate(chain._step_sequence()):
+    prefix: tuple[tp.Any, ...] = ()
+    for step in chain._step_sequence():
         if step.infra is not None:
-            assert identity._NOINPUT_UID in chain[: i + 1].lookup().cache_dict
+            assert identity._NOINPUT_UID in Runner(prefix=prefix).lookup(step).cache_dict
+        prefix = step._end(prefix)
 
     call_counts.clear()
     chain = chain.clone({"steps.1.infra.mode": "force"})
@@ -688,7 +1205,9 @@ def test_resolve_step_intermediate_cache(tmp_path: Path) -> None:
     intermediate = resolved._step_sequence()[0]
     assert intermediate.lookup().cached()
     step.lookup().clear_cache()
-    assert not intermediate.lookup().cached()
+    resolved = step._resolve_step()
+    assert isinstance(resolved, Chain)
+    assert not resolved._step_sequence()[0].lookup().cached()
 
 
 def test_resolve_step_inside_chain_cache(tmp_path: Path) -> None:
