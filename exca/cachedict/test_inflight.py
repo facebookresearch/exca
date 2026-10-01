@@ -16,14 +16,13 @@ from . import inflight, registry
 
 def test_inflight_lifecycle(tmp_path: Path) -> None:
     reg = inflight.InflightRegistry(tmp_path)
-    pid = os.getpid()
-    dead_pid = 2**20 + 7
+    dead = inflight.InflightRegistry(tmp_path, pid=2**20 + 7)
 
     # Claim, query, re-entrant claim
-    claimed = reg.claim(["a", "b", "c"], pid=pid)
+    claimed = reg.claim(["a", "b", "c"])
     assert set(claimed) == {"a", "b", "c"}
     assert set(reg.get(["a", "b", "c"])) == {"a", "b", "c"}
-    assert set(reg.claim(["a", "b", "c"], pid=pid)) == {"a", "b", "c"}
+    assert set(reg.claim(["a", "b", "c"])) == {"a", "b", "c"}
 
     # Update worker info (post-submission update)
     reg.update_worker_info(["a", "b"], job_id="12345", job_folder="/logs")
@@ -37,15 +36,14 @@ def test_inflight_lifecycle(tmp_path: Path) -> None:
     assert reg.get(["a", "b", "c"]) == {}
 
     # Dead worker reclaim via claim()
-    reg.claim(["x"], pid=dead_pid)
-    claimed = reg.claim(["x"], pid=pid)
-    assert claimed == ["x"] and reg.get(["x"])["x"].pid == pid
+    dead.claim(["x"])
+    claimed = reg.claim(["x"])
+    assert claimed == ["x"] and reg.get(["x"])["x"].pid == reg.pid
 
     # Live conflict: cannot steal from a live worker
-    reg.claim(["y"], pid=pid)
-    other = inflight.InflightRegistry(tmp_path)
-    assert other.claim(["y"], pid=dead_pid) == []
-    other.close()
+    reg.claim(["y"])
+    assert dead.claim(["y"]) == []
+    dead.close()
 
     reg.release(["x", "y"])
     reg.close()
@@ -102,8 +100,8 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
     dead_pid = 2**20 + 7
 
     # Dead worker: wait detects dead PID and reclaims
-    reg = inflight.InflightRegistry(tmp_path)
-    reg.claim(["stale"], pid=dead_pid)
+    reg = inflight.InflightRegistry(tmp_path, pid=dead_pid)
+    reg.claim(["stale"])
     reg2 = inflight.InflightRegistry(tmp_path)
     reg2.wait_for_inflight(["stale"])
     assert reg2.get(["stale"]) == {}, "dead worker's item should be reclaimed"
@@ -113,8 +111,8 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
     # Non-Slurm job with fake job_id: must not hang, reclaimed as dead.
     # Regression test for the case where a non-Slurm submitit job
     # (DebugExecutor/LocalExecutor) accidentally gets job_id recorded.
-    reg_ns = inflight.InflightRegistry(tmp_path)
-    reg_ns.claim(["non_slurm"], pid=dead_pid)
+    reg_ns = inflight.InflightRegistry(tmp_path, pid=dead_pid)
+    reg_ns.claim(["non_slurm"])
     reg_ns.update_worker_info(["non_slurm"], job_id="99999", job_folder="/nonexistent")
     info = reg_ns.get(["non_slurm"])["non_slurm"]
     assert not info.is_alive(), "fake Slurm job should not appear alive"
@@ -169,8 +167,8 @@ def test_db_deletion_unblocks_wait(
     """Deleting inflight.db while a process is waiting should unblock it."""
     alive_pid = os.getpid() + 1  # different PID, will be checked for liveness
 
-    reg = inflight.InflightRegistry(tmp_path)
-    reg.claim(["a", "b"], pid=alive_pid)
+    reg = inflight.InflightRegistry(tmp_path, pid=alive_pid)
+    reg.claim(["a", "b"])
 
     # Make the blocker appear alive so wait_for_inflight enters the polling loop
     monkeypatch.setattr(
@@ -208,13 +206,11 @@ def test_large_batch_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         original_wait(self)
 
     monkeypatch.setattr(inflight.WorkerInfo, "wait", tracking_wait)
-    reg = inflight.InflightRegistry(tmp_path)
+    reg = inflight.InflightRegistry(tmp_path, pid=dead_pid)
     for uid in ["a", "b", "c", "d", "e"]:
-        reg.claim([uid], pid=dead_pid)
-    for uids, job_id in [(["a", "b", "c"], "111"), (["d", "e"], "222")]:
-        reg.update_worker_info(
-            uids, job_id=job_id, job_folder="/nonexistent", pid=dead_pid
-        )
+        reg.claim([uid])
+    reg.update_worker_info(["a", "b", "c"], job_id="111", job_folder="/nonexistent")
+    reg.update_worker_info(["d", "e"], job_id="222", job_folder="/nonexistent")
     waiter = inflight.InflightRegistry(tmp_path)
     waiter.wait_for_inflight(["a", "b", "c", "d", "e"])
     assert sorted(wait_calls) == ["111", "222"]
@@ -249,8 +245,8 @@ def test_inflight_session_retries_lost_claim(
         original_wait(self, item_uids)
         wait_calls += 1
         if wait_calls == 1:
-            rival = inflight.InflightRegistry(tmp_path)
-            rival.claim(["x"], pid=competitor_pid)
+            rival = inflight.InflightRegistry(tmp_path, pid=competitor_pid)
+            rival.claim(["x"])
             rival.close()
 
     def patched_is_alive(self: inflight.WorkerInfo) -> bool:
