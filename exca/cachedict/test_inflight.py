@@ -211,8 +211,10 @@ def test_large_batch_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     reg = inflight.InflightRegistry(tmp_path)
     for uid in ["a", "b", "c", "d", "e"]:
         reg.claim([uid], pid=dead_pid)
-    reg.update_worker_info(["a", "b", "c"], job_id="111", job_folder="/nonexistent")
-    reg.update_worker_info(["d", "e"], job_id="222", job_folder="/nonexistent")
+    for uids, job_id in [(["a", "b", "c"], "111"), (["d", "e"], "222")]:
+        reg.update_worker_info(
+            uids, job_id=job_id, job_folder="/nonexistent", pid=dead_pid
+        )
     waiter = inflight.InflightRegistry(tmp_path)
     waiter.wait_for_inflight(["a", "b", "c", "d", "e"])
     assert sorted(wait_calls) == ["111", "222"]

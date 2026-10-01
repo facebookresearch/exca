@@ -79,6 +79,7 @@ Two callers hitting the same `(step_uid, uid)` would race. The
 other owners, claims all requested uids, yields an `InflightClaim`, then
 releases on exit. Waits go through `wait_for_inflight` (polls the DB;
 reclaims dead PIDs).
+An `InflightRegistry` acts as its `pid` (default: this process): claims, worker-info updates and releases all filter on it.
 
 A dispatch is one `CacheDispatch` over its `WriteTask`s (one per step); the constructor prepares, `submit()` runs the rest:
 
@@ -86,7 +87,12 @@ A dispatch is one `CacheDispatch` over its `WriteTask`s (one per step); the cons
 2. **Claim**: one `inflight_session` per task, in `step_uid` order (concurrent dispatches agree on lock order).
 3. **Recheck** under the claims: re-read cache state, clear what gets recomputed. Stops a competitor that populated mid-wait from handing its value back to a `force`; lets `retry` recompute cached errors.
 4. **Submit**: `Backend._submit(tasks)`, the only per-backend hook. All tasks go into one submission (a sweep of step variants shares one submitit array or pool), split into one shard per worker job. `_mark_recomputed` records force/retry tasks per attempt.
-5. **Release**: on return when `_submit` returns `None` (inline, submitit). A pool returns a `Submission`, holding the claims until all its jobs are waited on; `Backend._run` reads it lazily per uid via `SubmissionSource`.
+5. **Release**:
+   - by the worker: each shard releases its claims when `run_and_cache` ends (success or failure);
+   - by the session exit, for shards that never ran: on return when `_submit` returns `None` (inline, submitit), or when a pool's `Submission` closes (after a full wait, or at gc, cancelling queued shards);
+   - releases and worker-info updates filter on the claiming pid, so a late one never touches a competitor's newer claim.
+
+   `Backend._run` reads a pool's `Submission` lazily per uid via `SubmissionSource`.
 
 The session locks `inflight.db` only — direct user calls to
 `LookupHandle.clear_cache()` race against in-flight workers. Results are

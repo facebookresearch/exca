@@ -21,7 +21,6 @@ import logging
 import os
 import random
 import sys
-import threading
 import traceback
 import typing as tp
 import warnings
@@ -298,7 +297,7 @@ class WriteTask:
     cache_dict: exca.cachedict.CacheDict[tp.Any]
     items: items.StepItems
     runner: Runner  # context of `step`, with the step's folded mode
-    claim: inflight.InflightClaim | None = None  # driver-side, not pickled
+    claim: inflight.InflightClaim | None = None
     held_entries: frozenset[tuple[str, str]] = frozenset()  # {(folder, uid),...}
 
     def claimed_uids(self) -> list[str]:
@@ -306,11 +305,8 @@ class WriteTask:
         are excluded, so their rows keep pointing at the ancestor's job)."""
         if self.claim is None:
             raise RuntimeError(f"task was never claimed: {self.paths.step_uid}")
-        owned = set(self.claim.uids)
+        owned = set(self.claim.owned)
         return [uid for uid in self.items.uids if uid in owned]
-
-    def __getstate__(self) -> dict[str, tp.Any]:
-        return {**self.__dict__, "claim": None}
 
     def select(self, uids: tp.Sequence[str]) -> WriteTask:
         """Sub-task over *uids*, sharing step/paths/cache/claim."""
@@ -352,16 +348,20 @@ class WriteTask:
                 e.add_note(f"  -> cache may be invalid: {folder}")
             raise
         except Exception as e:
-            inflight: list[str] = getattr(e, "_inflight_uids", [])
-            if folder is not None and inflight:
-                e.add_note(f"  -> error recorded at {self.paths.step_uid}{inflight}")
+            failed: list[str] = getattr(e, "_inflight_uids", [])
+            if folder is not None and failed:
+                e.add_note(f"  -> error recorded at {self.paths.step_uid}{failed}")
                 tb = "".join(traceback.format_exception(e))
                 with errors.ErrorRegistry(folder.parent) as reg:
-                    for uid in inflight:
+                    for uid in failed:
                         reg.record(uid, e, tb)
             raise
         finally:
             _HELD_ENTRIES.reset(token)
+            if self.claim is not None:  # free competitors as soon as this work ends
+                folder, pid = self.paths.step_folder, self.claim.pid
+                with inflight.InflightRegistry(folder, pid=pid) as reg:
+                    reg.release(self.claimed_uids())
 
 
 def _multi_run_and_cache(shard: list[WriteTask]) -> None:
@@ -472,7 +472,7 @@ class CacheDispatch:
 
     def submit(self) -> Submission | None:
         """Claim, recheck and run the tasks; the returned submission (if any) holds
-        the claims until its work is done, otherwise they are released here."""
+        the claims until closed, otherwise they are released here."""
         with contextlib.ExitStack() as stack:
             # step_uid order: concurrent dispatches agree on lock order
             ordered = sorted(self.tasks, key=lambda task: task.paths.step_uid)
@@ -485,8 +485,8 @@ class CacheDispatch:
 
 
 class Submission:
-    """Running pool futures, one per shard of tasks; holds their claims and
-    executor until every job is waited on, ``close`` or garbage collection."""
+    """Running pool futures, one per shard of tasks. Shards release their claims
+    when done; the leftovers (e.g. cancelled shards) at ``close`` or gc."""
 
     def __init__(
         self,
@@ -494,7 +494,6 @@ class Submission:
         executor: futures.Executor,
     ) -> None:
         self._jobs = list(jobs)
-        self._remaining = set(self._jobs)
         self._entry_jobs = {
             (task.paths.step_folder, uid): job
             for job, shard in jobs.items()
@@ -506,30 +505,23 @@ class Submission:
 
     def wait(self, entry: tuple[Path, str] | None = None) -> None:
         """Block on the job computing *entry* (``(step_folder, uid)``), or on all
-        jobs if ``None`` (cancelling the others on failure)."""
-        jobs: tp.Iterable[futures.Future[None]]
-        if entry is None:  # fail fast on the first failure
-            jobs = futures.as_completed(self._jobs)
-        else:
-            jobs = [self._entry_jobs[entry]] if entry in self._entry_jobs else []
+        jobs then close if ``None`` (cancelling the others on failure)."""
+        if entry is not None:
+            if entry in self._entry_jobs:
+                self._entry_jobs[entry].result()
+            return
         try:
-            for job in jobs:
-                try:
-                    job.result()
-                finally:
-                    self._remaining.discard(job)
+            for job in futures.as_completed(self._jobs):
+                job.result()
         except BaseException:
-            if entry is None:
-                for job in self._jobs:
-                    job.cancel()
-            if entry is None or not self._remaining:
-                self.close()
+            for job in self._jobs:
+                job.cancel()
             raise
-        if not self._remaining and self._executor is not None:  # first completion
-            steps = {folder for folder, _ in self._entry_jobs}
-            msg = "Finished processing %s items for %s steps"
-            logger.info(msg, len(self._entry_jobs), len(steps))
+        finally:
             self.close()
+        steps = {folder for folder, _ in self._entry_jobs}
+        msg = "Finished processing %s items for %s steps"
+        logger.info(msg, len(self._entry_jobs), len(steps))
 
     def close(self) -> None:
         if self._executor is not None:
@@ -540,21 +532,8 @@ class Submission:
     def __del__(self) -> None:
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)
-        # cancelled-but-never-dequeued futures never count as done for futures.wait
-        jobs = [job for job in self._remaining if not job.cancelled()]
-        stack = self._stack
-        if not jobs:
-            stack.close()
-            return
-
-        def release() -> None:  # off-thread: gc must not block on workers
-            futures.wait(jobs)
-            stack.close()
-
-        try:
-            threading.Thread(target=release, daemon=True).start()
-        except RuntimeError:  # interpreter shutdown: dead-pid reclaim frees the claims
-            pass
+            self._executor = None
+        self._stack.close()
 
 
 class SubmissionSource:

@@ -7,11 +7,11 @@
 """Tests for execution backends (LocalProcess, Slurm, submitit integration)."""
 
 import contextlib
+import gc
 import logging
 import sys
 import time
 import typing as tp
-from concurrent import futures
 from pathlib import Path
 
 import pydantic
@@ -272,14 +272,11 @@ def test_pool_backend(tmp_path: Path, backend: str) -> None:
     infra: tp.Any = {"backend": backend, "folder": tmp_path}
     step = conftest.Mult(coeff=2.0, infra=infra)
     out = step.run_many([1.0, 2.0, 3.0])
-    with futures.ThreadPoolExecutor(1) as reader:
-        assert reader.submit(list, out).result() == [2.0, 4.0, 6.0]
+    assert list(out) == [2.0, 4.0, 6.0]
     paths = step.lookup(1.0).paths
     assert paths.cache_folder.exists()
     with backends.inflight.InflightRegistry(paths.step_folder) as reg:
-        assert not reg.get(), (
-            "claims must be released once all items are read, even off-thread"
-        )
+        assert not reg.get(), "workers must release their claims (out is still alive)"
 
 
 class _PrintStep(Step):
@@ -326,6 +323,21 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
     assert any("Add" in n for n in notes)
     others = list(out.read(out.uids[1:]))
     assert others == [k + 1.0 for k in range(2, 7)], "a failure must not cancel others"
+
+
+def test_pool_abandoned(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
+    step = _SlowAdd(value=1, infra=infra)
+    values = [float(k) for k in range(2, 8)]
+    out = step.run_many(values)  # 6 shards of 1 item, 2 running
+    folder = step.lookup(2.0).paths.step_folder
+    del out
+    gc.collect()
+    with backends.inflight.InflightRegistry(folder) as reg:
+        assert not reg.get(), "gc must release the claims of cancelled shards"
+    time.sleep(0.5)
+    n_cached = sum(step.lookup(v).cached() for v in values)
+    assert n_cached < len(values), "gc must cancel queued shards"
 
 
 def test_recomputed_per_task(tmp_path: Path) -> None:
