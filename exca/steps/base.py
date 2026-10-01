@@ -43,10 +43,10 @@ class Runner:
         via backend."""
         step = utils.resolved_step(step)
         standalone = not self.prefix and not batch._pending and self.mode == "cached"
-        if standalone:  # _output_items only valid with no upstream
-            warm = step._warm_items(batch.uids)
-            if warm is not None:
-                return warm
+        warm = step._warm_items if standalone else None  # only valid with no upstream
+        if warm is not None and isinstance(cd := warm._source, exca.cachedict.CacheDict):
+            if all(uid in cd for uid in batch.uids):
+                return warm.select(batch.uids)
         if step.infra is None:
             result = step._run_items(self, batch)
         elif step.infra.folder is None:
@@ -58,7 +58,7 @@ class Runner:
             result = step.infra._run(self, step, batch)
         keep = standalone and isinstance(result._source, exca.cachedict.CacheDict)
         if keep and backends._effective_mode(step) != "force":  # warm skips recompute
-            step._output_items = result
+            step._warm_items = result
             exca.utils.recursive_freeze(step)  # carrier relies on fixed identity
         return result
 
@@ -138,7 +138,7 @@ class Step(exca.helpers.DiscriminatedModel):
     # in ``materialize_uid``, avoids large keys cluttering the cache.
     _ITEM_UID_MAX_LENGTH: tp.ClassVar[int] = 256
     # Final cache-backed carrier reused by `run` when all requested uids exist.
-    _output_items: items.StepItems | None = pydantic.PrivateAttr(None)
+    _warm_items: items.StepItems | None = pydantic.PrivateAttr(None)
     _resolution_cache: Step | None = pydantic.PrivateAttr(
         None
     )  # see `utils.resolved_step`
@@ -146,7 +146,7 @@ class Step(exca.helpers.DiscriminatedModel):
     def __getstate__(self) -> dict[str, tp.Any]:
         out = super().__getstate__()
         private = out.get("__pydantic_private__", {})
-        private["_output_items"] = None
+        private["_warm_items"] = None
         private["_resolution_cache"] = None
         return out
 
@@ -154,7 +154,7 @@ class Step(exca.helpers.DiscriminatedModel):
         self, *, update: tp.Mapping[str, tp.Any] | None = None, deep: bool = False
     ) -> tp.Self:
         copied = super().model_copy(update=update, deep=deep)
-        copied._output_items = None
+        copied._warm_items = None
         copied._resolution_cache = None
         return copied
 
@@ -286,16 +286,6 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         return batch._append(self)
 
-    def _warm_items(self, uids: tp.Sequence[str]) -> items.StepItems | None:
-        """Reuse a prior run's cache-backed carrier for *uids*, or ``None``."""
-        cached = self._output_items
-        if cached is None or not isinstance(cached._source, exca.cachedict.CacheDict):
-            return None
-        with cached._source.frozen_cache_folder():
-            if not all(uid in cached._source for uid in uids):
-                return None
-        return cached.select(uids)
-
     # =========================================================================
     # Identity
     # =========================================================================
@@ -393,11 +383,6 @@ class Step(exca.helpers.DiscriminatedModel):
 
         values = list(values)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]
-
-        warm = self._warm_items(uids)
-        if warm is not None:
-            return warm  # extra-fast path -> avoid StepItems + Runner.dispatch overhead
-
         boundary = items.StepItems(source=dict(zip(uids, values)), uids=uids)
         return Runner().dispatch(self, boundary)
 
