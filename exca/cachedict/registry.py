@@ -10,6 +10,7 @@ lazy connection, busy-timeout retries, graceful degradation on corruption."""
 import logging
 import random
 import sqlite3
+import threading
 import time
 import typing as tp
 from pathlib import Path
@@ -76,6 +77,7 @@ class AdvisoryRegistry:
     def __init__(self, folder: Path | str) -> None:
         self.db_path = Path(folder) / self._DB_NAME
         self._conn: sqlite3.Connection | None = None
+        self._conn_thread: int | None = None
 
     def _connect(self, *, create: bool = False) -> sqlite3.Connection | None:
         """Lazy-open the DB connection, creating the table if needed.
@@ -87,6 +89,8 @@ class AdvisoryRegistry:
             no-op-write paths leave the folder untouched). Writers that
             materialise rows pass ``True``.
         """
+        if self._conn is not None and self._conn_thread != threading.get_ident():
+            self._conn = None  # sqlite connections are bound to their creating thread
         if self._conn is not None:
             if self.db_path.exists():
                 return self._conn
@@ -111,6 +115,7 @@ class AdvisoryRegistry:
         conn.execute("PRAGMA journal_mode=DELETE")
         conn.executescript(self._SCHEMA)
         self._conn = conn
+        self._conn_thread = threading.get_ident()
         return conn
 
     def _retry_on_lock(self, fn: tp.Callable[[], T]) -> T:

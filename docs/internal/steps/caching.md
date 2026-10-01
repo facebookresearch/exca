@@ -80,13 +80,13 @@ other owners, claims all requested uids, yields an `InflightClaim`, then
 releases on exit. Waits go through `wait_for_inflight` (polls the DB;
 reclaims dead PIDs).
 
-A dispatch is one `CacheTransaction` over its `WriteTask`s (one per step):
+A dispatch is one `CacheDispatch` over its `WriteTask`s (one per step); the constructor prepares, `submit()` runs the rest:
 
 1. **Prepare**: resolve paths; `force` clears stale entries before any claim (the pre-lock cache check is a fast path only).
 2. **Claim**: one `inflight_session` per task, in `step_uid` order (concurrent dispatches agree on lock order).
 3. **Recheck** under the claims: re-read cache state, clear what gets recomputed. Stops a competitor that populated mid-wait from handing its value back to a `force`; lets `retry` recompute cached errors.
 4. **Submit**: `Backend._submit(tasks)`, the only per-backend hook. All tasks go into one submission (a sweep of step variants shares one submitit array or pool), split into one shard per worker job. `_mark_recomputed` records force/retry tasks per attempt.
-5. **Release**: when `_submit` returns `None` (inline, or submitit after its jobs finish); a pool returns a `Submission`, holding the claims until all its jobs are waited on, and `Backend._run` returns a lazy `SubmissionSource` waiting per uid.
+5. **Release**: when `_submit` returns `None` (inline, or submitit after its jobs finish); a pool returns a `Submission`, holding the claims until all its jobs are waited on (or one fails: pending jobs are cancelled), and `Backend._run` returns a lazy `SubmissionSource` waiting per uid. Release may run on any reader thread, so registries reconnect per thread.
 
 The session locks `inflight.db` only — direct user calls to
 `LookupHandle.clear_cache()` race against in-flight workers. Results are

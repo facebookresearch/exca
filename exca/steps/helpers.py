@@ -203,7 +203,7 @@ class Parallel(base.Step):
             uids = [identity.materialize_uid(resolved, v) for v in batch]
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
             runs.append((runner, resolved, child_batch))
-        submission = backends.CacheTransaction(self.infra, runs).submit()
+        submission = backends.CacheDispatch(self.infra, runs).submit()
         if submission is not None:
             submission.wait()
         return items.StepItems(source={uid: None for uid in batch.uids}, uids=batch.uids)

@@ -11,6 +11,7 @@ import logging
 import sys
 import time
 import typing as tp
+from concurrent import futures
 from pathlib import Path
 
 import pydantic
@@ -270,9 +271,13 @@ def test_derive(tmp_path: Path) -> None:
 def test_pool_backend(tmp_path: Path, backend: str) -> None:
     infra: tp.Any = {"backend": backend, "folder": tmp_path}
     step = conftest.Mult(coeff=2.0, infra=infra)
-    result = list(step.run_many([1.0, 2.0, 3.0]))
-    assert result == [2.0, 4.0, 6.0]
-    assert step.lookup(1.0).paths.cache_folder.exists()
+    out = step.run_many([1.0, 2.0, 3.0])
+    with futures.ThreadPoolExecutor(1) as reader:  # claims released off-thread
+        assert reader.submit(list, out).result() == [2.0, 4.0, 6.0]
+    paths = step.lookup(1.0).paths
+    assert paths.cache_folder.exists()
+    with backends.inflight.InflightRegistry(paths.step_folder) as reg:
+        assert not reg.get(), "claims must be released once all items are read"
 
 
 class _PrintStep(Step):
@@ -309,9 +314,11 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
         list(step.run_many([1.0, 2.0]))
     notes = exc_info.value.__notes__
     assert any("Add" in n for n in notes)
+    with backends.inflight.InflightRegistry(step.lookup(1.0).paths.step_folder) as reg:
+        assert not reg.get(), "claims must be released on failure"
 
 
-def test_recomputed_per_batch(tmp_path: Path) -> None:
+def test_recomputed_per_task(tmp_path: Path) -> None:
     backend = backends.Cached(folder=tmp_path)
 
     def run(step: Step, value: float) -> tuple[base.Runner, Step, items.StepItems]:
@@ -321,15 +328,15 @@ def test_recomputed_per_batch(tmp_path: Path) -> None:
         uid = backends.identity.materialize_uid(forced, value)
         return base.Runner(), forced, items.StepItems(source={uid: value}, uids=[uid])
 
-    transaction = backends.CacheTransaction(
+    dispatch = backends.CacheDispatch(
         backend, [run(conftest.Add(fail_on="all"), 1.0), run(conftest.Add(value=1), 1.0)]
     )
-    fail, ok = transaction.tasks
+    fail, ok = dispatch.tasks
     # claims sort by step_uid, so fail must sort first to raise first
     assert fail.paths.step_uid < ok.paths.step_uid, "fail must sort first"
 
     with pytest.raises(ValueError, match="Triggered an error"):
-        transaction.submit()
+        dispatch.submit()
 
     key = (ok.paths.step_folder, ok.items.uids[0])
     assert key not in backend._recomputed, "ok never ran, so it must be unmarked"

@@ -392,9 +392,8 @@ def _shard_tasks(
     return shards
 
 
-class CacheTransaction:
-    """One dispatch's write tasks (one per step), claimed until ``close``;
-    ``ready`` holds those still to compute."""
+class CacheDispatch:
+    """One dispatch's write tasks (one per step), claimed and run by ``submit``."""
 
     def __init__(
         self, backend: Backend, runs: tp.Sequence[tuple[Runner, Step, items.StepItems]]
@@ -404,15 +403,6 @@ class CacheTransaction:
         step_uids = [task.paths.step_uid for task in self.tasks]
         if len(set(step_uids)) != len(step_uids):
             raise ValueError(f"one task per step_uid required, got {step_uids}")
-        self._stack = contextlib.ExitStack()
-        try:
-            # step_uid order: concurrent dispatches agree on lock order
-            ordered = sorted(self.tasks, key=lambda task: task.paths.step_uid)
-            claimed = [c for task in ordered if (c := self._claim(task)) is not None]
-            self.ready = [r for c in claimed if (r := self._recheck(c)) is not None]
-        except BaseException:
-            self.close()
-            raise
 
     def _prepare(self, runner: Runner, step: Step, batch: items.StepItems) -> WriteTask:
         """Resolve paths/cache/mode and force-clear before any claim is held."""
@@ -440,7 +430,7 @@ class CacheTransaction:
             step=step, paths=paths, cache_dict=cd, items=batch, runner=runner
         )
 
-    def _claim(self, task: WriteTask) -> WriteTask | None:
+    def _claim(self, stack: contextlib.ExitStack, task: WriteTask) -> WriteTask | None:
         """Claim *task*'s pending uids; ``None`` if nothing is pending."""
         pending = self.backend._pending_statuses(
             paths=task.paths, uids=task.items.uids, mode=task.runner.mode
@@ -452,7 +442,7 @@ class CacheTransaction:
         held = _HELD_ENTRIES.get()
         folder_key = str(task.paths.step_folder)
         request = {u for u in pending if (folder_key, u) not in held}
-        claim = self._stack.enter_context(inflight.inflight_session(reg, request))
+        claim = stack.enter_context(inflight.inflight_session(reg, request))
         held |= {(folder_key, u) for u in claim.uids}
         return dataclasses.replace(
             task.select(list(pending)), claim=claim, held_entries=held
@@ -480,32 +470,27 @@ class CacheTransaction:
         return task.select(list(pending))
 
     def submit(self) -> Submission | None:
-        """Submit ``ready`` tasks; the returned submission (if any) holds the claims
-        until its work is done, otherwise they are released here."""
-        try:
-            submission = self.backend._submit(self.ready) if self.ready else None
-        except BaseException:
-            self.close()
-            raise
-        if submission is None:
-            self.close()
-        else:
-            submission._stack.callback(self.close)
-        return submission
-
-    def close(self) -> None:
-        self._stack.close()
+        """Claim, recheck and run the tasks; the returned submission (if any) holds
+        the claims until its work is done, otherwise they are released here."""
+        with contextlib.ExitStack() as stack:
+            # step_uid order: concurrent dispatches agree on lock order
+            ordered = sorted(self.tasks, key=lambda task: task.paths.step_uid)
+            claimed = [c for t in ordered if (c := self._claim(stack, t)) is not None]
+            ready = [r for c in claimed if (r := self._recheck(c)) is not None]
+            submission = self.backend._submit(ready) if ready else None
+            if submission is not None:
+                submission._stack.push(stack.pop_all())
+            return submission
 
 
 class Submission:
-    """Running jobs (futures or submitit jobs), one per shard of tasks; holds
-    their claims and executor until every job is waited on, ``close`` or
-    garbage collection."""
+    """Running pool futures, one per shard of tasks; holds their claims and
+    executor until every job is waited on, ``close`` or garbage collection."""
 
     def __init__(
         self,
-        jobs: dict[tp.Any, list[WriteTask]],
-        executor: futures.Executor | None = None,
+        jobs: dict[futures.Future[None], list[WriteTask]],
+        executor: futures.Executor,
     ) -> None:
         self._jobs = list(jobs)
         self._remaining = set(self._jobs)
@@ -515,39 +500,46 @@ class Submission:
             for task in shard
             for uid in task.items.uids
         }
-        self._executor = executor
+        self._executor: futures.Executor | None = executor
         self._stack = contextlib.ExitStack()
 
     def wait(self, entry: tuple[Path, str] | None = None) -> None:
         """Block on the job computing *entry* (``(step_folder, uid)``), or on all
-        jobs if ``None`` (cancelling the others on failure)."""
-        jobs: tp.Iterable[tp.Any]
-        if entry is None:  # pool futures: fail fast on the first failure
-            pool = self._executor is not None
-            jobs = futures.as_completed(self._jobs) if pool else self._jobs
+        jobs if ``None``; any failure cancels the others and releases the claims."""
+        jobs: tp.Iterable[futures.Future[None]]
+        if entry is None:  # fail fast on the first failure
+            jobs = futures.as_completed(self._jobs)
         else:
             jobs = [self._entry_jobs[entry]] if entry in self._entry_jobs else []
+        running = bool(self._remaining)
         try:
             for job in jobs:
-                job.result()
-                self._remaining.discard(job)
+                try:
+                    job.result()
+                finally:
+                    self._remaining.discard(job)
         except BaseException:
-            if entry is None:
-                for job in self._jobs:
-                    job.cancel()
+            for job in self._jobs:
+                job.cancel()
+            self.close()
             raise
-        finally:
-            if entry is None or not self._remaining:
-                self.close()
+        if running and not self._remaining:
+            steps = {folder for folder, _ in self._entry_jobs}
+            msg = "Finished processing %s items for %s steps"
+            logger.info(msg, len(self._entry_jobs), len(steps))
+        if not self._remaining:
+            self.close()
 
-    def close(self, wait: bool = True) -> None:
+    def close(self) -> None:
         if self._executor is not None:
-            self._executor.shutdown(wait=wait)
+            self._executor.shutdown(wait=True)
             self._executor = None
         self._stack.close()
 
     def __del__(self) -> None:
-        self.close(wait=False)
+        for job in self._remaining:
+            job.cancel()
+        self.close()  # waits: running jobs keep their claims until done
 
 
 class SubmissionSource:
@@ -740,9 +732,9 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def _run(self, runner: Runner, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid."""
-        transaction = CacheTransaction(self, [(runner, step, batch)])
-        [task] = transaction.tasks
-        submission = transaction.submit()
+        dispatch = CacheDispatch(self, [(runner, step, batch)])
+        [task] = dispatch.tasks
+        submission = dispatch.submit()
         uids = task.items.uids
         if submission is None:
             return items.StepItems(source=task.cache_dict, uids=uids)
