@@ -597,14 +597,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         self, runner: Runner, step: Step, batch: items.StepItems
     ) -> ComputeBatch:
         """Resolve paths/cache/mode and force-clear before any claim is held."""
+        at = runner.advance(step)
         paths = runner.paths(step)
         paths.step_folder.mkdir(parents=True, exist_ok=True)
         if paths.step_folder not in self._checked_configs:
-            aligned = runner.prefix + tuple(step._uid_steps())
-            identity.write_configs(paths.step_folder, aligned)
+            identity.write_configs(paths.step_folder, at.prefix)
             self._checked_configs.add(paths.step_folder)
         cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        mode = _fold_modes(runner.mode, _effective_mode(step))
+        mode = at.mode
 
         pending_statuses = self._pending_statuses(paths=paths, uids=batch.uids, mode=mode)
         if pending_statuses:

@@ -75,7 +75,7 @@ class Runner:
             raise RuntimeError("paths requires a configured infra with a folder")
         return backends.StepPaths(
             step.infra.folder,
-            identity.step_uid(self.prefix + tuple(step._uid_steps())),
+            identity.step_uid(self.advance(step).prefix),
             cache_type=step._infer_cache_type(),
         )
 
