@@ -31,7 +31,7 @@ to wrong results.
 
 ## Writer / reader / cleaner
 
-`ComputeBatch.run_and_cache()` runs the user function on the worker:
+`WriteTask.run_and_cache()` runs the user function on the worker:
 
 - **Success**: `cd[uid] = result` (no-op if another worker already
   wrote it — handles inflight reclaim).
@@ -68,7 +68,7 @@ in lockstep with disk by `Backend._clear_caches` (used by
 `LookupHandle.clear_cache()` and `force`); external rmtrees that don't
 go through Backend leave stale RAM. Cross-process workers get a fresh
 view via `CacheDict.__reduce__`.
-`ComputeBatch.run_and_cache()` writes via the Backend's CacheDict; cross-process
+`WriteTask.run_and_cache()` writes via the Backend's CacheDict; cross-process
 workers get a reduced copy and the driver picks up new entries via
 folder-mtime invalidation in `_read_info_files`.
 
@@ -80,19 +80,13 @@ other owners, claims all requested uids, yields an `InflightClaim`, then
 releases on exit. Waits go through `wait_for_inflight` (polls the DB;
 reclaims dead PIDs).
 
-A run splits across methods. `Backend._prepare` resolves paths and, for
-`force`, clears stale entries before any claim is held (the pre-lock cache
-check is a fast path only). `Backend._claim` then holds one
-`inflight_session` per batch (claims taken in `step_uid` order so
-concurrent dispatches agree on lock order). Under the held claims it calls
-`_recheck_and_clear` per batch — re-checking cache state and clearing
-entries it will recompute — then the caller hands every still-pending
-batch to `_execute`. The under-claim recheck is what stops a competitor
-that populated mid-wait from handing its value back to a `force`; `retry`
-uses the same recheck to recompute cached errors. `_execute` takes the
-whole batch set, so a sweep (many step variants dispatched together) packs
-into one submitit array (one pool for pool backends). `_mark_recomputed`
-records force/retry batches per attempt.
+A dispatch is one `CacheTransaction` over its `WriteTask`s (one per step):
+
+1. **Prepare**: resolve paths; `force` clears stale entries before any claim (the pre-lock cache check is a fast path only).
+2. **Claim**: one `inflight_session` per task, in `step_uid` order (concurrent dispatches agree on lock order).
+3. **Recheck** under the claims: re-read cache state, clear what gets recomputed. Stops a competitor that populated mid-wait from handing its value back to a `force`; lets `retry` recompute cached errors.
+4. **Submit**: `Backend._submit(tasks)`, the only per-backend hook. All tasks go into one submission (a sweep of step variants shares one submitit array or pool), split into one shard per worker job. `_mark_recomputed` records force/retry tasks per attempt.
+5. **Release**: when `_submit` returns `None` (inline, or submitit after its jobs finish); a pool returns a `Submission`, holding the claims until all its jobs are waited on, and `Backend._run` returns a lazy `SubmissionSource` waiting per uid.
 
 The session locks `inflight.db` only — direct user calls to
 `LookupHandle.clear_cache()` race against in-flight workers. Results are

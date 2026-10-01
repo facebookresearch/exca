@@ -11,7 +11,7 @@ import typing as tp
 
 import pydantic
 
-from . import base, identity, items, utils
+from . import backends, base, identity, items, utils
 
 
 class Func(base.Step):
@@ -197,15 +197,15 @@ class Parallel(base.Step):
                 f"Parallel needs a cache folder; set infra.folder (on Parallel or "
                 f"a step), got {self.infra!r}"
             )
-        cbatches = []
+        runs = []
         for variant in self.steps:
             resolved = utils.resolved_step(variant)
             uids = [identity.materialize_uid(resolved, v) for v in batch]
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
-            cbatches.append(self.infra._prepare(runner, resolved, child_batch))
-        with self.infra._claim(cbatches) as claimed:
-            if claimed.ready:
-                self.infra._execute(claimed.ready)
+            runs.append((runner, resolved, child_batch))
+        submission = backends.CacheTransaction(self.infra, runs).submit()
+        if submission is not None:
+            submission.wait()
         return items.StepItems(source={uid: None for uid in batch.uids}, uids=batch.uids)
 
     def run(self, value: tp.Any = identity.NoValue()) -> None:

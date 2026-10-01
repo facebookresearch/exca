@@ -314,26 +314,25 @@ def test_pool_error_propagation(tmp_path: Path) -> None:
 def test_recomputed_per_batch(tmp_path: Path) -> None:
     backend = backends.Cached(folder=tmp_path)
 
-    def prepare(step: Step, value: float) -> backends.ComputeBatch:
-        # force mode → _execute marks attempted uids as recomputed
+    def run(step: Step, value: float) -> tuple[base.Runner, Step, items.StepItems]:
+        # force mode → _submit marks attempted uids as recomputed
         infra = backend.model_copy(update={"mode": "force"})
         forced = step.model_copy(update={"infra": infra})
         uid = backends.identity.materialize_uid(forced, value)
-        batch = items.StepItems(source={uid: value}, uids=[uid])
-        return backend._prepare(base.Runner(), forced, batch)
+        return base.Runner(), forced, items.StepItems(source={uid: value}, uids=[uid])
 
-    cb_fail = prepare(conftest.Add(fail_on="all"), 1.0)
-    cb_ok = prepare(conftest.Add(value=1), 1.0)
-    # _claim sorts by step_uid, so cb_fail must sort first to raise first
-    assert cb_fail.paths.step_uid < cb_ok.paths.step_uid, "cb_fail must sort first"
+    transaction = backends.CacheTransaction(
+        backend, [run(conftest.Add(fail_on="all"), 1.0), run(conftest.Add(value=1), 1.0)]
+    )
+    fail, ok = transaction.tasks
+    # claims sort by step_uid, so fail must sort first to raise first
+    assert fail.paths.step_uid < ok.paths.step_uid, "fail must sort first"
 
     with pytest.raises(ValueError, match="Triggered an error"):
-        with backend._claim([cb_fail, cb_ok]) as claimed:
-            if claimed.ready:
-                backend._execute(claimed.ready)
+        transaction.submit()
 
-    key = (cb_ok.paths.step_folder, cb_ok.items.uids[0])
-    assert key not in backend._recomputed, "cb_ok never ran, so it must be unmarked"
+    key = (ok.paths.step_folder, ok.items.uids[0])
+    assert key not in backend._recomputed, "ok never ran, so it must be unmarked"
 
 
 def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
