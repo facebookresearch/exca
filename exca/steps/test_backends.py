@@ -272,12 +272,14 @@ def test_pool_backend(tmp_path: Path, backend: str) -> None:
     infra: tp.Any = {"backend": backend, "folder": tmp_path}
     step = conftest.Mult(coeff=2.0, infra=infra)
     out = step.run_many([1.0, 2.0, 3.0])
-    with futures.ThreadPoolExecutor(1) as reader:  # claims released off-thread
+    with futures.ThreadPoolExecutor(1) as reader:
         assert reader.submit(list, out).result() == [2.0, 4.0, 6.0]
     paths = step.lookup(1.0).paths
     assert paths.cache_folder.exists()
     with backends.inflight.InflightRegistry(paths.step_folder) as reg:
-        assert not reg.get(), "claims must be released once all items are read"
+        assert not reg.get(), (
+            "claims must be released once all items are read, even off-thread"
+        )
 
 
 class _PrintStep(Step):
@@ -307,15 +309,23 @@ def test_cached_capture_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     assert capsys.readouterr().out == ""
 
 
+class _SlowAdd(conftest.Add):
+    def _run(self, value: float = 0) -> float:
+        if value != 1.0:
+            time.sleep(0.1)
+        return super()._run(value)
+
+
 def test_pool_error_propagation(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path}
-    step = conftest.Add(value=1, fail_on="all", infra=infra)
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
+    step = _SlowAdd(value=1, fail_on={1.0}, infra=infra)
+    out = step.run_many([float(k) for k in range(1, 7)])  # 6 shards of 1 item
     with pytest.raises(ValueError, match="Triggered an error") as exc_info:
-        list(step.run_many([1.0, 2.0]))
+        next(out.read(out.uids[:1]))
     notes = exc_info.value.__notes__
     assert any("Add" in n for n in notes)
-    with backends.inflight.InflightRegistry(step.lookup(1.0).paths.step_folder) as reg:
-        assert not reg.get(), "claims must be released on failure"
+    others = list(out.read(out.uids[1:]))
+    assert others == [k + 1.0 for k in range(2, 7)], "a failure must not cancel others"
 
 
 def test_recomputed_per_task(tmp_path: Path) -> None:

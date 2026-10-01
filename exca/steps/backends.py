@@ -21,6 +21,7 @@ import logging
 import os
 import random
 import sys
+import threading
 import traceback
 import typing as tp
 import warnings
@@ -505,13 +506,12 @@ class Submission:
 
     def wait(self, entry: tuple[Path, str] | None = None) -> None:
         """Block on the job computing *entry* (``(step_folder, uid)``), or on all
-        jobs if ``None``; any failure cancels the others and releases the claims."""
+        jobs if ``None`` (cancelling the others on failure)."""
         jobs: tp.Iterable[futures.Future[None]]
         if entry is None:  # fail fast on the first failure
             jobs = futures.as_completed(self._jobs)
         else:
             jobs = [self._entry_jobs[entry]] if entry in self._entry_jobs else []
-        running = bool(self._remaining)
         try:
             for job in jobs:
                 try:
@@ -519,15 +519,16 @@ class Submission:
                 finally:
                     self._remaining.discard(job)
         except BaseException:
-            for job in self._jobs:
-                job.cancel()
-            self.close()
+            if entry is None:
+                for job in self._jobs:
+                    job.cancel()
+            if entry is None or not self._remaining:
+                self.close()
             raise
-        if running and not self._remaining:
+        if not self._remaining and self._executor is not None:  # first completion
             steps = {folder for folder, _ in self._entry_jobs}
             msg = "Finished processing %s items for %s steps"
             logger.info(msg, len(self._entry_jobs), len(steps))
-        if not self._remaining:
             self.close()
 
     def close(self) -> None:
@@ -537,9 +538,23 @@ class Submission:
         self._stack.close()
 
     def __del__(self) -> None:
-        for job in self._remaining:
-            job.cancel()
-        self.close()  # waits: running jobs keep their claims until done
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+        # cancelled-but-never-dequeued futures never count as done for futures.wait
+        jobs = [job for job in self._remaining if not job.cancelled()]
+        stack = self._stack
+        if not jobs:
+            stack.close()
+            return
+
+        def release() -> None:  # off-thread: gc must not block on workers
+            futures.wait(jobs)
+            stack.close()
+
+        try:
+            threading.Thread(target=release, daemon=True).start()
+        except RuntimeError:  # interpreter shutdown: dead-pid reclaim frees the claims
+            pass
 
 
 class SubmissionSource:
