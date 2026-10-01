@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import collections
 import copy
+import dataclasses
 import inspect
 import logging
 import typing as tp
@@ -27,6 +28,56 @@ logger = logging.getLogger(__name__)
 def _is_step(value: tp.Any, disc_key: str) -> bool:
     """True if value is a Step instance or a dict containing the discriminator key."""
     return isinstance(value, Step) or (isinstance(value, dict) and disc_key in value)
+
+
+@dataclasses.dataclass(frozen=True)
+class Runner:
+    """Pipeline context of a step: the steps before it (cache identity) and the
+    mode folded from them."""
+
+    prefix: tuple[Step, ...] = ()
+    mode: identity.ModeType = "cached"
+
+    def dispatch(self, step: Step, batch: items.StepItems) -> items.StepItems:
+        """Resolve, then route *batch*: reuse/remember warm carrier, run inline or
+        via backend."""
+        step = utils.resolved_step(step)
+        standalone = not self.prefix and not batch._pending and self.mode == "cached"
+        warm = step._warm_items if standalone else None  # only valid with no upstream
+        if warm is not None and isinstance(cd := warm._source, exca.cachedict.CacheDict):
+            if all(uid in cd for uid in batch.uids):
+                return warm.select(batch.uids)
+        if step.infra is None:
+            result = step._run_items(self, batch)
+        elif step.infra.folder is None:
+            raise RuntimeError(
+                f"{type(step).__name__} has infra={type(step.infra).__name__!r} but no "
+                "folder set; set infra.folder (or run inside a Chain that provides one)"
+            )
+        else:
+            result = step.infra._run(self, step, batch)
+        keep = standalone and isinstance(result._source, exca.cachedict.CacheDict)
+        if keep and backends._effective_mode(step) != "force":  # warm skips recompute
+            step._warm_items = result
+            exca.utils.recursive_freeze(step)  # carrier relies on fixed identity
+        return result
+
+    def advance(self, step: Step) -> Runner:
+        """Context of the step following *step*."""
+        return Runner(
+            self.prefix + tuple(utils.resolved_step(step)._uid_steps()),
+            backends._fold_modes(self.mode, backends._effective_mode(step)),
+        )
+
+    def paths(self, step: Step) -> backends.StepPaths:
+        """Cache layout of *step* (resolved, with a configured folder) here."""
+        if step.infra is None or step.infra.folder is None:
+            raise RuntimeError("paths requires a configured infra with a folder")
+        return backends.StepPaths(
+            step.infra.folder,
+            identity.step_uid(self.advance(step).prefix),
+            cache_type=step._infer_cache_type(),
+        )
 
 
 class Step(exca.helpers.DiscriminatedModel):
@@ -87,7 +138,7 @@ class Step(exca.helpers.DiscriminatedModel):
     # in ``materialize_uid``, avoids large keys cluttering the cache.
     _ITEM_UID_MAX_LENGTH: tp.ClassVar[int] = 256
     # Final cache-backed carrier reused by `run` when all requested uids exist.
-    _output_items: items.StepItems | None = pydantic.PrivateAttr(None)
+    _warm_items: items.StepItems | None = pydantic.PrivateAttr(None)
     _resolution_cache: Step | None = pydantic.PrivateAttr(
         None
     )  # see `utils.resolved_step`
@@ -95,7 +146,7 @@ class Step(exca.helpers.DiscriminatedModel):
     def __getstate__(self) -> dict[str, tp.Any]:
         out = super().__getstate__()
         private = out.get("__pydantic_private__", {})
-        private["_output_items"] = None
+        private["_warm_items"] = None
         private["_resolution_cache"] = None
         return out
 
@@ -103,7 +154,7 @@ class Step(exca.helpers.DiscriminatedModel):
         self, *, update: tp.Mapping[str, tp.Any] | None = None, deep: bool = False
     ) -> tp.Self:
         copied = super().model_copy(update=update, deep=deep)
-        copied._output_items = None
+        copied._warm_items = None
         copied._resolution_cache = None
         return copied
 
@@ -224,53 +275,16 @@ class Step(exca.helpers.DiscriminatedModel):
         """Check if step is a generator (no required input in _run)."""
         return "generator" in self._step_flags
 
-    def _run_items(self, batch: items.StepItems) -> items.StepItems:
+    def _run_items(self, runner: Runner, batch: items.StepItems) -> items.StepItems:
         """Transform *batch* into the result carrier.
 
         The override point for batch-level steps (composites, fan-out).
         The result must be single-pass iterable (it may be consumed
-        eagerly) and must extend the carrier's identity with this step
-        (as ``StepItems._append`` does), or the cache mis-keys silently.
+        eagerly). Sub-steps must run via ``runner.dispatch`` on a runner
+        extended to their position (e.g. ``runner.advance``), or their cache
+        mis-keys silently.
         """
         return batch._append(self)
-
-    def _warm_items(self, uids: tp.Sequence[str]) -> items.StepItems | None:
-        """Reuse a prior run's cache-backed carrier for *uids*, or ``None``."""
-        cached = self._output_items
-        if cached is None or not isinstance(cached._source, exca.cachedict.CacheDict):
-            return None
-        if cached._mode == "force" and not all(uid in cached.uids for uid in uids):
-            return None
-        with cached._source.frozen_cache_folder():
-            if not all(uid in cached._source for uid in uids):
-                return None
-        return cached.select(uids)
-
-    def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        """Resolve, then route *batch*: reuse/remember warm carrier, run inline or via backend."""
-        built = utils.resolved_step(self)
-        if built is not self:
-            return built._dispatch(batch)
-        standalone = (
-            not batch._upstream and not batch._pending and batch._mode == "cached"
-        )
-        if standalone:  # _output_items only valid with no upstream
-            warm = self._warm_items(batch.uids)
-            if warm is not None:
-                return warm
-        if self.infra is None:
-            result = self._run_items(batch)
-        elif self.infra.folder is None:
-            raise RuntimeError(
-                f"{type(self).__name__} has infra={type(self.infra).__name__!r} but no "
-                "folder set; set infra.folder (or run inside a Chain that provides one)"
-            )
-        else:
-            result = self.infra._run(self, batch)
-        if standalone and isinstance(result._source, exca.cachedict.CacheDict):
-            self._output_items = result
-            exca.utils.recursive_freeze(self)  # carrier relies on fixed identity
-        return result
 
     # =========================================================================
     # Identity
@@ -285,18 +299,6 @@ class Step(exca.helpers.DiscriminatedModel):
         """Overridable cache format"""
         return self.CACHE_TYPE
 
-    def _make_paths(self, aligned: tp.Sequence[Step]) -> backends.StepPaths:
-        """Build StepPaths and create the step folder."""
-        if self.infra is None or self.infra.folder is None:
-            raise RuntimeError("_make_paths requires a configured infra with a folder")
-        paths = backends.StepPaths(
-            self.infra.folder,
-            identity.step_uid(aligned),
-            cache_type=self._infer_cache_type(),
-        )
-        paths.step_folder.mkdir(parents=True, exist_ok=True)
-        return paths
-
     def _exca_uid_dict_override(self) -> dict[str, tp.Any] | None:
         built = utils.resolved_step(self)
         if built is self:
@@ -307,7 +309,7 @@ class Step(exca.helpers.DiscriminatedModel):
         self,
         value: tp.Any = identity.NoValue(),
         *,
-        _upstream: tp.Sequence[Step] = (),
+        _runner: Runner = Runner(),
         _uid: str | None = None,
     ) -> backends.LookupHandle:
         """Return a :class:`~backends.LookupHandle` for inspecting or clearing the cache.
@@ -324,19 +326,14 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         built = utils.resolved_step(self)
         if built is not self:  # caching happens under the resolved form.
-            return built.lookup(value, _upstream=_upstream, _uid=_uid)
+            return built.lookup(value, _runner=_runner, _uid=_uid)
         if self.infra is None or self.infra.folder is None:
             return backends.LookupHandle()
         if _uid is not None and not isinstance(value, identity.NoValue):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
-        steps = list(_upstream) + list(self._uid_steps())
-        paths = backends.StepPaths(
-            self.infra.folder,
-            identity.step_uid(steps),
-            cache_type=self._infer_cache_type(),
-        )
+        paths = _runner.paths(self)
         cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
         return backends.LookupHandle(paths, cd, backend=self.infra, uid=_uid)
 
@@ -386,16 +383,8 @@ class Step(exca.helpers.DiscriminatedModel):
 
         values = list(values)  # eager: uid computation needs all values upfront
         uids = [identity.materialize_uid(self, v) for v in values]
-
-        warm = self._warm_items(uids)
-        if warm is not None:
-            return warm  # extra-fast path -> avoid StepItems + _dispatch overhead
-
-        boundary = items.StepItems(
-            source=dict(zip(uids, values)),
-            uids=uids,
-        )
-        return boundary.apply_step(self)
+        boundary = items.StepItems(source=dict(zip(uids, values)), uids=uids)
+        return Runner().dispatch(self, boundary)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
         raise AttributeError("Step.forward() was removed; use run() instead")
@@ -503,17 +492,16 @@ class Chain(Step):
         self,
         value: tp.Any = identity.NoValue(),
         *,
-        _upstream: tp.Sequence[Step] = (),
+        _runner: Runner = Runner(),
         _uid: str | None = None,
     ) -> backends.LookupHandle:
-        steps = self._resolved_steps()
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
-        handle = super().lookup(_upstream=_upstream, _uid=_uid)
-        upstreams: list[list[Step]] = [list(_upstream)]
-        for s in steps[:-1]:
-            upstreams.append(upstreams[-1] + s._uid_steps())
-        sub = [step.lookup(_upstream=up, _uid=_uid) for step, up in zip(steps, upstreams)]
+        handle = super().lookup(_runner=_runner, _uid=_uid)
+        sub = []
+        for step in self._resolved_steps():
+            sub.append(step.lookup(_runner=_runner, _uid=_uid))
+            _runner = _runner.advance(step)
         # Chain shares identity with last step — if the chain itself has
         # no infra, borrow the last step's handle for user inspection.
         if handle._paths is None and sub and sub[-1]._paths is not None:
@@ -525,18 +513,11 @@ class Chain(Step):
     # Execution
     # =========================================================================
 
-    def _walk_steps(
-        self,
-        values: items.StepItems,
-    ) -> items.StepItems:
-        """Compose sub-step dispatches sequentially."""
-        current = values
+    def _run_items(self, runner: Runner, batch: items.StepItems) -> items.StepItems:
         for step in self._step_sequence():
-            current = current.apply_step(step)
-        return current
-
-    def _run_items(self, batch: items.StepItems) -> items.StepItems:
-        return self._walk_steps(batch)
+            batch = runner.dispatch(step, batch)
+            runner = runner.advance(step)
+        return batch
 
 
 Step._exca_chain_class = Chain

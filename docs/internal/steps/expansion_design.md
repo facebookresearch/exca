@@ -95,7 +95,7 @@ if built is not self:
 
 ### 4. Resolution during dispatch
 
-`Step._dispatch()` calls `resolved_step()` before routing work. Stripped copies return `self` from `_resolve_step()`, so re-resolution is a no-op.
+`Runner.dispatch()` calls `resolved_step()` before routing work. Stripped copies return `self` from `_resolve_step()`, so re-resolution is a no-op.
 
 ### 5. UID consistency via `_exca_uid_dict_override`
 

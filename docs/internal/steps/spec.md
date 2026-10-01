@@ -37,7 +37,7 @@ A `Step` is the fundamental unit that:
 ### Backend (Discriminated Model)
 
 `Backend` is a discriminated model with `discriminator_key="backend"`.
-It receives `StepItems` batches from `Step._dispatch`, decides which
+It receives `StepItems` batches from `Runner.dispatch`, decides which
 item uids need work, and returns `StepItems` backed by CacheDict.
 
 - **Cached**: Inline execution + caching (base class for all)
@@ -82,7 +82,7 @@ sequentially. It shares a cache entry with its last step (same
 │  from (aligned_steps, value) at call time.                 │
 │                                                            │
 │  lookup(value) → LookupHandle (cache introspection handle) │
-│  _dispatch: routes inline or through the configured Backend │
+│  Runner.dispatch: routes inline or through the Backend     │
 └────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────┐
@@ -90,7 +90,7 @@ sequentially. It shares a cache entry with its last step (same
 │                                                            │
 │  Backend (base)                                            │
 │  - folder, mode, keep_in_ram                               │
-│  - _run(step, batch) / _execute(...) / _clear_caches(...)   │
+│  - _run(runner, step, batch) / _execute / _clear_caches    │
 │        │                                                   │
 │   ┌────┴────┬────────────┬─────────────┐                   │
 │   ▼         ▼            ▼             ▼                   │
@@ -230,15 +230,16 @@ When `step.run(value)` is called:
    delegate to the resolved step.
 2. Eagerly materialize values and uids (a scalar `run(value)` is the
    one-input case of `run_many`), then build the initial `StepItems`.
-3. `_dispatch(batch)` runs inline when no backend folder is configured;
-   otherwise it calls `Backend._run(step, batch)`.
+3. `Runner().dispatch(step, batch)` runs inline when no backend folder is
+   configured; otherwise it calls `Backend._run(runner, step, batch)`.
 4. Backend handles cache modes, inflight coordination, and job
    submission. See `caching.md`.
 
-For chains: `Chain._walk_steps` resolves child steps and dispatches each
-one sequentially. `StepItems` carries the original item uid sequence plus
-the accumulated upstream identity so downstream cache hits can skip
-upstream execution.
+For chains: `Chain._run_items` dispatches each child sequentially, then
+`runner.advance(child)` extends the `Runner` for the next one. `StepItems`
+carries the original item uid sequence and pending inline steps; the
+`Runner` carries the accumulated upstream identity (`prefix`) and folded
+`mode`, so downstream cache hits can skip upstream execution.
 
 Uid-only or lazy item construction would let cache-only runs avoid
 rebuilding expensive inputs. That is a useful future optimization, but not

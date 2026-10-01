@@ -11,8 +11,7 @@ import typing as tp
 
 from exca import confdict
 
-from . import backends, identity, items, utils
-from .base import Step
+from . import backends, base, identity, items, utils
 
 
 class BranchResult(tp.NamedTuple):
@@ -31,7 +30,7 @@ class _BranchKeyer:
     input) or just ``"{branch}"`` when input-independent (shared across inputs).
     """
 
-    steps: tuple[Step, ...]  # branch-folder steps (excluded selectors stripped)
+    steps: tuple[base.Step, ...]  # branch-folder steps (excluded selectors stripped)
     _input_scoped: bool
 
     _SEP = "/"  # default uids are "/"-free (bare: not a field)
@@ -123,7 +122,7 @@ class _Gather:
         )
 
 
-class Scatter(Step):
+class Scatter(base.Step):
     """Fan each input into N keyed branches, run one body per branch, gather (1->N->1).
 
     .. warning:: Experimental — API may change.
@@ -149,7 +148,7 @@ class Scatter(Step):
         (shared across selections), kept in the gathered output. Default: none."""
         return []
 
-    def _body(self) -> Step:
+    def _body(self) -> base.Step:
         """The single sub-step to scatter over (auto-discovered from the direct
         fields; override if the subclass holds more than one ``Step``)."""
         subs = utils.nested_steps(self)
@@ -186,31 +185,30 @@ class Scatter(Step):
         self,
         value: tp.Any = identity.NoValue(),
         *,
-        _upstream: tp.Sequence[Step] = (),
+        _runner: base.Runner = base.Runner(),
         _uid: str | None = None,
     ) -> backends.LookupHandle:
         """Like :meth:`Step.lookup`, but the handle's ``clear_cache`` also clears
         every branch's body cache (not just this Scatter's gathered result). For
         input-independent branches that cache is shared, so it clears other inputs too."""
-        handle = super().lookup(value, _upstream=_upstream, _uid=_uid)
+        handle = super().lookup(value, _runner=_runner, _uid=_uid)
         keyer = _BranchKeyer.from_scatter(self)
         # branches cache independently of the Scatter
         uid = _uid if _uid is not None else identity.materialize_uid(self, value)
-        upstream = tuple(_upstream) + keyer.steps
+        runner = base.Runner(_runner.prefix + keyer.steps)
         body = self._body()
         # any uid -> same body cachedict; we only read its keys
-        cd = body.lookup(_upstream=upstream, _uid=uid)._cache_dict
+        cd = body.lookup(_runner=runner, _uid=uid)._cache_dict
         if cd is None:
             return handle
         keys = keyer.select(uid, cd.keys())
-        handle._sub_handles = tuple(body.lookup(_upstream=upstream, _uid=k) for k in keys)
+        handle._sub_handles = tuple(body.lookup(_runner=runner, _uid=k) for k in keys)
         return handle
 
-    def _run_items(self, batch: items.StepItems) -> items.StepItems:
+    def _run_items(self, runner: base.Runner, batch: items.StepItems) -> items.StepItems:
         keyer = _BranchKeyer.from_scatter(self)
         # branch folder drops the selectors; the gathered output keeps full identity
-        branch_upstream = batch._upstream + keyer.steps
-        output_upstream = batch._upstream + tuple(self._uid_steps())
+        branch_runner = base.Runner(runner.prefix + keyer.steps, runner.mode)
         # input uid -> {branch uid: branch}; feeds both _Parts and _Gather
         # (input-independent branches reuse one branch uid across inputs)
         plan: dict[str, dict[str, tp.Any]] = {}
@@ -229,17 +227,9 @@ class Scatter(Step):
             for uid, m in plan.items()
             for branch_uid, branch in m.items()
         }
-        carrier = items.StepItems(
-            source=_Parts(batch, self.take, origin),
-            uids=uids,
-            upstream=branch_upstream,
-            mode=batch._mode,
-        )
+        carrier = items.StepItems(source=_Parts(batch, self.take, origin), uids=uids)
         # one dispatch over all branches lets a backend submit them together
-        dispatched = self._body()._dispatch(carrier)
+        dispatched = branch_runner.dispatch(self._body(), carrier)
         return items.StepItems(
-            source=_Gather(dispatched, plan, self.gather),
-            uids=batch.uids,
-            upstream=output_upstream,
-            mode=batch._mode,
+            source=_Gather(dispatched, plan, self.gather), uids=batch.uids
         )

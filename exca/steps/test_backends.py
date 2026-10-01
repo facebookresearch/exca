@@ -19,7 +19,7 @@ import submitit
 
 import exca
 
-from . import backends, conftest, items, jobregistry
+from . import backends, base, conftest, items, jobregistry
 from .base import Chain, Step
 
 
@@ -319,7 +319,8 @@ def test_recomputed_per_batch(tmp_path: Path) -> None:
         infra = backend.model_copy(update={"mode": "force"})
         forced = step.model_copy(update={"infra": infra})
         uid = backends.identity.materialize_uid(forced, value)
-        return backend._prepare(forced, items.StepItems(source={uid: value}, uids=[uid]))
+        batch = items.StepItems(source={uid: value}, uids=[uid])
+        return backend._prepare(base.Runner(), forced, batch)
 
     cb_fail = prepare(conftest.Add(fail_on="all"), 1.0)
     cb_ok = prepare(conftest.Add(value=1), 1.0)
@@ -344,7 +345,7 @@ def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
     def run(value: float, fail: bool, mode: str) -> float:
         infra = backend.model_copy(update={"mode": mode})
         step = conftest.Add(value=value, fail_on="all" if fail else None, infra=infra)
-        return next(iter(backend._run(step, batch)))
+        return next(iter(backend._run(base.Runner(), step, batch)))
 
     # seed a cached error under each step's folder
     for value in (1.0, 5.0):

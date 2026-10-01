@@ -7,8 +7,8 @@
 """Carrier for batch execution.
 
 ``StepItems`` is the framework-internal carrier threaded through a
-pipeline: source + pending + upstream + uids + mode. Users never
-construct it; ``step.run_many`` returns one as its results iterator.
+pipeline: source + pending + uids. Users never construct it;
+``step.run_many`` returns one as its results iterator.
 """
 
 from __future__ import annotations
@@ -125,9 +125,7 @@ class StepItems:
         *,
         source: _Source,
         uids: tp.Sequence[str] | None = None,
-        upstream: tp.Sequence[Step] = (),
         pending: tp.Sequence[Step] = (),
-        mode: identity.ModeType = "cached",
     ) -> None:
         if uids is None:
             if not isinstance(source, dict):
@@ -137,45 +135,25 @@ class StepItems:
         # (may repeat uids — iteration reads the same value twice)
         self._source = source
         self.uids = list(uids)
-        self._upstream = tuple(upstream)
         self._pending = tuple(pending)
-        self._mode = mode
 
     def __len__(self) -> int:
         return len(self.uids)
 
-    def apply_step(self, step: Step) -> StepItems:
-        """Run *step* over the carrier, honoring its infra/caching (leaf or ``Chain``)."""
-        return step._dispatch(self)
-
     def _append(self, step: Step) -> StepItems:
-        """Append a single leaf step's computation and identity."""
+        """Append a single leaf step's computation."""
         return StepItems(
-            source=self._source,
-            uids=self.uids,
-            upstream=self._upstream + tuple(step._uid_steps()),
-            pending=self._pending + (step,),
-            mode=self._mode,
+            source=self._source, uids=self.uids, pending=self._pending + (step,)
         )
 
-    def select(
-        self,
-        uids: tp.Sequence[str],
-        mode: identity.ModeType | None = None,
-    ) -> StepItems:
-        """Subset to specific uids, optionally overriding mode."""
+    def select(self, uids: tp.Sequence[str]) -> StepItems:
+        """Subset to specific uids."""
         source = self._source
         if isinstance(source, dict):
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
         elif hasattr(source, "select"):  # subset lazy sources before pickle
             source = source.select(uids)
-        return StepItems(
-            source=source,
-            uids=uids,
-            upstream=self._upstream,
-            pending=self._pending,
-            mode=mode if mode is not None else self._mode,
-        )
+        return StepItems(source=source, uids=uids, pending=self._pending)
 
     def read(self, uids: tp.Sequence[str]) -> tp.Iterator[tp.Any]:
         """Read these uids through the carrier's pending steps."""

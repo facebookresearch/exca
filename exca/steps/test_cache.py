@@ -572,10 +572,10 @@ def test_composed_head_warms_without_standalone_run(
     dispatches = 0
     original = backends.Backend._run
 
-    def counting_run(self: backends.Backend, step: Step, batch: tp.Any) -> tp.Any:
+    def counting_run(self: backends.Backend, *args: tp.Any) -> tp.Any:
         nonlocal dispatches
         dispatches += 1
-        return original(self, step, batch)
+        return original(self, *args)
 
     monkeypatch.setattr(backends.Backend, "_run", counting_run)
     assert Chain(steps=[head, conftest.Mult(coeff=2)]).run(0) == 2.0
