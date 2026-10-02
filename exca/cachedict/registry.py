@@ -50,16 +50,6 @@ def select_in_chunks(
     return out
 
 
-def bulk_delete(
-    conn: sqlite3.Connection, table: str, column: str, values: list[str]
-) -> None:
-    """Delete rows from *table* where *column* matches *values*, in one
-    transaction (single fsync — matters for large recompute sets / NFS)."""
-    conn.execute("BEGIN")
-    conn.executemany(f"DELETE FROM {table} WHERE {column} = ?", [(v,) for v in values])
-    conn.execute("COMMIT")
-
-
 class AdvisoryRegistry:
     """Advisory SQLite-backed registry inside a folder.
 
@@ -106,6 +96,7 @@ class AdvisoryRegistry:
             str(self.db_path),
             timeout=20,
             isolation_level=None,
+            check_same_thread=False,  # claims may be released at gc, on any thread
         )
         # WAL needs cross-host shared memory (broken on NFS) -> DELETE journal
         conn.execute("PRAGMA journal_mode=DELETE")

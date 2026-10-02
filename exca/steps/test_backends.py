@@ -7,6 +7,7 @@
 """Tests for execution backends (LocalProcess, Slurm, submitit integration)."""
 
 import contextlib
+import gc
 import logging
 import sys
 import time
@@ -270,9 +271,12 @@ def test_derive(tmp_path: Path) -> None:
 def test_pool_backend(tmp_path: Path, backend: str) -> None:
     infra: tp.Any = {"backend": backend, "folder": tmp_path}
     step = conftest.Mult(coeff=2.0, infra=infra)
-    result = list(step.run_many([1.0, 2.0, 3.0]))
-    assert result == [2.0, 4.0, 6.0]
-    assert step.lookup(1.0).paths.cache_folder.exists()
+    out = step.run_many([1.0, 2.0, 3.0])
+    assert list(out) == [2.0, 4.0, 6.0]
+    paths = step.lookup(1.0).paths
+    assert paths.cache_folder.exists()
+    with backends.inflight.InflightRegistry(paths.step_folder) as reg:
+        assert not reg.get(), "workers must release their claims (out is still alive)"
 
 
 class _PrintStep(Step):
@@ -302,38 +306,62 @@ def test_cached_capture_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     assert capsys.readouterr().out == ""
 
 
+class _SlowAdd(conftest.Add):
+    def _run(self, value: float = 0) -> float:
+        if value != 1.0:
+            time.sleep(0.1)
+        return super()._run(value)
+
+
 def test_pool_error_propagation(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path}
-    step = conftest.Add(value=1, fail_on="all", infra=infra)
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
+    step = _SlowAdd(value=1, fail_on={1.0}, infra=infra)
+    out = step.run_many([float(k) for k in range(1, 7)])  # 6 shards of 1 item
     with pytest.raises(ValueError, match="Triggered an error") as exc_info:
-        list(step.run_many([1.0, 2.0]))
+        next(out.read(out.uids[:1]))
     notes = exc_info.value.__notes__
     assert any("Add" in n for n in notes)
+    others = list(out.read(out.uids[1:]))
+    assert others == [k + 1.0 for k in range(2, 7)], "a failure must not cancel others"
 
 
-def test_recomputed_per_batch(tmp_path: Path) -> None:
+def test_pool_abandoned(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
+    step = _SlowAdd(value=1, infra=infra)
+    values = [float(k) for k in range(2, 8)]
+    out = step.run_many(values)  # 6 shards of 1 item, 2 running
+    folder = step.lookup(2.0).paths.step_folder
+    del out
+    gc.collect()
+    with backends.inflight.InflightRegistry(folder) as reg:
+        assert not reg.get(), "gc must release the claims of cancelled shards"
+    time.sleep(0.5)
+    n_cached = sum(step.lookup(v).cached() for v in values)
+    assert n_cached < len(values), "gc must cancel queued shards"
+
+
+def test_recomputed_per_task(tmp_path: Path) -> None:
     backend = backends.Cached(folder=tmp_path)
 
-    def prepare(step: Step, value: float) -> backends.ComputeBatch:
-        # force mode → _execute marks attempted uids as recomputed
+    def run(step: Step, value: float) -> tuple[base.Runner, Step, items.StepItems]:
+        # force mode → _submit marks attempted uids as recomputed
         infra = backend.model_copy(update={"mode": "force"})
         forced = step.model_copy(update={"infra": infra})
         uid = backends.identity.materialize_uid(forced, value)
-        batch = items.StepItems(source={uid: value}, uids=[uid])
-        return backend._prepare(base.Runner(), forced, batch)
+        return base.Runner(), forced, items.StepItems(source={uid: value}, uids=[uid])
 
-    cb_fail = prepare(conftest.Add(fail_on="all"), 1.0)
-    cb_ok = prepare(conftest.Add(value=1), 1.0)
-    # _claim sorts by step_uid, so cb_fail must sort first to raise first
-    assert cb_fail.paths.step_uid < cb_ok.paths.step_uid, "cb_fail must sort first"
+    dispatch = backends.CacheDispatch(
+        backend, [run(conftest.Add(fail_on="all"), 1.0), run(conftest.Add(value=1), 1.0)]
+    )
+    fail, ok = dispatch.tasks
+    # claims sort by step_uid, so fail must sort first to raise first
+    assert fail.paths.step_uid < ok.paths.step_uid, "fail must sort first"
 
     with pytest.raises(ValueError, match="Triggered an error"):
-        with backend._claim([cb_fail, cb_ok]) as claimed:
-            if claimed.ready:
-                backend._execute(claimed.ready)
+        dispatch.submit()
 
-    key = (cb_ok.paths.step_folder, cb_ok.items.uids[0])
-    assert key not in backend._recomputed, "cb_ok never ran, so it must be unmarked"
+    key = (ok.paths.step_folder, ok.items.uids[0])
+    assert key not in backend._recomputed, "ok never ran, so it must be unmarked"
 
 
 def test_recomputed_keyed_by_step(tmp_path: Path) -> None:

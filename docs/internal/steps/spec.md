@@ -90,7 +90,7 @@ sequentially. It shares a cache entry with its last step (same
 │                                                            │
 │  Backend (base)                                            │
 │  - folder, mode, keep_in_ram                               │
-│  - _run(runner, step, batch) / _execute / _clear_caches    │
+│  - _run(runner, step, batch) / _submit / _clear_caches     │
 │        │                                                   │
 │   ┌────┴────┬────────────┬─────────────┐                   │
 │   ▼         ▼            ▼             ▼                   │
