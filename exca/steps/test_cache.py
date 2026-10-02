@@ -98,14 +98,19 @@ def test_chain_and_last_step_share_cache(tmp_path: Path) -> None:
 
 def test_cached_run_freezes_config_and_clone_resets(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    prefix = conftest.Add(value=1.0)  # no infra, but in the uid of the cached step
     step = conftest.Add(value=1.0, infra=infra)
-    assert step.run(1.0) == 2.0
+    assert Chain(steps=[prefix, step]).run(1.0) == 3.0
 
-    with pytest.raises(RuntimeError, match="instance was frozen"):
-        step.value = 2.0
+    for frozen in (prefix, step):
+        with pytest.raises(RuntimeError, match="instance was frozen"):
+            frozen.value = 2.0
 
     cloned = step.clone(value=2.0)
     cloned.value = 3.0
+    cloned.lookup(1.0)
+    with pytest.raises(RuntimeError, match="instance was frozen"):
+        cloned.value = 4.0
     assert cloned.run(1.0) == 4.0
 
 
@@ -252,7 +257,7 @@ def test_mode_force(tmp_path: Path, chain: bool) -> None:
     dumped = pickle.dumps(step)
 
     restored = pickle.loads(dumped)
-    assert restored.run() != out3, "pickle starts a fresh backend lifetime"
+    assert restored.run() != out3, "pickle starts a fresh step runtime"
 
 
 def test_force_clears_after_inflight_claim(
@@ -263,12 +268,12 @@ def test_force_clears_after_inflight_claim(
     assert Versioned(infra=infra).run() == 1000
 
     events: list[str] = []
-    original_clear = backends.Backend._clear_caches
+    original_clear = backends._StepCache.clear
     original_session = backends.inflight.inflight_session
 
-    def paused_clear(self: backends.Backend, **kwargs: tp.Any) -> None:
+    def paused_clear(self: backends._StepCache, uids: tp.Iterable[str]) -> None:
         events.append("clear")
-        original_clear(self, **kwargs)
+        original_clear(self, uids)
 
     @contextlib.contextmanager
     def paused_session(
@@ -278,7 +283,7 @@ def test_force_clears_after_inflight_claim(
         with original_session(reg, item_uids) as claimed:
             yield claimed
 
-    monkeypatch.setattr(backends.Backend, "_clear_caches", paused_clear)
+    monkeypatch.setattr(backends._StepCache, "clear", paused_clear)
     monkeypatch.setattr(backends.inflight, "inflight_session", paused_session)
     force_infra: tp.Any = {**infra, "mode": "force"}
 
@@ -420,14 +425,18 @@ def test_force_on_grandchild(tmp_path: Path) -> None:
 
 def test_retry_on_grandchild(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    failing = conftest.Add(value=1, fail_on="all", infra=infra)
-    inner = Chain(steps=[failing, conftest.Mult(coeff=10)], infra=infra)
-    outer = Chain(steps=[inner, conftest.Add(value=2)], infra=infra)
+
+    def nested_chain(**add_params: tp.Any) -> Chain:
+        steps = [conftest.Add(value=1, **add_params), conftest.Mult(coeff=10)]
+        child = Chain(steps=steps, infra=infra)
+        return Chain(steps=[child, conftest.Add(value=2)], infra=infra)
+
     with pytest.raises(ValueError, match="Triggered an error"):
-        outer.run()
-    failing.fail_on = None  # excluded from uid, so cache key is unchanged
-    failing.infra.mode = "retry"  # type: ignore
-    assert outer.run() == 12.0  # (0 + 1) * 10 + 2
+        nested_chain(fail_on="all", infra=infra).run()
+    # fail_on is excluded from uid, so cache key is unchanged
+    with pytest.raises(ValueError, match="Triggered an error"):
+        nested_chain(infra=infra).run()
+    assert nested_chain(infra={**infra, "mode": "retry"}).run() == 12.0  # (0+1)*10+2
 
 
 # =============================================================================

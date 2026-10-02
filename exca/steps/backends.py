@@ -71,6 +71,80 @@ class StepPaths:
         return str(self.step_folder / "logs" / "%j")
 
 
+@dataclasses.dataclass
+class _StepCache:
+    """Cache of a step at *paths*, shared by its lookups and dispatches."""
+
+    paths: StepPaths
+    cache_dict: exca.cachedict.CacheDict[tp.Any]
+    attempted: set[str] = dataclasses.field(default_factory=set)
+    configs_written: bool = False
+
+    def __getstate__(self) -> dict[str, tp.Any]:
+        return {**self.__dict__, "attempted": set()}
+
+    def pending(
+        self, uids: tp.Iterable[str], mode: identity.ModeType
+    ) -> dict[str, CacheStatus]:
+        """Return cache statuses for uids that should run under *mode*."""
+        cd = self.cache_dict
+        statuses = _CachedEntry.lookup_statuses(cd, uids)
+        pending: dict[str, CacheStatus] = {}
+        for uid, status in statuses.items():
+            if status is None:
+                if mode == "read-only":
+                    raise RuntimeError(
+                        f"No cache in read-only mode: {self.paths.step_uid}[{uid}]"
+                    )
+                pending[uid] = status
+            elif uid in self.attempted:
+                if status == "error":
+                    _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
+                continue
+            elif mode == "force" or (mode == "retry" and status == "error"):
+                pending[uid] = status
+            elif status == "error":
+                _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
+        return pending
+
+    def clear(self, uids: tp.Iterable[str]) -> None:
+        """Drop everything cached for these uids (cd rows and error rows)."""
+        uids = list(dict.fromkeys(uids))
+        if not uids:
+            return
+        paths, cd = self.paths, self.cache_dict
+        # Other backends may have left inflight rows for this step folder.
+        if paths.step_folder.exists():
+            try:
+                held = _HELD_ENTRIES.get()
+                folder_key = str(paths.step_folder)
+                with inflight.InflightRegistry(paths.step_folder) as reg:
+                    info = reg.get(uids)
+                    jobs: dict[str, str] = {}
+                    for uid, worker in info.items():
+                        if worker.job_id is None or worker.job_folder is None:
+                            continue  # not submitit
+                        if (folder_key, uid) in held:
+                            continue  # an ancestor's job — cancelling it kills us
+                        # Slurm array tasks share a scheduler job; avoid per-task cancels.
+                        job_id = worker.job_id.split("_", 1)[0]
+                        jobs[job_id] = worker.job_folder
+                    for job_id, folder in jobs.items():
+                        submitit.SlurmJob(job_id=job_id, folder=folder).cancel()
+            except Exception as e:
+                logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
+        # Success first → a mid-clear crash leaves a recoverable cached
+        # error rather than a stale success (fail closed).
+        with cd.write(), cd.frozen_cache_folder():
+            for uid in uids:
+                if uid in cd:
+                    del cd[uid]
+        if paths.step_folder.exists():
+            with errors.ErrorRegistry(paths.step_folder) as ereg:
+                ereg.clear(uids)
+        self.configs_written = False
+
+
 class LookupHandle:
     """Cache handle for a ``(step, value)`` pair.
 
@@ -78,16 +152,8 @@ class LookupHandle:
     cache entry and its on-disk paths.
     """
 
-    def __init__(
-        self,
-        paths: StepPaths | None = None,
-        cache_dict: exca.cachedict.CacheDict[tp.Any] | None = None,
-        backend: Backend | None = None,
-        uid: str = "",
-    ) -> None:
-        self._paths = paths
-        self._cache_dict = cache_dict
-        self._backend = backend
+    def __init__(self, cache: _StepCache | None = None, uid: str = "") -> None:
+        self._cache = cache
         self.uid = uid
         # Populated by container steps (Chain, etc.) at lookup time.
         self._sub_handles: tuple[LookupHandle, ...] = ()
@@ -95,25 +161,25 @@ class LookupHandle:
     @property
     def paths(self) -> StepPaths:
         """On-disk path layout (:class:`StepPaths`) for this entry."""
-        if self._paths is None:
+        if self._cache is None:
             raise RuntimeError("no infra configured on this step")
-        return self._paths
+        return self._cache.paths
 
     @property
     def cache_dict(self) -> exca.cachedict.CacheDict[tp.Any]:
         """:class:`~exca.cachedict.CacheDict` for this entry."""
-        if self._cache_dict is None:
+        if self._cache is None:
             raise RuntimeError("no infra configured on this step")
-        return self._cache_dict
+        return self._cache.cache_dict
 
     @property
     def status(self) -> LookupStatus:
         """Entry status: ``"success"``, ``"error"``, ``"running"``, or ``None``."""
-        if self._cache_dict is None or self._paths is None:
+        if self._cache is None:
             return None
         if not self.uid:
             raise RuntimeError("LookupHandle has no uid")
-        status = _CachedEntry.lookup(self._cache_dict, self.uid).status
+        status = _CachedEntry.lookup(self.cache_dict, self.uid).status
         if status is not None or not self.paths.cache_folder.exists():
             return status
         with inflight.InflightRegistry(self.paths.cache_folder) as reg:
@@ -146,14 +212,12 @@ class LookupHandle:
         if recursive:
             for sub in self._sub_handles:
                 sub.clear_cache()
-        if self._backend is not None:
-            self._backend._clear_caches(
-                paths=self.paths, cd=self.cache_dict, uids=[self.uid]
-            )
+        if self._cache is not None:
+            self._cache.clear([self.uid])
 
     def job(self) -> submitit.Job[tp.Any] | None:
         """Return the live inflight job, or latest submitit job recorded for logs."""
-        if self._backend is None or not self.paths.step_folder.exists():
+        if self._cache is None or not self.paths.step_folder.exists():
             return None
         try:
             with inflight.InflightRegistry(self.paths.step_folder) as reg:
@@ -293,8 +357,7 @@ class WriteTask:
     """One step's items, run and cached together via ``step._run_items``."""
 
     step: Step
-    paths: StepPaths
-    cache_dict: exca.cachedict.CacheDict[tp.Any]
+    cache: _StepCache
     items: items.StepItems
     runner: Runner  # context of `step`, with the step's folded mode
     claim: inflight.InflightClaim | None = None
@@ -304,12 +367,17 @@ class WriteTask:
         """This task's uids claimed by its own session (entries held by an ancestor
         are excluded, so their rows keep pointing at the ancestor's job)."""
         if self.claim is None:
-            raise RuntimeError(f"task was never claimed: {self.paths.step_uid}")
+            raise RuntimeError(f"task was never claimed: {self.cache.paths.step_uid}")
         owned = set(self.claim.owned)
         return [uid for uid in self.items.uids if uid in owned]
 
+    def mark_attempted(self) -> None:
+        """Record the uids as attempted, so force/retry recompute them only once."""
+        if self.runner.mode in ("force", "retry"):
+            self.cache.attempted.update(self.items.uids)
+
     def select(self, uids: tp.Sequence[str]) -> WriteTask:
-        """Sub-task over *uids*, sharing step/paths/cache/claim."""
+        """Sub-task over *uids*, sharing step/cache/claim."""
         return dataclasses.replace(self, items=self.items.select(uids))
 
     def shuffled(self) -> WriteTask:
@@ -321,36 +389,37 @@ class WriteTask:
 
     # No return: the driver re-reads from cache rather than unpickle a (heavy) result.
     def run_and_cache(self) -> None:
-        folder = self.cache_dict.folder
+        paths, cd = self.cache.paths, self.cache.cache_dict
+        folder = cd.folder
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
         written_uids: list[str] = []
         token = _HELD_ENTRIES.set(self.held_entries)
         try:
             result_items = self.step._run_items(self.runner, self.items)
-            with self.cache_dict.write():
+            with cd.write():
                 for i, result in enumerate(result_items):
                     uid = self.items.uids[i]
-                    if uid not in self.cache_dict:
-                        self.cache_dict[uid] = result
+                    if uid not in cd:
+                        cd[uid] = result
                         written_uids.append(uid)
         except items.BatchProtocolError as e:
             if written_uids:
                 logger.warning(
                     "Clearing partial results after invalid _run_batch output: %s",
-                    self.paths.step_uid,
+                    paths.step_uid,
                 )
-                with self.cache_dict.write(), self.cache_dict.frozen_cache_folder():
+                with cd.write(), cd.frozen_cache_folder():
                     for uid in written_uids:
-                        if uid in self.cache_dict:
-                            del self.cache_dict[uid]
+                        if uid in cd:
+                            del cd[uid]
             if folder is not None:
                 e.add_note(f"  -> cache may be invalid: {folder}")
             raise
         except Exception as e:
             failed: list[str] = getattr(e, "_inflight_uids", [])
             if folder is not None and failed:
-                e.add_note(f"  -> error recorded at {self.paths.step_uid}{failed}")
+                e.add_note(f"  -> error recorded at {paths.step_uid}{failed}")
                 tb = "".join(traceback.format_exception(e))
                 with errors.ErrorRegistry(folder.parent) as reg:
                     for uid in failed:
@@ -359,7 +428,7 @@ class WriteTask:
         finally:
             _HELD_ENTRIES.reset(token)
             if self.claim is not None:  # free competitors as soon as this work ends
-                folder, pid = self.paths.step_folder, self.claim.pid
+                folder, pid = paths.step_folder, self.claim.pid
                 with inflight.InflightRegistry(folder, pid=pid) as reg:
                     reg.release(self.claimed_uids())
 
@@ -367,7 +436,8 @@ class WriteTask:
 def _multi_run_and_cache(shard: list[WriteTask]) -> None:
     """``run_and_cache`` each task of one worker shard."""
     for task in shard:
-        logger.info("Running %s items for %s", len(task.items.uids), task.paths.step_uid)
+        step_uid = task.cache.paths.step_uid
+        logger.info("Running %s items for %s", len(task.items.uids), step_uid)
         task.run_and_cache()
 
 
@@ -401,22 +471,21 @@ class CacheDispatch:
     ) -> None:
         self.backend = backend
         self.tasks = [self._prepare(*run) for run in runs]
-        step_uids = [task.paths.step_uid for task in self.tasks]
+        step_uids = [task.cache.paths.step_uid for task in self.tasks]
         if len(set(step_uids)) != len(step_uids):
             raise ValueError(f"one task per step_uid required, got {step_uids}")
 
     def _prepare(self, runner: Runner, step: Step, batch: items.StepItems) -> WriteTask:
         """Resolve paths/cache/mode and force-clear before any claim is held."""
-        backend = self.backend
         at = runner.advance(step)
         paths = runner.paths(step)
         paths.step_folder.mkdir(parents=True, exist_ok=True)
-        if paths.step_folder not in backend._checked_configs:
+        cache = step._runtime.cache(paths, keep_in_ram=self.backend.keep_in_ram)
+        if not cache.configs_written:
             identity.write_configs(paths.step_folder, at.prefix)
-            backend._checked_configs.add(paths.step_folder)
-        cd = backend._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
+            cache.configs_written = True
         mode = at.mode
-        pending = backend._pending_statuses(paths=paths, uids=batch.uids, mode=mode)
+        pending = cache.pending(batch.uids, mode)
         if pending:
             paths.cache_folder.mkdir(parents=True, exist_ok=True)
             if mode == "force":
@@ -424,24 +493,21 @@ class CacheDispatch:
                 if to_clear:
                     msg = "Clearing %s items for %s (infra.mode=%s)"
                     logger.warning(msg, len(to_clear), paths.step_uid, mode)
-                backend._clear_caches(paths=paths, cd=cd, uids=set(pending))
+                cache.clear(pending)
         # carries the full input set; _claim filters to pending
         runner = dataclasses.replace(runner, mode=mode)
-        return WriteTask(
-            step=step, paths=paths, cache_dict=cd, items=batch, runner=runner
-        )
+        return WriteTask(step=step, cache=cache, items=batch, runner=runner)
 
     def _claim(self, stack: contextlib.ExitStack, task: WriteTask) -> WriteTask | None:
         """Claim *task*'s pending uids; ``None`` if nothing is pending."""
-        pending = self.backend._pending_statuses(
-            paths=task.paths, uids=task.items.uids, mode=task.runner.mode
-        )
+        pending = task.cache.pending(task.items.uids, task.runner.mode)
         if not pending:
             return None
-        reg = inflight.InflightRegistry(task.paths.step_folder)
+        folder = task.cache.paths.step_folder
+        reg = inflight.InflightRegistry(folder)
         # ancestors already hold their entries: claiming them self-deadlocks
         held = _HELD_ENTRIES.get()
-        folder_key = str(task.paths.step_folder)
+        folder_key = str(folder)
         request = {u for u in pending if (folder_key, u) not in held}
         claim = stack.enter_context(inflight.inflight_session(reg, request))
         held |= {(folder_key, u) for u in claim.uids}
@@ -452,20 +518,16 @@ class CacheDispatch:
     def _recheck(self, task: WriteTask) -> WriteTask | None:
         """Recheck under the claim and clear stale entries; narrowed task, or
         ``None`` if a competitor populated it."""
-        backend, mode = self.backend, task.runner.mode
-        pending = backend._pending_statuses(
-            paths=task.paths, uids=task.items.uids, mode=mode
-        )
-        inflight.after_wait_log(task.paths.step_uid, len(task.items.uids), len(pending))
+        mode, step_uid = task.runner.mode, task.cache.paths.step_uid
+        pending = task.cache.pending(task.items.uids, mode)
+        inflight.after_wait_log(step_uid, len(task.items.uids), len(pending))
         retry_count = sum(status == "error" for status in pending.values())
         if retry_count:
-            logger.warning(
-                "Retrying %s failed items for %s", retry_count, task.paths.step_uid
-            )
+            logger.warning("Retrying %s failed items for %s", retry_count, step_uid)
         clear_uids = [
             uid for uid, status in pending.items() if mode == "force" or status == "error"
         ]
-        backend._clear_caches(paths=task.paths, cd=task.cache_dict, uids=clear_uids)
+        task.cache.clear(clear_uids)
         if not pending:
             return None
         return task.select(list(pending))
@@ -475,7 +537,7 @@ class CacheDispatch:
         the claims until closed, otherwise they are released here."""
         with contextlib.ExitStack() as stack:
             # step_uid order: concurrent dispatches agree on lock order
-            ordered = sorted(self.tasks, key=lambda task: task.paths.step_uid)
+            ordered = sorted(self.tasks, key=lambda task: task.cache.paths.step_uid)
             claimed = [c for t in ordered if (c := self._claim(stack, t)) is not None]
             ready = [r for c in claimed if (r := self._recheck(c)) is not None]
             submission = self.backend._submit(ready) if ready else None
@@ -495,7 +557,7 @@ class Submission:
     ) -> None:
         self._jobs = list(jobs)
         self._entry_jobs = {
-            (task.paths.step_folder, uid): job
+            (task.cache.paths.step_folder, uid): job
             for job, shard in jobs.items()
             for task in shard
             for uid in task.items.uids
@@ -541,28 +603,28 @@ class SubmissionSource:
     reads from the CacheDict."""
 
     def __init__(
-        self, task: WriteTask, submission: Submission, uids: tp.Sequence[str]
+        self, cache: _StepCache, submission: Submission, uids: tp.Sequence[str]
     ) -> None:
-        self._task = task
+        self._cache = cache
         self._submission = submission
         self._uids = uids
 
     def __getitem__(self, uid: str) -> tp.Any:
-        self._submission.wait((self._task.paths.step_folder, uid))
+        self._submission.wait((self._cache.paths.step_folder, uid))
         try:
-            return self._task.cache_dict[uid]
+            return self._cache.cache_dict[uid]
         except KeyError:
             raise RuntimeError(
-                f"Worker completed but cache missing: {self._task.paths.step_uid}[{uid}]"
+                f"Worker completed but cache missing: {self._cache.paths.step_uid}[{uid}]"
             ) from None
 
     def select(self, uids: tp.Sequence[str]) -> SubmissionSource:
-        return SubmissionSource(self._task, self._submission, uids)
+        return SubmissionSource(self._cache, self._submission, uids)
 
     def __reduce__(self) -> tp.Any:
         for uid in self._uids:
-            self._submission.wait((self._task.paths.step_folder, uid))
-        return self._task.cache_dict.__reduce__()
+            self._submission.wait((self._cache.paths.step_folder, uid))
+        return self._cache.cache_dict.__reduce__()
 
 
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
@@ -576,45 +638,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     mode: identity.ModeType = "cached"
     keep_in_ram: bool = False
-    # Force/retry: recompute each (step_folder, uid) at most once per lifetime
-    _recomputed: set[tuple[Path, str]] = pydantic.PrivateAttr(default_factory=set)
-    _checked_configs: set[Path] = pydantic.PrivateAttr(default_factory=set)
-
-    def __getstate__(self) -> dict[str, tp.Any]:
-        recomputed = self._recomputed
-        self._recomputed = set()
-        try:
-            return super().__getstate__()
-        finally:
-            self._recomputed = recomputed
-
-    def _pending_statuses(
-        self,
-        *,
-        paths: StepPaths,
-        uids: tp.Iterable[str],
-        mode: identity.ModeType,
-    ) -> dict[str, CacheStatus]:
-        """Return cache statuses for uids that should run under *mode*."""
-        cd = self._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        statuses = _CachedEntry.lookup_statuses(cd, uids)
-        pending: dict[str, CacheStatus] = {}
-        for uid, status in statuses.items():
-            if status is None:
-                if mode == "read-only":
-                    raise RuntimeError(
-                        f"No cache in read-only mode: {paths.step_uid}[{uid}]"
-                    )
-                pending[uid] = status
-            elif (paths.step_folder, uid) in self._recomputed:
-                if status == "error":
-                    _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
-                continue
-            elif mode == "force" or (mode == "retry" and status == "error"):
-                pending[uid] = status
-            elif status == "error":
-                _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
-        return pending
 
     @pydantic.field_validator("mode", mode="before")
     @classmethod
@@ -628,12 +651,6 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
             )
             return "force"
         return v
-
-    # memoize so `keep_in_ram` survives. Keyed on cache_folder as a Step
-    # could be reused in other chain contexts, with different `step_uid`s.
-    _cds: dict[Path, exca.cachedict.CacheDict[tp.Any]] = pydantic.PrivateAttr(
-        default_factory=dict
-    )
 
     def __eq__(self, other: tp.Any) -> bool:
         """Compare backends by declared model fields."""
@@ -667,84 +684,22 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
         }
         return tp.cast("Backend", target(**{**data, **kwargs}))
 
-    def _cache_dict(
-        self, cache_folder: Path, *, cache_type: str | None
-    ) -> exca.cachedict.CacheDict[tp.Any]:
-        """Per-Backend CacheDict, memoised by cache_folder so `keep_in_ram`
-        and disk handles persist across `run()` calls."""
-        cd = self._cds.get(cache_folder)
-        if cd is None:
-            cd = exca.cachedict.CacheDict(
-                folder=cache_folder,
-                cache_type=cache_type,
-                keep_in_ram=self.keep_in_ram,
-            )
-            self._cds[cache_folder] = cd
-        return cd
-
-    def _clear_caches(
-        self,
-        *,
-        paths: StepPaths,
-        cd: exca.cachedict.CacheDict[tp.Any],
-        uids: tp.Iterable[str],
-    ) -> None:
-        """Drop everything cached for these uids (cd rows and error rows)."""
-        uids = list(dict.fromkeys(uids))
-        if not uids:
-            return
-        # Other backends may have left inflight rows for this step folder.
-        if paths.step_folder.exists():
-            try:
-                held = _HELD_ENTRIES.get()
-                folder_key = str(paths.step_folder)
-                with inflight.InflightRegistry(paths.step_folder) as reg:
-                    info = reg.get(uids)
-                    jobs: dict[str, str] = {}
-                    for uid, worker in info.items():
-                        if worker.job_id is None or worker.job_folder is None:
-                            continue  # not submitit
-                        if (folder_key, uid) in held:
-                            continue  # an ancestor's job — cancelling it kills us
-                        # Slurm array tasks share a scheduler job; avoid per-task cancels.
-                        job_id = worker.job_id.split("_", 1)[0]
-                        jobs[job_id] = worker.job_folder
-                    for job_id, folder in jobs.items():
-                        submitit.SlurmJob(job_id=job_id, folder=folder).cancel()
-            except Exception as e:
-                logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
-        # Success first → a mid-clear crash leaves a recoverable cached
-        # error rather than a stale success (fail closed).
-        with cd.write(), cd.frozen_cache_folder():
-            for uid in uids:
-                if uid in cd:
-                    del cd[uid]
-        if paths.step_folder.exists():
-            with errors.ErrorRegistry(paths.step_folder) as ereg:
-                ereg.clear(uids)
-        self._checked_configs.discard(paths.step_folder)
-
     def _run(self, runner: Runner, step: Step, batch: items.StepItems) -> items.StepItems:
         """Execute *step* for uncached items, caching per uid."""
         dispatch = CacheDispatch(self, [(runner, step, batch)])
         [task] = dispatch.tasks
         submission = dispatch.submit()
-        uids = task.items.uids
+        cache, uids = task.cache, task.items.uids
         if submission is None:
-            return items.StepItems(source=task.cache_dict, uids=uids)
-        return items.StepItems(source=SubmissionSource(task, submission, uids), uids=uids)
-
-    def _mark_recomputed(self, task: WriteTask) -> None:
-        """Record *task*'s uids as recomputed-this-lifetime (once attempted)."""
-        if task.runner.mode in ("force", "retry"):
-            folder = task.paths.step_folder
-            self._recomputed.update((folder, uid) for uid in task.items.uids)
+            return items.StepItems(source=cache.cache_dict, uids=uids)
+        source = SubmissionSource(cache, submission, uids)
+        return items.StepItems(source=source, uids=uids)
 
     def _submit(self, tasks: list[WriteTask]) -> Submission | None:
         """Run claimed *tasks*: inline (returns ``None`` once done), or
         asynchronously (returns the running submission)."""
         for task in tasks:
-            self._mark_recomputed(task)  # per task: tasks after a raise stay unmarked
+            task.mark_attempted()  # per task: tasks after a raise stay unmarked
             task.run_and_cache()
         return None
 
@@ -762,14 +717,14 @@ class Cached(Backend):
     def _submit(self, tasks: list[WriteTask]) -> Submission | None:
         log_folder = None
         if self.capture_logs:
-            paths = tasks[0].paths
+            paths = tasks[0].cache.paths
             log_folder = Path(paths._logs_folder.replace("%j", "main-process"))
         from . import utils as step_utils  # circular
 
         with step_utils.capture_logs(log_folder):
             if log_folder is not None:
                 time = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
-                step_uids = ", ".join(task.paths.step_uid for task in tasks)
+                step_uids = ", ".join(task.cache.paths.step_uid for task in tasks)
                 n_items = sum(len(task.items.uids) for task in tasks)
                 header = f"{time} - Running {n_items} items for steps: {step_uids}"
                 print(header)
@@ -806,7 +761,7 @@ class _SubmititBackend(Backend):
     def _submit(self, tasks: list[WriteTask]) -> Submission | None:
         # all tasks → one executor.batch() → one slurm array
         for task in tasks:
-            self._mark_recomputed(task)  # all attempted at once
+            task.mark_attempted()  # all attempted at once
         shards = _shard_tasks(
             [task.shuffled() for task in tasks],
             max_shards=self.max_jobs,
@@ -814,7 +769,7 @@ class _SubmititBackend(Backend):
         )
         # one array → one logs folder; jobs.db still records per step_folder
         executor = submitit.AutoExecutor(
-            folder=tasks[0].paths._logs_folder, cluster=self._CLUSTER
+            folder=tasks[0].cache.paths._logs_folder, cluster=self._CLUSTER
         )
         params = self._submitit_params()
         if self._CLUSTER in ("slurm", None):
@@ -828,7 +783,7 @@ class _SubmititBackend(Backend):
             for task in shard:
                 assert task.claim is not None  # inherited from its variant
                 task.claim.record_worker_info(job, uids=task.claimed_uids())
-                folder = task.paths.step_folder
+                folder = task.cache.paths.step_folder
                 by_folder.setdefault(folder, {})[job.job_id] = task.items.uids
         for folder, records in by_folder.items():
             with jobregistry.JobRegistry(folder) as reg:
@@ -899,7 +854,7 @@ class _PoolBackend(Backend):
         if max_workers <= 1:
             return super()._submit(tasks)
         for task in tasks:
-            self._mark_recomputed(task)  # all attempted at once
+            task.mark_attempted()  # all attempted at once
         # ~3x as many shards as workers, run in one pool
         shards = _shard_tasks(
             [task.shuffled() for task in tasks],

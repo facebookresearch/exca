@@ -30,6 +30,31 @@ def _is_step(value: tp.Any, disc_key: str) -> bool:
     return isinstance(value, Step) or (isinstance(value, dict) and disc_key in value)
 
 
+@dataclasses.dataclass
+class _StepRuntime:
+    """State of a step instance across runs, dropped on pickle."""
+
+    caches: dict[backends.StepPaths, backends._StepCache] = dataclasses.field(
+        default_factory=dict
+    )
+    warm_items: items.StepItems | None = None  # carrier reused by `run` if all cached
+    resolution: Step | None = None  # memo of `utils.resolved_step`
+
+    def cache(
+        self, paths: backends.StepPaths, *, keep_in_ram: bool
+    ) -> backends._StepCache:
+        cache = self.caches.get(paths)
+        if cache is None:
+            cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
+                folder=paths.cache_folder,
+                cache_type=paths.cache_type,
+                keep_in_ram=keep_in_ram,
+            )
+            cache = backends._StepCache(paths, cd)
+            self.caches[paths] = cache
+        return cache
+
+
 @dataclasses.dataclass(frozen=True)
 class Runner:
     """Pipeline context of a step: the steps before it (cache identity) and the
@@ -43,10 +68,11 @@ class Runner:
         via backend."""
         step = utils.resolved_step(step)
         standalone = not self.prefix and not batch._pending and self.mode == "cached"
-        warm = step._warm_items if standalone else None  # only valid with no upstream
+        warm = step._runtime.warm_items if standalone else None
         if warm is not None and isinstance(cd := warm._source, exca.cachedict.CacheDict):
             if all(uid in cd for uid in batch.uids):
                 return warm.select(batch.uids)
+        exca.utils.recursive_freeze(step)  # caches and carrier rely on fixed config
         if step.infra is None:
             result = step._run_items(self, batch)
         elif step.infra.folder is None:
@@ -58,8 +84,7 @@ class Runner:
             result = step.infra._run(self, step, batch)
         keep = standalone and isinstance(result._source, exca.cachedict.CacheDict)
         if keep and backends._effective_mode(step) != "force":  # warm skips recompute
-            step._warm_items = result
-            exca.utils.recursive_freeze(step)  # carrier relies on fixed identity
+            step._runtime.warm_items = result
         return result
 
     def advance(self, step: Step) -> Runner:
@@ -137,25 +162,21 @@ class Step(exca.helpers.DiscriminatedModel):
     CACHE_TYPE: tp.ClassVar[str | None] = None  # ``None`` = auto-dispatch.
     # in ``materialize_uid``, avoids large keys cluttering the cache.
     _ITEM_UID_MAX_LENGTH: tp.ClassVar[int] = 256
-    # Final cache-backed carrier reused by `run` when all requested uids exist.
-    _warm_items: items.StepItems | None = pydantic.PrivateAttr(None)
-    _resolution_cache: Step | None = pydantic.PrivateAttr(
-        None
-    )  # see `utils.resolved_step`
+    _runtime: _StepRuntime = pydantic.PrivateAttr(default_factory=_StepRuntime)
 
     def __getstate__(self) -> dict[str, tp.Any]:
         out = super().__getstate__()
         private = out.get("__pydantic_private__", {})
-        private["_warm_items"] = None
-        private["_resolution_cache"] = None
+        private["_runtime"] = _StepRuntime()
         return out
 
     def model_copy(
         self, *, update: tp.Mapping[str, tp.Any] | None = None, deep: bool = False
     ) -> tp.Self:
         copied = super().model_copy(update=update, deep=deep)
-        copied._warm_items = None
-        copied._resolution_cache = None
+        # shared CacheDicts: a separate one misses the other's clears
+        caches = self._runtime.caches if copied.infra is self.infra else {}
+        copied._runtime = _StepRuntime(caches=caches)
         return copied
 
     def clone(self, *args: dict[str, tp.Any], **kwargs: tp.Any) -> tp.Self:
@@ -333,9 +354,10 @@ class Step(exca.helpers.DiscriminatedModel):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
+        exca.utils.recursive_freeze(self)  # memoized cache relies on fixed config
         paths = _runner.paths(self)
-        cd = self.infra._cache_dict(paths.cache_folder, cache_type=paths.cache_type)
-        return backends.LookupHandle(paths, cd, backend=self.infra, uid=_uid)
+        cache = self._runtime.cache(paths, keep_in_ram=self.infra.keep_in_ram)
+        return backends.LookupHandle(cache, uid=_uid)
 
     def clear_cache(self) -> None:  # deprecated
         warnings.warn(
@@ -504,7 +526,7 @@ class Chain(Step):
             _runner = _runner.advance(step)
         # Chain shares identity with last step — if the chain itself has
         # no infra, borrow the last step's handle for user inspection.
-        if handle._paths is None and sub and sub[-1]._paths is not None:
+        if handle._cache is None and sub and sub[-1]._cache is not None:
             handle = copy.copy(sub[-1])
         handle._sub_handles = tuple(sub)
         return handle
