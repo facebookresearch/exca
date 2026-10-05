@@ -37,10 +37,24 @@ class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
 
 
-def _note_inflight(exc: Exception, step: Step, uids: list[str]) -> None:
-    exc.add_note(f"  -> in {step!r}, inflight uids: {uids}")
-    if uids:
-        exc._inflight_uids = uids  # type: ignore[attr-defined]  # read by retry logic
+class _LazyUid:
+    def __init__(self, factory: tp.Callable[[tp.Any], str], value: tp.Any) -> None:
+        self._factory = factory
+        self._value = value
+        self._uid: str | None = None
+
+    def __str__(self) -> str:
+        if self._uid is None:
+            self._uid = self._factory(self._value)
+            self._value = None
+        return self._uid
+
+
+def _note_inflight(exc: Exception, step: Step, uids: tp.Iterable[str | _LazyUid]) -> None:
+    materialized = [str(uid) for uid in uids]
+    exc.add_note(f"  -> in {step!r}, inflight uids: {materialized}")
+    if materialized:
+        exc._inflight_uids = materialized  # type: ignore[attr-defined]  # read by retry logic
 
 
 class _AnnotatedBatch:
@@ -50,40 +64,33 @@ class _AnnotatedBatch:
     """
 
     def __init__(
-        self, step: Step, values: tp.Iterable[tp.Any], uids: tp.Sequence[str]
+        self, step: Step, items: tp.Iterable[tuple[str | _LazyUid, tp.Any]]
     ) -> None:
         self.step = step
-        self._values = values
-        self._uid_iter = iter(uids)
-        self._expected = len(uids)
-        self._inflight: collections.deque[str] = collections.deque()
-        self.n_out = 0
+        self._items = items
 
-    def _tracked(self) -> tp.Iterator[tp.Any]:
-        for v in self._values:
-            self._inflight.append(next(self._uid_iter))
-            yield v
+    def __iter__(self) -> tp.Iterator[tuple[str | _LazyUid, tp.Any]]:
+        upstream = iter(self._items)
+        inflight: collections.deque[str | _LazyUid] = collections.deque()
 
-    def __iter__(self) -> tp.Iterator[tp.Any]:
+        def tracked() -> tp.Iterator[tp.Any]:
+            for uid, value in upstream:
+                inflight.append(uid)
+                yield value
+
         try:
-            for result in self.step._run_batch(self._tracked()):
-                if self.n_out >= self._expected:
+            for result in self.step._run_batch(tracked()):
+                if not inflight:
                     raise BatchProtocolError(
-                        f"{self.step!r}._run_batch yielded more than {self._expected} results"
+                        f"{self.step!r}._run_batch yielded without consuming an input"
                     )
-                if not self._inflight:
-                    raise BatchProtocolError(
-                        f"{self.step!r}._run_batch yielded before consuming an input"
-                    )
-                self._inflight.popleft()
-                self.n_out += 1
-                yield result
+                yield inflight.popleft(), result
         except Exception as e:
-            _note_inflight(e, self.step, list(self._inflight))
+            _note_inflight(e, self.step, inflight)
             raise
-        if self.n_out < self._expected:
+        if inflight or next(upstream, None) is not None:
             raise BatchProtocolError(
-                f"{self.step!r}._run_batch yielded {self.n_out} results for {self._expected} inputs"
+                f"{self.step!r}._run_batch stopped before producing one result per input"
             )
 
 
@@ -93,15 +100,13 @@ class _FusedRun:
     def __init__(
         self,
         steps: tp.Sequence[Step],
-        values: tp.Iterable[tp.Any],
-        uids: tp.Sequence[str],
+        items: tp.Iterable[tuple[str | _LazyUid, tp.Any]],
     ) -> None:
         self.steps = tuple(steps)
-        self._values = values
-        self.uids = uids
+        self._items = items
 
-    def __iter__(self) -> tp.Iterator[tp.Any]:
-        for value, uid in zip(self._values, self.uids):
+    def __iter__(self) -> tp.Iterator[tuple[str | _LazyUid, tp.Any]]:
+        for uid, value in self._items:
             for step in self.steps:
                 try:
                     args = () if isinstance(value, identity.NoValue) else (value,)
@@ -109,7 +114,7 @@ class _FusedRun:
                 except Exception as e:
                     _note_inflight(e, step, [uid])
                     raise
-            yield value
+            yield uid, value
 
 
 class StepItems:
@@ -118,37 +123,55 @@ class StepItems:
     For dict sources, uids default to the dict keys (insertion order).
     For CacheDict sources, explicit uids are required
     (the CacheDict may contain keys from other runs).
+    Callable uids keep an iterable source unaddressed until needed.
     """
 
     def __init__(
         self,
         *,
-        source: _Source,
-        uids: tp.Sequence[str] | None = None,
+        source: _Source | tp.Iterable[tp.Any],
+        uids: tp.Sequence[str] | tp.Callable[[tp.Any], str] | None = None,
         pending: tp.Sequence[Step] = (),
     ) -> None:
         if uids is None:
             if not isinstance(source, dict):
                 raise TypeError("CacheDict source requires explicit uids")
             uids = list(source)
-        # source: unique uid→value mapping; uids: full input sequence
-        # (may repeat uids — iteration reads the same value twice)
+        elif not callable(uids):
+            uids = list(uids)
+        # addressed: source=unique uid→value; uids=ordered sequence, duplicates allowed
         self._source = source
-        self.uids = list(uids)
+        self._uids = uids
         self._pending = tuple(pending)
 
+    @property
+    def uids(self) -> list[str]:
+        self._address()
+        assert isinstance(self._uids, list)
+        return self._uids
+
+    def _address(self) -> _Source:
+        if callable(self._uids):
+            values = list(tp.cast(tp.Iterable[tp.Any], self._source))
+            uids = [self._uids(value) for value in values]
+            self._source = dict(zip(uids, values))
+            self._uids = uids
+        return tp.cast(_Source, self._source)
+
     def __len__(self) -> int:
-        return len(self.uids)
+        if isinstance(self._uids, list):
+            return len(self._uids)
+        return len(tp.cast(tp.Sized, self._source))
 
     def _append(self, step: Step) -> StepItems:
         """Append a single leaf step's computation."""
         return StepItems(
-            source=self._source, uids=self.uids, pending=self._pending + (step,)
+            source=self._source, uids=self._uids, pending=self._pending + (step,)
         )
 
     def select(self, uids: tp.Sequence[str]) -> StepItems:
         """Subset to specific uids."""
-        source = self._source
+        source = self._address()
         if isinstance(source, dict):
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
         elif hasattr(source, "select"):  # subset lazy sources before pickle
@@ -157,17 +180,27 @@ class StepItems:
 
     def read(self, uids: tp.Sequence[str]) -> tp.Iterator[tp.Any]:
         """Read these uids through the carrier's pending steps."""
-        current: tp.Iterable[tp.Any] = (self._source[uid] for uid in uids)
+        source = self._address()
+        current = ((uid, source[uid]) for uid in uids)
+        return self._run(current)
+
+    def _run(
+        self, current: tp.Iterable[tuple[str | _LazyUid, tp.Any]]
+    ) -> tp.Iterator[tp.Any]:
         grouped = itertools.groupby(
             self._pending, key=lambda s: "batched" in s._step_flags
         )
         for batched, group in grouped:
             if batched:
                 for step in group:
-                    current = _AnnotatedBatch(step, current, uids)
+                    current = _AnnotatedBatch(step, current)
             else:
-                current = _FusedRun(list(group), current, uids)
-        return iter(current)
+                current = _FusedRun(list(group), current)
+        return (value for _, value in current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
-        return self.read(self.uids)
+        if isinstance(self._uids, list):
+            return self.read(self._uids)
+        values = tp.cast(tp.Iterable[tp.Any], self._source)
+        current = ((_LazyUid(self._uids, value), value) for value in values)
+        return self._run(current)

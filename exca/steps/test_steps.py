@@ -37,6 +37,31 @@ def test_chain_no_infra() -> None:
     assert chain.run(5.0) == 30.0
 
 
+def test_no_infra_streams_without_uids(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+    consumed: list[int] = []
+
+    class Batched(Step):
+        def _run_batch(self, values: tp.Iterable[int]) -> tp.Iterator[int]:
+            calls.append(1)
+            yield from (2 * value for value in values)
+
+    monkeypatch.setattr(
+        identity,
+        "materialize_uid",
+        lambda *_: pytest.fail("inline execution materialized a uid"),
+    )
+    result = Chain(steps=[Batched(), Batched()]).run_many(
+        consumed.append(value) or value for value in (1, 2)
+    )
+    assert not consumed
+    iterator = iter(result)
+    assert next(iterator) == 4
+    assert consumed == [1]
+    assert list(iterator) == [8]
+    assert calls == [1, 1]
+
+
 def test_clone_rejects_ambiguous_updates() -> None:
     step = conftest.Mult()
     with pytest.raises(ValueError, match="Only one positional argument"):
@@ -694,7 +719,10 @@ class _NumYield(Step):
 @pytest.mark.parametrize("with_infra", [False, True])
 @pytest.mark.parametrize(
     "num, match",
-    [(1, "yielded 1 results for 3"), (4, "yielded more than 3")],
+    [
+        (1, "stopped before producing one result per input"),
+        (4, "yielded without consuming an input"),
+    ],
     ids=["under", "over"],
 )
 def test_run_batch_yield_count(
@@ -717,7 +745,7 @@ def test_run_batch_cannot_yield_before_consuming() -> None:
             yield from values
 
     with pytest.raises(
-        items.BatchProtocolError, match="yielded before consuming an input"
+        items.BatchProtocolError, match="yielded without consuming an input"
     ):
         list(EarlyYield().run_many([10, 20]))
 

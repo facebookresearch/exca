@@ -11,6 +11,7 @@ from __future__ import annotations
 import collections
 import copy
 import dataclasses
+import functools
 import inspect
 import logging
 import typing as tp
@@ -390,9 +391,10 @@ class Step(exca.helpers.DiscriminatedModel):
         if built is not self:
             return built.run_many(values)
 
-        values = list(values)  # eager: uid computation needs all values upfront
-        uids = [identity.materialize_uid(self, v) for v in values]
-        boundary = items.StepItems(source=dict(zip(uids, values)), uids=uids)
+        boundary = items.StepItems(
+            source=values,
+            uids=functools.partial(identity.materialize_uid, self),
+        )
         return Runner().dispatch(self, boundary)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed

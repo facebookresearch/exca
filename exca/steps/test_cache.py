@@ -763,10 +763,10 @@ def test_generator_item_uid_colocation(tmp_path: Path) -> None:
     assert steps["b"].lookup().cached(), "clearing one variant must not affect others"
 
 
-def test_generator_item_uid_rejects_non_pure_generator() -> None:
+def test_generator_item_uid_rejects_non_pure_generator(tmp_path: Path) -> None:
     class _NonPure(_VariantGenerator):
         def _run(self, value: float = 0) -> float:  # type: ignore[override]
             return value + 1
 
     with pytest.raises(TypeError, match="accepts optional input"):
-        _NonPure(variant="x").run()
+        _NonPure(variant="x", infra={"backend": "Cached", "folder": tmp_path}).run()

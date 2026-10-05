@@ -68,6 +68,12 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     assert (job is not None) == (backend == "LocalProcess")
 
 
+def test_backend_accepts_generator_inputs(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
+    step = conftest.Mult(infra=infra)
+    assert list(step.run_many(float(x) for x in range(3))) == [0, 2, 4]
+
+
 def test_slurm_backend_param_forwarding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
