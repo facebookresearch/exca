@@ -62,9 +62,11 @@ def test_read_fuses_defaults_and_isolates_batched(
     fused: list[int] = []
     orig = items._FusedRun
 
-    def spy(steps: tp.Sequence[base.Step], run_items: tp.Any) -> items._FusedRun:
+    def spy(
+        steps: tp.Sequence[base.Step], values: tp.Any, uids: tp.Any
+    ) -> items._FusedRun:
         fused.append(len(steps))
-        return orig(steps, run_items)
+        return orig(steps, values, uids)
 
     monkeypatch.setattr(items, "_FusedRun", spy)
     si = items.StepItems(source={"a": 1, "b": 2, "c": 3})
