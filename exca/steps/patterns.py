@@ -223,8 +223,8 @@ class Scatter(base.Step):
                 keys.update(reg.get())
             with backends.inflight.InflightRegistry(cache.paths.step_folder) as reg:
                 keys.update(reg.get())
-        keys = keyer.select(uid, keys)
-        handle._sub_handles = tuple(body.lookup(_runner=runner, _uid=k) for k in keys)
+        selected = keyer.select(uid, keys)
+        handle._sub_handles = tuple(body.lookup(_runner=runner, _uid=k) for k in selected)
         return handle
 
     def _run_items(self, runner: base.Runner, batch: items.StepItems) -> items.StepItems:

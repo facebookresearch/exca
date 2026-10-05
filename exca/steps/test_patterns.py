@@ -141,7 +141,8 @@ def test_scatter_branch_caching(tmp_path: Path, nested: bool) -> None:
     body_uid = "coeff=10,type=Mult-98baeffc"
     assert (tmp_path / scat_uid / body_uid / "cache").is_dir()
 
-    body = conftest.Add(fail_on="all", infra={"backend": "Cached"})
+    body_infra: tp.Any = {"backend": "Cached"}
+    body = conftest.Add(fail_on="all", infra=body_infra)
     scatter = ScatterDict(body=body, infra=infra)
     step = base.Chain(steps=[scatter]) if nested else scatter
     with pytest.raises(ValueError, match="Triggered"):
@@ -185,24 +186,23 @@ def test_branch_excludes(tmp_path: Path, upstream: bool) -> None:
     body = conftest.Mult(coeff=2.0, infra=infra)
     item = {"a": 1.0, "b": 2.0, "c": 3.0}
 
-    def make(limit: int) -> base.Step:
+    def make(limit: int, exclude_upstream: bool = True) -> base.Step:
         if not upstream:
             return ScatterDict(body=body, limit=limit, infra=infra)
         select = ScatterDict(body=conftest.Mult(coeff=1.0), limit=limit)
-        after = ScatterDict(body=body, exclude_upstream=True, infra=infra)
+        after = ScatterDict(body=body, exclude_upstream=exclude_upstream, infra=infra)
         return base.Chain(steps=[select, after])
 
     assert make(0).run(item) == {"a": 2.0, "b": 4.0, "c": 6.0}
     assert len(body.calls) == 3
     assert make(2).run(item) == {"a": 2.0, "b": 4.0}
     assert len(body.calls) == 3, "limit excluded from branch key -> subset reuses cache"
-    scatter = ScatterDict(body=conftest.Mult(), limit=2, exclude_upstream=upstream)
-    steps = patterns._BranchKeyer.from_scatter(scatter, (scatter,)).steps
-    expected = [0, 0] if upstream else [2, 0]
-    assert [s.limit for s in steps if isinstance(s, ScatterDict)] == expected
     make(2).lookup(item).clear_cache()
     make(2).run(item)
     assert len(body.calls) == 5, "lookup clears the branch caches run wrote"
+    if upstream:
+        make(2, exclude_upstream=False).run(item)
+        assert len(body.calls) == 7, "upstream limit keys the branches unless excluded"
     shared = conftest.Mult(coeff=10.0, infra=infra)
     scat = ScatterDict(body=shared, exclude_input=True, infra=infra)
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))
