@@ -576,8 +576,11 @@ class Submission:
         """Block on the job computing *entry* (``(step_folder, uid)``), or on all
         jobs then close if ``None`` (a pool cancels the others on failure)."""
         if entry is not None:
-            if entry in self._entry_jobs:
-                self._entry_jobs[entry].result()
+            job = self._entry_jobs.get(entry)
+            if job is not None:
+                if not job.done():
+                    logger.info("Waiting for job %s", getattr(job, "job_id", job))
+                job.result()
             return
         pool = self._executor is not None
         try:

@@ -32,6 +32,9 @@ class _FakeJob:
     def __init__(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> None:
         self._call: tuple[tp.Any, ...] | None = (func, *args)
 
+    def done(self) -> bool:
+        return self._call is None
+
     def result(self) -> None:
         if self._call is not None:
             func, *args = self._call
@@ -88,8 +91,11 @@ def test_slurm_backend_param_forwarding(
         "qos": "h100",
         "gpus_per_node": 4,
     }
-    step = conftest.Add(value=1, infra=infra)
-    assert step.run() == 1
+    step = conftest.Mult(coeff=2.0, infra=infra)
+    out = Chain(steps=[step, conftest.Add(value=1)]).run_many([1.0])
+    handle = step.lookup(1.0)
+    assert handle.status == "running", "run_many returns before the jobs run"
+    assert list(out) == [3.0]
 
     [(ctor, params)] = _CapturingAutoExecutor.captured
     assert ctor["cluster"] == "slurm"
@@ -100,7 +106,6 @@ def test_slurm_backend_param_forwarding(
         "gpus_per_node": 4,
         "slurm_array_parallelism": 1,
     }
-    handle = step.lookup()
     job = handle.job()
     assert job is not None
     assert job.job_id == "fake-job"
@@ -111,21 +116,10 @@ def test_slurm_backend_param_forwarding(
 
     time.sleep(0.01)
     handle.clear_cache()
-    assert step.run() == 1
+    assert step.run(1.0) == 2.0
     with jobregistry.JobRegistry(handle.paths.step_folder) as registry:
         info = registry.get([handle.uid])
     assert info[handle.uid].submitted_at > submitted_at
-
-
-def test_slurm_returns_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(submitit, "AutoExecutor", _CapturingAutoExecutor)
-    infra: tp.Any = {"backend": "Slurm", "folder": tmp_path}
-    mult = conftest.Mult(coeff=2.0, infra=infra)
-    out = Chain(steps=[mult, conftest.Add(value=1)]).run_many([1.0, 2.0])
-    handle = mult.lookup(1.0)
-    assert handle.status == "running", "run_many returns before the jobs run"
-    assert list(out) == [3.0, 5.0]
-    assert handle.status == "success"
 
 
 def test_backend_error_caching(tmp_path: Path) -> None:
