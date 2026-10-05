@@ -60,9 +60,16 @@ def _compress_tail(segments: list[str], budget: int) -> str:
 
 
 def step_uid(steps: tp.Sequence[Step]) -> str:
-    """Slash-joined per-step uid; compressed if over MAX_STEP_UID_LENGTH."""
+    """Slash-joined per-step uid; compressed if over MAX_STEP_UID_LENGTH.
+    Freezes the steps, as their uids are memoized."""
     opts = {"exclude_defaults": True, "uid": True}
-    segments = [exca.ConfDict.from_model(s, **opts).to_uid() for s in steps]
+    segments: list[str] = []
+    for s in steps:
+        uid = s._runtime.uid
+        if uid is None:
+            utils.recursive_freeze(s)
+            uid = s._runtime.uid = exca.ConfDict.from_model(s, **opts).to_uid()
+        segments.append(uid)
     full = "/".join(segments)
     if len(full) <= MAX_STEP_UID_LENGTH:
         return full

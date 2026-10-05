@@ -193,8 +193,8 @@ def test_lookup_layout(tmp_path: Path) -> None:
     step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
     handle = step.lookup(1.0)
     assert handle.paths.step_folder.exists() is False
-    handle.paths.cache_folder.mkdir(parents=True)
-    with backends.inflight.InflightRegistry(handle.paths.cache_folder) as reg:
+    handle.paths.step_folder.mkdir(parents=True)
+    with backends.inflight.InflightRegistry(handle.paths.step_folder) as reg:
         assert reg.claim([handle.uid]) == [handle.uid]
         assert handle.status == "running"
         assert not handle.cached()

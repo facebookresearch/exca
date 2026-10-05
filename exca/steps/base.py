@@ -38,6 +38,7 @@ class _StepRuntime:
     caches: dict[str, backends._StepCache] = dataclasses.field(default_factory=dict)
     warm_items: items.StepItems | None = None  # carrier reused by `run` if all cached
     resolution: Step | None = None  # memo of `utils.resolved_step`
+    uid: str | None = None  # memo of the step's own `identity.step_uid` segment
 
 
 @dataclasses.dataclass(frozen=True)

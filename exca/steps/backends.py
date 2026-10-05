@@ -188,9 +188,9 @@ class LookupHandle:
         if not self.uid:
             raise RuntimeError("LookupHandle has no uid")
         status = _CachedEntry.lookup(self.cache_dict, self.uid).status
-        if status is not None or not self.paths.cache_folder.exists():
+        if status is not None or not self.paths.step_folder.exists():
             return status
-        with inflight.InflightRegistry(self.paths.cache_folder) as reg:
+        with inflight.InflightRegistry(self.paths.step_folder) as reg:
             info = reg.get([self.uid]).get(self.uid)
         if info is not None and info.is_alive():
             return "running"

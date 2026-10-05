@@ -122,6 +122,7 @@ def resolved_step(step: base.Step) -> base.Step:
         )
     # Freeze: memo is only valid while config is fixed; resolving finalises step.
     utils.recursive_freeze(step)
+    utils.recursive_freeze(built)
     step._runtime.resolution = built
     return built
 
