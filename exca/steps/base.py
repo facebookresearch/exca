@@ -392,7 +392,7 @@ class Step(exca.helpers.DiscriminatedModel):
             return built.run_many(values)
 
         boundary = items.StepItems(
-            source=values,
+            source=list(values),
             uids=functools.partial(identity.materialize_uid, self),
         )
         return Runner().dispatch(self, boundary)

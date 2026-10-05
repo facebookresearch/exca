@@ -19,7 +19,7 @@ import pytest
 import exca
 
 from . import backends, conftest, helpers, identity, items, utils
-from .base import Chain, Step
+from .base import Chain, Runner, Step
 
 # =============================================================================
 # Basic execution (no infra)
@@ -37,13 +37,9 @@ def test_chain_no_infra() -> None:
     assert chain.run(5.0) == 30.0
 
 
-def test_no_infra_streams_without_uids(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[int] = []
-    consumed: list[int] = []
-
+def test_no_infra_skips_uids(monkeypatch: pytest.MonkeyPatch) -> None:
     class Batched(Step):
         def _run_batch(self, values: tp.Iterable[int]) -> tp.Iterator[int]:
-            calls.append(1)
             yield from (2 * value for value in values)
 
     monkeypatch.setattr(
@@ -51,15 +47,8 @@ def test_no_infra_streams_without_uids(monkeypatch: pytest.MonkeyPatch) -> None:
         "materialize_uid",
         lambda *_: pytest.fail("inline execution materialized a uid"),
     )
-    result = Chain(steps=[Batched(), Batched()]).run_many(
-        consumed.append(value) or value for value in (1, 2)
-    )
-    assert not consumed
-    iterator = iter(result)
-    assert next(iterator) == 4
-    assert consumed == [1]
-    assert list(iterator) == [8]
-    assert calls == [1, 1]
+    chain = Chain(steps=[conftest.Mult(), Batched()])
+    assert list(chain.run_many([1, 2])) == [4, 8]
 
 
 def test_clone_rejects_ambiguous_updates() -> None:
@@ -522,20 +511,17 @@ def _format_exc(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
 
-def test_step_error_note() -> None:
-    step = conftest.Add(value=5, fail_on="all")
+@pytest.mark.parametrize("chained", [False, True])
+def test_step_error_note(chained: bool) -> None:
+    step: Step = conftest.Add(value=5, fail_on="all")
+    value = 0
+    if chained:
+        step = Chain(steps=[conftest.Mult(coeff=2), step])
+        value = 1
     with pytest.raises(ValueError) as exc_info:
-        step.run(0)
+        step.run(value)
     formatted = _format_exc(exc_info.value)
     assert "Add(" in formatted and "fail_on='all'" in formatted
-
-
-def test_chain_error_note() -> None:
-    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=5, fail_on="all")])
-    with pytest.raises(ValueError) as exc_info:
-        chain.run(1)
-    formatted = _format_exc(exc_info.value)
-    assert "Add" in formatted
 
 
 # =============================================================================
@@ -718,10 +704,7 @@ class _NumYield(Step):
 @pytest.mark.parametrize("with_infra", [False, True])
 @pytest.mark.parametrize(
     "num, match",
-    [
-        (1, "stopped before producing one result per input"),
-        (4, "yielded without consuming an input"),
-    ],
+    [(1, "yielded 1 results for 3"), (4, "yielded more than 3")],
     ids=["under", "over"],
 )
 def test_run_batch_yield_count(
@@ -744,7 +727,7 @@ def test_run_batch_cannot_yield_before_consuming() -> None:
             yield from values
 
     with pytest.raises(
-        items.BatchProtocolError, match="yielded without consuming an input"
+        items.BatchProtocolError, match="yielded before consuming an input"
     ):
         list(EarlyYield().run_many([10, 20]))
 
@@ -773,7 +756,19 @@ def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
     with pytest.raises(ValueError, match="boom") as exc_info:
         list(step.run_many([1, 2, 3, 4, 5, 6]))
     inflight = getattr(exc_info.value, "_inflight_uids", [])
-    assert len(inflight) == 2 * with_infra
+    assert len(inflight) == 2 * with_infra, inflight
+
+
+def test_batch_error_inflight_uids_after_shuffle(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = _GroupedMult(group_size=2, fail_value=3, infra=infra)
+    values = [1, 2, 3, 4, 5, 6]
+    uids = [identity.materialize_uid(step, value) for value in values]
+    shuffled = list(reversed(uids))
+    batch = items.StepItems(source=dict(zip(uids, values)), uids=shuffled)
+    with pytest.raises(ValueError, match="boom") as exc_info:
+        list(Runner().dispatch(step, batch))
+    assert exc_info.value._inflight_uids == shuffled[2:4]  # type: ignore[attr-defined]
 
 
 def test_chained_group_sizes_call_order() -> None:
