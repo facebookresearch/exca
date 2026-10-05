@@ -70,7 +70,7 @@ class _AnnotatedBatch:
             e.add_note(f"  -> in {self.step!r}")
             positions = range(self.n_out, self.n_in)
             if positions:
-                e.__dict__["_inflight_positions"] = positions
+                e._inflight_positions = positions  # type: ignore[attr-defined]
             raise
         if self.n_out < self._expected:
             raise BatchProtocolError(
@@ -97,7 +97,7 @@ class _FusedRun:
                     value = step._run(*args)
                 except Exception as e:
                     e.add_note(f"  -> in {step!r}")
-                    e.__dict__["_inflight_positions"] = range(position, position + 1)
+                    e._inflight_positions = [position]  # type: ignore[attr-defined]
                     raise
             yield value
 

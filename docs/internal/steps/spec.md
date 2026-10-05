@@ -228,7 +228,7 @@ When `step.run(value)` is called:
 
 1. Resolve via `_resolve_step()` to a fixed point. If non-self,
    delegate to the resolved step.
-2. Eagerly materialize values and store a uid factory (a scalar `run(value)` is the one-input case of `run_many`), then build the initial `StepItems`. Fully inline execution never invokes the factory.
+2. Eagerly materialize values and store a uid factory (a scalar `run(value)` is the one-input case of `run_many`), then build the initial `StepItems`. Fully inline execution only invokes the factory if a step needs uids (e.g. `Scatter`).
 3. `Runner().dispatch(step, batch)` runs inline when no backend folder is
    configured; otherwise it calls `Backend._run(runner, step, batch)`.
 4. Backend handles cache modes, inflight coordination, and job

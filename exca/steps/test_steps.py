@@ -19,7 +19,7 @@ import pytest
 import exca
 
 from . import backends, conftest, helpers, identity, items, utils
-from .base import Chain, Runner, Step
+from .base import Chain, Step
 
 # =============================================================================
 # Basic execution (no infra)
@@ -745,16 +745,13 @@ def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
     assert len(inflight) == 2 * with_infra, inflight
 
 
-def test_batch_error_inflight_uids_after_shuffle(tmp_path: Path) -> None:
+def test_batch_error_inflight_uids_with_duplicates(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     step = _GroupedMult(group_size=2, fail_value=3, infra=infra)
-    values = [1, 2, 3, 4, 5, 6]
-    uids = [identity.materialize_uid(step, value) for value in values]
-    shuffled = list(reversed(uids))
-    batch = items.StepItems(source=dict(zip(uids, values)), uids=shuffled)
     with pytest.raises(ValueError, match="boom") as exc_info:
-        list(Runner().dispatch(step, batch))
-    assert exc_info.value._inflight_uids == shuffled[2:4]  # type: ignore[attr-defined]
+        list(step.run_many([1, 2, 1, 3, 4]))
+    expected = [identity.materialize_uid(step, v) for v in (3, 4)]
+    assert exc_info.value._inflight_uids == expected  # type: ignore[attr-defined]
 
 
 def test_chained_group_sizes_call_order() -> None:

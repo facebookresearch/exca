@@ -68,7 +68,7 @@ class Embed(steps.Step):
         return embed(value)
 ```
 
-Per-input identity stays anchored to the caller-provided value. `item_uid` is consulted only when a cache, backend, or explicit uid access needs it; a fully inline pipeline does not compute item uids. Once computed, the uid is propagated unchanged to every sub-step. This lets a downstream cache hit short-circuit the whole pipeline without running upstream steps. Per-input identity that depends on an upstream's output is therefore not supported.
+Per-input identity stays anchored to the caller-provided value. `item_uid` is consulted only when a cache, backend, or explicit uid access needs it; a fully inline pipeline does not compute item uids unless a step needs them (e.g. `Scatter`). Once computed, the uid is propagated unchanged to every sub-step. This lets a downstream cache hit short-circuit the whole pipeline without running upstream steps. Per-input identity that depends on an upstream's output is therefore not supported.
 
 Long item_uids are truncated to 256 characters
 (`Step._ITEM_UID_MAX_LENGTH`) to keep on-disk paths sane;

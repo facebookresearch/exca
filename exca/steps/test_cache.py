@@ -768,5 +768,6 @@ def test_generator_item_uid_rejects_non_pure_generator(tmp_path: Path) -> None:
         def _run(self, value: float = 0) -> float:  # type: ignore[override]
             return value + 1
 
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     with pytest.raises(TypeError, match="accepts optional input"):
-        _NonPure(variant="x", infra={"backend": "Cached", "folder": tmp_path}).run()
+        _NonPure(variant="x", infra=infra).run()
