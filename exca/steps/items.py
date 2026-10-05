@@ -78,28 +78,20 @@ class _AnnotatedBatch:
             )
 
 
-class _FusedRun:
-    """Run efficiently consecutive non-batched steps over the inputs in a single pass."""
-
-    def __init__(
-        self,
-        steps: tp.Sequence[Step],
-        values: tp.Iterable[tp.Any],
-    ) -> None:
-        self.steps = tuple(steps)
-        self._values = values
-
-    def __iter__(self) -> tp.Iterator[tp.Any]:
-        for position, value in enumerate(self._values):
-            for step in self.steps:
-                try:
-                    args = () if isinstance(value, identity.NoValue) else (value,)
-                    value = step._run(*args)
-                except Exception as e:
-                    e.add_note(f"  -> in {step!r}")
-                    e._inflight_positions = [position]  # type: ignore[attr-defined]
-                    raise
-            yield value
+def _fused_run(
+    steps: tp.Sequence[Step], values: tp.Iterable[tp.Any]
+) -> tp.Iterator[tp.Any]:
+    """Run consecutive non-batched steps over the inputs in a single pass."""
+    for position, value in enumerate(values):
+        for step in steps:
+            try:
+                args = () if isinstance(value, identity.NoValue) else (value,)
+                value = step._run(*args)
+            except Exception as e:
+                e.add_note(f"  -> in {step!r}")
+                e._inflight_positions = [position]  # type: ignore[attr-defined]
+                raise
+        yield value
 
 
 class StepItems:
@@ -184,7 +176,7 @@ class StepItems:
                 for step in group:
                     current = _AnnotatedBatch(step, current, size)
             else:
-                current = _FusedRun(list(group), current)
+                current = _fused_run(list(group), current)
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
