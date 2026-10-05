@@ -36,15 +36,24 @@ class _BranchKeyer:
     _SEP = "/"  # default uids are "/"-free (bare: not a field)
 
     @classmethod
-    def from_scatter(cls, scatter: Scatter) -> _BranchKeyer:
-        """The keyer for ``scatter``'s :meth:`Scatter._branch_excludes`."""
+    def from_scatter(
+        cls, scatter: Scatter, prefix: tuple[base.Step, ...]
+    ) -> _BranchKeyer:
+        """The keyer for ``scatter``'s :meth:`Scatter._branch_excludes`, after the
+        upstream ``prefix``."""
         excludes = scatter._branch_excludes()
-        # filter the dump by hand: Step's serializer ignores model_dump(exclude=...).
-        # excluded fields then fall back to default, dropping from the branch folder.
-        field_excludes = {f for f in excludes if f != scatter._INPUT}
-        data = {k: v for k, v in scatter.model_dump().items() if k not in field_excludes}
-        branch_self = type(scatter).model_validate(data) if field_excludes else scatter
-        return cls(tuple(branch_self._uid_steps()), scatter._INPUT not in excludes)
+        steps: list[base.Step] = []
+        for s in (*prefix, scatter):
+            fields: set[str] = set()
+            if isinstance(s, Scatter) and (s is scatter or scatter._UPSTREAM in excludes):
+                fields = set(s._branch_excludes()) - {s._INPUT, s._UPSTREAM}
+            # filter the dump by hand: Step's serializer ignores model_dump(exclude=...).
+            # excluded fields then fall back to default, dropping from the branch folder.
+            if fields:
+                data = {k: v for k, v in s.model_dump().items() if k not in fields}
+                s = type(s).model_validate(data)
+            steps.extend(s._uid_steps())
+        return cls(tuple(steps), scatter._INPUT not in excludes)
 
     def branch_uid(self, uid: str, branch: tp.Any) -> str:
         spec = confdict.UidMaker(branch).format()
@@ -134,18 +143,21 @@ class Scatter(base.Step):
     - :meth:`take` (required): a branch's body input (e.g. ``item[branch]``).
     - :meth:`gather`: recombine results, in ``branches`` order (default: the
       ``{branch: result}`` mapping).
-    - :meth:`_branch_excludes`: config fields or the input that pick branches but
-      aren't part of each branch's cache key (default: none).
+    - :meth:`_branch_excludes`: config fields, the input or upstream selectors that
+      pick branches but aren't part of each branch's cache key (default: none).
 
     The body runs through its own infra, so a backend fans the branches out.
     """
 
     _INPUT: tp.ClassVar[str] = "<input>"  # see _branch_excludes
+    _UPSTREAM: tp.ClassVar[str] = "<upstream>"  # see _branch_excludes
 
     def _branch_excludes(self) -> list[str]:
         """Config field names and/or :attr:`_INPUT` (the runtime input) that select or
         recombine branches but don't *define* one: dropped from each branch's cache key
-        (shared across selections), kept in the gathered output. Default: none."""
+        (shared across selections), kept in the gathered output. Default: none.
+        :attr:`_UPSTREAM` also drops the upstream Scatters' excluded fields (sound only
+        if nothing in between pools across their selection)."""
         return []
 
     def _body(self) -> base.Step:
@@ -192,10 +204,10 @@ class Scatter(base.Step):
         every branch's body cache (not just this Scatter's gathered result). For
         input-independent branches that cache is shared, so it clears other inputs too."""
         handle = super().lookup(value, _runner=_runner, _uid=_uid)
-        keyer = _BranchKeyer.from_scatter(self)
+        keyer = _BranchKeyer.from_scatter(self, _runner.prefix)
         # branches cache independently of the Scatter
         uid = _uid if _uid is not None else identity.materialize_uid(self, value)
-        runner = base.Runner(_runner.prefix + keyer.steps)
+        runner = dataclasses.replace(_runner, prefix=keyer.steps)
         body = self._body()
         # any uid -> same body cachedict; we only read its keys
         cache = body.lookup(_runner=runner, _uid=uid)._cache
@@ -206,9 +218,9 @@ class Scatter(base.Step):
         return handle
 
     def _run_items(self, runner: base.Runner, batch: items.StepItems) -> items.StepItems:
-        keyer = _BranchKeyer.from_scatter(self)
+        keyer = _BranchKeyer.from_scatter(self, runner.prefix)
         # branch folder drops the selectors; the gathered output keeps full identity
-        branch_runner = base.Runner(runner.prefix + keyer.steps, runner.mode)
+        branch_runner = dataclasses.replace(runner, prefix=keyer.steps)
         # input uid -> {branch uid: branch}; feeds both _Parts and _Gather
         # (input-independent branches reuse one branch uid across inputs)
         plan: dict[str, dict[str, tp.Any]] = {}

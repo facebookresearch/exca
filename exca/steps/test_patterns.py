@@ -26,6 +26,7 @@ class ScatterDict(Scatter):
     body: base.Step
     limit: int = 0  # >0: scatter only the first N branches (a selector, not a branch key)
     exclude_input: bool = False  # key branches by name alone -> shared across inputs
+    exclude_upstream: bool = False  # drop upstream Scatters' selectors from branch keys
 
     def branches(self, item: dict[str, float]) -> list:
         ks = list(item)
@@ -35,7 +36,9 @@ class ScatterDict(Scatter):
         return item[branch]
 
     def _branch_excludes(self) -> list[str]:
-        return ["limit", Scatter._INPUT] if self.exclude_input else ["limit"]
+        input_ = [Scatter._INPUT] if self.exclude_input else []
+        upstream = [Scatter._UPSTREAM] if self.exclude_upstream else []
+        return ["limit", *input_, *upstream]
 
 
 def test_gather_override() -> None:
@@ -167,14 +170,26 @@ def test_process_backend_scatters_branches(tmp_path: Path, cached_upstream: bool
         assert ScatterDict(body=body).run({"a": 1.0, "b": 2.0}) == {"a": 2.0, "b": 4.0}
 
 
-def test_branch_excludes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("upstream", [False, True])  # limit on this or upstream Scatter
+def test_branch_excludes(tmp_path: Path, upstream: bool) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     body = conftest.Mult(coeff=2.0, infra=infra)
     item = {"a": 1.0, "b": 2.0, "c": 3.0}
-    assert ScatterDict(body=body, infra=infra).run(item) == {"a": 2.0, "b": 4.0, "c": 6.0}
+
+    def make(limit: int) -> base.Step:
+        if not upstream:
+            return ScatterDict(body=body, limit=limit, infra=infra)
+        select = ScatterDict(body=conftest.Mult(coeff=1.0), limit=limit)
+        after = ScatterDict(body=body, exclude_upstream=True, infra=infra)
+        return base.Chain(steps=[select, after])
+
+    assert make(0).run(item) == {"a": 2.0, "b": 4.0, "c": 6.0}
     assert len(body.calls) == 3
-    assert ScatterDict(body=body, limit=2, infra=infra).run(item) == {"a": 2.0, "b": 4.0}
+    assert make(2).run(item) == {"a": 2.0, "b": 4.0}
     assert len(body.calls) == 3, "limit excluded from branch key -> subset reuses cache"
+    make(2).lookup(item).clear_cache()
+    make(2).run(item)
+    assert len(body.calls) == 5, "lookup clears the branch caches run wrote"
     shared = conftest.Mult(coeff=10.0, infra=infra)
     scat = ScatterDict(body=shared, exclude_input=True, infra=infra)
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))
