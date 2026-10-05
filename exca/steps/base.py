@@ -34,9 +34,7 @@ def _is_step(value: tp.Any, disc_key: str) -> bool:
 class _StepRuntime:
     """State of a step instance across runs, dropped on pickle."""
 
-    caches: dict[backends.StepPaths, backends._StepCache] = dataclasses.field(
-        default_factory=dict
-    )
+    caches: dict[str, backends._StepCache] = dataclasses.field(default_factory=dict)
     warm_items: items.StepItems | None = None  # carrier reused by `run` if all cached
     resolution: Step | None = None  # memo of `utils.resolved_step`
 
@@ -75,9 +73,10 @@ class Runner:
 
     def advance(self, step: Step) -> Runner:
         """Context of the step following *step*."""
-        return Runner(
-            self.prefix + tuple(utils.resolved_step(step)._uid_steps()),
-            backends._fold_modes(self.mode, backends._effective_mode(step)),
+        return dataclasses.replace(
+            self,
+            prefix=self.prefix + tuple(utils.resolved_step(step)._uid_steps()),
+            mode=backends._fold_modes(self.mode, backends._effective_mode(step)),
         )
 
     def cache(self, step: Step) -> backends._StepCache:
@@ -85,14 +84,11 @@ class Runner:
         if step.infra is None or step.infra.folder is None:
             raise RuntimeError("cache requires a configured infra with a folder")
         exca.utils.recursive_freeze(step)  # memoized cache relies on fixed config
-        paths = backends.StepPaths(
-            step.infra.folder,
-            identity.step_uid(self.advance(step).prefix),
-        )
-        cache = step._runtime.caches.get(paths)
+        step_uid = identity.step_uid(self.advance(step).prefix)
+        cache = step._runtime.caches.get(step_uid)
         if cache is None:
-            cache = step._runtime.caches[paths] = backends._StepCache(
-                paths,
+            cache = step._runtime.caches[step_uid] = backends._StepCache(
+                backends.StepPaths(step.infra.folder, step_uid),
                 keep_in_ram=step.infra.keep_in_ram,
                 cache_type=step._infer_cache_type(),
             )

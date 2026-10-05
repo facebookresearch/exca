@@ -55,7 +55,7 @@ fail closed, not open.
 
 ## RAM caching and the per-Step cache
 
-Each Step runtime memoises a `_StepCache` per `StepPaths`. A Step used
+Each Step runtime memoises a `_StepCache` per `step_uid`. A Step used
 in multiple chain contexts has different `step_uid`s, so each gets its
 own CacheDict. The cache persists across `run()` calls on the same Step,
 so `keep_in_ram` survives.
