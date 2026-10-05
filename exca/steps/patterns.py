@@ -11,7 +11,7 @@ import typing as tp
 
 from exca import confdict
 
-from . import backends, base, identity, items, utils
+from . import backends, base, errors, identity, items, utils
 
 
 class BranchResult(tp.NamedTuple):
@@ -43,10 +43,11 @@ class _BranchKeyer:
         upstream ``prefix``."""
         excludes = scatter._branch_excludes()
         steps: list[base.Step] = []
-        for s in (*prefix, scatter):
+        for index, s in enumerate((*prefix, scatter)):
             fields: set[str] = set()
-            if isinstance(s, Scatter) and (s is scatter or scatter._UPSTREAM in excludes):
-                fields = set(s._branch_excludes()) - {s._INPUT, s._UPSTREAM}
+            if isinstance(s, Scatter):
+                if index == len(prefix) or scatter._UPSTREAM in excludes:
+                    fields = set(s._branch_excludes()) - {s._INPUT, s._UPSTREAM}
             # filter the dump by hand: Step's serializer ignores model_dump(exclude=...).
             # excluded fields then fall back to default, dropping from the branch folder.
             if fields:
@@ -153,11 +154,14 @@ class Scatter(base.Step):
     _UPSTREAM: tp.ClassVar[str] = "<upstream>"  # see _branch_excludes
 
     def _branch_excludes(self) -> list[str]:
-        """Config field names and/or :attr:`_INPUT` (the runtime input) that select or
-        recombine branches but don't *define* one: dropped from each branch's cache key
-        (shared across selections), kept in the gathered output. Default: none.
-        :attr:`_UPSTREAM` also drops the upstream Scatters' excluded fields (sound only
-        if nothing in between pools across their selection)."""
+        """What to drop from each branch's cache key (kept in the gathered output), so
+        branches are shared across its values. Default: none. Any of:
+
+        - config field names that select or recombine branches but don't *define* one;
+        - :attr:`_INPUT`: the runtime input;
+        - :attr:`_UPSTREAM`: the fields upstream Scatters drop themselves (e.g. a
+          selection query). Only valid if a branch's input does not depend on them,
+          e.g. no upstream ``gather`` nor step in between pools over the selection."""
         return []
 
     def _body(self) -> base.Step:
@@ -213,7 +217,13 @@ class Scatter(base.Step):
         cache = body.lookup(_runner=runner, _uid=uid)._cache
         if cache is None:
             return handle
-        keys = keyer.select(uid, cache.cache_dict.keys())
+        keys = set(cache.cache_dict.keys())
+        if cache.paths.step_folder.exists():
+            with errors.ErrorRegistry(cache.paths.step_folder) as reg:
+                keys.update(reg.get())
+            with backends.inflight.InflightRegistry(cache.paths.step_folder) as reg:
+                keys.update(reg.get())
+        keys = keyer.select(uid, keys)
         handle._sub_handles = tuple(body.lookup(_runner=runner, _uid=k) for k in keys)
         return handle
 
