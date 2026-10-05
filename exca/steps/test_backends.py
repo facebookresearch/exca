@@ -355,13 +355,14 @@ def test_recomputed_per_task(tmp_path: Path) -> None:
     )
     fail, ok = dispatch.tasks
     # claims sort by step_uid, so fail must sort first to raise first
-    assert fail.paths.step_uid < ok.paths.step_uid, "fail must sort first"
+    assert fail.cache.paths.step_uid < ok.cache.paths.step_uid, "fail must sort first"
 
     with pytest.raises(ValueError, match="Triggered an error"):
         dispatch.submit()
 
-    key = (ok.paths.step_folder, ok.items.uids[0])
-    assert key not in backend._recomputed, "ok never ran, so it must be unmarked"
+    assert ok.items.uids[0] not in ok.cache.attempted, (
+        "ok never ran, so it must be unmarked"
+    )
 
 
 def test_recomputed_keyed_by_step(tmp_path: Path) -> None:

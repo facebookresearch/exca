@@ -198,10 +198,10 @@ class Scatter(base.Step):
         runner = base.Runner(_runner.prefix + keyer.steps)
         body = self._body()
         # any uid -> same body cachedict; we only read its keys
-        cd = body.lookup(_runner=runner, _uid=uid)._cache_dict
-        if cd is None:
+        cache = body.lookup(_runner=runner, _uid=uid)._cache
+        if cache is None:
             return handle
-        keys = keyer.select(uid, cd.keys())
+        keys = keyer.select(uid, cache.cache_dict.keys())
         handle._sub_handles = tuple(body.lookup(_runner=runner, _uid=k) for k in keys)
         return handle
 

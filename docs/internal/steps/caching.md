@@ -47,28 +47,26 @@ substitute `RuntimeError(text)` when the exception isn't picklable /
 loadable in this process (locally-defined class, class missing
 cross-venv).
 
-`LookupHandle.clear_cache()` delegates to `Backend._clear_caches()`: it
+`LookupHandle.clear_cache()` delegates to `_StepCache.clear()`: it
 cancels any running submitit job for the requested uids, then deletes
 CacheDict entries and `errors.db` rows. A partial mid-clear (success
 gone, error row still there) surfaces as a recoverable cached error —
 fail closed, not open.
 
-## RAM caching and the per-Backend CacheDict
+## RAM caching and the per-Step cache
 
-`Backend._cache_dict()` memoises CacheDicts in a per-instance
-`dict[Path, CacheDict]` (`_cds`), keyed on `cache_folder`. A Step
-used in multiple chain contexts has different `step_uid`s (and thus
-different `cache_folder`s), so each gets its own CacheDict. The
-handle persists across `run()` calls on the same Backend, so
-`keep_in_ram` survives.
+Each Step runtime memoises a `_StepCache` per `step_uid`. A Step used
+in multiple chain contexts has different `step_uid`s, so each gets its
+own CacheDict. The cache persists across `run()` calls on the same Step,
+so `keep_in_ram` survives.
 
 With `keep_in_ram=True`, `__contains__` and `__getitem__` consult
 `_ram_data` before disk, so repeat reads don't re-decode. RAM is wiped
-in lockstep with disk by `Backend._clear_caches` (used by
+in lockstep with disk by `_StepCache.clear` (used by
 `LookupHandle.clear_cache()` and `force`); external rmtrees that don't
-go through Backend leave stale RAM. Cross-process workers get a fresh
+go through it leave stale RAM. Cross-process workers get a fresh
 view via `CacheDict.__reduce__`.
-`WriteTask.run_and_cache()` writes via the Backend's CacheDict; cross-process
+`WriteTask.run_and_cache()` writes via its `_StepCache`'s CacheDict; cross-process
 workers get a reduced copy and the driver picks up new entries via
 folder-mtime invalidation in `_read_info_files`.
 
@@ -86,7 +84,7 @@ A dispatch is one `CacheDispatch` over its `WriteTask`s (one per step); the cons
 1. **Prepare**: resolve paths; `force` clears stale entries before any claim (the pre-lock cache check is a fast path only).
 2. **Claim**: one `inflight_session` per task, in `step_uid` order (concurrent dispatches agree on lock order).
 3. **Recheck** under the claims: re-read cache state, clear what gets recomputed. Stops a competitor that populated mid-wait from handing its value back to a `force`; lets `retry` recompute cached errors.
-4. **Submit**: `Backend._submit(tasks)`, the only per-backend hook. All tasks go into one submission (a sweep of step variants shares one submitit array or pool), split into one shard per worker job. `_mark_recomputed` records force/retry tasks per attempt.
+4. **Submit**: `Backend._submit(tasks)`, the only per-backend hook. All tasks go into one submission (a sweep of step variants shares one submitit array or pool), split into one shard per worker job. `WriteTask.mark_attempted` records force/retry attempts on the task's `_StepCache`.
 5. **Release**:
    - by the worker: each shard releases its claims when `run_and_cache` ends (success or failure);
    - by the session exit, for shards that never ran: on return when `_submit` returns `None` (inline, submitit), or when a pool's `Submission` closes (after a full wait, or at gc, cancelling queued shards);

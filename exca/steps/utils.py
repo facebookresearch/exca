@@ -99,9 +99,9 @@ def resolved_step(step: base.Step) -> base.Step:
     does not resolve). Raises on circular or self-containing resolutions."""
     if "has_resolve" not in step._step_flags:
         return step
-    # Memoise distinct resolutions: their cache/_recomputed state must outlive a run.
-    if step._resolution_cache is not None:
-        return step._resolution_cache
+    # Memoise distinct resolutions: their runtime state must outlive a run.
+    if step._runtime.resolution is not None:
+        return step._runtime.resolution
     built = step
     for _ in range(10):
         nxt = built._resolve_step()
@@ -122,7 +122,7 @@ def resolved_step(step: base.Step) -> base.Step:
         )
     # Freeze: memo is only valid while config is fixed; resolving finalises step.
     utils.recursive_freeze(step)
-    step._resolution_cache = built
+    step._runtime.resolution = built
     return built
 
 

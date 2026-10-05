@@ -49,7 +49,7 @@ item uids need work, and returns `StepItems` backed by CacheDict.
 All backends have:
 - `folder`: Path for cache storage (optional, can be propagated from Chain)
 - `mode`: Execution mode (cached/force/read-only/retry)
-- `keep_in_ram`: keep cached values in a per-Backend RAM dict
+- `keep_in_ram`: keep cached values in RAM, per step instance
 
 Cache serialization format comes from `Step.CACHE_TYPE` (class-level),
 not from the backend.
@@ -90,7 +90,7 @@ sequentially. It shares a cache entry with its last step (same
 │                                                            │
 │  Backend (base)                                            │
 │  - folder, mode, keep_in_ram                               │
-│  - _run(runner, step, batch) / _submit / _clear_caches     │
+│  - _run(runner, step, batch) / _submit                     │
 │        │                                                   │
 │   ┌────┴────┬────────────┬─────────────┐                   │
 │   ▼         ▼            ▼             ▼                   │
@@ -218,7 +218,7 @@ except ValueError:
     pass
 step.run(bad_input)               # re-raises from cache
 
-step.infra.mode = "retry"
+step = step.clone({"infra.mode": "retry"})  # run() froze step
 step.run(bad_input)               # clears error, recomputes
 ```
 
@@ -249,7 +249,7 @@ required for MapInfra parity or current step semantics.
 
 - Config consistency checking (`identity.write_configs`)
 - Shared cache access follows the process umask
-- Force/retry one-shot tracking per Backend lifetime
+- Force/retry one-shot tracking per Step runtime and cache path
 - Job lifecycle status — `LookupHandle.status` returns `"success"` /
   `"error"` / `"running"` / `None`
 - Concurrent submission detection — `JobRegistry` / `jobs.db`
