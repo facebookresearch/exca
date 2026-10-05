@@ -554,13 +554,13 @@ class CacheDispatch:
 
 
 class Submission:
-    """Running pool futures, one per shard of tasks. Shards release their claims
-    when done; the leftovers (e.g. cancelled shards) at ``close`` or gc."""
+    """Running pool futures or submitit jobs, one per shard of tasks. Shards release
+    their claims when done; the leftovers (e.g. cancelled shards) at ``close`` or gc."""
 
     def __init__(
         self,
-        jobs: dict[futures.Future[None], list[WriteTask]],
-        executor: futures.Executor,
+        jobs: dict[tp.Any, list[WriteTask]],  # pool future or submitit job → shard
+        executor: futures.Executor | None = None,
     ) -> None:
         self._jobs = list(jobs)
         self._entry_jobs = {
@@ -574,17 +574,19 @@ class Submission:
 
     def wait(self, entry: tuple[Path, str] | None = None) -> None:
         """Block on the job computing *entry* (``(step_folder, uid)``), or on all
-        jobs then close if ``None`` (cancelling the others on failure)."""
+        jobs then close if ``None`` (a pool cancels the others on failure)."""
         if entry is not None:
             if entry in self._entry_jobs:
                 self._entry_jobs[entry].result()
             return
+        pool = self._executor is not None
         try:
-            for job in futures.as_completed(self._jobs):
+            for job in futures.as_completed(self._jobs) if pool else self._jobs:
                 job.result()
         except BaseException:
-            for job in self._jobs:
-                job.cancel()
+            if pool:
+                for job in self._jobs:
+                    job.cancel()
             raise
         finally:
             self.close()
@@ -798,10 +800,7 @@ class _SubmititBackend(Backend):
         n_items = sum(len(task.items.uids) for task in tasks)
         msg = "Sent %s items for %s steps into %s jobs on cluster '%s' (eg: %s)"
         logger.info(msg, n_items, len(tasks), len(shards), self._CLUSTER, jobs[0].job_id)
-        for job in jobs:
-            job.result()
-        logger.info("Finished processing %s items for %s steps", n_items, len(tasks))
-        return None
+        return Submission(dict(zip(jobs, shards)))
 
 
 class LocalProcess(_SubmititBackend):

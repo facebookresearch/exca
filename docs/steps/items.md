@@ -118,10 +118,11 @@ for embedding in step.run_many(paths):           # M items → up to 16 jobs
 ```
 
 Each worker runs `_run_batch` on its sub-batch and writes results
-to the shared cache. With a distributed backend the driver waits for
-all jobs, then the returned iterator reads results from the cache one
-at a time (never the full set in memory, never round-tripped through
-the job pickle). Execution order within a batch is non-deterministic;
+to the shared cache. With a distributed backend `run_many` returns
+once the jobs are submitted; the returned iterator waits for each
+item's job (raising its failure, if any), then reads results from the
+cache one at a time (never the full set in memory, never round-tripped
+through the job pickle). Execution order within a batch is non-deterministic;
 output order matches input order.
 
 ## What's stable

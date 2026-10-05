@@ -29,8 +29,14 @@ class _FakeJob:
 
     job_id = "fake-job"
 
+    def __init__(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> None:
+        self._call: tuple[tp.Any, ...] | None = (func, *args)
+
     def result(self) -> None:
-        return None
+        if self._call is not None:
+            func, *args = self._call
+            self._call = None
+            func(*args)
 
 
 class _CapturingAutoExecutor:
@@ -46,8 +52,7 @@ class _CapturingAutoExecutor:
         type(self).captured.append((self._ctor, kw))
 
     def submit(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> _FakeJob:
-        func(*args)
-        return _FakeJob()
+        return _FakeJob(func, *args)
 
     def batch(self) -> contextlib.nullcontext[None]:
         return contextlib.nullcontext()
@@ -110,6 +115,17 @@ def test_slurm_backend_param_forwarding(
     with jobregistry.JobRegistry(handle.paths.step_folder) as registry:
         info = registry.get([handle.uid])
     assert info[handle.uid].submitted_at > submitted_at
+
+
+def test_slurm_returns_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(submitit, "AutoExecutor", _CapturingAutoExecutor)
+    infra: tp.Any = {"backend": "Slurm", "folder": tmp_path}
+    mult = conftest.Mult(coeff=2.0, infra=infra)
+    out = Chain(steps=[mult, conftest.Add(value=1)]).run_many([1.0, 2.0])
+    handle = mult.lookup(1.0)
+    assert handle.status == "running", "run_many returns before the jobs run"
+    assert list(out) == [3.0, 5.0]
+    assert handle.status == "success"
 
 
 def test_backend_error_caching(tmp_path: Path) -> None:
