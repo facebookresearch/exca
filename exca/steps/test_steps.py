@@ -497,21 +497,17 @@ def _format_exc(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
 
-def test_step_error_note() -> None:
-    step = conftest.Add(value=5, fail_on="all")
+@pytest.mark.parametrize("chained", [False, True])
+def test_step_error_note(chained: bool) -> None:
+    step: Step = conftest.Add(value=5, fail_on="all")
+    value = 0
+    if chained:
+        step = Chain(steps=[conftest.Mult(coeff=2), step])
+        value = 1
     with pytest.raises(ValueError) as exc_info:
-        step.run(0)
+        step.run(value)
     formatted = _format_exc(exc_info.value)
     assert "Add(" in formatted and "fail_on='all'" in formatted
-
-
-def test_chain_error_note() -> None:
-    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=5, fail_on="all")])
-    with pytest.raises(ValueError) as exc_info:
-        chain.run(1)
-    formatted = _format_exc(exc_info.value)
-    assert "Add" in formatted
-    assert identity.materialize_uid(chain, 1) in formatted, "uid missing in message"
 
 
 # =============================================================================
@@ -746,7 +742,16 @@ def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
     with pytest.raises(ValueError, match="boom") as exc_info:
         list(step.run_many([1, 2, 3, 4, 5, 6]))
     inflight = getattr(exc_info.value, "_inflight_uids", [])
-    assert len(inflight) == 2, f"expected 2 inflight uids, got {inflight}"
+    assert len(inflight) == 2 * with_infra, inflight
+
+
+def test_batch_error_inflight_uids_with_duplicates(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = _GroupedMult(group_size=2, fail_value=3, infra=infra)
+    with pytest.raises(ValueError, match="boom") as exc_info:
+        list(step.run_many([1, 2, 1, 3, 4]))
+    expected = [identity.materialize_uid(step, v) for v in (3, 4)]
+    assert exc_info.value._inflight_uids == expected  # type: ignore[attr-defined]
 
 
 def test_chained_group_sizes_call_order() -> None:

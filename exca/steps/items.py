@@ -13,7 +13,6 @@ pipeline: source + pending + uids. Users never construct it;
 
 from __future__ import annotations
 
-import collections
 import itertools
 import typing as tp
 
@@ -37,32 +36,22 @@ class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
 
 
-def _note_inflight(exc: Exception, step: Step, uids: list[str]) -> None:
-    exc.add_note(f"  -> in {step!r}, inflight uids: {uids}")
-    if uids:
-        exc._inflight_uids = uids  # type: ignore[attr-defined]  # read by retry logic
-
-
 class _AnnotatedBatch:
     """Wraps ``step._run_batch`` with consumption tracking, yield validation, and error annotation.
 
-    On error, ``_inflight_uids`` on the exception contains the consumed-but-not-yielded uids.
+    On error, ``_inflight_positions`` contains the consumed-but-not-yielded positions.
     """
 
-    def __init__(
-        self, step: Step, values: tp.Iterable[tp.Any], uids: tp.Sequence[str]
-    ) -> None:
+    def __init__(self, step: Step, values: tp.Iterable[tp.Any], size: int) -> None:
         self.step = step
         self._values = values
-        self._uid_iter = iter(uids)
-        self._expected = len(uids)
-        self._inflight: collections.deque[str] = collections.deque()
-        self.n_out = 0
+        self._expected = size
+        self.n_in = self.n_out = 0
 
     def _tracked(self) -> tp.Iterator[tp.Any]:
-        for v in self._values:
-            self._inflight.append(next(self._uid_iter))
-            yield v
+        for value in self._values:
+            self.n_in += 1
+            yield value
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         try:
@@ -71,15 +60,17 @@ class _AnnotatedBatch:
                     raise BatchProtocolError(
                         f"{self.step!r}._run_batch yielded more than {self._expected} results"
                     )
-                if not self._inflight:
+                if self.n_out == self.n_in:
                     raise BatchProtocolError(
                         f"{self.step!r}._run_batch yielded before consuming an input"
                     )
-                self._inflight.popleft()
                 self.n_out += 1
                 yield result
         except Exception as e:
-            _note_inflight(e, self.step, list(self._inflight))
+            e.add_note(f"  -> in {self.step!r}")
+            positions = range(self.n_out, self.n_in)
+            if positions:
+                e._inflight_positions = positions  # type: ignore[attr-defined]
             raise
         if self.n_out < self._expected:
             raise BatchProtocolError(
@@ -87,29 +78,20 @@ class _AnnotatedBatch:
             )
 
 
-class _FusedRun:
-    """Run efficiently consecutive non-batched steps over the inputs in a single pass."""
-
-    def __init__(
-        self,
-        steps: tp.Sequence[Step],
-        values: tp.Iterable[tp.Any],
-        uids: tp.Sequence[str],
-    ) -> None:
-        self.steps = tuple(steps)
-        self._values = values
-        self.uids = uids
-
-    def __iter__(self) -> tp.Iterator[tp.Any]:
-        for value, uid in zip(self._values, self.uids):
-            for step in self.steps:
-                try:
-                    args = () if isinstance(value, identity.NoValue) else (value,)
-                    value = step._run(*args)
-                except Exception as e:
-                    _note_inflight(e, step, [uid])
-                    raise
-            yield value
+def _fused_run(
+    steps: tp.Sequence[Step], values: tp.Iterable[tp.Any]
+) -> tp.Iterator[tp.Any]:
+    """Run consecutive non-batched steps over the inputs in a single pass."""
+    for position, value in enumerate(values):
+        for step in steps:
+            try:
+                args = () if isinstance(value, identity.NoValue) else (value,)
+                value = step._run(*args)
+            except Exception as e:
+                e.add_note(f"  -> in {step!r}")
+                e._inflight_positions = [position]  # type: ignore[attr-defined]
+                raise
+        yield value
 
 
 class StepItems:
@@ -118,37 +100,54 @@ class StepItems:
     For dict sources, uids default to the dict keys (insertion order).
     For CacheDict sources, explicit uids are required
     (the CacheDict may contain keys from other runs).
+    Callable uids keep a value list unaddressed until needed.
     """
 
     def __init__(
         self,
         *,
-        source: _Source,
-        uids: tp.Sequence[str] | None = None,
+        source: _Source | list[tp.Any],
+        uids: tp.Sequence[str] | tp.Callable[[tp.Any], str] | None = None,
         pending: tp.Sequence[Step] = (),
     ) -> None:
         if uids is None:
             if not isinstance(source, dict):
                 raise TypeError("CacheDict source requires explicit uids")
             uids = list(source)
-        # source: unique uid→value mapping; uids: full input sequence
-        # (may repeat uids — iteration reads the same value twice)
-        self._source = source
-        self.uids = list(uids)
+        elif not callable(uids):
+            uids = list(uids)
+        # addressed: source=unique uid→value; uids=ordered sequence, duplicates allowed
+        self._source: tp.Any = source
+        self._uids = uids
         self._pending = tuple(pending)
 
+    @property
+    def uids(self) -> list[str]:
+        self._address()
+        assert isinstance(self._uids, list)
+        return self._uids
+
+    def _address(self) -> _Source:
+        if callable(self._uids):
+            uids = [self._uids(value) for value in self._source]
+            self._source = dict(zip(uids, self._source))
+            self._uids = uids
+        return self._source
+
     def __len__(self) -> int:
-        return len(self.uids)
+        if callable(self._uids):
+            return len(self._source)
+        return len(self._uids)
 
     def _append(self, step: Step) -> StepItems:
         """Append a single leaf step's computation."""
         return StepItems(
-            source=self._source, uids=self.uids, pending=self._pending + (step,)
+            source=self._source, uids=self._uids, pending=self._pending + (step,)
         )
 
     def select(self, uids: tp.Sequence[str]) -> StepItems:
         """Subset to specific uids."""
-        source = self._source
+        source = self._address()
         if isinstance(source, dict):
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
         elif hasattr(source, "select"):  # subset lazy sources before pickle
@@ -157,17 +156,30 @@ class StepItems:
 
     def read(self, uids: tp.Sequence[str]) -> tp.Iterator[tp.Any]:
         """Read these uids through the carrier's pending steps."""
-        current: tp.Iterable[tp.Any] = (self._source[uid] for uid in uids)
+        source = self._address()
+        try:
+            yield from self._pipeline((source[uid] for uid in uids), len(uids))
+        except Exception as e:
+            positions = e.__dict__.pop("_inflight_positions", ())
+            if positions:
+                inflight = [uids[position] for position in positions]
+                e._inflight_uids = inflight  # type: ignore[attr-defined]
+                e.add_note(f"  -> inflight uids: {inflight}")
+            raise
+
+    def _pipeline(self, current: tp.Iterable[tp.Any], size: int) -> tp.Iterator[tp.Any]:
         grouped = itertools.groupby(
             self._pending, key=lambda s: "batched" in s._step_flags
         )
         for batched, group in grouped:
             if batched:
                 for step in group:
-                    current = _AnnotatedBatch(step, current, uids)
+                    current = _AnnotatedBatch(step, current, size)
             else:
-                current = _FusedRun(list(group), current, uids)
+                current = _fused_run(list(group), current)
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
-        return self.read(self.uids)
+        if callable(self._uids):
+            return self._pipeline(self._source, len(self))
+        return self.read(self._uids)

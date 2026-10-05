@@ -60,15 +60,13 @@ def test_read_fuses_defaults_and_isolates_batched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fused: list[int] = []
-    orig = items._FusedRun
+    orig = items._fused_run
 
-    def spy(
-        steps: tp.Sequence[base.Step], values: tp.Any, uids: tp.Any
-    ) -> items._FusedRun:
+    def spy(steps: tp.Sequence[base.Step], values: tp.Any) -> tp.Iterator[tp.Any]:
         fused.append(len(steps))
-        return orig(steps, values, uids)
+        return orig(steps, values)
 
-    monkeypatch.setattr(items, "_FusedRun", spy)
+    monkeypatch.setattr(items, "_fused_run", spy)
     si = items.StepItems(source={"a": 1, "b": 2, "c": 3})
     for step in (conftest.Mult(), conftest.Mult(), _Batched(), conftest.Mult()):
         si = base.Runner().dispatch(step, si)

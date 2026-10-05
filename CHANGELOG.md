@@ -15,7 +15,7 @@
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
 - `steps`: all backends now claim items in the inflight registry, deduplicating cached dispatches made inside workers. [#330]
-
+- `steps`: defer item UID computation until cache/backend addressing. [#338]
 
 ## 0.5.29 - 26-07-28
 

@@ -41,18 +41,25 @@ def test_chain_is_sequential(tmp_path: Path, with_infra: bool) -> None:
 
 
 @pytest.mark.parametrize("with_cache", [False, True])
-def test_downstream_cache_skips_upstream(tmp_path: Path, with_cache: bool) -> None:
+def test_downstream_cache_skips_upstream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_cache: bool
+) -> None:
     # Cache key comes from a uid carried from the root, not from the
     # transformed upstream output — else checking the cache requires _run.
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_cache else None
     upstream = conftest.Add(value=1.0)  # one instance so .calls spans both runs
+    uid_calls: list[int] = []
+    monkeypatch.setattr(Chain, "item_uid", lambda _, value: uid_calls.append(value))
 
     def make_chain() -> Chain:
         return Chain(steps=[upstream, conftest.Mult(coeff=10.0, infra=infra)])
 
-    make_chain().run()
-    make_chain().run()
+    make_chain().run(1)
+    make_chain().run(1)
     assert len(upstream.calls) == (1 if with_cache else 2)
+    assert uid_calls == ([1, 1] if with_cache else []), (
+        "uid should only be computed if an infra needs it."
+    )
 
 
 @pytest.mark.parametrize("as_chain", [False, True])
@@ -228,6 +235,7 @@ def test_scalar_and_items_share_cache(tmp_path: Path, as_chain: bool) -> None:
 # -----------------------------------------------------------------------------
 # Lazy iteration
 # "Datasets too large to fit in memory must traverse the pipeline lazily."
+# (only outer values are consumed eagerly)
 # -----------------------------------------------------------------------------
 
 
