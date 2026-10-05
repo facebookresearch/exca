@@ -40,20 +40,6 @@ class _StepRuntime:
     warm_items: items.StepItems | None = None  # carrier reused by `run` if all cached
     resolution: Step | None = None  # memo of `utils.resolved_step`
 
-    def cache(
-        self, paths: backends.StepPaths, *, keep_in_ram: bool
-    ) -> backends._StepCache:
-        cache = self.caches.get(paths)
-        if cache is None:
-            cd: exca.cachedict.CacheDict[tp.Any] = exca.cachedict.CacheDict(
-                folder=paths.cache_folder,
-                cache_type=paths.cache_type,
-                keep_in_ram=keep_in_ram,
-            )
-            cache = backends._StepCache(paths, cd)
-            self.caches[paths] = cache
-        return cache
-
 
 @dataclasses.dataclass(frozen=True)
 class Runner:
@@ -94,15 +80,23 @@ class Runner:
             backends._fold_modes(self.mode, backends._effective_mode(step)),
         )
 
-    def paths(self, step: Step) -> backends.StepPaths:
-        """Cache layout of *step* (resolved, with a configured folder) here."""
+    def cache(self, step: Step) -> backends._StepCache:
+        """Cache of *step* (resolved, with a configured folder) here; freezes *step*."""
         if step.infra is None or step.infra.folder is None:
-            raise RuntimeError("paths requires a configured infra with a folder")
-        return backends.StepPaths(
+            raise RuntimeError("cache requires a configured infra with a folder")
+        exca.utils.recursive_freeze(step)  # memoized cache relies on fixed config
+        paths = backends.StepPaths(
             step.infra.folder,
             identity.step_uid(self.advance(step).prefix),
-            cache_type=step._infer_cache_type(),
         )
+        cache = step._runtime.caches.get(paths)
+        if cache is None:
+            cache = step._runtime.caches[paths] = backends._StepCache(
+                paths,
+                keep_in_ram=step.infra.keep_in_ram,
+                cache_type=step._infer_cache_type(),
+            )
+        return cache
 
 
 class Step(exca.helpers.DiscriminatedModel):
@@ -354,10 +348,7 @@ class Step(exca.helpers.DiscriminatedModel):
             raise ValueError("pass value or _uid, not both")
         if _uid is None:
             _uid = identity.materialize_uid(self, value)
-        exca.utils.recursive_freeze(self)  # memoized cache relies on fixed config
-        paths = _runner.paths(self)
-        cache = self._runtime.cache(paths, keep_in_ram=self.infra.keep_in_ram)
-        return backends.LookupHandle(cache, uid=_uid)
+        return backends.LookupHandle(_runner.cache(self), uid=_uid)
 
     def clear_cache(self) -> None:  # deprecated
         warnings.warn(

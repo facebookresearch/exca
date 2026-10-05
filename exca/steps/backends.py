@@ -54,7 +54,6 @@ class StepPaths:
 
     base_folder: Path
     step_uid: str
-    cache_type: str | None = None  # CacheDict format override (e.g. "Pickle")
 
     @property
     def step_folder(self) -> Path:
@@ -76,9 +75,18 @@ class _StepCache:
     """Cache of a step at *paths*, shared by its lookups and dispatches."""
 
     paths: StepPaths
-    cache_dict: exca.cachedict.CacheDict[tp.Any]
+    keep_in_ram: dataclasses.InitVar[bool]
+    cache_type: dataclasses.InitVar[str | None] = None
+    cache_dict: exca.cachedict.CacheDict[tp.Any] = dataclasses.field(init=False)
     attempted: set[str] = dataclasses.field(default_factory=set)
     configs_written: bool = False
+
+    def __post_init__(self, keep_in_ram: bool, cache_type: str | None) -> None:
+        self.cache_dict = exca.cachedict.CacheDict(
+            folder=self.paths.cache_folder,
+            keep_in_ram=keep_in_ram,
+            cache_type=cache_type,
+        )
 
     def __getstate__(self) -> dict[str, tp.Any]:
         return {**self.__dict__, "attempted": set()}
@@ -478,21 +486,20 @@ class CacheDispatch:
     def _prepare(self, runner: Runner, step: Step, batch: items.StepItems) -> WriteTask:
         """Resolve paths/cache/mode and force-clear before any claim is held."""
         at = runner.advance(step)
-        paths = runner.paths(step)
-        paths.step_folder.mkdir(parents=True, exist_ok=True)
-        cache = step._runtime.cache(paths, keep_in_ram=self.backend.keep_in_ram)
+        cache = runner.cache(step)
+        cache.paths.step_folder.mkdir(parents=True, exist_ok=True)
         if not cache.configs_written:
-            identity.write_configs(paths.step_folder, at.prefix)
+            identity.write_configs(cache.paths.step_folder, at.prefix)
             cache.configs_written = True
         mode = at.mode
         pending = cache.pending(batch.uids, mode)
         if pending:
-            paths.cache_folder.mkdir(parents=True, exist_ok=True)
+            cache.paths.cache_folder.mkdir(parents=True, exist_ok=True)
             if mode == "force":
                 to_clear = [uid for uid, status in pending.items() if status is not None]
                 if to_clear:
                     msg = "Clearing %s items for %s (infra.mode=%s)"
-                    logger.warning(msg, len(to_clear), paths.step_uid, mode)
+                    logger.warning(msg, len(to_clear), cache.paths.step_uid, mode)
                 cache.clear(pending)
         # carries the full input set; _claim filters to pending
         runner = dataclasses.replace(runner, mode=mode)
