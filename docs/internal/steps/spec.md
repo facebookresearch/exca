@@ -78,8 +78,8 @@ sequentially. It shares a cache entry with its last step (same
 │  │ (params) │  │  (discriminated)     │  │  -> output  │  │
 │  └──────────┘  └──────────────────────┘  └─────────────┘  │
 │                                                            │
-│  Identity: step_uid + uid computed by `identity` module    │
-│  from (aligned_steps, value) at call time.                 │
+│  Identity: step_uid + uid derived by `identity` module     │
+│  from (aligned_steps, value) when first addressed.         │
 │                                                            │
 │  lookup(value) → LookupHandle (cache introspection handle) │
 │  Runner.dispatch: routes inline or through the Backend     │
@@ -228,22 +228,13 @@ When `step.run(value)` is called:
 
 1. Resolve via `_resolve_step()` to a fixed point. If non-self,
    delegate to the resolved step.
-2. Eagerly materialize values and uids (a scalar `run(value)` is the
-   one-input case of `run_many`), then build the initial `StepItems`.
+2. Eagerly materialize values and store a uid factory (a scalar `run(value)` is the one-input case of `run_many`), then build the initial `StepItems`. Fully inline execution never invokes the factory.
 3. `Runner().dispatch(step, batch)` runs inline when no backend folder is
    configured; otherwise it calls `Backend._run(runner, step, batch)`.
 4. Backend handles cache modes, inflight coordination, and job
    submission. See `caching.md`.
 
-For chains: `Chain._run_items` dispatches each child sequentially, then
-`runner.advance(child)` extends the `Runner` for the next one. `StepItems`
-carries the original item uid sequence and pending inline steps; the
-`Runner` carries the accumulated upstream identity (`prefix`) and folded
-`mode`, so downstream cache hits can skip upstream execution.
-
-Uid-only or lazy item construction would let cache-only runs avoid
-rebuilding expensive inputs. That is a useful future optimization, but not
-required for MapInfra parity or current step semantics.
+For chains: `Chain._run_items` dispatches each child sequentially, then `runner.advance(child)` extends the `Runner` for the next one. `StepItems` carries the original values and uid factory through pending inline steps. Accessing uids, selecting items, or entering a backend converts them once to the addressed source-plus-uid representation. The `Runner` carries the accumulated upstream identity (`prefix`) and folded `mode`, so downstream cache hits can skip upstream execution.
 
 ### Safety Measures (from TaskInfra/MapInfra)
 

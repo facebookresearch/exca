@@ -381,6 +381,7 @@ class Step(exca.helpers.DiscriminatedModel):
         ----------
         values:
             Inputs to run; one result is produced per input, in order.
+            Item uids are computed only if execution needs addressing.
 
         Returns
         -------

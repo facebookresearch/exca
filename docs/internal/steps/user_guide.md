@@ -132,6 +132,7 @@ list(result)                                  # [2.0, 4.0, 6.0]
 Each input gets its own cache entry keyed by `(step_uid, item_uid)`,
 so re-running with overlapping inputs reuses cached values. Backends
 distribute items across workers per their executor config.
+Fully inline execution skips item uid computation because it does not address inputs.
 
 For vectorised compute, override `_run_batch` instead of `_run` —
 useful when the per-input cost is dominated by setup that should be

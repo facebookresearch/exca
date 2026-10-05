@@ -68,12 +68,7 @@ class Embed(steps.Step):
         return embed(value)
 ```
 
-`item_uid` is consulted **once at chain entry** on the
-caller-provided value, and the result is propagated unchanged to
-every sub-step. This is what makes downstream cache lookups lazy:
-a downstream cache hit can short-circuit the whole pipeline
-without running upstream steps. Per-input identity that depends on
-an upstream's output is therefore not supported (yet).
+Per-input identity stays anchored to the caller-provided value. `item_uid` is consulted only when a cache, backend, or explicit uid access needs it; a fully inline pipeline does not compute item uids. Once computed, the uid is propagated unchanged to every sub-step. This lets a downstream cache hit short-circuit the whole pipeline without running upstream steps. Per-input identity that depends on an upstream's output is therefore not supported.
 
 Long item_uids are truncated to 256 characters
 (`Step._ITEM_UID_MAX_LENGTH`) to keep on-disk paths sane;
@@ -95,11 +90,7 @@ class Embed(steps.Step):
             yield model(v)                         # in order, 1 per input
 ```
 
-`_run_batch` must yield **exactly one result per input, in order**.
-The framework validates this and raises `BatchProtocolError` on
-under- or over-yield. A partial-batch error annotates the
-exception with the uids consumed-but-not-yielded so you can see
-which items were in flight when it raised.
+`_run_batch` must yield **exactly one result per input, in order**. The framework validates this and raises `BatchProtocolError` on under- or over-yield. When inputs are addressed for caching or execution, a partial-batch error identifies the uids consumed-but-not-yielded.
 
 A single-value call and a batched call share the same cache: if
 `step.run(v)` writes uid `X`, `next(iter(step.run_many([v])))`

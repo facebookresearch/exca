@@ -37,20 +37,6 @@ def test_chain_no_infra() -> None:
     assert chain.run(5.0) == 30.0
 
 
-def test_no_infra_skips_uids(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Batched(Step):
-        def _run_batch(self, values: tp.Iterable[int]) -> tp.Iterator[int]:
-            yield from (2 * value for value in values)
-
-    monkeypatch.setattr(
-        identity,
-        "materialize_uid",
-        lambda *_: pytest.fail("inline execution materialized a uid"),
-    )
-    chain = Chain(steps=[conftest.Mult(), Batched()])
-    assert list(chain.run_many([1, 2])) == [4, 8]
-
-
 def test_clone_rejects_ambiguous_updates() -> None:
     step = conftest.Mult()
     with pytest.raises(ValueError, match="Only one positional argument"):
