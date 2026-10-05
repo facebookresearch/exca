@@ -141,8 +141,7 @@ def test_scatter_branch_caching(tmp_path: Path, nested: bool) -> None:
     body_uid = "coeff=10,type=Mult-98baeffc"
     assert (tmp_path / scat_uid / body_uid / "cache").is_dir()
 
-    body_infra: tp.Any = {"backend": "Cached"}
-    body = conftest.Add(fail_on="all", infra=body_infra)
+    body = conftest.Add(fail_on="all", infra=infra)
     scatter = ScatterDict(body=body, infra=infra)
     step = base.Chain(steps=[scatter]) if nested else scatter
     with pytest.raises(ValueError, match="Triggered"):
