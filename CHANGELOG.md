@@ -9,7 +9,7 @@
 - Removed deprecated compatibility paths: `DumperLoader`, legacy handler classes, legacy `Auto` (`optimized`/`pickled`), `torch.save` tensor entries, and implicit `Auto` pickle fallback (use `AutoPickle`). [#331]
 - `DumpContext.shared_file`: content suffixes must start with `.`. [#326]
 - `steps`: `Parallel` cannot be a `Chain` step; call it directly. [#328, #329]
-- `steps`: submitit backends (`Slurm`, `LocalProcess`, …) return from `run_many` once jobs are submitted; results and job errors come when iterating.
+- `steps`: submitit and pool backends return from `run_many` once jobs are submitted; results and job errors come when iterating. [#340, #341]
 
 ### Other
 

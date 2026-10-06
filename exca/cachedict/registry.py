@@ -26,6 +26,7 @@ _CORRUPTION_HINTS = (
     "not a database",
     "no such table",
     "no such column",
+    "has no column named",  # INSERT on an older schema
 )
 # OperationalError substrings for transient lock contention (retried).
 _LOCK_HINTS = ("locked", "busy")

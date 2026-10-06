@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import collections
 import contextlib
-import contextvars
 import dataclasses
 import datetime
+import functools
 import logging
 import os
 import random
@@ -24,7 +24,6 @@ import sys
 import traceback
 import typing as tp
 import warnings
-import weakref
 from concurrent import futures
 from pathlib import Path
 
@@ -125,16 +124,12 @@ class _StepCache:
         # Other backends may have left inflight rows for this step folder.
         if paths.step_folder.exists():
             try:
-                held = _HELD_ENTRIES.get()
-                folder_key = str(paths.step_folder)
                 with inflight.InflightRegistry(paths.step_folder) as reg:
                     info = reg.get(uids)
                     jobs: dict[str, str] = {}
                     for uid, worker in info.items():
                         if worker.job_id is None or worker.job_folder is None:
                             continue  # not submitit
-                        if (folder_key, uid) in held:
-                            continue  # an ancestor's job — cancelling it kills us
                         # Slurm array tasks share a scheduler job; avoid per-task cancels.
                         job_id = worker.job_id.split("_", 1)[0]
                         jobs[job_id] = worker.job_folder
@@ -355,12 +350,6 @@ class _CachedEntry:
         raise RuntimeError(f"No cached entry for {self._uid}")
 
 
-# cache entries claimed by the running work or its ancestors
-_HELD_ENTRIES: contextvars.ContextVar[frozenset[tuple[str, str]]] = (
-    contextvars.ContextVar("exca_held_entries", default=frozenset())
-)
-
-
 @dataclasses.dataclass
 class WriteTask:
     """One step's items, run and cached together via ``step._run_items``."""
@@ -370,15 +359,21 @@ class WriteTask:
     items: items.StepItems
     runner: Runner  # context of `step`, with the step's folded mode
     claim: inflight.InflightClaim | None = None
-    held_entries: frozenset[tuple[str, str]] = frozenset()  # {(folder, uid),...}
 
-    def claimed_uids(self) -> list[str]:
-        """This task's uids claimed by its own session (entries held by an ancestor
-        are excluded, so their rows keep pointing at the ancestor's job)."""
-        if self.claim is None:
-            raise RuntimeError(f"task was never claimed: {self.cache.paths.step_uid}")
-        owned = set(self.claim.owned)
-        return [uid for uid in self.items.uids if uid in owned]
+    def held_claim(self) -> inflight.InflightClaim | None:
+        """The enclosing task's claim if it covers this task's cell (a chain shares
+        its cell with its last step), else ``None``."""
+        held = self.runner.held
+        if held is not None and held.folder == self.cache.paths.step_folder:
+            return held
+        return None
+
+    def release(self) -> None:
+        """Free this task's claimed uids for competitors."""
+        if self.claim is not None:
+            folder, token = self.cache.paths.step_folder, self.claim.token
+            with inflight.InflightRegistry(folder, token=token) as reg:
+                reg.release(list(self.items.uids))
 
     def mark_attempted(self) -> None:
         """Record the uids as attempted, so force/retry recompute them only once."""
@@ -403,9 +398,9 @@ class WriteTask:
         if folder is not None:
             folder.mkdir(parents=True, exist_ok=True)
         written_uids: list[str] = []
-        token = _HELD_ENTRIES.set(self.held_entries)
         try:
-            result_items = self.step._run_items(self.runner, self.items)
+            runner = dataclasses.replace(self.runner, held=self.claim)
+            result_items = self.step._run_items(runner, self.items)
             with cd.write():
                 for i, result in enumerate(result_items):
                     uid = self.items.uids[i]
@@ -435,11 +430,7 @@ class WriteTask:
                         reg.record(uid, e, tb)
             raise
         finally:
-            _HELD_ENTRIES.reset(token)
-            if self.claim is not None:  # free competitors as soon as this work ends
-                folder, pid = paths.step_folder, self.claim.pid
-                with inflight.InflightRegistry(folder, pid=pid) as reg:
-                    reg.release(self.claimed_uids())
+            self.release()  # free competitors as soon as this work ends
 
 
 def _multi_run_and_cache(shard: list[WriteTask]) -> None:
@@ -448,6 +439,11 @@ def _multi_run_and_cache(shard: list[WriteTask]) -> None:
         step_uid = task.cache.paths.step_uid
         logger.info("Running %s items for %s", len(task.items.uids), step_uid)
         task.run_and_cache()
+
+
+def _release_shard(shard: list[WriteTask], _: futures.Future[None]) -> None:
+    for task in shard:
+        task.release()
 
 
 def _shard_tasks(
@@ -493,39 +489,40 @@ class CacheDispatch:
             identity.write_configs(cache.paths.step_folder, at.prefix)
             cache.configs_written = True
         mode = at.mode
+        runner = dataclasses.replace(runner, mode=mode)
+        # carries the full input set; _claim filters to pending
+        task = WriteTask(step=step, cache=cache, items=batch, runner=runner)
         pending = cache.pending(batch.uids, mode)
         if pending:
             cache.paths.cache_folder.mkdir(parents=True, exist_ok=True)
-            if mode == "force":
+            if mode == "force" and task.held_claim() is None:
                 to_clear = [uid for uid, status in pending.items() if status is not None]
                 if to_clear:
                     msg = "Clearing %s items for %s (infra.mode=%s)"
                     logger.warning(msg, len(to_clear), cache.paths.step_uid, mode)
                 cache.clear(pending)
-        # carries the full input set; _claim filters to pending
-        runner = dataclasses.replace(runner, mode=mode)
-        return WriteTask(step=step, cache=cache, items=batch, runner=runner)
+        return task
 
     def _claim(self, stack: contextlib.ExitStack, task: WriteTask) -> WriteTask | None:
-        """Claim *task*'s pending uids; ``None`` if nothing is pending."""
+        """Claim *task*'s pending uids, or reuse the enclosing task's claim on the
+        same cell; ``None`` if nothing is pending."""
         pending = task.cache.pending(task.items.uids, task.runner.mode)
         if not pending:
             return None
-        folder = task.cache.paths.step_folder
-        reg = inflight.InflightRegistry(folder)
-        # ancestors already hold their entries: claiming them self-deadlocks
-        held = _HELD_ENTRIES.get()
-        folder_key = str(folder)
-        request = {u for u in pending if (folder_key, u) not in held}
-        claim = stack.enter_context(inflight.inflight_session(reg, request))
-        held |= {(folder_key, u) for u in claim.uids}
-        return dataclasses.replace(
-            task.select(list(pending)), claim=claim, held_entries=held
-        )
+        folder, held = task.cache.paths.step_folder, task.held_claim()
+        if held is not None:  # reopened: may be unpickled, and stamps this task's jobs
+            reg = stack.enter_context(inflight.InflightRegistry(folder, token=held.token))
+            claim = dataclasses.replace(held, _reg=reg)
+        else:
+            reg = inflight.InflightRegistry(folder)
+            claim = stack.enter_context(inflight.inflight_session(reg, pending))
+        return dataclasses.replace(task.select(list(pending)), claim=claim)
 
     def _recheck(self, task: WriteTask) -> WriteTask | None:
         """Recheck under the claim and clear stale entries; narrowed task, or
         ``None`` if a competitor populated it."""
+        if task.held_claim() is not None:
+            return task  # rechecked by the enclosing task
         mode, step_uid = task.runner.mode, task.cache.paths.step_uid
         pending = task.cache.pending(task.items.uids, mode)
         inflight.after_wait_log(step_uid, len(task.items.uids), len(pending))
@@ -541,16 +538,8 @@ class CacheDispatch:
         return task.select(list(pending))
 
     def submit(self) -> Submission | None:
-        """Claim, recheck and run the tasks; the returned submission (if any) holds
-        the claims until closed, otherwise they are released here."""
-        held = _HELD_ENTRIES.get()
-        for task in self.tasks:
-            folder = task.cache.paths.step_folder
-            for uid in task.items.uids:
-                live = Submission._LIVE.get((folder, uid))
-                if live is not None and (str(folder), uid) not in held:
-                    with contextlib.suppress(Exception):  # errors get cached
-                        live.wait((folder, uid))
+        """Claim, recheck and run the tasks; the returned submission's (if any)
+        shards release their claims when they end, the rest is released here."""
         with contextlib.ExitStack() as stack:
             # step_uid order: concurrent dispatches agree on lock order
             ordered = sorted(self.tasks, key=lambda task: task.cache.paths.step_uid)
@@ -558,24 +547,19 @@ class CacheDispatch:
             ready = [r for c in claimed if (r := self._recheck(c)) is not None]
             submission = self.backend._submit(ready) if ready else None
             if submission is not None:
-                submission._stack.push(stack.pop_all())
+                for task in ready:
+                    assert task.claim is not None
+                    task.claim.hand_off(task.items.uids)
             return submission
 
 
 class Submission:
-    """Running pool futures or submitit jobs, one per shard of tasks. Shards release
-    their claims when done; ``close`` (also at gc) waits for all jobs, then releases
-    the leftovers (e.g. of crashed shards)."""
-
-    # temporary, until claims record their owner: same-process dispatches wait on these
-    _LIVE: tp.ClassVar[weakref.WeakValueDictionary[tuple[Path, str], Submission]] = (
-        weakref.WeakValueDictionary()
-    )
+    """Running pool futures or submitit jobs, one per shard of tasks. Each shard
+    releases its claims when it ends, whether or not the submission is waited on."""
 
     def __init__(
         self,
         jobs: dict[tp.Any, list[WriteTask]],  # pool future or submitit job → shard
-        executor: futures.Executor | None = None,
     ) -> None:
         self._jobs = list(jobs)
         self._entry_jobs = {
@@ -584,13 +568,10 @@ class Submission:
             for task in shard
             for uid in task.items.uids
         }
-        self._executor: futures.Executor | None = executor
-        self._stack = contextlib.ExitStack()
-        Submission._LIVE.update(dict.fromkeys(self._entry_jobs, self))
 
     def wait(self, entry: tuple[Path, str] | None = None) -> None:
         """Block on the job computing *entry* (``(step_folder, uid)``), or on all
-        jobs then close if ``None``."""
+        jobs if ``None``."""
         if entry is not None:
             job = self._entry_jobs.get(entry)
             if job is not None:
@@ -598,28 +579,11 @@ class Submission:
                     logger.info("Waiting for job %s", getattr(job, "job_id", job))
                 job.result()
             return
-        try:
-            for job in self._jobs:
-                job.result()
-        finally:
-            self.close()
+        for job in self._jobs:
+            job.result()
         steps = {folder for folder, _ in self._entry_jobs}
         msg = "Finished processing %s items for %s steps"
         logger.info(msg, len(self._entry_jobs), len(steps))
-
-    def close(self) -> None:
-        try:
-            for job in self._jobs:
-                with contextlib.suppress(Exception):  # raised by reads instead
-                    job.result()
-        finally:  # also on Ctrl+C
-            if self._executor is not None:
-                self._executor.shutdown(wait=False)
-                self._executor = None
-            self._stack.close()
-
-    def __del__(self) -> None:
-        self.close()
 
 
 class SubmissionSource:
@@ -806,7 +770,7 @@ class _SubmititBackend(Backend):
         for shard, job in zip(shards, jobs):
             for task in shard:
                 assert task.claim is not None  # inherited from its variant
-                task.claim.record_worker_info(job, uids=task.claimed_uids())
+                task.claim.record_worker_info(job, uids=task.items.uids)
                 folder = task.cache.paths.step_folder
                 by_folder.setdefault(folder, {})[job.job_id] = task.items.uids
         for folder, records in by_folder.items():
@@ -828,6 +792,12 @@ class SubmititDebug(_SubmititBackend):
     """Debug executor (inline but simulates submitit)."""
 
     _CLUSTER: tp.ClassVar[str | None] = "debug"
+
+    def _submit(self, tasks: list[WriteTask]) -> Submission | None:
+        submission = super()._submit(tasks)
+        if submission is not None:
+            submission.wait()  # debug jobs only run when waited on
+        return None
 
 
 class Slurm(_SubmititBackend):
@@ -882,14 +852,14 @@ class _PoolBackend(Backend):
             max_shards=3 * max_workers,
             min_items_per_shard=1,
         )
-        for shard in shards:
-            for task in shard:
-                assert task.claim is not None  # inherited from its variant
-                task.claim.record_worker_info(uids=task.claimed_uids())
         pool = utils.make_pool_executor(self._POOL_TYPE, max_workers)
         logger.info("Sent %s items for %s steps into a %s", n_items, len(tasks), pool)
         jobs = {pool.submit(_multi_run_and_cache, shard): shard for shard in shards}
-        return Submission(jobs, executor=pool)
+        for job, shard in jobs.items():
+            # a crashed process-pool worker never reaches run_and_cache's release
+            job.add_done_callback(functools.partial(_release_shard, shard))
+        pool.shutdown(wait=False)  # submitted jobs still run
+        return Submission(jobs)
 
 
 class ProcessPool(_PoolBackend):

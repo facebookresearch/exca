@@ -21,9 +21,11 @@ import logging
 import os
 import random
 import shutil
+import socket
 import sqlite3
 import time
 import typing as tp
+import uuid
 from pathlib import Path
 
 import submitit
@@ -32,13 +34,11 @@ from . import registry
 
 logger = logging.getLogger(__name__)
 
-# Sentinel `job_id` for non-Slurm submitit backends — distinguishes
-# in-progress local work from a not-yet-stamped Slurm claim (job_id IS NULL).
-_LOCAL_JOB_ID = "local"
-
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS inflight (
     item_uid    TEXT PRIMARY KEY,
+    token       TEXT NOT NULL,
+    host        TEXT NOT NULL,
     pid         INTEGER NOT NULL,
     job_id      TEXT,
     job_folder  TEXT,
@@ -47,18 +47,17 @@ CREATE TABLE IF NOT EXISTS inflight (
 """
 
 # Column order matches `WorkerInfo._from_row` and the INSERT statement.
-_COLUMNS = ["item_uid", "pid", "job_id", "job_folder", "claimed_at"]
+_COLUMNS = ["item_uid", "token", "host", "pid", "job_id", "job_folder", "claimed_at"]
 
 
 @functools.lru_cache(maxsize=1)
 def _has_sacct() -> bool:
     """Check whether sacct is available (cached after first call).
 
-    Secondary safety net: on machines without sacct (dev, CI), submitit's
+    Safety net: on machines without sacct (dev, CI), submitit's
     SlurmJob.done() silently returns False instead of raising, making dead
-    jobs appear alive and causing wait_for_inflight to hang. The primary
-    defense is InflightClaim.record_worker_info, which stamps non-Slurm
-    jobs with _LOCAL_JOB_ID so is_alive routes them to the PID check.
+    jobs appear alive and causing wait_for_inflight to hang. Without sacct,
+    is_alive falls back to the claimer's host and PID.
     """
     return shutil.which("sacct") is not None
 
@@ -82,7 +81,9 @@ class WorkerInfo:
     """
 
     pid: int
-    job_id: str | None = None
+    token: str = ""  # of the claiming registry
+    host: str = ""
+    job_id: str | None = None  # Slurm job submitted for the item
     job_folder: str | None = None
     claimed_at: float | None = None
 
@@ -100,16 +101,22 @@ class WorkerInfo:
 
     @classmethod
     def _from_row(
-        cls, row: tuple[str, int, str | None, str | None, float]
+        cls, row: tuple[str, str, str, int, str | None, str | None, float]
     ) -> tuple[str, "WorkerInfo"]:
-        """Convert a (item_uid, pid, job_id, job_folder, claimed_at) row."""
-        uid, pid, job_id, job_folder, claimed_at = row
+        """Convert a row ordered as ``_COLUMNS``."""
+        uid, token, host, pid, job_id, job_folder, claimed_at = row
         return uid, cls(
-            pid=pid, job_id=job_id, job_folder=job_folder, claimed_at=claimed_at
+            pid=pid,
+            token=token,
+            host=host,
+            job_id=job_id,
+            job_folder=job_folder,
+            claimed_at=claimed_at,
         )
 
     def is_alive(self, no_job_timeout: float = 600.0) -> bool:
-        """Check if this worker is still running.
+        """Check if this worker is still running: via sacct for Slurm jobs, via
+        the PID on the claimer's host, else presumed dead after a timeout.
 
         Parameters
         ----------
@@ -123,44 +130,24 @@ class WorkerInfo:
                 return not job.done()
             except Exception:
                 return False
-        if (
-            self.claimed_at is not None
-            and self.job_id != _LOCAL_JOB_ID
-            and (time.time() - self.claimed_at) > no_job_timeout
-        ):
-            return False
-        return _is_pid_alive(self.pid)
-
-    def wait(self) -> None:
-        """Block until a Slurm job finishes (no-op for local workers)."""
-        job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
-        if job is None:
-            return
-        try:
-            if not job.done():
-                job.wait()
-        except Exception:
-            logger.debug("Could not wait for Slurm job %s", self.job_id, exc_info=True)
+        if self.host == socket.gethostname():
+            return _is_pid_alive(self.pid)
+        return self.claimed_at is None or time.time() - self.claimed_at <= no_job_timeout
 
     def describe(self) -> str:
         """Compact identity + liveness status for logging, e.g.
-        ``'64059024 [slurm:FAILED]'`` or ``'pid=1234 [local]'``. Slurm array
+        ``'64059024 [slurm:FAILED]'`` or ``'pid=1234@host'``. Slurm array
         tasks use their base id (the ``_<task>`` suffix is dropped)."""
-        if self.job_id is None or self.job_id == _LOCAL_JOB_ID:
-            ident = f"pid={self.pid}"
-        else:
-            ident = self.job_id.split("_")[0]  # array base id
-        job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
-        if job is not None:
-            try:
-                return f"{ident} [slurm:{job.state}]"
-            except Exception:
-                return f"{ident} [slurm:?]"
-        if self.job_id == _LOCAL_JOB_ID:
-            return f"{ident} [local]"
         if self.job_id is None:
-            return f"{ident} [unstamped]"
-        return f"{ident} [slurm:unchecked]"
+            return f"pid={self.pid}@{self.host}"
+        ident = self.job_id.split("_")[0]  # array base id
+        job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
+        if job is None:
+            return f"{ident} [slurm:unchecked]"
+        try:
+            return f"{ident} [slurm:{job.state}]"
+        except Exception:
+            return f"{ident} [slurm:?]"
 
 
 def _summarize_workers(counts: tp.Mapping["WorkerInfo", int]) -> str:
@@ -201,33 +188,34 @@ class InflightRegistry(registry.AdvisoryRegistry):
     _SCHEMA: tp.ClassVar[str] = _SCHEMA
     _LABEL: tp.ClassVar[str] = "Inflight"
 
-    def __init__(self, folder: Path | str, pid: int | None = None) -> None:
+    def __init__(self, folder: Path | str, token: str | None = None) -> None:
         super().__init__(folder)
-        self.pid = os.getpid() if pid is None else pid  # owner of claims/releases
+        self.token = uuid.uuid4().hex if token is None else token  # of claims/releases
 
     def claim(self, item_uids: list[str]) -> list[str]:
-        """Atomically claim all requested items, or none (except pre-owned).
+        """Atomically claim all requested items, or none.
 
         All-or-nothing semantics enforced at the database level via
-        ROLLBACK: if any item is held by a live worker with a different
-        PID, the entire transaction is rolled back and no new claims are
-        written. This prevents partial-claim hold-and-wait deadlocks
-        across concurrent sessions with overlapping item sets.
+        ROLLBACK: if any item is held by a live worker, the entire
+        transaction is rolled back and no new claims are written. This
+        prevents partial-claim hold-and-wait deadlocks across concurrent
+        sessions with overlapping item sets.
 
-        Returns the list of item_uids actually claimed. On success this
-        equals *item_uids*. On rollback it contains only items already
-        owned by ``self.pid`` (re-entrant / nested calls).
+        Rows are stamped with this host and PID as liveness signal.
+
+        Returns the list of item_uids actually claimed: *item_uids* on
+        success, empty on rollback.
         """
         if not item_uids:
             return []
-        pid = self.pid
+        token = self.token
 
         # Phase 1: liveness checks outside the transaction (can be slow
         # for Slurm sacct calls — must not hold the DB write lock).
         existing = self.get(item_uids)
         alive_cache: dict[WorkerInfo, bool] = {}
         for info in existing.values():
-            if info.pid != pid and info not in alive_cache:
+            if info not in alive_cache:
                 alive_cache[info] = info.is_alive()
 
         # Phase 2: short transaction — only SELECT + INSERT, no I/O.
@@ -241,68 +229,66 @@ class InflightRegistry(registry.AdvisoryRegistry):
                 conn, "inflight", _COLUMNS, "item_uid", item_uids
             )
             fresh = dict(WorkerInfo._from_row(r) for r in rows)
-            pre_owned: list[str] = []
-            to_insert: list[str] = []
-            for uid in item_uids:
-                if uid in fresh:
-                    owner = fresh[uid]
-                    if owner.pid == pid:
-                        pre_owned.append(uid)
-                        continue
-                    if alive_cache.get(owner, True):
-                        # Live worker blocks us — rollback everything.
-                        conn.execute("ROLLBACK")
-                        return pre_owned
-                to_insert.append(uid)
+            for info in fresh.values():
+                if alive_cache.get(info, True):
+                    # Live worker blocks us — rollback everything.
+                    conn.execute("ROLLBACK")
+                    return []
+            host, pid = socket.gethostname(), os.getpid()
             conn.executemany(
-                "INSERT OR REPLACE INTO inflight "
-                "(item_uid, pid, job_id, job_folder, claimed_at) "
-                "VALUES (?, ?, NULL, NULL, ?)",
-                [(uid, pid, now) for uid in to_insert],
+                f"INSERT OR REPLACE INTO inflight ({', '.join(_COLUMNS)}) "
+                "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
+                [(uid, token, host, pid, now) for uid in item_uids],
             )
             conn.execute("COMMIT")
-            return pre_owned + to_insert
+            return list(item_uids)
 
         result = self._safe_execute("claim", list(item_uids), _do, create=True)
-        logger.debug("Claimed %d/%d items (pid=%d)", len(result), len(item_uids), pid)
+        msg = "Claimed %d/%d items (token=%s)"
+        logger.debug(msg, len(result), len(item_uids), token)
         return result
 
     def update_worker_info(
         self,
         item_uids: list[str],
         *,
+        pid: int | None = None,
         job_id: str | None = None,
         job_folder: str | None = None,
     ) -> None:
-        """Set ``job_id`` (Slurm id or ``_LOCAL_JOB_ID``) and optional
-        ``job_folder`` on already-claimed rows owned by ``self.pid``."""
+        """Set the given Slurm ``job_id`` and ``job_folder``, and the worker's
+        ``pid`` on this host, on rows claimed with ``self.token``; fields not
+        given are kept."""
         if not item_uids:
             return
+        host = None if pid is None else socket.gethostname()
+        values = (host, pid, job_id, job_folder)
 
         def _do(conn: sqlite3.Connection) -> None:
             conn.execute("BEGIN")
             conn.executemany(
-                "UPDATE inflight SET job_id = ?, job_folder = ? "
-                "WHERE item_uid = ? AND pid = ?",
-                [(job_id, job_folder, uid, self.pid) for uid in item_uids],
+                "UPDATE inflight SET host = COALESCE(?, host), pid = COALESCE(?, pid), "
+                "job_id = COALESCE(?, job_id), job_folder = COALESCE(?, job_folder) "
+                "WHERE item_uid = ? AND token = ?",
+                [(*values, uid, self.token) for uid in item_uids],
             )
             conn.execute("COMMIT")
 
         self._safe_execute("update", None, _do)
-        msg = "Updated worker info for %d items (job_id=%s)"
-        logger.debug(msg, len(item_uids), job_id)
+        msg = "Updated worker info for %d items (pid=%s, job_id=%s)"
+        logger.debug(msg, len(item_uids), pid, job_id)
 
     def release(self, item_uids: list[str]) -> None:
-        """Remove items from the registry (done or failed), only rows owned by
-        ``self.pid``."""
+        """Remove items from the registry (done or failed), only rows claimed
+        with ``self.token``."""
         if not item_uids:
             return
 
         def _do(conn: sqlite3.Connection) -> None:
             conn.execute("BEGIN")
             conn.executemany(
-                "DELETE FROM inflight WHERE item_uid = ? AND pid = ?",
-                [(uid, self.pid) for uid in item_uids],
+                "DELETE FROM inflight WHERE item_uid = ? AND token = ?",
+                [(uid, self.token) for uid in item_uids],
             )
             conn.execute("COMMIT")
 
@@ -333,19 +319,15 @@ class InflightRegistry(registry.AdvisoryRegistry):
     ) -> None:
         """Block until the given items are no longer in-flight.
 
-        For Slurm items, waits via submitit. For local items, polls with
-        exponential backoff (0.5 s → 30 s) until the item disappears from
-        the registry or the owning process dies. Items reclaimed from dead
-        workers are released here, so the next ``claim`` picks them up.
-
-        Items owned by ``self.pid`` (by default the current process) are silently
-        skipped to prevent self-deadlock in re-entrant / nested calls.
+        Polls with exponential backoff (0.5 s → 30 s) until the item
+        disappears from the registry or its worker dies (see
+        ``WorkerInfo.is_alive``). Items reclaimed from dead workers are
+        released here, so the next ``claim`` picks them up.
         """
         if not item_uids:
             return
-        remaining = set(item_uids)
-
-        inflight = self.get(list(remaining))
+        inflight = self.get(list(item_uids))
+        remaining = set(inflight)
         if inflight:
             # Jitter to de-synchronize callers that start simultaneously
             # (e.g. Slurm array jobs), reducing claim contention.
@@ -353,18 +335,6 @@ class InflightRegistry(registry.AdvisoryRegistry):
             msg = "Waiting for %d in-flight items (of %d requested) held by: %s"
             workers = _summarize_workers(collections.Counter(inflight.values()))
             logger.warning(msg, len(inflight), len(item_uids), workers)
-        # Deduplicate by job_id: many items may share one Slurm array job,
-        # so we wait once per job instead of once per item.
-        waited_jobs: set[str] = set()
-        for uid, info in list(inflight.items()):
-            if info.pid == self.pid:
-                remaining.discard(uid)
-                continue
-            if info.job_id is not None and info.job_folder is not None:
-                if info.job_id not in waited_jobs:
-                    logger.debug("Waiting for Slurm job %s", info.job_id)
-                    info.wait()
-                    waited_jobs.add(info.job_id)
 
         interval = 0.5
         next_log = time.time() + 3600.0
@@ -373,23 +343,21 @@ class InflightRegistry(registry.AdvisoryRegistry):
             inflight = self.get(list(remaining))
             alive_cache: dict[WorkerInfo, bool] = {}
             still_waiting: set[str] = set()
-            dead_uids: dict[int, list[str]] = collections.defaultdict(list)  # by pid
+            dead_uids: dict[str, list[str]] = collections.defaultdict(list)  # by token
             for uid in remaining:
                 if uid not in inflight:
                     continue
                 info = inflight[uid]
-                if info.pid == self.pid:
-                    continue
                 if info not in alive_cache:
                     alive_cache[info] = info.is_alive()
                 if not alive_cache[info]:
-                    dead_uids[info.pid].append(uid)
+                    dead_uids[info.token].append(uid)
                     dead_workers[info] += 1
                 else:
                     still_waiting.add(uid)
-            # pid filter: another waiter may have reclaimed and re-claimed the row
-            for dead_pid, uids in dead_uids.items():
-                with InflightRegistry(self.db_path.parent, pid=dead_pid) as reg:
+            # token filter: another waiter may have reclaimed and re-claimed the row
+            for dead_token, uids in dead_uids.items():
+                with InflightRegistry(self.db_path.parent, token=dead_token) as reg:
                     reg.release(uids)
             remaining = still_waiting
             if remaining:
@@ -420,28 +388,35 @@ class InflightClaim:
     """Items owned by an inflight session."""
 
     uids: tuple[str, ...]
-    owned: tuple[str, ...] = ()  # inserted by this session: what it releases
     waited: bool = False
-    pid: int = dataclasses.field(default_factory=os.getpid)
+    token: str = ""  # see `InflightRegistry.token`
+    folder: Path | None = None  # of the registry
     _reg: InflightRegistry | None = dataclasses.field(
         default=None, repr=False, compare=False
+    )
+    # released by the work itself (worker or job end), not by the session
+    _handed_off: set[str] = dataclasses.field(
+        default_factory=set, repr=False, compare=False
     )
 
     def __getstate__(self) -> dict[str, tp.Any]:
         return {**self.__dict__, "_reg": None}
 
-    def record_worker_info(
-        self, job: tp.Any = None, uids: tp.Sequence[str] | None = None
-    ) -> None:
-        """Stamp this claim's worker liveness info in the registry."""
+    def record_worker_info(self, job: tp.Any, uids: tp.Sequence[str]) -> None:
+        """Stamp the submitit *job* running *uids* as their liveness signal."""
         if self._reg is None:
             return
-        item_uids = list(self.owned if uids is None else uids)
         if isinstance(job, submitit.SlurmJob):
-            job_id, job_folder = str(job.job_id), str(job.paths.folder)
-        else:
-            job_id, job_folder = _LOCAL_JOB_ID, None
-        self._reg.update_worker_info(item_uids, job_id=job_id, job_folder=job_folder)
+            self._reg.update_worker_info(
+                list(uids), job_id=str(job.job_id), job_folder=str(job.paths.folder)
+            )
+        elif isinstance(job, submitit.LocalJob):  # job_id: the subprocess pid
+            self._reg.update_worker_info(list(uids), pid=int(job.job_id))
+        # else in-process (debug): the claimer stays the liveness signal
+
+    def hand_off(self, uids: tp.Iterable[str]) -> None:
+        """Leave the release of *uids* to the work running them."""
+        self._handed_off.update(uids)
 
 
 @contextlib.contextmanager
@@ -449,27 +424,20 @@ def inflight_session(
     reg: InflightRegistry | None,
     item_uids: tp.Collection[str],
 ) -> tp.Iterator[InflightClaim]:
-    """Wait for in-flight items, claim available ones, release+close on exit.
+    """Wait for in-flight items, claim available ones, release+close on exit,
+    except for the uids handed off to running work.
 
     When *reg* is ``None`` (no cache folder), yields an unblocked claim
     so that callers never need a ``None`` guard.
 
-    Self-deadlock is prevented internally: ``wait_for_inflight`` skips items
-    owned by the current PID, and ``claim`` treats same-PID rows as already
-    ours.
-
     Callers should call ``claim.record_worker_info`` inside the ``with``
-    block to stamp claimed items with a liveness signal.
+    block when submitit jobs run the claimed items.
     """
     if reg is None:
         yield InflightClaim(tuple(item_uids))
         return
     item_uids = list(item_uids)
-    pid = reg.pid
-    existing = reg.get(item_uids)
-    waited = any(info.pid != pid for info in existing.values())
-    # outer / re-entrant session's rows: not released by this one
-    pre_owned: set[str] = {uid for uid, info in existing.items() if info.pid == pid}
+    waited = bool(reg.get(item_uids))
     # all-or-nothing claim: no release on retry, no hold-and-wait deadlock
     while True:
         reg.wait_for_inflight(item_uids)
@@ -481,10 +449,13 @@ def inflight_session(
         msg = "Claim race: got %d/%d items, re-waiting"
         logger.info(msg, len(claimed), len(item_uids))
         time.sleep(random.uniform(0.5, 2.0))
-    owned = tuple(uid for uid in claimed if uid not in pre_owned)
-    claim = InflightClaim(tuple(claimed), owned=owned, waited=waited, pid=pid, _reg=reg)
+    folder = reg.db_path.parent
+    claim = InflightClaim(
+        tuple(claimed), waited=waited, token=reg.token, folder=folder, _reg=reg
+    )
     try:
         yield claim
     finally:
-        reg.release(list(claim.owned))  # pid-filtered: freed rows may be others' now
+        # token-filtered: freed rows may be others' now
+        reg.release([uid for uid in claim.uids if uid not in claim._handed_off])
         reg.close()
