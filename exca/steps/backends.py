@@ -24,6 +24,7 @@ import sys
 import traceback
 import typing as tp
 import warnings
+import weakref
 from concurrent import futures
 from pathlib import Path
 
@@ -542,6 +543,14 @@ class CacheDispatch:
     def submit(self) -> Submission | None:
         """Claim, recheck and run the tasks; the returned submission (if any) holds
         the claims until closed, otherwise they are released here."""
+        held = _HELD_ENTRIES.get()
+        for task in self.tasks:
+            folder = task.cache.paths.step_folder
+            for uid in task.items.uids:
+                live = Submission._LIVE.get((folder, uid))
+                if live is not None and (str(folder), uid) not in held:
+                    with contextlib.suppress(Exception):  # errors get cached
+                        live.wait((folder, uid))
         with contextlib.ExitStack() as stack:
             # step_uid order: concurrent dispatches agree on lock order
             ordered = sorted(self.tasks, key=lambda task: task.cache.paths.step_uid)
@@ -554,13 +563,19 @@ class CacheDispatch:
 
 
 class Submission:
-    """Running pool futures, one per shard of tasks. Shards release their claims
-    when done; the leftovers (e.g. cancelled shards) at ``close`` or gc."""
+    """Running pool futures or submitit jobs, one per shard of tasks. Shards release
+    their claims when done; ``close`` (also at gc) waits for all jobs, then releases
+    the leftovers (e.g. of crashed shards)."""
+
+    # temporary, until claims record their owner: same-process dispatches wait on these
+    _LIVE: tp.ClassVar[weakref.WeakValueDictionary[tuple[Path, str], Submission]] = (
+        weakref.WeakValueDictionary()
+    )
 
     def __init__(
         self,
-        jobs: dict[futures.Future[None], list[WriteTask]],
-        executor: futures.Executor,
+        jobs: dict[tp.Any, list[WriteTask]],  # pool future or submitit job → shard
+        executor: futures.Executor | None = None,
     ) -> None:
         self._jobs = list(jobs)
         self._entry_jobs = {
@@ -571,21 +586,21 @@ class Submission:
         }
         self._executor: futures.Executor | None = executor
         self._stack = contextlib.ExitStack()
+        Submission._LIVE.update(dict.fromkeys(self._entry_jobs, self))
 
     def wait(self, entry: tuple[Path, str] | None = None) -> None:
         """Block on the job computing *entry* (``(step_folder, uid)``), or on all
-        jobs then close if ``None`` (cancelling the others on failure)."""
+        jobs then close if ``None``."""
         if entry is not None:
-            if entry in self._entry_jobs:
-                self._entry_jobs[entry].result()
+            job = self._entry_jobs.get(entry)
+            if job is not None:
+                if not job.done():
+                    logger.info("Waiting for job %s", getattr(job, "job_id", job))
+                job.result()
             return
         try:
-            for job in futures.as_completed(self._jobs):
-                job.result()
-        except BaseException:
             for job in self._jobs:
-                job.cancel()
-            raise
+                job.result()
         finally:
             self.close()
         steps = {folder for folder, _ in self._entry_jobs}
@@ -593,16 +608,18 @@ class Submission:
         logger.info(msg, len(self._entry_jobs), len(steps))
 
     def close(self) -> None:
-        if self._executor is not None:
-            self._executor.shutdown(wait=True)
-            self._executor = None
-        self._stack.close()
+        try:
+            for job in self._jobs:
+                with contextlib.suppress(Exception):  # raised by reads instead
+                    job.result()
+        finally:  # also on Ctrl+C
+            if self._executor is not None:
+                self._executor.shutdown(wait=False)
+                self._executor = None
+            self._stack.close()
 
     def __del__(self) -> None:
-        if self._executor is not None:
-            self._executor.shutdown(wait=False, cancel_futures=True)
-            self._executor = None
-        self._stack.close()
+        self.close()
 
 
 class SubmissionSource:
@@ -798,10 +815,7 @@ class _SubmititBackend(Backend):
         n_items = sum(len(task.items.uids) for task in tasks)
         msg = "Sent %s items for %s steps into %s jobs on cluster '%s' (eg: %s)"
         logger.info(msg, n_items, len(tasks), len(shards), self._CLUSTER, jobs[0].job_id)
-        for job in jobs:
-            job.result()
-        logger.info("Finished processing %s items for %s steps", n_items, len(tasks))
-        return None
+        return Submission(dict(zip(jobs, shards)))
 
 
 class LocalProcess(_SubmititBackend):

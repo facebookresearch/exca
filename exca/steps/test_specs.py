@@ -205,14 +205,15 @@ def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
         steps=[
             _pid_recorder(tmp_path / "0.txt", cached),
             _pid_recorder(tmp_path / "1.txt", local),
+            _pid_recorder(tmp_path / "2.txt", local),  # pickles pending inputs
         ]
     )
-    assert chain.run(5.0) == 7.0
-    pids = [int((tmp_path / f"{k}.txt").read_text(encoding="utf-8")) for k in range(2)]
+    assert chain.run(5.0) == 8.0
+    pids = [int((tmp_path / f"{k}.txt").read_text(encoding="utf-8")) for k in range(3)]
     assert pids[0] == os.getpid(), "First step should run in the main process"
     assert pids[1] != os.getpid(), "Second step should run in a sub-process"
     # chain lookup falls back to the last step's cache
-    assert chain.lookup(5.0).result() == 7.0
+    assert chain.lookup(5.0).result() == 8.0
 
 
 # -----------------------------------------------------------------------------

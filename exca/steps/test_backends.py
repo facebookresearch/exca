@@ -29,8 +29,19 @@ class _FakeJob:
 
     job_id = "fake-job"
 
-    def result(self) -> None:
-        return None
+    def __init__(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> None:
+        self._func, self._args = func, args
+        self._done = False
+        self._result: tp.Any = None
+
+    def done(self) -> bool:
+        return self._done
+
+    def result(self) -> tp.Any:
+        if not self._done:
+            self._result = self._func(*self._args)
+            self._done = True
+        return self._result
 
 
 class _CapturingAutoExecutor:
@@ -46,8 +57,7 @@ class _CapturingAutoExecutor:
         type(self).captured.append((self._ctor, kw))
 
     def submit(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> _FakeJob:
-        func(*args)
-        return _FakeJob()
+        return _FakeJob(func, *args)
 
     def batch(self) -> contextlib.nullcontext[None]:
         return contextlib.nullcontext()
@@ -83,10 +93,17 @@ def test_slurm_backend_param_forwarding(
         "qos": "h100",
         "gpus_per_node": 4,
     }
-    step = conftest.Add(value=1, infra=infra)
-    assert step.run() == 1
+    step = conftest.Mult(coeff=2.0, infra=infra)
+    chain = Chain(steps=[step, conftest.Add(value=1)])
+    out = chain.run_many([1.0])
+    handle = step.lookup(1.0)
+    assert handle.status == "running", "run_many returns before the jobs run"
+    assert chain.run(1.0) == 3.0
+    assert list(out) == [3.0]
 
-    [(ctor, params)] = _CapturingAutoExecutor.captured
+    captured = _CapturingAutoExecutor.captured
+    assert len(captured) == 1, "a same-process rerun must wait for the pending job"
+    [(ctor, params)] = captured
     assert ctor["cluster"] == "slurm"
     assert params == {
         "slurm_partition": "gpu",
@@ -95,7 +112,6 @@ def test_slurm_backend_param_forwarding(
         "gpus_per_node": 4,
         "slurm_array_parallelism": 1,
     }
-    handle = step.lookup()
     job = handle.job()
     assert job is not None
     assert job.job_id == "fake-job"
@@ -106,7 +122,7 @@ def test_slurm_backend_param_forwarding(
 
     time.sleep(0.01)
     handle.clear_cache()
-    assert step.run() == 1
+    assert step.run(1.0) == 2.0
     with jobregistry.JobRegistry(handle.paths.step_folder) as registry:
         info = registry.get([handle.uid])
     assert info[handle.uid].submitted_at > submitted_at
@@ -334,10 +350,8 @@ def test_pool_abandoned(tmp_path: Path) -> None:
     del out
     gc.collect()
     with backends.inflight.InflightRegistry(folder) as reg:
-        assert not reg.get(), "gc must release the claims of cancelled shards"
-    time.sleep(0.5)
-    n_cached = sum(step.lookup(v).cached() for v in values)
-    assert n_cached < len(values), "gc must cancel queued shards"
+        assert not reg.get(), "gc must release the claims"
+    assert all(step.lookup(v).cached() for v in values), "gc must finish all shards"
 
 
 def test_recomputed_per_task(tmp_path: Path) -> None:
