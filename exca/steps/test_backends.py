@@ -30,16 +30,18 @@ class _FakeJob:
     job_id = "fake-job"
 
     def __init__(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> None:
-        self._call: tuple[tp.Any, ...] | None = (func, *args)
+        self._func, self._args = func, args
+        self._done = False
+        self._result: tp.Any = None
 
     def done(self) -> bool:
-        return self._call is None
+        return self._done
 
-    def result(self) -> None:
-        if self._call is not None:
-            func, *args = self._call
-            self._call = None
-            func(*args)
+    def result(self) -> tp.Any:
+        if not self._done:
+            self._result = self._func(*self._args)
+            self._done = True
+        return self._result
 
 
 class _CapturingAutoExecutor:
