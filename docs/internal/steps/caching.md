@@ -87,7 +87,7 @@ A dispatch is one `CacheDispatch` over its `WriteTask`s (one per step); the cons
 4. **Submit**: `Backend._submit(tasks)`, the only per-backend hook. All tasks go into one submission (a sweep of step variants shares one submitit array or pool), split into one shard per worker job. `WriteTask.mark_attempted` records force/retry attempts on the task's `_StepCache`.
 5. **Release**:
    - by the worker: each shard releases its claims when `run_and_cache` ends (success or failure);
-   - by the session exit, for shards that never ran: on return when `_submit` returns `None` (inline), or when a pool or submitit `Submission` closes (after a full wait, or at gc, a pool cancelling its queued shards);
+   - by the session exit, for shards that never ran: on return when `_submit` returns `None` (inline), or when a pool or submitit `Submission` closes (after a full wait, or at gc, both waiting for all its jobs first);
    - releases and worker-info updates filter on the claiming pid, so a late one never touches a competitor's newer claim.
 
    `Backend._run` reads a `Submission` lazily per uid via `SubmissionSource`.

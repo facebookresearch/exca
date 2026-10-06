@@ -92,12 +92,16 @@ def test_slurm_backend_param_forwarding(
         "gpus_per_node": 4,
     }
     step = conftest.Mult(coeff=2.0, infra=infra)
-    out = Chain(steps=[step, conftest.Add(value=1)]).run_many([1.0])
+    chain = Chain(steps=[step, conftest.Add(value=1)])
+    out = chain.run_many([1.0])
     handle = step.lookup(1.0)
     assert handle.status == "running", "run_many returns before the jobs run"
+    assert chain.run(1.0) == 3.0
     assert list(out) == [3.0]
 
-    [(ctor, params)] = _CapturingAutoExecutor.captured
+    captured = _CapturingAutoExecutor.captured
+    assert len(captured) == 1, "a same-process rerun must wait for the pending job"
+    [(ctor, params)] = captured
     assert ctor["cluster"] == "slurm"
     assert params == {
         "slurm_partition": "gpu",
@@ -344,10 +348,8 @@ def test_pool_abandoned(tmp_path: Path) -> None:
     del out
     gc.collect()
     with backends.inflight.InflightRegistry(folder) as reg:
-        assert not reg.get(), "gc must release the claims of cancelled shards"
-    time.sleep(0.5)
-    n_cached = sum(step.lookup(v).cached() for v in values)
-    assert n_cached < len(values), "gc must cancel queued shards"
+        assert not reg.get(), "gc must release the claims"
+    assert all(step.lookup(v).cached() for v in values), "gc must finish all shards"
 
 
 def test_recomputed_per_task(tmp_path: Path) -> None:

@@ -24,6 +24,7 @@ import sys
 import traceback
 import typing as tp
 import warnings
+import weakref
 from concurrent import futures
 from pathlib import Path
 
@@ -542,6 +543,14 @@ class CacheDispatch:
     def submit(self) -> Submission | None:
         """Claim, recheck and run the tasks; the returned submission (if any) holds
         the claims until closed, otherwise they are released here."""
+        held = _HELD_ENTRIES.get()
+        for task in self.tasks:
+            folder = task.cache.paths.step_folder
+            for uid in task.items.uids:
+                live = Submission._LIVE.get((folder, uid))
+                if live is not None and (str(folder), uid) not in held:
+                    with contextlib.suppress(Exception):  # errors get cached
+                        live.wait((folder, uid))
         with contextlib.ExitStack() as stack:
             # step_uid order: concurrent dispatches agree on lock order
             ordered = sorted(self.tasks, key=lambda task: task.cache.paths.step_uid)
@@ -555,7 +564,13 @@ class CacheDispatch:
 
 class Submission:
     """Running pool futures or submitit jobs, one per shard of tasks. Shards release
-    their claims when done; the leftovers (e.g. cancelled shards) at ``close`` or gc."""
+    their claims when done; ``close`` (also at gc) waits for all jobs, then releases
+    the leftovers (e.g. of crashed shards)."""
+
+    # temporary, until claims record their owner: same-process dispatches wait on these
+    _LIVE: tp.ClassVar[weakref.WeakValueDictionary[tuple[Path, str], Submission]] = (
+        weakref.WeakValueDictionary()
+    )
 
     def __init__(
         self,
@@ -571,10 +586,11 @@ class Submission:
         }
         self._executor: futures.Executor | None = executor
         self._stack = contextlib.ExitStack()
+        Submission._LIVE.update(dict.fromkeys(self._entry_jobs, self))
 
     def wait(self, entry: tuple[Path, str] | None = None) -> None:
         """Block on the job computing *entry* (``(step_folder, uid)``), or on all
-        jobs then close if ``None`` (a pool cancels the others on failure)."""
+        jobs then close if ``None``."""
         if entry is not None:
             job = self._entry_jobs.get(entry)
             if job is not None:
@@ -582,15 +598,9 @@ class Submission:
                     logger.info("Waiting for job %s", getattr(job, "job_id", job))
                 job.result()
             return
-        pool = self._executor is not None
         try:
-            for job in futures.as_completed(self._jobs) if pool else self._jobs:
+            for job in self._jobs:
                 job.result()
-        except BaseException:
-            if pool:
-                for job in self._jobs:
-                    job.cancel()
-            raise
         finally:
             self.close()
         steps = {folder for folder, _ in self._entry_jobs}
@@ -598,16 +608,18 @@ class Submission:
         logger.info(msg, len(self._entry_jobs), len(steps))
 
     def close(self) -> None:
-        if self._executor is not None:
-            self._executor.shutdown(wait=True)
-            self._executor = None
-        self._stack.close()
+        try:
+            for job in self._jobs:
+                with contextlib.suppress(Exception):  # raised by reads instead
+                    job.result()
+        finally:  # also on Ctrl+C
+            if self._executor is not None:
+                self._executor.shutdown(wait=False)
+                self._executor = None
+            self._stack.close()
 
     def __del__(self) -> None:
-        if self._executor is not None:
-            self._executor.shutdown(wait=False, cancel_futures=True)
-            self._executor = None
-        self._stack.close()
+        self.close()
 
 
 class SubmissionSource:
