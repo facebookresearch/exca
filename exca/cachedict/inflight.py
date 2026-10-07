@@ -188,9 +188,12 @@ class InflightRegistry(registry.AdvisoryRegistry):
     _SCHEMA: tp.ClassVar[str] = _SCHEMA
     _LABEL: tp.ClassVar[str] = "Inflight"
 
-    def __init__(self, folder: Path | str, token: str | None = None) -> None:
+    def __init__(self, folder: Path | str, worker: WorkerInfo | None = None) -> None:
         super().__init__(folder)
-        self.token = uuid.uuid4().hex if token is None else token  # of claims/releases
+        if worker is None:
+            token, host = uuid.uuid4().hex, socket.gethostname()
+            worker = WorkerInfo(pid=os.getpid(), token=token, host=host)
+        self.worker = worker  # claims, updates and releases as this worker
 
     def claim(self, item_uids: list[str]) -> list[str]:
         """Atomically claim all requested items, or none.
@@ -201,14 +204,15 @@ class InflightRegistry(registry.AdvisoryRegistry):
         prevents partial-claim hold-and-wait deadlocks across concurrent
         sessions with overlapping item sets.
 
-        Rows are stamped with this host and PID as liveness signal.
+        Rows are stamped with ``self.worker``, by default this host and PID.
 
         Returns the list of item_uids actually claimed: *item_uids* on
         success, empty on rollback.
         """
         if not item_uids:
             return []
-        token = self.token
+        w = self.worker
+        values = (w.token, w.host, w.pid, w.job_id, w.job_folder)
 
         # Phase 1: liveness checks outside the transaction (can be slow
         # for Slurm sacct calls — must not hold the DB write lock).
@@ -234,18 +238,17 @@ class InflightRegistry(registry.AdvisoryRegistry):
                     # Live worker blocks us — rollback everything.
                     conn.execute("ROLLBACK")
                     return []
-            host, pid = socket.gethostname(), os.getpid()
             conn.executemany(
                 f"INSERT OR REPLACE INTO inflight ({', '.join(_COLUMNS)}) "
-                "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
-                [(uid, token, host, pid, now) for uid in item_uids],
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(uid, *values, now) for uid in item_uids],
             )
             conn.execute("COMMIT")
             return list(item_uids)
 
         result = self._safe_execute("claim", list(item_uids), _do, create=True)
         msg = "Claimed %d/%d items (token=%s)"
-        logger.debug(msg, len(result), len(item_uids), token)
+        logger.debug(msg, len(result), len(item_uids), w.token)
         return result
 
     def update_worker_info(
@@ -257,7 +260,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
         job_folder: str | None = None,
     ) -> None:
         """Set the given Slurm ``job_id`` and ``job_folder``, and the worker's
-        ``pid`` on this host, on rows claimed with ``self.token``; fields not
+        ``pid`` on this host, on rows claimed with ``self.worker.token``; fields not
         given are kept."""
         if not item_uids:
             return
@@ -270,7 +273,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
                 "UPDATE inflight SET host = COALESCE(?, host), pid = COALESCE(?, pid), "
                 "job_id = COALESCE(?, job_id), job_folder = COALESCE(?, job_folder) "
                 "WHERE item_uid = ? AND token = ?",
-                [(*values, uid, self.token) for uid in item_uids],
+                [(*values, uid, self.worker.token) for uid in item_uids],
             )
             conn.execute("COMMIT")
 
@@ -280,7 +283,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
 
     def release(self, item_uids: list[str]) -> None:
         """Remove items from the registry (done or failed), only rows claimed
-        with ``self.token``."""
+        with ``self.worker.token``."""
         if not item_uids:
             return
 
@@ -288,7 +291,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
             conn.execute("BEGIN")
             conn.executemany(
                 "DELETE FROM inflight WHERE item_uid = ? AND token = ?",
-                [(uid, self.token) for uid in item_uids],
+                [(uid, self.worker.token) for uid in item_uids],
             )
             conn.execute("COMMIT")
 
@@ -343,7 +346,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
             inflight = self.get(list(remaining))
             alive_cache: dict[WorkerInfo, bool] = {}
             still_waiting: set[str] = set()
-            dead_uids: dict[str, list[str]] = collections.defaultdict(list)  # by token
+            dead_uids: dict[WorkerInfo, list[str]] = collections.defaultdict(list)
             for uid in remaining:
                 if uid not in inflight:
                     continue
@@ -351,13 +354,13 @@ class InflightRegistry(registry.AdvisoryRegistry):
                 if info not in alive_cache:
                     alive_cache[info] = info.is_alive()
                 if not alive_cache[info]:
-                    dead_uids[info.token].append(uid)
+                    dead_uids[info].append(uid)
                     dead_workers[info] += 1
                 else:
                     still_waiting.add(uid)
             # token filter: another waiter may have reclaimed and re-claimed the row
-            for dead_token, uids in dead_uids.items():
-                with InflightRegistry(self.db_path.parent, token=dead_token) as reg:
+            for dead, uids in dead_uids.items():
+                with InflightRegistry(self.db_path.parent, worker=dead) as reg:
                     reg.release(uids)
             remaining = still_waiting
             if remaining:
@@ -389,7 +392,7 @@ class InflightClaim:
 
     uids: tuple[str, ...]
     waited: bool = False
-    token: str = ""  # see `InflightRegistry.token`
+    worker: WorkerInfo | None = None  # see `InflightRegistry.worker`
     folder: Path | None = None  # of the registry
     _reg: InflightRegistry | None = dataclasses.field(
         default=None, repr=False, compare=False
@@ -413,6 +416,15 @@ class InflightClaim:
         elif isinstance(job, submitit.LocalJob):  # job_id: the subprocess pid
             self._reg.update_worker_info(list(uids), pid=int(job.job_id))
         # else in-process (debug): the claimer stays the liveness signal
+
+    def current_worker(self) -> WorkerInfo | None:
+        """The worker as recorded now for this claim's first item, with any job
+        stamped since; ``None`` if no longer held by this claim."""
+        if self.folder is None or self.worker is None or not self.uids:
+            return None
+        with InflightRegistry(self.folder) as reg:
+            info = reg.get([self.uids[0]]).get(self.uids[0])
+        return info if info is not None and info.token == self.worker.token else None
 
     def hand_off(self, uids: tp.Iterable[str]) -> None:
         """Leave the release of *uids* to the work running them."""
@@ -451,7 +463,7 @@ def inflight_session(
         time.sleep(random.uniform(0.5, 2.0))
     folder = reg.db_path.parent
     claim = InflightClaim(
-        tuple(claimed), waited=waited, token=reg.token, folder=folder, _reg=reg
+        tuple(claimed), waited=waited, worker=reg.worker, folder=folder, _reg=reg
     )
     try:
         yield claim

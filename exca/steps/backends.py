@@ -126,10 +126,15 @@ class _StepCache:
             try:
                 with inflight.InflightRegistry(paths.step_folder) as reg:
                     info = reg.get(uids)
+                    with jobregistry.JobRegistry(paths.step_folder) as jreg:
+                        submitted = jreg.get(list(info))
                     jobs: dict[str, str] = {}
                     for uid, worker in info.items():
                         if worker.job_id is None or worker.job_folder is None:
                             continue  # not submitit
+                        sub, expected = submitted.get(uid), ("slurm", worker.job_id)
+                        if sub is None or (sub.cluster, sub.job_id) != expected:
+                            continue  # not submitted for uid, e.g. an enclosing job
                         # Slurm array tasks share a scheduler job; avoid per-task cancels.
                         job_id = worker.job_id.split("_", 1)[0]
                         jobs[job_id] = worker.job_folder
@@ -364,15 +369,17 @@ class WriteTask:
         """The enclosing task's claim if it covers this task's cell (a chain shares
         its cell with its last step), else ``None``."""
         held = self.runner.held
-        if held is not None and held.folder == self.cache.paths.step_folder:
+        if held is None or held.folder != self.cache.paths.step_folder:
+            return None
+        if set(self.items.uids) <= set(held.uids):
             return held
         return None
 
     def release(self) -> None:
         """Free this task's claimed uids for competitors."""
         if self.claim is not None:
-            folder, token = self.cache.paths.step_folder, self.claim.token
-            with inflight.InflightRegistry(folder, token=token) as reg:
+            folder, worker = self.cache.paths.step_folder, self.claim.worker
+            with inflight.InflightRegistry(folder, worker=worker) as reg:
                 reg.release(list(self.items.uids))
 
     def mark_attempted(self) -> None:
@@ -399,7 +406,10 @@ class WriteTask:
             folder.mkdir(parents=True, exist_ok=True)
         written_uids: list[str] = []
         try:
-            runner = dataclasses.replace(self.runner, held=self.claim)
+            held = self.claim
+            if held is not None:  # this shard's uids: their rows carry its job
+                held = dataclasses.replace(held, uids=tuple(self.items.uids))
+            runner = dataclasses.replace(self.runner, held=held)
             result_items = self.step._run_items(runner, self.items)
             with cd.write():
                 for i, result in enumerate(result_items):
@@ -511,10 +521,12 @@ class CacheDispatch:
             return None
         folder, held = task.cache.paths.step_folder, task.held_claim()
         if held is not None:  # reopened: may be unpickled, and stamps this task's jobs
-            reg = stack.enter_context(inflight.InflightRegistry(folder, token=held.token))
+            reg = stack.enter_context(inflight.InflightRegistry(folder, held.worker))
             claim = dataclasses.replace(held, _reg=reg)
         else:
-            reg = inflight.InflightRegistry(folder)
+            enclosing = task.runner.held  # its work also runs this nested claim
+            worker = None if enclosing is None else enclosing.current_worker()
+            reg = inflight.InflightRegistry(folder, worker=worker)
             claim = stack.enter_context(inflight.inflight_session(reg, pending))
         return dataclasses.replace(task.select(list(pending)), claim=claim)
 

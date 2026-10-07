@@ -80,6 +80,7 @@ reclaims dead workers).
 An `InflightRegistry` claims, updates and releases under a random `token`; any live row blocks, the same process's included.
 Rows record the claimer's host and PID, then the submitted job if any; liveness checks the job, else the PID on the same host, else expires.
 A Chain shares its cell with its last step: the inner dispatch reuses the enclosing task's claim (`Runner.held`) instead of claiming it again.
+A claim made inside a running job stays alive as long as that job; `clear` only cancels jobs submitted for the cleared items.
 
 A dispatch is one `CacheDispatch` over its `WriteTask`s (one per step); the constructor prepares, `submit()` runs the rest:
 

@@ -15,11 +15,12 @@ import submitit
 from . import inflight, registry
 
 _DEAD_PID = 2**20 + 7
+_DEAD = inflight.WorkerInfo(pid=_DEAD_PID, token="dead", host=socket.gethostname())
 
 
 def test_inflight_lifecycle(tmp_path: Path) -> None:
     reg = inflight.InflightRegistry(tmp_path)
-    dead = inflight.InflightRegistry(tmp_path, token="dead")
+    dead = inflight.InflightRegistry(tmp_path, worker=_DEAD)
 
     # Claim, query
     claimed = reg.claim(["a", "b", "c"])
@@ -39,9 +40,8 @@ def test_inflight_lifecycle(tmp_path: Path) -> None:
 
     # Dead worker reclaim via claim()
     dead.claim(["x"])
-    dead.update_worker_info(["x"], pid=_DEAD_PID)
     claimed = reg.claim(["x"])
-    assert claimed == ["x"] and reg.get(["x"])["x"].token == reg.token
+    assert claimed == ["x"] and reg.get(["x"])["x"].token == reg.worker.token
 
     # Live conflict: cannot steal from a live worker
     reg.claim(["y"])
@@ -89,9 +89,8 @@ def test_inflight_session(tmp_path: Path) -> None:
 
 def test_wait_for_inflight(tmp_path: Path) -> None:
     # Dead worker: wait detects dead PID and reclaims
-    reg = inflight.InflightRegistry(tmp_path, token="dead")
+    reg = inflight.InflightRegistry(tmp_path, worker=_DEAD)
     reg.claim(["stale"])
-    reg.update_worker_info(["stale"], pid=_DEAD_PID)
     reg2 = inflight.InflightRegistry(tmp_path)
     reg2.wait_for_inflight(["stale"])
     assert reg2.get(["stale"]) == {}, "dead worker's item should be reclaimed"
@@ -127,7 +126,7 @@ def test_db_deletion_unblocks_wait(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Deleting inflight.db while a process is waiting should unblock it."""
-    reg = inflight.InflightRegistry(tmp_path, token="blocker")
+    reg = inflight.InflightRegistry(tmp_path, inflight.WorkerInfo(pid=0, token="blocker"))
     reg.claim(["a", "b"])
 
     # Make the blocker appear alive so wait_for_inflight enters the polling loop
@@ -178,7 +177,8 @@ def test_inflight_session_retries_lost_claim(
         original_wait(self, item_uids)
         wait_calls += 1
         if wait_calls == 1:
-            rival = inflight.InflightRegistry(tmp_path, token="rival")
+            worker = inflight.WorkerInfo(pid=0, token="rival")
+            rival = inflight.InflightRegistry(tmp_path, worker)
             rival.claim(["x"])
             rival.close()
 
