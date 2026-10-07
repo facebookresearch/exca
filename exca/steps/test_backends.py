@@ -9,9 +9,12 @@
 import contextlib
 import gc
 import logging
+import os
 import sys
+import threading
 import time
 import typing as tp
+from concurrent import futures
 from pathlib import Path
 
 import pydantic
@@ -25,23 +28,29 @@ from .base import Chain, Step
 
 
 class _FakeJob:
-    """Pickleable stand-in for submitit.Job; used by fake executors below."""
+    """Stand-in for submitit.Job, run in a thread once ``gate`` is set; used by
+    fake executors below."""
 
     job_id = "fake-job"
+    gate = threading.Event()
+    gate.set()
 
     def __init__(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> None:
-        self._func, self._args = func, args
-        self._done = False
-        self._result: tp.Any = None
+        self._future: futures.Future[tp.Any] = futures.Future()
+        threading.Thread(target=self._run, args=(func, args), daemon=True).start()
+
+    def _run(self, func: tp.Callable[..., tp.Any], args: tuple[tp.Any, ...]) -> None:
+        _FakeJob.gate.wait()
+        try:
+            self._future.set_result(func(*args))
+        except Exception as e:
+            self._future.set_exception(e)
 
     def done(self) -> bool:
-        return self._done
+        return self._future.done()
 
     def result(self) -> tp.Any:
-        if not self._done:
-            self._result = self._func(*self._args)
-            self._done = True
-        return self._result
+        return self._future.result()
 
 
 class _CapturingAutoExecutor:
@@ -85,6 +94,7 @@ def test_slurm_backend_param_forwarding(
     unset generics (e.g. ``tasks_per_node``) don't leak through."""
     _CapturingAutoExecutor.captured = []
     monkeypatch.setattr(submitit, "AutoExecutor", _CapturingAutoExecutor)
+    monkeypatch.setattr(_FakeJob, "gate", threading.Event())
 
     infra: tp.Any = {
         "backend": "Slurm",
@@ -95,11 +105,11 @@ def test_slurm_backend_param_forwarding(
     }
     step = conftest.Mult(coeff=2.0, infra=infra)
     chain = Chain(steps=[step, conftest.Add(value=1)])
-    out = chain.run_many([1.0])
+    chain.run_many([1.0])  # results dropped: the job keeps its claim
     handle = step.lookup(1.0)
     assert handle.status == "running", "run_many returns before the jobs run"
+    threading.Timer(0.2, _FakeJob.gate.set).start()
     assert chain.run(1.0) == 3.0
-    assert list(out) == [3.0]
 
     captured = _CapturingAutoExecutor.captured
     assert len(captured) == 1, "a same-process rerun must wait for the pending job"
@@ -349,9 +359,28 @@ def test_pool_abandoned(tmp_path: Path) -> None:
     folder = step.lookup(2.0).paths.step_folder
     del out
     gc.collect()
+    assert not all(step.lookup(v).cached() for v in values), "gc must not wait"
+    assert list(step.run_many(values)) == [v + 1 for v in values]
     with backends.inflight.InflightRegistry(folder) as reg:
-        assert not reg.get(), "gc must release the claims"
-    assert all(step.lookup(v).cached() for v in values), "gc must finish all shards"
+        assert not reg.get(), "abandoned shards must release their claims"
+
+
+def test_pool_crash_releases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def crash(shard: list[backends.WriteTask]) -> None:  # e.g. an OOM-killed process
+        raise RuntimeError("worker died")
+
+    monkeypatch.setattr(backends, "_multi_run_and_cache", crash)
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
+    step = conftest.Mult(coeff=2.0, infra=infra)
+    out = step.run_many([1.0, 2.0])
+    with pytest.raises(RuntimeError, match="worker died"):
+        list(out)
+    with backends.inflight.InflightRegistry(step.lookup(1.0).paths.step_folder) as reg:
+        for _ in range(50):  # done-callbacks may lag the raised result
+            if not reg.get():
+                break
+            time.sleep(0.1)
+        assert not reg.get(), "a crashed worker's claims must be released"
 
 
 def test_recomputed_per_task(tmp_path: Path) -> None:
@@ -402,7 +431,20 @@ def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
 
 def test_nested_dispatch_on_shared_cell(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
-    inner = Chain(steps=[conftest.Mult(coeff=3.0, infra=infra)], infra=infra)
+    inner = Chain(steps=[_SlowAdd(value=1, infra=infra)], infra=infra)
     chain = Chain(steps=[conftest.Add(value=1.0), inner], infra=infra)
     # identity flattens recursively: the 3 infras share one cache entry
-    assert chain.run(1.0) == 6.0
+    pids: set[int] = set()
+    folder = chain.lookup(1.0).paths.step_folder
+    with (
+        futures.ThreadPoolExecutor(1) as pool,
+        backends.inflight.InflightRegistry(folder) as reg,
+    ):
+        future = pool.submit(chain.run, 1.0)
+        while not future.done():
+            for worker in reg.get().values():
+                pids.add(worker.liveness.pid)  # type: ignore[attr-defined]
+            time.sleep(0.01)
+    assert future.result() == 3.0
+    jobs = pids - {os.getpid()}
+    assert len(jobs) == 3, "each nested job must take over the shared cell's row"

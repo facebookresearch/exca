@@ -48,6 +48,7 @@ class Runner:
 
     prefix: tuple[Step, ...] = ()
     mode: identity.ModeType = "cached"
+    held: backends.inflight.InflightClaim | None = None  # of the enclosing WriteTask
 
     def dispatch(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Resolve, then route *batch*: reuse/remember warm carrier, run inline or

@@ -76,8 +76,11 @@ Two callers hitting the same `(step_uid, uid)` would race. The
 `inflight_session` context manager wraps submit-and-wait: it waits for
 other owners, claims all requested uids, yields an `InflightClaim`, then
 releases on exit. Waits go through `wait_for_inflight` (polls the DB;
-reclaims dead PIDs).
-An `InflightRegistry` acts as its `pid` (default: this process): claims, worker-info updates and releases all filter on it.
+reclaims dead workers).
+An `InflightRegistry` claims, updates and releases under a random `token`; any live row blocks, the same process's included.
+Rows record what runs the item: the submitted job, else the claimer's Slurm job or process; liveness checks it (a process from its host only), else expires.
+A Chain shares its cell with its last step: the inner dispatch reuses the enclosing task's claim (`Runner.held`) instead of claiming it again.
+A claim made inside a running job stays alive as long as that job; `clear` cancels the items' jobs, except the one it runs in.
 
 A dispatch is one `CacheDispatch` over its `WriteTask`s (one per step); the constructor prepares, `submit()` runs the rest:
 
@@ -86,9 +89,9 @@ A dispatch is one `CacheDispatch` over its `WriteTask`s (one per step); the cons
 3. **Recheck** under the claims: re-read cache state, clear what gets recomputed. Stops a competitor that populated mid-wait from handing its value back to a `force`; lets `retry` recompute cached errors.
 4. **Submit**: `Backend._submit(tasks)`, the only per-backend hook. All tasks go into one submission (a sweep of step variants shares one submitit array or pool), split into one shard per worker job. `WriteTask.mark_attempted` records force/retry attempts on the task's `_StepCache`.
 5. **Release**:
-   - by the worker: each shard releases its claims when `run_and_cache` ends (success or failure);
-   - by the session exit, for shards that never ran: on return when `_submit` returns `None` (inline), or when a pool or submitit `Submission` closes (after a full wait, or at gc, both waiting for all its jobs first);
-   - releases and worker-info updates filter on the claiming pid, so a late one never touches a competitor's newer claim.
+   - by the worker: each shard releases its claims when `run_and_cache` ends (success or failure), or for pools when its future is done (crashed processes included);
+   - by the session exit, for what was not handed off to a `Submission`; dropping a `Submission` neither waits nor releases;
+   - releases and worker-info updates filter on the claiming token, so a late one never touches a competitor's newer claim.
 
    `Backend._run` reads a `Submission` lazily per uid via `SubmissionSource`.
 

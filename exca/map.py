@@ -407,7 +407,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             np.random.shuffle(missing)
             reg = self._inflight_registry()
             with inflight.inflight_session(reg, [k for k, _ in missing]) as claim:
-                claim.record_worker_info()
                 missing = self._recheck_after_wait(missing, claim)
                 if pool is None and missing:
                     msg = "Computing %s missing items"
