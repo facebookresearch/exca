@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.6.0 - 26-10-07
+
 ### Breaking
 
 - Cache files follow the process umask instead of being forced to `0o777`; `permissions` options were removed. For shared caches, call `exca.utils.setup_shared_folder(folder)` once on the cache root; without default ACL support, also set `umask 002`. [#324, #332]
