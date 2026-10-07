@@ -10,12 +10,12 @@ import time
 from pathlib import Path
 
 import pytest
-import submitit
 
 from . import inflight, registry
 
 _DEAD_PID = 2**20 + 7
-_DEAD = inflight.WorkerInfo(pid=_DEAD_PID, token="dead", host=socket.gethostname())
+_DEAD_LIVENESS = inflight.Pid(host=socket.gethostname(), pid=_DEAD_PID)
+_DEAD = inflight.WorkerInfo(token="dead", liveness=_DEAD_LIVENESS)
 
 
 def test_inflight_lifecycle(tmp_path: Path) -> None:
@@ -28,9 +28,10 @@ def test_inflight_lifecycle(tmp_path: Path) -> None:
     assert set(reg.get(["a", "b", "c"])) == {"a", "b", "c"}
 
     # Update worker info (post-submission update)
-    reg.update_worker_info(["a", "b"], job_id="12345", job_folder="/logs")
+    job = inflight.Slurm(job_id="12345", folder="/logs")
+    reg.update_liveness(["a", "b"], job)
     info = reg.get(["a", "b"])
-    assert info["a"].job_id == "12345" and info["b"].job_folder == "/logs"
+    assert info["a"].liveness == job
 
     # Release subset, verify remainder
     reg.release(["a", "b"])
@@ -71,7 +72,7 @@ def test_inflight_session(tmp_path: Path) -> None:
         assert not claimed.waited
         info = seen(["x", "y"])
         assert set(info) == {"x", "y"}
-        assert (info["x"].host, info["x"].pid) == (socket.gethostname(), os.getpid())
+        assert info["x"].liveness == inflight.Pid.here()
     assert seen(["x", "y"]) == {}
 
     # Exception: items still released in finally.
@@ -98,26 +99,24 @@ def test_wait_for_inflight(tmp_path: Path) -> None:
     reg.close()
 
 
+_ME = inflight.Pid.here()
+_ELSEWHERE = inflight.Pid(host="elsewhere", pid=os.getpid())
+_FAKE_JOB = inflight.Slurm(job_id="99999", folder="/nonexistent")
+
+
 @pytest.mark.parametrize(
-    "host,pid,job_id,age,alive",
+    "liveness,age,alive",
     [
-        ("elsewhere", os.getpid(), None, 0, True),  # other host: alive until timeout
-        ("elsewhere", os.getpid(), None, 700, False),
-        ("here", os.getpid(), None, 700, True),  # same host: pid, no timeout
-        ("here", _DEAD_PID, None, 0, False),
-        ("here", _DEAD_PID, "99999", 0, False),  # fake job id must not hang
-        ("elsewhere", os.getpid(), "12345", 700, False),  # unreconstructable job
+        (_ELSEWHERE, 0, True),  # other host: alive until timeout
+        (_ELSEWHERE, 700, False),
+        (_ME, 700, True),  # same host: pid, no timeout
+        (_DEAD_LIVENESS, 0, False),
+        (_FAKE_JOB, 700, False),  # unreconstructable job
     ],
 )
-def test_is_alive(
-    host: str, pid: int, job_id: str | None, age: float, alive: bool
-) -> None:
+def test_is_alive(liveness: inflight.Liveness, age: float, alive: bool) -> None:
     worker = inflight.WorkerInfo(
-        pid=pid,
-        host=socket.gethostname() if host == "here" else host,
-        job_id=job_id,
-        job_folder=None if job_id is None else "/nonexistent",
-        claimed_at=time.time() - age,
+        token="t", liveness=liveness, claimed_at=time.time() - age
     )
     assert worker.is_alive(no_job_timeout=600) is alive
 
@@ -126,7 +125,7 @@ def test_db_deletion_unblocks_wait(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Deleting inflight.db while a process is waiting should unblock it."""
-    reg = inflight.InflightRegistry(tmp_path, inflight.WorkerInfo(pid=0, token="blocker"))
+    reg = inflight.InflightRegistry(tmp_path, inflight.WorkerInfo("blocker", None))
     reg.claim(["a", "b"])
 
     # Make the blocker appear alive so wait_for_inflight enters the polling loop
@@ -177,7 +176,7 @@ def test_inflight_session_retries_lost_claim(
         original_wait(self, item_uids)
         wait_calls += 1
         if wait_calls == 1:
-            worker = inflight.WorkerInfo(pid=0, token="rival")
+            worker = inflight.WorkerInfo("rival", None)
             rival = inflight.InflightRegistry(tmp_path, worker)
             rival.claim(["x"])
             rival.close()
@@ -197,23 +196,3 @@ def test_inflight_session_retries_lost_claim(
         assert claimed.uids == ("x",)
         assert claimed.waited
     assert wait_calls >= 2, f"expected retry, got {wait_calls} wait calls"
-
-
-def test_record_worker_info_dispatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    slurm = submitit.SlurmJob[None](folder=tmp_path, job_id="42")
-    local = submitit.LocalJob[None](folder=tmp_path, job_id="1234")
-
-    reg = inflight.InflightRegistry(tmp_path)
-    with inflight.inflight_session(reg, ["s", "l"]) as claim:
-        claim.record_worker_info(slurm, uids=["s"])
-        claim.record_worker_info(local, uids=["l"])
-        info = reg.get(["s", "l"])
-        # claim handed to the Slurm job, whose local subprocess runs on its node
-        monkeypatch.setattr(inflight.socket, "gethostname", lambda: "node-2")
-        claim.record_worker_info(local, uids=["s"])
-        s = reg.get(["s"])["s"]
-    assert (info["s"].job_id, info["s"].job_folder) == ("42", str(slurm.paths.folder))
-    assert (info["l"].pid, info["l"].job_id) == (1234, None)
-    assert (s.host, s.pid, s.job_id) == ("node-2", 1234, "42"), "job must be kept"

@@ -13,6 +13,8 @@ corrupt or inaccessible, all methods degrade gracefully (log a
 warning and behave as if the registry is empty).
 """
 
+from __future__ import annotations
+
 import collections
 import contextlib
 import dataclasses
@@ -28,7 +30,10 @@ import typing as tp
 import uuid
 from pathlib import Path
 
+import pydantic
 import submitit
+
+from exca import helpers
 
 from . import registry
 
@@ -38,38 +43,117 @@ _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS inflight (
     item_uid    TEXT PRIMARY KEY,
     token       TEXT NOT NULL,
-    host        TEXT NOT NULL,
-    pid         INTEGER NOT NULL,
-    job_id      TEXT,
-    job_folder  TEXT,
+    liveness    TEXT NOT NULL,
     claimed_at  REAL NOT NULL
 );
 """
 
 # Column order matches `WorkerInfo._from_row` and the INSERT statement.
-_COLUMNS = ["item_uid", "token", "host", "pid", "job_id", "job_folder", "claimed_at"]
+_COLUMNS = ["item_uid", "token", "liveness", "claimed_at"]
 
 
-@functools.lru_cache(maxsize=1)
-def _has_sacct() -> bool:
-    """Check whether sacct is available (cached after first call).
+class Liveness(helpers.DiscriminatedModel, discriminator_key="kind"):
+    """What runs a claimed item (e.g. a Slurm job, or a process)."""
 
-    Safety net: on machines without sacct (dev, CI), submitit's
-    SlurmJob.done() silently returns False instead of raising, making dead
-    jobs appear alive and causing wait_for_inflight to hang. Without sacct,
-    is_alive falls back to the claimer's host and PID.
-    """
-    return shutil.which("sacct") is not None
+    model_config = pydantic.ConfigDict(frozen=True)
+
+    @classmethod
+    def here(cls) -> Liveness | None:
+        """What runs the current process: the outermost detected kind."""
+        if cls is not Liveness:
+            raise NotImplementedError(f"{cls.__name__} must override here()")
+        kinds = reversed(Liveness.__subclasses__())  # later kinds enclose earlier ones
+        return next((x for kind in kinds if (x := kind.here()) is not None), None)
+
+    def is_alive(self) -> bool | None:
+        """Whether it still runs; ``None`` when unknown from this host."""
+        raise NotImplementedError
+
+    @classmethod
+    def cancel(cls, lives: list[tp.Self]) -> None:
+        """Stop what runs these items, if possible (by default, nothing)."""
 
 
-def _is_pid_alive(pid: int) -> bool:
+class Pid(Liveness):  # defined first: innermost (fallback)
+    """A process, checkable from its host only."""
+
+    host: str
+    pid: int
+
+    @classmethod
+    def here(cls) -> Pid:
+        return cls(host=socket.gethostname(), pid=os.getpid())
+
+    def is_alive(self) -> bool | None:
+        if self.host != socket.gethostname():
+            return None
+        try:
+            os.kill(self.pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass
+        return True
+
+
+class Slurm(Liveness):
+    """A Slurm job, checkable where sacct is available."""
+
+    job_id: str
+    folder: str
+
+    def model_post_init(self, context: tp.Any) -> None:
+        _ = self.job  # registered in submitit's watcher: one sacct call per get()
+
+    @classmethod
+    def here(cls) -> Slurm | None:
+        try:
+            env = submitit.JobEnvironment()
+        except RuntimeError:  # not in a submitit job
+            return None
+        if env.cluster != "slurm":
+            return None
+        return cls(job_id=env.job_id, folder=str(env.paths.folder))
+
+    @functools.cached_property
+    def job(self) -> submitit.SlurmJob[tp.Any] | None:
+        if shutil.which("sacct") is None:  # else done() stays False: dead looks alive
+            return None
+        return submitit.SlurmJob(self.folder, self.job_id)
+
+    def is_alive(self) -> bool | None:
+        if self.job is None:
+            return None
+        try:
+            return not self.job.done()
+        except Exception:
+            return False
+
+    @classmethod
+    def cancel(cls, lives: list[Slurm]) -> None:
+        # Slurm array tasks share a scheduler job; avoid per-task cancels.
+        for job_id, folder in {(x.job_id.split("_", 1)[0], x.folder) for x in lives}:
+            submitit.SlurmJob(folder=folder, job_id=job_id).cancel()
+
+    def __str__(self) -> str:
+        """e.g. ``'64059024 [slurm:FAILED]'``; array tasks use their base id
+        (the ``_<task>`` suffix is dropped)."""
+        try:
+            state = "unchecked" if self.job is None else self.job.state
+        except Exception:
+            state = "?"
+        return f"{self.job_id.split('_')[0]} [slurm:{state}]"
+
+
+_LIVENESS: pydantic.TypeAdapter[Liveness | None] = pydantic.TypeAdapter(Liveness | None)
+
+
+@functools.lru_cache(maxsize=4096)
+def _parse_liveness(raw: str) -> Liveness | None:
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+        return _LIVENESS.validate_json(raw)
+    except pydantic.ValidationError:  # e.g. from another exca version: expires
+        return None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -80,43 +164,18 @@ class WorkerInfo:
     Frozen so it can be used as a dict key for grouping liveness checks.
     """
 
-    pid: int
-    token: str = ""  # of the claiming registry
-    host: str = ""
-    job_id: str | None = None  # Slurm job submitted for the item
-    job_folder: str | None = None
+    token: str  # of the claiming registry
+    liveness: Liveness | None  # None: no usable signal
     claimed_at: float | None = None
 
-    def __post_init__(self) -> None:
-        # Pre-register with submitit's shared SlurmInfoWatcher so that
-        # batch sacct calls cover all workers created in the same
-        # get() result set (one sacct call instead of N).
-        job: tp.Any = None
-        if self.job_id is not None and self.job_folder is not None and _has_sacct():
-            try:
-                job = submitit.SlurmJob(job_id=self.job_id, folder=self.job_folder)
-            except Exception:
-                pass
-        object.__setattr__(self, "_job", job)
-
     @classmethod
-    def _from_row(
-        cls, row: tuple[str, str, str, int, str | None, str | None, float]
-    ) -> tuple[str, "WorkerInfo"]:
+    def _from_row(cls, row: tuple[str, str, str, float]) -> tuple[str, WorkerInfo]:
         """Convert a row ordered as ``_COLUMNS``."""
-        uid, token, host, pid, job_id, job_folder, claimed_at = row
-        return uid, cls(
-            pid=pid,
-            token=token,
-            host=host,
-            job_id=job_id,
-            job_folder=job_folder,
-            claimed_at=claimed_at,
-        )
+        uid, token, liveness, claimed_at = row
+        return uid, cls(token, _parse_liveness(liveness), claimed_at)
 
     def is_alive(self, no_job_timeout: float = 600.0) -> bool:
-        """Check if this worker is still running: via sacct for Slurm jobs, via
-        the PID on the claimer's host, else presumed dead after a timeout.
+        """Check if this worker is still running.
 
         Parameters
         ----------
@@ -124,39 +183,19 @@ class WorkerInfo:
             Seconds after ``claimed_at`` beyond which a claim with no
             usable liveness signal is presumed dead.
         """
-        job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
-        if job is not None:
-            try:
-                return not job.done()
-            except Exception:
-                return False
-        if self.host == socket.gethostname():
-            return _is_pid_alive(self.pid)
+        alive = None if self.liveness is None else self.liveness.is_alive()
+        if alive is not None:
+            return alive
         return self.claimed_at is None or time.time() - self.claimed_at <= no_job_timeout
 
-    def describe(self) -> str:
-        """Compact identity + liveness status for logging, e.g.
-        ``'64059024 [slurm:FAILED]'`` or ``'pid=1234@host'``. Slurm array
-        tasks use their base id (the ``_<task>`` suffix is dropped)."""
-        if self.job_id is None:
-            return f"pid={self.pid}@{self.host}"
-        ident = self.job_id.split("_")[0]  # array base id
-        job: submitit.SlurmJob | None = self._job  # type: ignore[attr-defined]
-        if job is None:
-            return f"{ident} [slurm:unchecked]"
-        try:
-            return f"{ident} [slurm:{job.state}]"
-        except Exception:
-            return f"{ident} [slurm:?]"
 
-
-def _summarize_workers(counts: tp.Mapping["WorkerInfo", int]) -> str:
+def _summarize_workers(counts: tp.Mapping[WorkerInfo, int]) -> str:
     """Render blocking/dead workers as a compact, bounded string, merging array
-    tasks that share the same base id and status (see ``WorkerInfo.describe``)."""
+    tasks that share the same base id and status (see ``Slurm.__str__``)."""
     top = 12
     merged: collections.Counter[str] = collections.Counter()
     for info, n in counts.items():
-        merged[info.describe()] += n
+        merged[str(info.liveness)] += n
     parts = [f"{label} x{count}" for label, count in merged.most_common(top)]
     if len(merged) > top:
         parts.append(f"(+{len(merged) - top} more)")
@@ -191,8 +230,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
     def __init__(self, folder: Path | str, worker: WorkerInfo | None = None) -> None:
         super().__init__(folder)
         if worker is None:
-            token, host = uuid.uuid4().hex, socket.gethostname()
-            worker = WorkerInfo(pid=os.getpid(), token=token, host=host)
+            worker = WorkerInfo(token=uuid.uuid4().hex, liveness=Liveness.here())
         self.worker = worker  # claims, updates and releases as this worker
 
     def claim(self, item_uids: list[str]) -> list[str]:
@@ -204,7 +242,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
         prevents partial-claim hold-and-wait deadlocks across concurrent
         sessions with overlapping item sets.
 
-        Rows are stamped with ``self.worker``, by default this host and PID.
+        Rows are stamped with ``self.worker``, by default ``Liveness.here()``.
 
         Returns the list of item_uids actually claimed: *item_uids* on
         success, empty on rollback.
@@ -212,7 +250,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
         if not item_uids:
             return []
         w = self.worker
-        values = (w.token, w.host, w.pid, w.job_id, w.job_folder)
+        values = (w.token, _LIVENESS.dump_json(w.liveness).decode())
 
         # Phase 1: liveness checks outside the transaction (can be slow
         # for Slurm sacct calls — must not hold the DB write lock).
@@ -240,7 +278,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
                     return []
             conn.executemany(
                 f"INSERT OR REPLACE INTO inflight ({', '.join(_COLUMNS)}) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?)",
                 [(uid, *values, now) for uid in item_uids],
             )
             conn.execute("COMMIT")
@@ -251,35 +289,22 @@ class InflightRegistry(registry.AdvisoryRegistry):
         logger.debug(msg, len(result), len(item_uids), w.token)
         return result
 
-    def update_worker_info(
-        self,
-        item_uids: list[str],
-        *,
-        pid: int | None = None,
-        job_id: str | None = None,
-        job_folder: str | None = None,
-    ) -> None:
-        """Set the given Slurm ``job_id`` and ``job_folder``, and the worker's
-        ``pid`` on this host, on rows claimed with ``self.worker.token``; fields not
-        given are kept."""
+    def update_liveness(self, item_uids: list[str], liveness: Liveness) -> None:
+        """Set *liveness* on rows claimed with ``self.worker.token``."""
         if not item_uids:
             return
-        host = None if pid is None else socket.gethostname()
-        values = (host, pid, job_id, job_folder)
+        raw = _LIVENESS.dump_json(liveness).decode()
 
         def _do(conn: sqlite3.Connection) -> None:
             conn.execute("BEGIN")
             conn.executemany(
-                "UPDATE inflight SET host = COALESCE(?, host), pid = COALESCE(?, pid), "
-                "job_id = COALESCE(?, job_id), job_folder = COALESCE(?, job_folder) "
-                "WHERE item_uid = ? AND token = ?",
-                [(*values, uid, self.worker.token) for uid in item_uids],
+                "UPDATE inflight SET liveness = ? WHERE item_uid = ? AND token = ?",
+                [(raw, uid, self.worker.token) for uid in item_uids],
             )
             conn.execute("COMMIT")
 
         self._safe_execute("update", None, _do)
-        msg = "Updated worker info for %d items (pid=%s, job_id=%s)"
-        logger.debug(msg, len(item_uids), pid, job_id)
+        logger.debug("Updated liveness of %d items: %s", len(item_uids), raw)
 
     def release(self, item_uids: list[str]) -> None:
         """Remove items from the registry (done or failed), only rows claimed
@@ -409,22 +434,14 @@ class InflightClaim:
         """Stamp the submitit *job* running *uids* as their liveness signal."""
         if self._reg is None:
             return
+        liveness: Liveness
         if isinstance(job, submitit.SlurmJob):
-            self._reg.update_worker_info(
-                list(uids), job_id=str(job.job_id), job_folder=str(job.paths.folder)
-            )
+            liveness = Slurm(job_id=str(job.job_id), folder=str(job.paths.folder))
         elif isinstance(job, submitit.LocalJob):  # job_id: the subprocess pid
-            self._reg.update_worker_info(list(uids), pid=int(job.job_id))
-        # else in-process (debug): the claimer stays the liveness signal
-
-    def current_worker(self) -> WorkerInfo | None:
-        """The worker as recorded now for this claim's first item, with any job
-        stamped since; ``None`` if no longer held by this claim."""
-        if self.folder is None or self.worker is None or not self.uids:
-            return None
-        with InflightRegistry(self.folder) as reg:
-            info = reg.get([self.uids[0]]).get(self.uids[0])
-        return info if info is not None and info.token == self.worker.token else None
+            liveness = Pid(host=socket.gethostname(), pid=int(job.job_id))
+        else:  # in-process (debug): the claimer's stays
+            return
+        self._reg.update_liveness(list(uids), liveness)
 
     def hand_off(self, uids: tp.Iterable[str]) -> None:
         """Leave the release of *uids* to the work running them."""

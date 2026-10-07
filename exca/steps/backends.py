@@ -125,21 +125,14 @@ class _StepCache:
         if paths.step_folder.exists():
             try:
                 with inflight.InflightRegistry(paths.step_folder) as reg:
-                    info = reg.get(uids)
-                    with jobregistry.JobRegistry(paths.step_folder) as jreg:
-                        submitted = jreg.get(list(info))
-                    jobs: dict[str, str] = {}
-                    for uid, worker in info.items():
-                        if worker.job_id is None or worker.job_folder is None:
-                            continue  # not submitit
-                        sub, expected = submitted.get(uid), ("slurm", worker.job_id)
-                        if sub is None or (sub.cluster, sub.job_id) != expected:
-                            continue  # not submitted for uid, e.g. an enclosing job
-                        # Slurm array tasks share a scheduler job; avoid per-task cancels.
-                        job_id = worker.job_id.split("_", 1)[0]
-                        jobs[job_id] = worker.job_folder
-                    for job_id, folder in jobs.items():
-                        submitit.SlurmJob(job_id=job_id, folder=folder).cancel()
+                    rows = reg.get(uids).values()
+                here = inflight.Liveness.here()
+                by_kind: dict[type[inflight.Liveness], list[inflight.Liveness]] = {}
+                for live in {w.liveness for w in rows}:
+                    if live is not None and live != here:  # ours: cancelling kills us
+                        by_kind.setdefault(type(live), []).append(live)
+                for kind, group in by_kind.items():
+                    kind.cancel(group)
             except Exception as e:
                 logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
         # Success first → a mid-clear crash leaves a recoverable cached
@@ -232,7 +225,8 @@ class LookupHandle:
             with inflight.InflightRegistry(self.paths.step_folder) as reg:
                 info = reg.get([self.uid])
             if self.uid in info:
-                return info[self.uid]._job  # type: ignore[attr-defined]
+                live = info[self.uid].liveness
+                return live.job if isinstance(live, inflight.Slurm) else None
             with jobregistry.JobRegistry(self.paths.step_folder) as reg:
                 job = reg.get([self.uid]).get(self.uid)
             if job is not None:
@@ -406,10 +400,7 @@ class WriteTask:
             folder.mkdir(parents=True, exist_ok=True)
         written_uids: list[str] = []
         try:
-            held = self.claim
-            if held is not None:  # this shard's uids: their rows carry its job
-                held = dataclasses.replace(held, uids=tuple(self.items.uids))
-            runner = dataclasses.replace(self.runner, held=held)
+            runner = dataclasses.replace(self.runner, held=self.claim)
             result_items = self.step._run_items(runner, self.items)
             with cd.write():
                 for i, result in enumerate(result_items):
@@ -524,9 +515,7 @@ class CacheDispatch:
             reg = stack.enter_context(inflight.InflightRegistry(folder, held.worker))
             claim = dataclasses.replace(held, _reg=reg)
         else:
-            enclosing = task.runner.held  # its work also runs this nested claim
-            worker = None if enclosing is None else enclosing.current_worker()
-            reg = inflight.InflightRegistry(folder, worker=worker)
+            reg = inflight.InflightRegistry(folder)
             claim = stack.enter_context(inflight.inflight_session(reg, pending))
         return dataclasses.replace(task.select(list(pending)), claim=claim)
 
