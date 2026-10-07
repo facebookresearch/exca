@@ -444,7 +444,7 @@ def test_nested_dispatch_on_shared_cell(tmp_path: Path) -> None:
         future = pool.submit(chain.run, 1.0)
         while not future.done():
             for worker in reg.get().values():
-                pids.add(worker.liveness.pid)  # type: ignore[union-attr]
+                pids.add(worker.liveness.pid)  # type: ignore[attr-defined]
             time.sleep(0.01)
     assert future.result() == 3.0
     jobs = pids - {os.getpid()}

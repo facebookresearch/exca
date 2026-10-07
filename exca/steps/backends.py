@@ -129,7 +129,7 @@ class _StepCache:
                 here = inflight.Liveness.here()
                 by_kind: dict[type[inflight.Liveness], list[inflight.Liveness]] = {}
                 for live in {w.liveness for w in rows}:
-                    if live is not None and live != here:  # ours: cancelling kills us
+                    if live != here:  # ours: cancelling kills us
                         by_kind.setdefault(type(live), []).append(live)
                 for kind, group in by_kind.items():
                     kind.cancel(group)

@@ -125,7 +125,7 @@ def test_db_deletion_unblocks_wait(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Deleting inflight.db while a process is waiting should unblock it."""
-    reg = inflight.InflightRegistry(tmp_path, inflight.WorkerInfo("blocker", None))
+    reg = inflight.InflightRegistry(tmp_path, inflight.WorkerInfo("blocker", _ME))
     reg.claim(["a", "b"])
 
     # Make the blocker appear alive so wait_for_inflight enters the polling loop
@@ -176,7 +176,7 @@ def test_inflight_session_retries_lost_claim(
         original_wait(self, item_uids)
         wait_calls += 1
         if wait_calls == 1:
-            worker = inflight.WorkerInfo("rival", None)
+            worker = inflight.WorkerInfo("rival", _ME)
             rival = inflight.InflightRegistry(tmp_path, worker)
             rival.claim(["x"])
             rival.close()

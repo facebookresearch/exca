@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS inflight (
 );
 """
 
-# Column order matches `WorkerInfo._from_row` and the INSERT statement.
+# Column order matches `WorkerInfo._from_rows` and the INSERT statement.
 _COLUMNS = ["item_uid", "token", "liveness", "claimed_at"]
 
 
@@ -63,7 +63,7 @@ class Liveness(helpers.DiscriminatedModel, discriminator_key="kind"):
         if cls is not Liveness:
             raise NotImplementedError(f"{cls.__name__} must override here()")
         kinds = reversed(Liveness.__subclasses__())  # later kinds enclose earlier ones
-        return next((x for kind in kinds if (x := kind.here()) is not None), None)
+        return next(x for kind in kinds if (x := kind.here()) is not None)
 
     def is_alive(self) -> bool | None:
         """Whether it still runs; ``None`` when unknown from this host."""
@@ -145,17 +145,6 @@ class Slurm(Liveness):
         return f"{self.job_id.split('_')[0]} [slurm:{state}]"
 
 
-_LIVENESS: pydantic.TypeAdapter[Liveness | None] = pydantic.TypeAdapter(Liveness | None)
-
-
-@functools.lru_cache(maxsize=4096)
-def _parse_liveness(raw: str) -> Liveness | None:
-    try:
-        return _LIVENESS.validate_json(raw)
-    except pydantic.ValidationError:  # e.g. from another exca version: expires
-        return None
-
-
 @dataclasses.dataclass(frozen=True)
 class WorkerInfo:
     """Identity of the worker that claimed an item.
@@ -165,14 +154,24 @@ class WorkerInfo:
     """
 
     token: str  # of the claiming registry
-    liveness: Liveness | None  # None: no usable signal
+    liveness: Liveness
     claimed_at: float | None = None
 
     @classmethod
-    def _from_row(cls, row: tuple[str, str, str, float]) -> tuple[str, WorkerInfo]:
-        """Convert a row ordered as ``_COLUMNS``."""
-        uid, token, liveness, claimed_at = row
-        return uid, cls(token, _parse_liveness(liveness), claimed_at)
+    def _from_rows(
+        cls, rows: tp.Iterable[tuple[str, str, str, float]]
+    ) -> dict[str, WorkerInfo]:
+        """Convert rows ordered as ``_COLUMNS``, skipping unreadable ones."""
+        infos = {}
+        parsed: dict[str, Liveness] = {}  # a job's rows share their json
+        for uid, token, raw, claimed_at in rows:
+            if raw not in parsed:
+                try:
+                    parsed[raw] = Liveness.model_validate_json(raw)
+                except pydantic.ValidationError:  # e.g. from another exca version
+                    continue
+            infos[uid] = cls(token, parsed[raw], claimed_at)
+        return infos
 
     def is_alive(self, no_job_timeout: float = 600.0) -> bool:
         """Check if this worker is still running.
@@ -183,7 +182,7 @@ class WorkerInfo:
             Seconds after ``claimed_at`` beyond which a claim with no
             usable liveness signal is presumed dead.
         """
-        alive = None if self.liveness is None else self.liveness.is_alive()
+        alive = self.liveness.is_alive()
         if alive is not None:
             return alive
         return self.claimed_at is None or time.time() - self.claimed_at <= no_job_timeout
@@ -230,7 +229,9 @@ class InflightRegistry(registry.AdvisoryRegistry):
     def __init__(self, folder: Path | str, worker: WorkerInfo | None = None) -> None:
         super().__init__(folder)
         if worker is None:
-            worker = WorkerInfo(token=uuid.uuid4().hex, liveness=Liveness.here())
+            liveness = Liveness.here()
+            assert liveness is not None, "Pid always detects"
+            worker = WorkerInfo(token=uuid.uuid4().hex, liveness=liveness)
         self.worker = worker  # claims, updates and releases as this worker
 
     def claim(self, item_uids: list[str]) -> list[str]:
@@ -250,7 +251,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
         if not item_uids:
             return []
         w = self.worker
-        values = (w.token, _LIVENESS.dump_json(w.liveness).decode())
+        values = (w.token, w.liveness.model_dump_json())
 
         # Phase 1: liveness checks outside the transaction (can be slow
         # for Slurm sacct calls — must not hold the DB write lock).
@@ -270,7 +271,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
             rows = registry.select_in_chunks(
                 conn, "inflight", _COLUMNS, "item_uid", item_uids
             )
-            fresh = dict(WorkerInfo._from_row(r) for r in rows)
+            fresh = WorkerInfo._from_rows(rows)
             for info in fresh.values():
                 if alive_cache.get(info, True):
                     # Live worker blocks us — rollback everything.
@@ -293,7 +294,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
         """Set *liveness* on rows claimed with ``self.worker.token``."""
         if not item_uids:
             return
-        raw = _LIVENESS.dump_json(liveness).decode()
+        raw = liveness.model_dump_json()
 
         def _do(conn: sqlite3.Connection) -> None:
             conn.execute("BEGIN")
@@ -337,7 +338,7 @@ class InflightRegistry(registry.AdvisoryRegistry):
                 rows = registry.select_in_chunks(
                     conn, "inflight", _COLUMNS, "item_uid", item_uids
                 )
-            return dict(WorkerInfo._from_row(r) for r in rows)
+            return WorkerInfo._from_rows(rows)
 
         return self._safe_execute("query", {}, _do)
 
