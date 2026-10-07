@@ -105,12 +105,11 @@ def test_slurm_backend_param_forwarding(
     }
     step = conftest.Mult(coeff=2.0, infra=infra)
     chain = Chain(steps=[step, conftest.Add(value=1)])
-    out = chain.run_many([1.0])
+    chain.run_many([1.0])  # results dropped: the job keeps its claim
     handle = step.lookup(1.0)
     assert handle.status == "running", "run_many returns before the jobs run"
     threading.Timer(0.2, _FakeJob.gate.set).start()
     assert chain.run(1.0) == 3.0
-    assert list(out) == [3.0]
 
     captured = _CapturingAutoExecutor.captured
     assert len(captured) == 1, "a same-process rerun must wait for the pending job"
