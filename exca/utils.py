@@ -10,6 +10,7 @@ import copy
 import difflib
 import hashlib
 import itertools
+import json
 import logging
 import math
 import os
@@ -344,6 +345,8 @@ class ConfigExporter(pydantic.BaseModel):
                 raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
             for obj2, dump2 in zip(obj, dump):
                 cfg._post_process_dump(obj2, dump2)
+            if isinstance(obj, set) and isinstance(dump, list):
+                dump.sort(key=lambda value: json.dumps(value, sort_keys=True))
         return True
 
     def _dump(self, obj: tp.Any) -> tp.Any:

@@ -491,6 +491,7 @@ class ComplexTypesConfig(BaseModel):
     y: datetime.timedelta = datetime.timedelta(minutes=1)
     # ImportString needs to work (serialize_as_any=False in model_dump)
     z: pydantic.ImportString = ConfDict
+    values: set[str] = {str(k) for k in range(6)}
 
 
 def test_complex_types() -> None:
@@ -499,9 +500,18 @@ def test_complex_types() -> None:
     expected = """x: /
 y: PT1M
 z: exca.confdict.ConfDict
+values:
+- '0'
+- '1'
+- '2'
+- '3'
+- '4'
+- '5'
 """
     assert out.to_yaml() == expected
-    assert out.to_uid().startswith("x=-,y=PT1M,z=exca.confdict.ConfDict")
+    assert out.to_uid() == (
+        "x=-,y=PT1M,values=(0,1,2,3,4,5),z=exca.confdict.ConfDict-cf780e7e"
+    )
 
 
 class BasicP(pydantic.BaseModel):
