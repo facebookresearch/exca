@@ -10,6 +10,7 @@ import copy
 import difflib
 import hashlib
 import itertools
+import json
 import logging
 import math
 import os
@@ -339,11 +340,19 @@ class ConfigExporter(pydantic.BaseModel):
                         break  # val is different from cfg default -> keep in cfg
                 else:
                     dump.pop(name)  # all equal to default, let's remove it
-        if isinstance(obj, (tuple, list, set)):
+        if isinstance(obj, (tuple, list, set, frozenset)):
             if not isinstance(dump, (tuple, list, set)) or len(obj) != len(dump):
                 raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
             for obj2, dump2 in zip(obj, dump):
                 cfg._post_process_dump(obj2, dump2)
+            if isinstance(obj, (set, frozenset)) and isinstance(dump, list):
+                dump.sort(
+                    key=lambda v: (
+                        (0, v)
+                        if isinstance(v, (int, float))
+                        else (1, json.dumps(v, sort_keys=True))
+                    )
+                )
         return True
 
     def _dump(self, obj: tp.Any) -> tp.Any:
