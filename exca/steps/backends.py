@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import contextvars
 import dataclasses
 import datetime
 import functools
+import hashlib
 import logging
 import os
 import random
@@ -68,6 +70,65 @@ class StepPaths:
     @property
     def _logs_folder(self) -> str:
         return str(self.step_folder / "logs" / "%j")
+
+
+@dataclasses.dataclass(frozen=True)
+class RunContext:
+    """Context of the current cache computation.
+
+    ``item_uids`` contains every item in the computation.
+    """
+
+    _paths: StepPaths
+    item_uids: tuple[str, ...]
+
+    @functools.cached_property
+    def _item_uid_set(self) -> frozenset[str]:
+        return frozenset(self.item_uids)
+
+    def folder(self, item_uid: str | None = None) -> Path:
+        """Per-item folder, created on call and shared within the computation.
+
+        Parameters
+        ----------
+        item_uid:
+            One of ``item_uids``; inferred inside a 1-to-1 ordinary ``_run``.
+        """
+        if not self.item_uids:
+            raise ValueError(
+                "folder(): the current cache computation has no item_uids, "
+                f"step={self._paths.step_uid}"
+            )
+        if item_uid is None:
+            item_uid = next(
+                (
+                    uid
+                    for uid in reversed(items._RUN_ITEM_UIDS.get() or ())
+                    if uid in self._item_uid_set
+                ),
+                None,
+            )
+            if item_uid is None and len(self.item_uids) > 1:
+                raise ValueError(
+                    f"folder() needs an item_uid for {len(self.item_uids)} items, "
+                    f"e.g. {self.item_uids[0]!r}"
+                )
+            if item_uid is None:
+                item_uid = self.item_uids[0]
+        elif item_uid not in self._item_uid_set:
+            raise ValueError(
+                f"{item_uid!r} is not one of the {len(self.item_uids)} item_uids, "
+                f"e.g. {self.item_uids[0]!r}"
+            )
+        digest = hashlib.md5(item_uid.encode("utf8")).hexdigest()
+        folder = self._paths.step_folder / "runs" / digest
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+
+_RUN_CONTEXT: contextvars.ContextVar[RunContext | None] = contextvars.ContextVar(
+    "exca_steps_run_context", default=None
+)
 
 
 @dataclasses.dataclass
@@ -401,13 +462,20 @@ class WriteTask:
         written_uids: list[str] = []
         try:
             runner = dataclasses.replace(self.runner, held=self.claim)
-            result_items = self.step._run_items(runner, self.items)
-            with cd.write():
-                for i, result in enumerate(result_items):
-                    uid = self.items.uids[i]
-                    if uid not in cd:
-                        cd[uid] = result
-                        written_uids.append(uid)
+            context = RunContext(paths, tuple(self.items.uids))
+            token = _RUN_CONTEXT.set(context)
+            item_token = items._RUN_ITEM_UIDS.set(())
+            try:
+                result_items = self.step._run_items(runner, self.items)
+                with cd.write():
+                    for i, result in enumerate(result_items):
+                        uid = self.items.uids[i]
+                        if uid not in cd:
+                            cd[uid] = result
+                            written_uids.append(uid)
+            finally:
+                items._RUN_ITEM_UIDS.reset(item_token)
+                _RUN_CONTEXT.reset(token)
         except items.BatchProtocolError as e:
             if written_uids:
                 logger.warning(

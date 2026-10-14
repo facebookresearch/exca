@@ -13,6 +13,7 @@ pipeline: source + pending + uids. Users never construct it;
 
 from __future__ import annotations
 
+import contextvars
 import itertools
 import typing as tp
 
@@ -34,6 +35,11 @@ class _Source(tp.Protocol):
 
 class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
+
+
+_RUN_ITEM_UIDS: contextvars.ContextVar[tuple[str, ...] | None] = contextvars.ContextVar(
+    "exca_steps_run_item_uids", default=None
+)
 
 
 class _AnnotatedBatch:
@@ -79,19 +85,31 @@ class _AnnotatedBatch:
 
 
 def _fused_run(
-    steps: tp.Sequence[Step], values: tp.Iterable[tp.Any]
+    steps: tp.Sequence[Step],
+    values: tp.Iterable[tp.Any],
+    uids: tp.Sequence[str] | None = None,
 ) -> tp.Iterator[tp.Any]:
     """Run consecutive non-batched steps over the inputs in a single pass."""
+    scoped = uids is not None and _RUN_ITEM_UIDS.get() is not None
     for position, value in enumerate(values):
-        for step in steps:
-            try:
-                args = () if isinstance(value, identity.NoValue) else (value,)
-                value = step._run(*args)
-            except Exception as e:
-                e.add_note(f"  -> in {step!r}")
-                e._inflight_positions = [position]  # type: ignore[attr-defined]
-                raise
-        yield value
+        token = None
+        if scoped:
+            stack = _RUN_ITEM_UIDS.get()
+            assert stack is not None and uids is not None
+            token = _RUN_ITEM_UIDS.set((*stack, uids[position]))
+        try:
+            for step in steps:
+                try:
+                    args = () if isinstance(value, identity.NoValue) else (value,)
+                    value = step._run(*args)
+                except Exception as e:
+                    e.add_note(f"  -> in {step!r}")
+                    e._inflight_positions = [position]  # type: ignore[attr-defined]
+                    raise
+            yield value
+        finally:
+            if token is not None:
+                _RUN_ITEM_UIDS.reset(token)
 
 
 class StepItems:
@@ -158,7 +176,7 @@ class StepItems:
         """Read these uids through the carrier's pending steps."""
         source = self._address()
         try:
-            yield from self._pipeline((source[uid] for uid in uids), len(uids))
+            yield from self._pipeline((source[uid] for uid in uids), len(uids), uids)
         except Exception as e:
             positions = e.__dict__.pop("_inflight_positions", ())
             if positions:
@@ -167,16 +185,21 @@ class StepItems:
                 e.add_note(f"  -> inflight uids: {inflight}")
             raise
 
-    def _pipeline(self, current: tp.Iterable[tp.Any], size: int) -> tp.Iterator[tp.Any]:
+    def _pipeline(
+        self,
+        current: tp.Iterable[tp.Any],
+        size: int,
+        uids: tp.Sequence[str] | None = None,
+    ) -> tp.Iterator[tp.Any]:
         grouped = itertools.groupby(
-            self._pending, key=lambda s: "batched" in s._step_flags
+            self._pending, key=lambda step: "batched" in step._step_flags
         )
         for batched, group in grouped:
             if batched:
                 for step in group:
                     current = _AnnotatedBatch(step, current, size)
             else:
-                current = _fused_run(list(group), current)
+                current = _fused_run(list(group), current, uids)
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:

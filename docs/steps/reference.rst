@@ -11,7 +11,7 @@ Core classes
 ------------
 
 .. autoclass:: exca.steps.Step
-    :members: run, run_many, lookup, clone, item_uid, CACHE_TYPE
+    :members: run, run_many, lookup, clone, item_uid, _run_context, CACHE_TYPE
 
 .. autoclass:: exca.steps.Chain
     :show-inheritance:
@@ -27,6 +27,9 @@ Batched execution
 .. autoclass:: exca.steps.items.StepItems
 
 .. autoexception:: exca.steps.items.BatchProtocolError
+
+.. autoclass:: exca.steps.backends.RunContext()
+    :members: item_uids, folder
 
 Cache lookup
 ------------

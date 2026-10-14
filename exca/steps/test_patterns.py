@@ -207,3 +207,19 @@ def test_branch_excludes(tmp_path: Path, upstream: bool) -> None:
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))
     assert out == [{"a": 10.0, "b": 20.0}, {"b": 20.0, "c": 30.0}]
     assert sorted(shared.calls) == [1.0, 2.0, 3.0], "shared branch b computed once"
+
+
+def test_scatter_run_context(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    scatter = ScatterDict(body=conftest.ContextRecorder())
+    after = conftest.ContextRecorder()
+    steps = [MakeDict(), conftest.BatchContextRecorder(), scatter, after]
+    chain: tp.Any = base.Chain(steps=steps, infra=infra)
+    values = [2, 3]
+    chain.run_many(values)
+    uids = tuple(chain.lookup(v).uid for v in values)
+    batch_uids = {c.item_uids for c in chain[1].calls}
+    assert batch_uids == {uids}
+    body = [c for _, c in chain[2].body.calls]
+    assert {c.item_uids for c in body} == {uids}
+    assert {c.item_uids for _, c in chain[3].calls} == {uids}

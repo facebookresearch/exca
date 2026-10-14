@@ -235,6 +235,28 @@ if job is not None:
     print(job.paths.stdout, job.paths.stderr)
 ```
 
+(keep-per-item-files)=
+
+## Keep per-item working files (e.g. checkpoints)
+
+While a step with a cache folder computes, `self._run_context()` accesses its `RunContext`.
+Its user-managed `folder()` lives outside the result cache and survives failures, recomputation and `clear_cache()`.
+Callers own file synchronization and validation.
+
+```python
+class Train(steps.Step):
+    def _run(self, data):
+        with self._run_context() as run:
+            ckpt = run.folder() / "train.ckpt"
+            model = resume(ckpt) if ckpt.exists() else init()
+            return fit(model, data, ckpt)
+```
+
+The context belongs to the current cache computation, so its uncached helpers and fan-outs share it.
+`item_uids` lists every item in that computation; `folder()` infers the current cache item in a 1-to-1 ordinary `_run`, while custom batches and fan-outs pass an explicit uid when there is more than one.
+A nested cached computation replaces the context until it returns.
+Entering `_run_context()` outside a cached computation raises.
+
 ## Keep cached data in RAM across calls
 
 Set `keep_in_ram=True` on the backend to avoid re-decoding the

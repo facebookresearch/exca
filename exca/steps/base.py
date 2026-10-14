@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import collections
+import contextlib
 import copy
 import dataclasses
 import functools
@@ -288,6 +289,18 @@ class Step(exca.helpers.DiscriminatedModel):
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
         return "generator" in self._step_flags
+
+    @contextlib.contextmanager
+    def _run_context(self) -> tp.Iterator[backends.RunContext]:
+        """Access the current cache computation's context; see
+        :class:`~exca.steps.backends.RunContext`."""
+        context = backends._RUN_CONTEXT.get()
+        if context is None:
+            raise RuntimeError(
+                f"{type(self).__name__}._run_context() is only available while a "
+                "step with a cache folder (infra.folder) computes its items"
+            )
+        yield context
 
     def _run_items(self, runner: Runner, batch: items.StepItems) -> items.StepItems:
         """Transform *batch* into the result carrier.
