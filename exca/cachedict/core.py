@@ -57,7 +57,7 @@ class DumpInfo:
         default=(), repr=False, compare=False
     )
 
-    def delete_info(self, *, ignore_errors: bool = False) -> None:
+    def delete_info(self, ctx: DumpContext, *, ignore_errors: bool = False) -> None:
         """Blank this entry so ``JsonlReader`` treats it as deleted.
 
         When *ignore_errors* is True, silently ignores missing/locked files."""
@@ -65,12 +65,12 @@ class DumpInfo:
         if start == end:
             return
         try:
-            with self.jsonl.open("rb+") as f:
-                f.seek(start)
-                f.write(b" ")  # atomic mark — survives partial bulk write
-                f.flush()
-                if end - start > 2:
-                    f.write(b" " * (end - start - 2))  # blank out
+            f = ctx.index_file(self.jsonl)
+            f.seek(start)
+            f.write(b" ")  # atomic mark — survives partial bulk write
+            f.flush()
+            if end - start > 2:
+                f.write(b" " * (end - start - 2))  # blank out
         except (FileNotFoundError, OSError):
             if not ignore_errors:
                 raise
@@ -388,7 +388,7 @@ class CacheDict(tp.Generic[X]):
         self._ram_data.pop(key, None)
         dinfo = self._key_info.pop(key)
         for info in (dinfo, *dinfo._duplicates):
-            info.delete_info(ignore_errors=True)
+            info.delete_info(self._write_ctx, ignore_errors=True)
             self._dumper.delete(info.content)
 
     def __contains__(self, key: str) -> bool:

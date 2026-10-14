@@ -120,6 +120,7 @@ class DumpContext:
         self._prefix = f"{socket.gethostname()}-{self._thread_id}"
         self._stack: contextlib.ExitStack | None = None
         self._files: dict[str, tp.IO[bytes]] = {}
+        self._index_files: dict[Path, tp.IO[bytes]] = {}  # opened "rb+" to blank
         self._created_files: list[Path] = []
         self._dump_count: int = 0
         # read-side cache (per-thread, fork-safe via _get_store)
@@ -199,6 +200,7 @@ class DumpContext:
             self._stack.__exit__(*exc)
         finally:
             self._files.clear()
+            self._index_files.clear()
             self._created_files.clear()
 
     def shared_file(self, suffix: str) -> tuple[tp.IO[bytes], str]:
@@ -223,6 +225,15 @@ class DumpContext:
             self._files[name] = f
             self._created_files.append(path)
         return self._files[name], name
+
+    def index_file(self, path: Path) -> tp.IO[bytes]:
+        """Open an info file (any writer's) for blanking deleted entries.
+        Reused across calls with the same path."""
+        if self._stack is None:
+            raise RuntimeError("DumpContext must be used as a context manager for writes")
+        if path not in self._index_files:
+            self._index_files[path] = self._stack.enter_context(path.open("rb+"))
+        return self._index_files[path]
 
     def key_path(self, suffix: str = "") -> str:
         """Create a unique path from ctx.key for one-file-per-entry handlers.
