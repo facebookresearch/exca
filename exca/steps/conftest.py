@@ -77,6 +77,19 @@ class Mult(RecordingStep):
         return value * self.coeff
 
 
+class ContextRecorder(RecordingStep):
+    def _run(self, value: tp.Any) -> tp.Any:
+        self.record((value, self._run_context()))
+        return value
+
+
+class BatchContextRecorder(RecordingStep):
+    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
+        values = list(values)
+        self.record((tuple(values), self._run_context()))
+        return iter(values)
+
+
 # =============================================================================
 # Transformer with default (can be used as generator))
 # =============================================================================

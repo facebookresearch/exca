@@ -47,8 +47,10 @@ class Runner:
     mode folded from them."""
 
     prefix: tuple[Step, ...] = ()
+    upstream_steps: tuple[Step, ...] = ()
     mode: identity.ModeType = "cached"
     held: backends.inflight.InflightClaim | None = None  # of the enclosing WriteTask
+    outer_step: Step | None = dataclasses.field(default=None, repr=False)
 
     def dispatch(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Resolve, then route *batch*: reuse/remember warm carrier, run inline or
@@ -76,9 +78,11 @@ class Runner:
 
     def advance(self, step: Step) -> Runner:
         """Context of the step following *step*."""
+        steps = tuple(utils.resolved_step(step)._uid_steps())
         return dataclasses.replace(
             self,
-            prefix=self.prefix + tuple(utils.resolved_step(step)._uid_steps()),
+            prefix=self.prefix + steps,
+            upstream_steps=self.upstream_steps + steps,
             mode=backends._fold_modes(self.mode, backends._effective_mode(step)),
         )
 
@@ -257,6 +261,13 @@ class Step(exca.helpers.DiscriminatedModel):
         """Override in subclasses."""
         raise NotImplementedError
 
+    def _run_context(self) -> items.RunContext:
+        """Context of this active ``_run``/``_run_batch``.
+
+        Lookup after the method returns, including from lazy results, is unsupported.
+        """
+        return items._run_context(self)
+
     def _resolve_step(self) -> Step:
         """Override to decompose this step into a chain of steps.
 
@@ -281,9 +292,9 @@ class Step(exca.helpers.DiscriminatedModel):
         Must yield exactly one result per input value, in order.
         Default loops ``_run`` over inputs.
         """
+        run = self._run
         for v in values:
-            args = () if isinstance(v, identity.NoValue) else (v,)
-            yield self._run(*args)
+            yield run() if isinstance(v, identity.NoValue) else run(v)
 
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
@@ -298,7 +309,7 @@ class Step(exca.helpers.DiscriminatedModel):
         extended to their position (e.g. ``runner.advance``), or their cache
         mis-keys silently.
         """
-        return batch._append(self)
+        return batch._append(items._StepCall(self, runner))
 
     # =========================================================================
     # Identity
@@ -391,14 +402,11 @@ class Step(exca.helpers.DiscriminatedModel):
             Iterator yielding one result per input, in input order.
         """
         built = utils.resolved_step(self)
-        if built is not self:
-            return built.run_many(values)
-
         boundary = items.StepItems(
             source=list(values),
-            uids=functools.partial(identity.materialize_uid, self),
+            uids=functools.partial(identity.materialize_uid, built),
         )
-        return Runner().dispatch(self, boundary)
+        return Runner(outer_step=self).dispatch(built, boundary)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
         raise AttributeError("Step.forward() was removed; use run() instead")
