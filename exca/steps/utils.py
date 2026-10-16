@@ -25,14 +25,12 @@ if tp.TYPE_CHECKING:
     from . import base
 
 
-def has_all_defaults(
-    method: tp.Callable[..., tp.Any], *, ignore: tp.Container[str] = ()
-) -> bool:
+def has_all_defaults(method: tp.Callable[..., tp.Any]) -> bool:
     """Check if all parameters (except self) have defaults."""
     return all(
         p.default is not inspect.Parameter.empty
         for name, p in inspect.signature(method).parameters.items()
-        if name != "self" and name not in ignore
+        if name != "self"
     )
 
 

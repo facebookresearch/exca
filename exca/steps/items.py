@@ -16,13 +16,30 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import itertools
+import sys
 import typing as tp
 from pathlib import Path
 
 from . import identity
 
 if tp.TYPE_CHECKING:
-    from .base import Step
+    from .base import Runner, Step
+
+_UidGetter = tp.Callable[[], tp.Sequence[str]]
+
+
+class _RunUids:
+    __slots__ = ("_context", "_get")
+
+    def __init__(self, get: _UidGetter) -> None:
+        self._get = get
+        self._context: tuple[tuple[str, ...], frozenset[str]] | None = None
+
+    def context(self) -> tuple[tuple[str, ...], frozenset[str]]:
+        if self._context is None:
+            item_uids = tuple(self._get())
+            self._context = item_uids, frozenset(item_uids)
+        return self._context
 
 
 class _Source(tp.Protocol):
@@ -41,14 +58,16 @@ class BatchProtocolError(RuntimeError):
 
 @dataclasses.dataclass(frozen=True)
 class RunContext:
-    """Context passed to an execution-aware Step."""
+    """Execution context of the running step, from ``Step._run_context()``."""
 
     outer_step: Step
     upstream_steps: tuple[Step, ...]
     item_uids: tuple[str, ...]
     _step_folder: Path | None = dataclasses.field(default=None, repr=False)
     _current_item_uid: str | None = dataclasses.field(default=None, repr=False)
-    _item_uid_set: frozenset[str] = dataclasses.field(default_factory=frozenset)
+    _item_uid_set: frozenset[str] = dataclasses.field(
+        default_factory=frozenset, repr=False
+    )
 
     def folder(self, item_uid: str | None = None) -> Path:
         """Per-item persistent folder, created on call when available."""
@@ -58,14 +77,12 @@ class RunContext:
             )
         if item_uid is None:
             item_uid = self._current_item_uid
-            if item_uid is None and len(self.item_uids) > 1:
-                raise ValueError(
-                    f"folder() needs an item_uid for {len(self.item_uids)} items, "
-                    f"e.g. {self.item_uids[0]!r}"
-                )
-            if item_uid is None:
-                [item_uid] = self.item_uids
-        elif item_uid not in self._item_uid_set:
+        if item_uid is None:
+            raise ValueError(
+                f"folder() needs an item_uid for {len(self.item_uids)} items, "
+                f"e.g. {self.item_uids[0]!r}"
+            )
+        if item_uid not in self._item_uid_set:
             raise ValueError(
                 f"{item_uid!r} is not one of the {len(self.item_uids)} item_uids, "
                 f"e.g. {self.item_uids[0]!r}"
@@ -76,12 +93,15 @@ class RunContext:
         return folder
 
 
-class _PendingStep(tp.Protocol):
-    _step_flags: tp.ClassVar[frozenset[str]]
+@dataclasses.dataclass(frozen=True, slots=True)
+class _StepCall:
+    """A pending step with the runner that planned it."""
 
-    def _run(self, *args: tp.Any) -> tp.Any: ...
+    step: Step
+    runner: Runner
 
-    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]: ...
+    def __repr__(self) -> str:
+        return repr(self.step)
 
 
 class _AnnotatedBatch:
@@ -91,16 +111,12 @@ class _AnnotatedBatch:
     """
 
     def __init__(
-        self,
-        step: _PendingStep,
-        values: tp.Iterable[tp.Any],
-        size: int,
-        uids: tp.Sequence[str] | None = None,
+        self, call: _StepCall, values: tp.Iterable[tp.Any], size: int, uids: _RunUids
     ) -> None:
-        self.step = step
-        self._values = iter(values)
+        self.call = call
+        self._values = values
         self._expected = size
-        self._uids = uids
+        self.uids = uids
         self.n_in = self.n_out = 0
 
     def _tracked(self) -> tp.Iterator[tp.Any]:
@@ -110,55 +126,79 @@ class _AnnotatedBatch:
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         try:
-            run_batch_uids = getattr(self.step, "_run_batch_uids", None)
-            if run_batch_uids is None:
-                results = iter(self.step._run_batch(self._tracked()))
-            else:
-                assert self._uids is not None
-                results = iter(run_batch_uids(self._tracked(), self._uids))
-            while True:
-                try:
-                    result = next(results)
-                except StopIteration:
-                    break
+            for result in self.call.step._run_batch(self._tracked()):
                 if self.n_out >= self._expected:
                     raise BatchProtocolError(
-                        f"{self.step!r}._run_batch yielded more than "
-                        f"{self._expected} results"
+                        f"{self.call!r}._run_batch yielded more than {self._expected} results"
                     )
                 if self.n_out == self.n_in:
                     raise BatchProtocolError(
-                        f"{self.step!r}._run_batch yielded before consuming an input"
+                        f"{self.call!r}._run_batch yielded before consuming an input"
                     )
                 self.n_out += 1
                 yield result
         except Exception as e:
-            e.add_note(f"  -> in {self.step!r}")
+            e.add_note(f"  -> in {self.call!r}")
             positions = range(self.n_out, self.n_in)
             if positions:
                 e._inflight_positions = positions  # type: ignore[attr-defined]
             raise
         if self.n_out < self._expected:
             raise BatchProtocolError(
-                f"{self.step!r}._run_batch yielded {self.n_out} results "
-                f"for {self._expected} inputs"
+                f"{self.call!r}._run_batch yielded {self.n_out} results for {self._expected} inputs"
             )
 
 
 def _fused_run(
-    steps: tp.Sequence[_PendingStep], values: tp.Iterable[tp.Any]
+    calls: tp.Sequence[_StepCall], values: tp.Iterable[tp.Any], uids: _RunUids
 ) -> tp.Iterator[tp.Any]:
     """Run consecutive non-batched steps over the inputs in a single pass."""
+    # bound once: pydantic's __getattr__ makes each step._run lookup slow
+    runs = [(call, call.step._run) for call in calls]
     for position, value in enumerate(values):
-        for step in steps:
+        for call, run in runs:
             try:
-                args = () if isinstance(value, identity.NoValue) else (value,)
-                value = step._run(*args)
+                value = run() if isinstance(value, identity.NoValue) else run(value)
             except Exception as e:
-                e.add_note(f"  -> in {step!r}")
+                e.add_note(f"  -> in {call!r}")
                 e._inflight_positions = [position]  # type: ignore[attr-defined]
                 raise
         yield value
+
+
+def _run_context(step: Step) -> RunContext:
+    """Context of *step*'s active ``_run``/``_run_batch``."""
+    frame = sys._getframe(1)
+    # frame contract: _fused_run call/position/uids; _AnnotatedBatch.__iter__ self
+    stages = (_fused_run.__code__, _AnnotatedBatch.__iter__.__code__)
+    while frame.f_code not in stages:
+        if frame.f_back is None:
+            raise RuntimeError("_run_context() requires a running _run or _run_batch")
+        frame = frame.f_back
+    local = frame.f_locals
+    if frame.f_code is _fused_run.__code__:
+        call, current, uids = local["call"], local["position"], local["uids"]
+    else:
+        stage = local["self"]
+        call, uids = stage.call, stage.uids
+        current = stage.n_in - 1 if stage.n_in == stage.n_out + 1 else None
+    if isinstance(local, dict):
+        local.clear()  # <3.13: this snapshot stays on the frame, pinning the item
+    if call.step is not step:
+        raise RuntimeError(
+            f"{step!r}._run_context() must be called within its own "
+            f"_run/_run_batch, not while {call!r} runs"
+        )
+    item_uids, item_uid_set = uids.context()
+    runner = call.runner
+    return RunContext(
+        outer_step=call.step if runner.outer_step is None else runner.outer_step,
+        upstream_steps=runner.upstream_steps,
+        item_uids=item_uids,
+        _step_folder=None if runner.held is None else runner.held.folder,
+        _current_item_uid=None if current is None else item_uids[current],
+        _item_uid_set=item_uid_set,
+    )
 
 
 class StepItems:
@@ -175,7 +215,7 @@ class StepItems:
         *,
         source: _Source | list[tp.Any],
         uids: tp.Sequence[str] | tp.Callable[[tp.Any], str] | None = None,
-        pending: tp.Sequence[_PendingStep] = (),
+        pending: tp.Sequence[_StepCall] = (),
     ) -> None:
         if uids is None:
             if not isinstance(source, dict):
@@ -206,12 +246,10 @@ class StepItems:
             return len(self._source)
         return len(self._uids)
 
-    def _append(self, step: _PendingStep) -> StepItems:
+    def _append(self, call: _StepCall) -> StepItems:
         """Append a single leaf step's computation."""
         return StepItems(
-            source=self._source,
-            uids=self._uids,
-            pending=self._pending + (step,),
+            source=self._source, uids=self._uids, pending=self._pending + (call,)
         )
 
     def select(self, uids: tp.Sequence[str]) -> StepItems:
@@ -227,7 +265,8 @@ class StepItems:
         """Read these uids through the carrier's pending steps."""
         source = self._address()
         try:
-            yield from self._pipeline((source[uid] for uid in uids), len(uids), uids)
+            values = (source[uid] for uid in uids)
+            yield from self._pipeline(values, len(uids), lambda: uids)
         except Exception as e:
             positions = e.__dict__.pop("_inflight_positions", ())
             if positions:
@@ -237,23 +276,21 @@ class StepItems:
             raise
 
     def _pipeline(
-        self,
-        current: tp.Iterable[tp.Any],
-        size: int,
-        uids: tp.Sequence[str] | None = None,
+        self, current: tp.Iterable[tp.Any], size: int, uids: _UidGetter
     ) -> tp.Iterator[tp.Any]:
+        run_uids = _RunUids(uids)
         grouped = itertools.groupby(
-            self._pending, key=lambda step: "batched" in step._step_flags
+            self._pending, key=lambda call: "batched" in call.step._step_flags
         )
         for batched, group in grouped:
             if batched:
-                for step in group:
-                    current = _AnnotatedBatch(step, current, size, uids)
+                for call in group:
+                    current = _AnnotatedBatch(call, current, size, run_uids)
             else:
-                current = _fused_run(list(group), current)
+                current = _fused_run(list(group), current, run_uids)
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         if callable(self._uids):
-            return self._pipeline(self._source, len(self))
+            return self._pipeline(self._source, len(self), lambda: self.uids)
         return self.read(self._uids)

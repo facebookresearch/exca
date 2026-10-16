@@ -43,7 +43,8 @@ class _StepRuntime:
 
 @dataclasses.dataclass(frozen=True)
 class Runner:
-    """Pipeline context of a step."""
+    """Pipeline context of a step: the steps before it (cache identity) and the
+    mode folded from them."""
 
     prefix: tuple[Step, ...] = ()
     upstream_steps: tuple[Step, ...] = ()
@@ -209,32 +210,17 @@ class Step(exca.helpers.DiscriminatedModel):
         )
         if has_run:
             flags.add("has_run")
-            custom_batch = cls._run_batch is not Step._run_batch
-            if custom_batch or cls._run_items is not Step._run_items:
+            if (
+                cls._run_batch is not Step._run_batch
+                or cls._run_items is not Step._run_items
+            ):
                 flags.add("batched")
-            context_param = inspect.signature(cls._run).parameters.get("context")
-            if context_param is not None:
-                if custom_batch:
-                    raise TypeError(
-                        f"{cls.__name__} cannot combine a contextual _run with "
-                        "a custom _run_batch"
-                    )
-                if (
-                    context_param.kind is not inspect.Parameter.KEYWORD_ONLY
-                    or context_param.default is not inspect.Parameter.empty
-                ):
-                    raise TypeError(
-                        f"{cls.__name__}._run context must be "
-                        "a required keyword-only parameter"
-                    )
-                flags.add("run_context")
-                flags.add("batched")
-            if utils.has_all_defaults(cls._run, ignore={"context"}):
+            if utils.has_all_defaults(cls._run):
                 flags.add("generator")
                 if not any(
                     p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
                     for name, p in inspect.signature(cls._run).parameters.items()
-                    if name not in ("self", "context")
+                    if name != "self"
                 ):
                     flags.add("pure_generator")
         if cls._resolve_step is not Step._resolve_step:
@@ -271,9 +257,16 @@ class Step(exca.helpers.DiscriminatedModel):
         if folder is not None:
             utils.propagate_folder(self, folder)
 
-    def _run(self, *args: tp.Any, **kwargs: tp.Any) -> tp.Any:
+    def _run(self, *args: tp.Any) -> tp.Any:
         """Override in subclasses."""
         raise NotImplementedError
+
+    def _run_context(self) -> items.RunContext:
+        """Context of this active ``_run``/``_run_batch``.
+
+        Lookup after the method returns, including from lazy results, is unsupported.
+        """
+        return items._run_context(self)
 
     def _resolve_step(self) -> Step:
         """Override to decompose this step into a chain of steps.
@@ -299,9 +292,9 @@ class Step(exca.helpers.DiscriminatedModel):
         Must yield exactly one result per input value, in order.
         Default loops ``_run`` over inputs.
         """
+        run = self._run
         for v in values:
-            args = () if isinstance(v, identity.NoValue) else (v,)
-            yield self._run(*args)
+            yield run() if isinstance(v, identity.NoValue) else run(v)
 
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
@@ -316,10 +309,7 @@ class Step(exca.helpers.DiscriminatedModel):
         extended to their position (e.g. ``runner.advance``), or their cache
         mis-keys silently.
         """
-        if "run_context" in self._step_flags:
-            batch.uids
-            return batch._append(_ContextCall(self, runner))
-        return batch._append(self)
+        return batch._append(items._StepCall(self, runner))
 
     # =========================================================================
     # Identity
@@ -420,39 +410,6 @@ class Step(exca.helpers.DiscriminatedModel):
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
         raise AttributeError("Step.forward() was removed; use run() instead")
-
-
-@dataclasses.dataclass(frozen=True)
-class _ContextCall:
-    step: Step
-    runner: Runner
-
-    _step_flags: tp.ClassVar[frozenset[str]] = frozenset({"batched"})
-
-    def __repr__(self) -> str:
-        return repr(self.step)
-
-    def _run(self, *args: tp.Any) -> tp.NoReturn:
-        raise RuntimeError("_ContextCall only runs through _run_batch_uids")
-
-    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.NoReturn:
-        raise RuntimeError("_ContextCall requires read-aligned uids")
-
-    def _run_batch_uids(
-        self, values: tp.Iterable[tp.Any], uids: tp.Sequence[str]
-    ) -> tp.Iterator[tp.Any]:
-        item_uids = tuple(uids)
-        context = items.RunContext(
-            outer_step=self.runner.outer_step or self.step,
-            upstream_steps=self.runner.upstream_steps,
-            item_uids=item_uids,
-            _step_folder=None if self.runner.held is None else self.runner.held.folder,
-            _item_uid_set=frozenset(item_uids),
-        )
-        for uid, value in zip(item_uids, values, strict=True):
-            item_context = dataclasses.replace(context, _current_item_uid=uid)
-            args = () if isinstance(value, identity.NoValue) else (value,)
-            yield self.step._run(*args, context=item_context)
 
 
 class Chain(Step):
