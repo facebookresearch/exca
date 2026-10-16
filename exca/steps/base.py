@@ -14,6 +14,7 @@ import dataclasses
 import functools
 import inspect
 import logging
+import sys
 import typing as tp
 import warnings
 
@@ -266,7 +267,36 @@ class Step(exca.helpers.DiscriminatedModel):
 
         Lookup after the method returns, including from lazy results, is unsupported.
         """
-        return items._run_context(self)
+        frame = sys._getframe(1)
+        # frame contract: _fused_run call/position/uids; _AnnotatedBatch.__iter__ self
+        stages = (items._fused_run.__code__, items._AnnotatedBatch.__iter__.__code__)
+        while frame.f_code not in stages:
+            if frame.f_back is None:
+                raise RuntimeError("_run_context() requires a running _run or _run_batch")
+            frame = frame.f_back
+        local = frame.f_locals
+        if frame.f_code is items._fused_run.__code__:
+            call, current, uids = local["call"], local["position"], local["uids"]
+        else:
+            stage = local["self"]
+            call, uids = stage.call, stage.uids
+            current = stage.n_in - 1 if stage.n_in == stage.n_out + 1 else None
+        if isinstance(local, dict):
+            local.clear()  # <3.13: this snapshot stays on the frame, pinning the item
+        if call.step is not self:
+            raise RuntimeError(
+                f"{self!r}._run_context() must be called within its own "
+                f"_run/_run_batch, not while {call!r} runs"
+            )
+        item_uids = uids()
+        runner = call.runner
+        return items.RunContext(
+            outer_step=call.step if runner.outer_step is None else runner.outer_step,
+            upstream_steps=runner.upstream_steps,
+            item_uids=item_uids,
+            _step_folder=None if runner.held is None else runner.held.folder,
+            _current_item_uid=None if current is None else item_uids[current],
+        )
 
     def _resolve_step(self) -> Step:
         """Override to decompose this step into a chain of steps.

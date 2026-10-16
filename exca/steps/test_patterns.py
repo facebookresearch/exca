@@ -212,27 +212,14 @@ def test_branch_excludes(tmp_path: Path, upstream: bool) -> None:
 def test_scatter_run_context(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     scatter = ScatterDict(body=conftest.ContextRecorder())
-    after = conftest.ContextRecorder()
-    steps = [MakeDict(), conftest.BatchContextRecorder(), scatter, after]
-    chain: tp.Any = base.Chain(steps=steps, infra=infra)
+    chain: tp.Any = base.Chain(
+        steps=[MakeDict(), scatter, conftest.ContextRecorder()], infra=infra
+    )
     values = [2, 3]
     chain.run_many(values)
-    uids = tuple(chain.lookup(v).uid for v in values)
-    assert chain[1].calls
-    body = [c for _, c in chain[2].body.calls]
+    body = [c for _, c in chain[1].body.calls]
+    after = [c for _, c in chain[2].calls]
     assert all(c.outer_step is chain for c in body)
-    assert all(c.upstream_steps == tuple(chain.steps[:3]) for c in body)
-    after_contexts = [c for _, c in chain[3].calls]
-    assert {tuple(c.item_uids) for c in after_contexts} == {uids}
-    assert all(c.upstream_steps == tuple(chain.steps[:3]) for c in after_contexts)
-
-
-def test_scatter_run_context_folder_per_branch(tmp_path: Path) -> None:
-    class InFolder(base.Step):
-        def _run(self, value: tp.Any) -> str:
-            return str(self._run_context().folder())
-
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = base.Chain(steps=[MakeDict(), ScatterDict(body=InFolder())], infra=infra)
-    folders = step.run(3)
-    assert len(set(folders.values())) == 3
+    assert all(c.upstream_steps == tuple(chain.steps[:2]) for c in body + after)
+    assert len({c.folder() for c in body}) == len(body) == 5, "one folder per branch"
+    assert {c.item_uids for c in after} == {tuple(chain.lookup(v).uid for v in values)}

@@ -14,9 +14,9 @@ pipeline: source + pending + uids. Users never construct it;
 from __future__ import annotations
 
 import dataclasses
+import functools
 import hashlib
 import itertools
-import sys
 import typing as tp
 from pathlib import Path
 
@@ -25,21 +25,7 @@ from . import identity
 if tp.TYPE_CHECKING:
     from .base import Runner, Step
 
-_UidGetter = tp.Callable[[], tp.Sequence[str]]
-
-
-class _RunUids:
-    __slots__ = ("_context", "_get")
-
-    def __init__(self, get: _UidGetter) -> None:
-        self._get = get
-        self._context: tuple[tuple[str, ...], frozenset[str]] | None = None
-
-    def context(self) -> tuple[tuple[str, ...], frozenset[str]]:
-        if self._context is None:
-            item_uids = tuple(self._get())
-            self._context = item_uids, frozenset(item_uids)
-        return self._context
+_Uids = tp.Callable[[], tuple[str, ...]]
 
 
 class _Source(tp.Protocol):
@@ -65,9 +51,6 @@ class RunContext:
     item_uids: tuple[str, ...]
     _step_folder: Path | None = dataclasses.field(default=None, repr=False)
     _current_item_uid: str | None = dataclasses.field(default=None, repr=False)
-    _item_uid_set: frozenset[str] = dataclasses.field(
-        default_factory=frozenset, repr=False
-    )
 
     def folder(self, item_uid: str | None = None) -> Path:
         """Per-item persistent folder, created on call when available."""
@@ -77,12 +60,12 @@ class RunContext:
             )
         if item_uid is None:
             item_uid = self._current_item_uid
-        if item_uid is None:
-            raise ValueError(
-                f"folder() needs an item_uid for {len(self.item_uids)} items, "
-                f"e.g. {self.item_uids[0]!r}"
-            )
-        if item_uid not in self._item_uid_set:
+            if item_uid is None:
+                raise ValueError(
+                    f"folder() needs an item_uid for {len(self.item_uids)} items, "
+                    f"e.g. {self.item_uids[0]!r}"
+                )
+        elif item_uid not in self._item_uid_set:
             raise ValueError(
                 f"{item_uid!r} is not one of the {len(self.item_uids)} item_uids, "
                 f"e.g. {self.item_uids[0]!r}"
@@ -91,6 +74,10 @@ class RunContext:
         folder = self._step_folder / "runs" / digest
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    @functools.cached_property
+    def _item_uid_set(self) -> frozenset[str]:
+        return frozenset(self.item_uids)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -111,7 +98,7 @@ class _AnnotatedBatch:
     """
 
     def __init__(
-        self, call: _StepCall, values: tp.Iterable[tp.Any], size: int, uids: _RunUids
+        self, call: _StepCall, values: tp.Iterable[tp.Any], size: int, uids: _Uids
     ) -> None:
         self.call = call
         self._values = values
@@ -150,7 +137,7 @@ class _AnnotatedBatch:
 
 
 def _fused_run(
-    calls: tp.Sequence[_StepCall], values: tp.Iterable[tp.Any], uids: _RunUids
+    calls: tp.Sequence[_StepCall], values: tp.Iterable[tp.Any], uids: _Uids
 ) -> tp.Iterator[tp.Any]:
     """Run consecutive non-batched steps over the inputs in a single pass."""
     # bound once: pydantic's __getattr__ makes each step._run lookup slow
@@ -164,41 +151,6 @@ def _fused_run(
                 e._inflight_positions = [position]  # type: ignore[attr-defined]
                 raise
         yield value
-
-
-def _run_context(step: Step) -> RunContext:
-    """Context of *step*'s active ``_run``/``_run_batch``."""
-    frame = sys._getframe(1)
-    # frame contract: _fused_run call/position/uids; _AnnotatedBatch.__iter__ self
-    stages = (_fused_run.__code__, _AnnotatedBatch.__iter__.__code__)
-    while frame.f_code not in stages:
-        if frame.f_back is None:
-            raise RuntimeError("_run_context() requires a running _run or _run_batch")
-        frame = frame.f_back
-    local = frame.f_locals
-    if frame.f_code is _fused_run.__code__:
-        call, current, uids = local["call"], local["position"], local["uids"]
-    else:
-        stage = local["self"]
-        call, uids = stage.call, stage.uids
-        current = stage.n_in - 1 if stage.n_in == stage.n_out + 1 else None
-    if isinstance(local, dict):
-        local.clear()  # <3.13: this snapshot stays on the frame, pinning the item
-    if call.step is not step:
-        raise RuntimeError(
-            f"{step!r}._run_context() must be called within its own "
-            f"_run/_run_batch, not while {call!r} runs"
-        )
-    item_uids, item_uid_set = uids.context()
-    runner = call.runner
-    return RunContext(
-        outer_step=call.step if runner.outer_step is None else runner.outer_step,
-        upstream_steps=runner.upstream_steps,
-        item_uids=item_uids,
-        _step_folder=None if runner.held is None else runner.held.folder,
-        _current_item_uid=None if current is None else item_uids[current],
-        _item_uid_set=item_uid_set,
-    )
 
 
 class StepItems:
@@ -276,9 +228,12 @@ class StepItems:
             raise
 
     def _pipeline(
-        self, current: tp.Iterable[tp.Any], size: int, uids: _UidGetter
+        self,
+        current: tp.Iterable[tp.Any],
+        size: int,
+        uids: tp.Callable[[], tp.Sequence[str]],
     ) -> tp.Iterator[tp.Any]:
-        run_uids = _RunUids(uids)
+        run_uids: _Uids = functools.cache(lambda: tuple(uids()))
         grouped = itertools.groupby(
             self._pending, key=lambda call: "batched" in call.step._step_flags
         )
