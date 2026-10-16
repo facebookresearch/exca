@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pydantic
 
-from . import base, identity
+from . import base, identity, items
 
 # =============================================================================
 # Test utilities
@@ -78,17 +78,15 @@ class Mult(RecordingStep):
 
 
 class ContextRecorder(RecordingStep):
-    def _run(self, value: tp.Any) -> tp.Any:
-        with self._run_context() as context:
-            self.record((value, context))
+    def _run(self, value: tp.Any, *, context: items.RunContext) -> tp.Any:
+        self.record((value, context))
         return value
 
 
 class BatchContextRecorder(RecordingStep):
     def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
         values = list(values)
-        with self._run_context() as context:
-            self.record(context)
+        self.record(tuple(values))
         yield from values
 
 

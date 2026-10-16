@@ -218,8 +218,21 @@ def test_scatter_run_context(tmp_path: Path) -> None:
     values = [2, 3]
     chain.run_many(values)
     uids = tuple(chain.lookup(v).uid for v in values)
-    batch_uids = {c.item_uids for c in chain[1].calls}
-    assert batch_uids == {uids}
+    assert chain[1].calls
     body = [c for _, c in chain[2].body.calls]
-    assert {c.item_uids for c in body} == {uids}
-    assert {c.item_uids for _, c in chain[3].calls} == {uids}
+    assert all(c.outer_step is chain for c in body)
+    assert all(c.upstream_steps == tuple(chain.steps[:3]) for c in body)
+    after_contexts = [c for _, c in chain[3].calls]
+    assert {c.item_uids for c in after_contexts} == {uids}
+    assert all(c.upstream_steps == tuple(chain.steps[:3]) for c in after_contexts)
+
+
+def test_scatter_run_context_folder_per_branch(tmp_path: Path) -> None:
+    class InFolder(base.Step):
+        def _run(self, value: tp.Any, *, context: items.RunContext) -> str:
+            return str(context.folder())
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = base.Chain(steps=[MakeDict(), ScatterDict(body=InFolder())], infra=infra)
+    folders = step.run(3)
+    assert len(set(folders.values())) == 3

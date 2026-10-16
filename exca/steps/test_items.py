@@ -63,12 +63,11 @@ def test_read_fuses_defaults_and_isolates_batched(
     orig = items._fused_run
 
     def spy(
-        steps: tp.Sequence[base.Step],
+        pending: tp.Sequence[tp.Any],
         values: tp.Any,
-        uids: tp.Sequence[str] | None = None,
     ) -> tp.Iterator[tp.Any]:
-        fused.append(len(steps))
-        return orig(steps, values, uids)
+        fused.append(len(pending))
+        return orig(pending, values)
 
     monkeypatch.setattr(items, "_fused_run", spy)
     si = items.StepItems(source={"a": 1, "b": 2, "c": 3})
@@ -82,11 +81,10 @@ def test_read_fuses_defaults_and_isolates_batched(
 class _Nest(conftest.RecordingStep):
     inner: base.Step
 
-    def _run(self, value: tp.Any) -> tp.Any:
-        with self._run_context() as before:
-            list(self.inner.run_many([value]))
-        with self._run_context() as after:
-            self.record((before, after))
+    def _run(self, value: tp.Any, *, context: items.RunContext) -> tp.Any:
+        before = context
+        list(self.inner.run_many([value]))
+        self.record((before, context))
         return value
 
 
@@ -100,9 +98,8 @@ class _InFolder(base.Step):
     def item_uid(self, value: tp.Any) -> str:
         return str(value)
 
-    def _run(self, value: tp.Any) -> str:
-        with self._run_context() as context:
-            folder = context.folder()
+    def _run(self, value: tp.Any, *, context: items.RunContext) -> str:
+        folder = context.folder()
         with (folder / "attempts").open("a", encoding="utf8") as f:
             f.write(f"{value}\n")
         if self.fail:
@@ -110,22 +107,34 @@ class _InFolder(base.Step):
         return str(folder)
 
 
-def test_run_context_follows_items_through_chain(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+@pytest.mark.parametrize("cached", [False, True])
+def test_run_context_follows_items_through_chain(tmp_path: Path, cached: bool) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if cached else None
+    first = conftest.ContextRecorder()
+    batch = conftest.BatchContextRecorder()
     last = conftest.ContextRecorder()
-    steps = [conftest.ContextRecorder(), conftest.BatchContextRecorder(), last, last]
+    steps = [first, batch, last]
     chain: tp.Any = base.Chain(steps=steps, infra=infra)
     assert list(chain.run_many([1, 2, 3])) == [1, 2, 3]
-    uids = tuple(chain.lookup(v).uid for v in (1, 2, 3))
-    [whole] = chain[1].calls
-    assert whole.item_uids == uids
-    fused = [c for _, c in chain[0].calls + chain[2].calls]
-    assert {c.item_uids for c in fused} == {uids}
-    assert len({whole.folder(uid) for uid in uids}) == len(uids)
-    with pytest.raises(ValueError, match="needs an item_uid"):
-        whole.folder()
-    with pytest.raises(ValueError, match="not one of"):
-        whole.folder("missing")
+    first_contexts = [context for _, context in first.calls]
+    [batch_values] = batch.calls
+    last_contexts = [context for _, context in last.calls]
+    assert batch_values == (1, 2, 3)
+    assert all(context.outer_step is chain for context in first_contexts)
+    assert all(context.outer_step is chain for context in last_contexts)
+    assert first_contexts[0].upstream_steps == ()
+    assert last_contexts[0].upstream_steps == (first, batch)
+    if cached:
+        uids = tuple(chain.lookup(v).uid for v in (1, 2, 3))
+        assert {context.item_uids for context in first_contexts} == {uids}
+        assert len({first_contexts[0].folder(uid) for uid in uids}) == len(uids)
+        with pytest.raises(ValueError, match="not one of"):
+            first_contexts[0].folder("missing")
+    else:
+        assert len(first_contexts[0].item_uids) == 3
+        assert len(set(first_contexts[0].item_uids)) == 3
+        with pytest.raises(RuntimeError, match="unavailable"):
+            first_contexts[0].folder()
 
 
 @pytest.mark.parametrize("inner_infra", [None, {"backend": "Cached"}])
@@ -138,8 +147,13 @@ def test_run_context_nested_override_and_inherit(
     [(before, after)] = outer.calls
     [(_, inner)] = tp.cast(conftest.ContextRecorder, outer.inner).calls
     assert after == before, "restored after the nested write"
-    assert (inner == before) == (inner_infra is None), "uncached inherits"
-    if inner_infra is not None:
+    assert before.outer_step is outer
+    assert inner.outer_step is outer.inner
+    assert inner.upstream_steps == ()
+    if inner_infra is None:
+        with pytest.raises(RuntimeError, match="unavailable"):
+            inner.folder()
+    else:
         parent = outer.inner.lookup(1).paths.step_folder / "runs"
         assert inner.folder().parent == parent
 
@@ -178,11 +192,11 @@ def test_run_context_folder_persists(tmp_path: Path) -> None:
     assert folder.exists()
 
 
-def test_run_context_requires_cached_write(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    cached = conftest.ContextRecorder(infra=infra)
-    cached.run(1)
-    with pytest.raises(RuntimeError, match="only available"), cached._run_context():
-        pass
-    with pytest.raises(RuntimeError, match="only available"):
-        conftest.ContextRecorder().run(1)
+def test_run_context_without_storage() -> None:
+    step = conftest.ContextRecorder()
+    step.run(1)
+    [(_, context)] = step.calls
+    assert context.outer_step is step
+    assert len(context.item_uids) == 1
+    with pytest.raises(RuntimeError, match="unavailable"):
+        context.folder()
