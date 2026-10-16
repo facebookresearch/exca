@@ -96,6 +96,8 @@ A single-value call and a batched call share the same cache: if
 `step.run(v)` writes uid `X`, `next(iter(step.run_many([v])))`
 reads `X` back.
 
+For per-item working files, see [Keep per-item working files](keep-per-item-files).
+
 ## Distribution across workers
 
 When `infra.backend` is `Slurm`, `LocalProcess`, `ProcessPool`, or

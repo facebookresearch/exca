@@ -103,7 +103,7 @@ class FetchTable(steps.Step):
 FetchTable(
     url="...",
     infra={"backend": "Cached", "folder": cache},
-).run()                                 # stored as .parquet
+).run()  # stored as .parquet
 ```
 
 A `Chain` propagates the last step's `CACHE_TYPE` to its own
@@ -213,9 +213,9 @@ Use `lookup().clear_cache()` — `Chain.lookup` walks the chain, so
 `recursive=True` (the default) clears the whole pipeline:
 
 ```python
-chain.lookup().clear_cache()                  # recursive (default)
-chain.lookup().clear_cache(recursive=False)   # final step only
-chain[1].lookup(value).clear_cache()          # one specific sub-step + input
+chain.lookup().clear_cache()  # recursive (default)
+chain.lookup().clear_cache(recursive=False)  # final step only
+chain[1].lookup(value).clear_cache()  # one specific sub-step + input
 ```
 
 `Step.clear_cache()` (no `lookup()`) still works but is deprecated.
@@ -229,11 +229,31 @@ log discovery, not for retrieving results — cache reads go through
 
 ```python
 handle = step.lookup(value)
-handle.status                  # "running" / "success" / "error" / None
+handle.status  # "running" / "success" / "error" / None
 job = handle.job()
 if job is not None:
     print(job.paths.stdout, job.paths.stderr)
 ```
+
+(keep-per-item-files)=
+
+## Inspect execution and keep per-item files
+
+Declare a required keyword-only `context` parameter to receive the outer Step passed to `run`/`run_many`, the flattened upstream Steps and the current read's item uids.
+
+```python
+class Train(steps.Step):
+    def _run(self, data, *, context):
+        print(context.outer_step, context.upstream_steps)
+        ckpt = context.folder() / "train.ckpt"
+        model = resume(ckpt) if ckpt.exists() else init()
+        return fit(model, data, ckpt)
+```
+
+`folder()` is available when the Step was planned inside a cached computation.
+It lives outside the result cache and survives failures, recomputation and `clear_cache()`; callers own file synchronization and validation.
+`item_uids` aligns with the values in the current read; `folder()` infers the item in ordinary `_run`, while `_run_batch` passes an explicit uid when there is more than one.
+An explicit nested `run`/`run_many` starts a new root and does not inherit storage.
 
 ## Keep cached data in RAM across calls
 
@@ -244,8 +264,8 @@ same cache entry on repeated reads:
 step = MyStep(
     infra={"backend": "Cached", "folder": cache, "keep_in_ram": True},
 )
-step.run(v)   # loads from disk, keeps in RAM
-step.run(v)   # served from RAM
+step.run(v)  # loads from disk, keeps in RAM
+step.run(v)  # served from RAM
 ```
 
 The RAM cache is per-`Backend` instance and is wiped in lockstep
