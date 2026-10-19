@@ -402,7 +402,7 @@ class WriteTask:
         try:
             runner = dataclasses.replace(self.runner, held=self.claim)
             result_items = self.step._run_items(runner, self.items)
-            with cd.write():
+            with cd.write(), cd.frozen_cache_folder():
                 for i, result in enumerate(result_items):
                     uid = self.items.uids[i]
                     if uid not in cd:

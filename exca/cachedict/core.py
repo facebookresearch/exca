@@ -140,13 +140,12 @@ class CacheDict(tp.Generic[X]):
         # json info file reading
         self._folder_modified = -1.0
         self._jsonl_readers: dict[str, JsonlReader] = {}
-        self._jsonl_reading_allowance = float("inf")
         # DumpContext for this folder (load/delete; writes use per-thread _write_ctx)
         self._dumper: DumpContext | None = None
         self._recorded_jsonls: set[Path] = set()  # one per writer, not per key
         if self.folder is not None:
             self._dumper = DumpContext(self.folder)
-        self._local = threading.local()  # per-thread write context, see _write_ctx
+        self._local = threading.local()  # per-thread write context and freeze
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -210,7 +209,8 @@ class CacheDict(tp.Generic[X]):
         if self.folder is None or not self.folder.exists():
             return
         readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
-        if not force and self._jsonl_reading_allowance <= readings:
+        allowance = getattr(self._local, "reading_allowance", float("inf"))
+        if not force and allowance <= readings:
             return  # bypass reloading info files
         modified = self.folder.lstat().st_mtime
         nothing_new = self._folder_modified == modified
@@ -409,11 +409,11 @@ class CacheDict(tp.Generic[X]):
         items, which could trigger thousands of file rereads
         """
         readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
-        self._jsonl_reading_allowance = readings + 1
+        self._local.reading_allowance = readings + 1
         try:
             yield
         finally:
-            self._jsonl_reading_allowance = float("inf")
+            self._local.reading_allowance = float("inf")
 
 
 class JsonlReader:
