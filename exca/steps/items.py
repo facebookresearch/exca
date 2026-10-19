@@ -14,18 +14,15 @@ pipeline: source + pending + uids. Users never construct it;
 from __future__ import annotations
 
 import dataclasses
-import functools
-import hashlib
 import itertools
 import typing as tp
-from pathlib import Path
 
 from . import identity
 
 if tp.TYPE_CHECKING:
     from .base import Runner, Step
 
-_Uids = tp.Callable[[], tuple[str, ...]]
+_Uids = tp.Callable[[], tp.Sequence[str]]
 
 
 class _Source(tp.Protocol):
@@ -42,53 +39,12 @@ class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
 
 
-@dataclasses.dataclass(frozen=True)
-class RunContext:
-    """Execution context of the running step, from ``Step._run_context()``."""
-
-    outer_step: Step
-    upstream_steps: tuple[Step, ...]
-    item_uids: tuple[str, ...]
-    _step_folder: Path | None = dataclasses.field(default=None, repr=False)
-    _current_item_uid: str | None = dataclasses.field(default=None, repr=False)
-
-    def folder(self, item_uid: str | None = None) -> Path:
-        """Per-item persistent folder, created on call when available."""
-        if self._step_folder is None:
-            raise RuntimeError(
-                "folder() is unavailable because no enclosing step has infra.folder"
-            )
-        if item_uid is None:
-            item_uid = self._current_item_uid
-            if item_uid is None:
-                raise ValueError(
-                    f"folder() needs an item_uid for {len(self.item_uids)} items, "
-                    f"e.g. {self.item_uids[0]!r}"
-                )
-        elif item_uid not in self._item_uid_set:
-            raise ValueError(
-                f"{item_uid!r} is not one of the {len(self.item_uids)} item_uids, "
-                f"e.g. {self.item_uids[0]!r}"
-            )
-        digest = hashlib.md5(item_uid.encode("utf8")).hexdigest()
-        folder = self._step_folder / "runs" / digest
-        folder.mkdir(parents=True, exist_ok=True)
-        return folder
-
-    @functools.cached_property
-    def _item_uid_set(self) -> frozenset[str]:
-        return frozenset(self.item_uids)
-
-
 @dataclasses.dataclass(frozen=True, slots=True)
 class _StepCall:
     """A pending step with the runner that planned it."""
 
     step: Step
     runner: Runner
-
-    def __repr__(self) -> str:
-        return repr(self.step)
 
 
 class _AnnotatedBatch:
@@ -116,23 +72,23 @@ class _AnnotatedBatch:
             for result in self.call.step._run_batch(self._tracked()):
                 if self.n_out >= self._expected:
                     raise BatchProtocolError(
-                        f"{self.call!r}._run_batch yielded more than {self._expected} results"
+                        f"{self.call.step!r}._run_batch yielded more than {self._expected} results"
                     )
                 if self.n_out == self.n_in:
                     raise BatchProtocolError(
-                        f"{self.call!r}._run_batch yielded before consuming an input"
+                        f"{self.call.step!r}._run_batch yielded before consuming an input"
                     )
                 self.n_out += 1
                 yield result
         except Exception as e:
-            e.add_note(f"  -> in {self.call!r}")
+            e.add_note(f"  -> in {self.call.step!r}")
             positions = range(self.n_out, self.n_in)
             if positions:
                 e._inflight_positions = positions  # type: ignore[attr-defined]
             raise
         if self.n_out < self._expected:
             raise BatchProtocolError(
-                f"{self.call!r}._run_batch yielded {self.n_out} results for {self._expected} inputs"
+                f"{self.call.step!r}._run_batch yielded {self.n_out} results for {self._expected} inputs"
             )
 
 
@@ -147,10 +103,14 @@ def _fused_run(
             try:
                 value = run() if isinstance(value, identity.NoValue) else run(value)
             except Exception as e:
-                e.add_note(f"  -> in {call!r}")
+                e.add_note(f"  -> in {call.step!r}")
                 e._inflight_positions = [position]  # type: ignore[attr-defined]
                 raise
         yield value
+
+
+# frame contract: _fused_run call/position/uids; _AnnotatedBatch.__iter__ self
+_STAGES = (_fused_run.__code__, _AnnotatedBatch.__iter__.__code__)
 
 
 class StepItems:
@@ -228,21 +188,17 @@ class StepItems:
             raise
 
     def _pipeline(
-        self,
-        current: tp.Iterable[tp.Any],
-        size: int,
-        uids: tp.Callable[[], tp.Sequence[str]],
+        self, current: tp.Iterable[tp.Any], size: int, uids: _Uids
     ) -> tp.Iterator[tp.Any]:
-        run_uids: _Uids = functools.cache(lambda: tuple(uids()))
         grouped = itertools.groupby(
             self._pending, key=lambda call: "batched" in call.step._step_flags
         )
         for batched, group in grouped:
             if batched:
                 for call in group:
-                    current = _AnnotatedBatch(call, current, size, run_uids)
+                    current = _AnnotatedBatch(call, current, size, uids)
             else:
-                current = _fused_run(list(group), current, run_uids)
+                current = _fused_run(list(group), current, uids)
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:

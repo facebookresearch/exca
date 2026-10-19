@@ -289,20 +289,38 @@ def test_duplicate_uids_preserve_all_results(
 # -----------------------------------------------------------------------------
 
 
+class _AddWithContext(conftest.Add):
+    def _run(self, value: float = 0) -> float:
+        self._run_context()
+        return super()._run(value)
+
+
 def test_fail_fast_partial_cache(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = conftest.Add(value=10, fail_on={3}, infra=infra)
+    step = _AddWithContext(value=10, fail_on={3}, infra=infra)
     with pytest.raises(ValueError):
         list(step.run_many([1, 2, 3, 4, 5]))
     assert step.calls[-1] == 3, "fail-fast: nothing should compute after the failure"
     first_cached = set(step.calls[:-1])
+    checkpoint = step.contexts[-1].folder() / "ckpt"
+    checkpoint.touch()
 
     infra["mode"] = "retry"
-    retried = conftest.Add(value=10, infra=infra)  # fail_on excluded from uid
+    retried = _AddWithContext(value=10, infra=infra)  # fail_on excluded from uid
     result = list(retried.run_many([1, 2, 3, 4, 5]))
     assert result == [11, 12, 13, 14, 15]
     assert 3 in retried.calls
     assert first_cached.isdisjoint(set(retried.calls)), "cached items must not recompute"
+    resumed = retried.contexts[retried.calls.index(3)].folder()
+    assert resumed == checkpoint.parent, "retry sees the failed run's folder"
+    assert checkpoint.exists(), "and keeps its files"
+    retried.lookup(3).clear_cache()
+    assert not checkpoint.exists(), "clear_cache deletes them"
+    resumed.mkdir()
+    checkpoint.touch()
+    infra["mode"] = "force"
+    _AddWithContext(value=10, infra=infra).run(3)
+    assert not checkpoint.exists(), "and so does force"
 
 
 # -----------------------------------------------------------------------------

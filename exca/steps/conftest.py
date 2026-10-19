@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pydantic
 
-from . import base, identity
+from . import backends, base, identity
 
 # =============================================================================
 # Test utilities
@@ -42,6 +42,7 @@ class RecordingStep(base.Step):
 
     # PrivateAttrs: kept out of the uid/config, but pickled to workers.
     _calls: list = pydantic.PrivateAttr(default_factory=list)
+    _contexts: list = pydantic.PrivateAttr(default_factory=list)
     _on_call: tp.Callable[[tp.Any], None] | None = pydantic.PrivateAttr(None)
 
     def on_call(self, fn: tp.Callable[[tp.Any], None]) -> tp.Self:
@@ -55,6 +56,16 @@ class RecordingStep(base.Step):
         """Inputs seen by ``_run`` in-process, in call order (a no-input call
         records ``identity.NoValue()``)."""
         return list(self._calls)
+
+    @property
+    def contexts(self) -> list:
+        """``self._run_context()`` results in-process, in call order."""
+        return list(self._contexts)
+
+    def _run_context(self) -> backends.RunContext:
+        context = super()._run_context()
+        self._contexts.append(context)
+        return context
 
     def record(self, value: tp.Any = identity.NoValue()) -> None:
         self._calls.append(value)
@@ -77,17 +88,12 @@ class Mult(RecordingStep):
         return value * self.coeff
 
 
-class ContextRecorder(RecordingStep):
-    def _run(self, value: tp.Any) -> tp.Any:
-        self.record((value, self._run_context()))
-        return value
+class MultWithContext(Mult):
+    """Mult that also calls ``self._run_context()`` in ``_run``."""
 
-
-class BatchContextRecorder(RecordingStep):
-    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[tp.Any]:
-        values = list(values)
-        self.record((tuple(values), self._run_context()))
-        return iter(values)
+    def _run(self, value: float) -> float:
+        self._run_context()
+        return super()._run(value)
 
 
 # =============================================================================

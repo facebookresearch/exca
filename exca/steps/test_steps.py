@@ -455,7 +455,7 @@ class _ResolvesToMult(Step):
         return value
 
     def _resolve_step(self) -> Step:
-        return conftest.Mult(infra=self.infra)
+        return conftest.MultWithContext(infra=self.infra)
 
 
 class _StepWithBody(Step):
@@ -467,7 +467,9 @@ class _StepWithBody(Step):
 
 def test_nested_resolution_drives_uid() -> None:
     resolving_uid = identity.step_uid([_StepWithBody(body=_ResolvesToMult())])
-    assert resolving_uid == identity.step_uid([_StepWithBody(body=conftest.Mult())])
+    assert resolving_uid == identity.step_uid(
+        [_StepWithBody(body=conftest.MultWithContext())]
+    )
 
 
 def test_parallel_caches_the_resolved_step_result(tmp_path: Path) -> None:
@@ -475,6 +477,8 @@ def test_parallel_caches_the_resolved_step_result(tmp_path: Path) -> None:
     sweep = helpers.Parallel(steps=[_ResolvesToMult()], infra=infra)
     sweep.run(5.0)
     assert sweep.steps[0].lookup(5.0).result() == 10.0
+    resolved: tp.Any = utils.resolved_step(sweep.steps[0])
+    assert resolved.contexts[0].outer_step is sweep.steps[0], "variant is the root"
 
 
 def test_resolve_step_runtime_checks(tmp_path: Path) -> None:

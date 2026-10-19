@@ -259,7 +259,7 @@ class TrainMany(steps.Step):
 ```
 
 `folder()` is available when the Step was planned inside a cached computation.
-It lives outside the result cache and survives failures, recomputation and `clear_cache()`; callers own file synchronization and validation.
+It lives outside the result cache and survives failures and `mode="retry"`, while `mode="force"` and `clear_cache()` delete it; callers own file synchronization and validation.
 `item_uids` aligns with the values in the current read; `folder()` infers the item while a single one is in flight, otherwise it needs an explicit uid.
 An explicit nested `run`/`run_many` starts a new root and does not inherit storage.
 

@@ -52,13 +52,15 @@ def test_step_items_cache_dict_requires_uids() -> None:
         items.StepItems(source=cd)
 
 
-class _Batched(base.Step):
+class _Batched(conftest.RecordingStep):
     def _run_batch(self, values: tp.Iterable[int]) -> tp.Iterator[int]:
+        self._run_context()
         yield from values  # "batched" flag -> must not fuse
 
 
+@pytest.mark.parametrize("cached", [False, True])
 def test_read_fuses_defaults_and_isolates_batched(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cached: bool
 ) -> None:
     fused: list[int] = []
     orig = items._fused_run
@@ -68,47 +70,50 @@ def test_read_fuses_defaults_and_isolates_batched(
         return orig(calls, *args)
 
     monkeypatch.setattr(items, "_fused_run", spy)
-    si = items.StepItems(source={"a": 1, "b": 2, "c": 3})
-    for step in (conftest.Mult(), conftest.Mult(), _Batched(), conftest.Mult()):
-        si = base.Runner().dispatch(step, si)
-    result = list(si)
+    mult, batched = conftest.MultWithContext(), _Batched()
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if cached else None
+    chain = base.Chain(steps=[mult, mult, batched, mult], infra=infra)
+    result = list(chain.run_many([1, 2, 3]))
     assert result == [8, 16, 24], "x2, x2, identity batch, x2"
     assert fused == [2, 1], "two defaults fuse; the batched step splits, then one default"
+    contexts = batched.contexts + mult.contexts
+    assert all(c.outer_step is chain for c in contexts)
+    upstream = [c.upstream_steps for c in contexts]
+    assert upstream == [(mult, mult)] + [(), (mult,), (mult, mult, batched)] * 3
+    uids = contexts[0].item_uids
+    assert all(c.item_uids is uids for c in contexts), "uids copied per context"
+    if cached:
+        assert list(uids) == [chain.lookup(v).uid for v in (1, 2, 3)]
+        [batch_context] = batched.contexts
+        per_item = [c.folder() for c in mult.contexts[::3]]
+        assert [batch_context.folder(u) for u in uids] == per_item
+        with pytest.raises(ValueError, match="needs an item_uid"):
+            batch_context.folder()
+        with pytest.raises(ValueError, match="not one of"):
+            batch_context.folder("missing")
+    else:
+        with pytest.raises(RuntimeError, match="unavailable"):
+            contexts[0].folder()
 
 
 class _Nest(conftest.RecordingStep):
     inner: base.Step
 
     def _run(self, value: tp.Any) -> tp.Any:
-        contexts = [self._run_context()]
+        self._run_context()
         for _ in self.inner.run_many([value, value + 1]):
-            contexts.append(self._run_context())
-        self.record(contexts)
+            self._run_context()
         return value
 
 
 class _InFolder(base.Step):
-    fail: bool = False
-
-    @classmethod
-    def _exclude_from_cls_uid(cls) -> list[str]:
-        return super()._exclude_from_cls_uid() + ["fail"]
-
     def item_uid(self, value: tp.Any) -> str:
         return str(value)
 
     def _run(self, value: tp.Any) -> str:
         folder = self._run_context().folder()
-        with (folder / "attempts").open("a", encoding="utf8") as f:
-            f.write(f"{value}\n")
-        if self.fail:
-            raise ValueError("boom")
+        (folder / "value").write_text(value, "utf8")
         return str(folder)
-
-
-class _InFolderBatch(_InFolder):
-    def _run_batch(self, values: tp.Iterable[tp.Any]) -> tp.Iterator[str]:
-        yield from map(self._run, values)
 
 
 class _Deferred(base.Step):
@@ -138,63 +143,26 @@ class _DropWithContext(base.Step):
         return 0
 
 
-@pytest.mark.parametrize("cached", [False, True])
-def test_run_context_follows_items_through_chain(tmp_path: Path, cached: bool) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if cached else None
-    step = conftest.ContextRecorder()
-    batch = conftest.BatchContextRecorder()
-    chain: tp.Any = base.Chain(steps=[step, batch, step], infra=infra)
-    assert list(chain.run_many([1, 2, 3])) == [1, 2, 3]
-    [(batch_values, batch_context)] = batch.calls
-    contexts = [context for _, context in step.calls]
-    assert batch_values == (1, 2, 3)
-    all_contexts = contexts + [batch_context]
-    assert all(c.outer_step is chain for c in all_contexts)
-    upstream = [c.upstream_steps for c in all_contexts]
-    assert upstream == [()] * 3 + [(step, batch)] * 3 + [(step,)], "per occurrence"
-    uids = contexts[0].item_uids
-    assert isinstance(uids, tuple)
-    assert len(set(uids)) == 3
-    assert all(c.item_uids is uids for c in all_contexts), "uids copied per context"
-    if cached:
-        assert uids == tuple(chain.lookup(v).uid for v in (1, 2, 3))
-        assert [c.folder() for c in contexts[:3]] == [
-            batch_context.folder(u) for u in uids
-        ]
-        with pytest.raises(ValueError, match="needs an item_uid"):
-            batch_context.folder()
-        with pytest.raises(ValueError, match="not one of"):
-            batch_context.folder("missing")
-    else:
-        with pytest.raises(RuntimeError, match="unavailable"):
-            contexts[0].folder()
-
-
 @pytest.mark.parametrize("inner_infra", [None, {"backend": "Cached"}])
-def test_run_context_nested_run_starts_new_root(
-    tmp_path: Path, inner_infra: tp.Any
-) -> None:
+def test_run_context_scoped_to_its_run(tmp_path: Path, inner_infra: tp.Any) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    inner = conftest.ContextRecorder(infra=inner_infra)
+    inner = conftest.MultWithContext(infra=inner_infra)
     outer = _Nest(inner=inner, infra=infra)
     outer.run(1)
-    [contexts] = outer.calls
-    assert all(c == contexts[0] for c in contexts), "stable across inner yields"
-    assert contexts[0].outer_step is outer
-    inner_contexts = [context for _, context in inner.calls]
-    assert all(c.outer_step is inner and c.upstream_steps == () for c in inner_contexts)
-    assert [len(c.item_uids) for c in inner_contexts] == [2, 2], "the inner read's uids"
+    assert all(c == outer.contexts[0] for c in outer.contexts), (
+        "stable across inner yields"
+    )
+    assert outer.contexts[0].outer_step is outer
+    assert all(c.outer_step is inner and c.upstream_steps == () for c in inner.contexts)
+    assert [len(c.item_uids) for c in inner.contexts] == [2, 2], "the inner read's uids"
     if inner_infra is None:
         with pytest.raises(RuntimeError, match="unavailable"):
-            inner_contexts[0].folder()
+            inner.contexts[0].folder()
     else:
         parent = inner.lookup(1).paths.step_folder / "runs"
-        assert inner_contexts[0].folder().parent == parent
-
-
-def test_run_context_outside_own_run_raises() -> None:
+        assert inner.contexts[0].folder().parent == parent
     with pytest.raises(RuntimeError, match="requires a running"):
-        conftest.ContextRecorder()._run_context()
+        outer._run_context()
     with pytest.raises(RuntimeError, match="not while _Drain"):
         list(base.Chain(steps=[_Deferred(), _Drain()]).run_many([1]))
 
@@ -207,28 +175,9 @@ def test_run_context_releases_item_values() -> None:
     assert payload() is None, "context retained the previous item"
 
 
-@pytest.mark.parametrize(
-    "cls,backend", [(_InFolderBatch, "Cached"), (_InFolder, "LocalProcess")]
-)
-def test_run_context_folder_isolated_per_item(
-    tmp_path: Path, backend: str, cls: type[_InFolder]
-) -> None:
-    infra: tp.Any = {"backend": backend, "folder": tmp_path}
+def test_run_context_folder_isolated_per_item(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
     values = ["../../escape", "a/b", "a_b", "x"]
-    folders = [Path(f) for f in cls(infra=infra).run_many(values)]
-    assert [(f / "attempts").read_text("utf8") for f in folders] == [
-        f"{v}\n" for v in values
-    ]
+    folders = [Path(f) for f in _InFolder(infra=infra).run_many(values)]
+    assert [(f / "value").read_text("utf8") for f in folders] == values
     assert len({f.parent for f in folders}) == 1, "hostile uids escaped runs/"
-
-
-def test_run_context_folder_persists(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    step = _InFolder(infra=infra, fail=True)
-    with pytest.raises(ValueError, match="boom"):
-        step.run("a")
-    step = step.clone(fail=False, infra={"mode": "retry"})
-    folder = Path(step.run("a"))
-    assert (folder / "attempts").read_text("utf8") == "a\na\n"
-    step.lookup("a").clear_cache()
-    assert folder.exists()

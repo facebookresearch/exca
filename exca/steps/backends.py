@@ -17,9 +17,11 @@ import contextlib
 import dataclasses
 import datetime
 import functools
+import hashlib
 import logging
 import os
 import random
+import shutil
 import sys
 import traceback
 import typing as tp
@@ -115,8 +117,9 @@ class _StepCache:
                 _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
         return pending
 
-    def clear(self, uids: tp.Iterable[str]) -> None:
-        """Drop everything cached for these uids (cd rows and error rows)."""
+    def clear(self, uids: tp.Iterable[str], runs: bool = True) -> None:
+        """Drop everything cached for these uids (cd rows, error rows and, if
+        *runs*, run folders)."""
         uids = list(dict.fromkeys(uids))
         if not uids:
             return
@@ -135,6 +138,10 @@ class _StepCache:
                     kind.cancel(group)
             except Exception as e:
                 logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
+        if runs:  # first: a mid-clear crash must not leave a run folder to resume
+            for uid in uids:
+                with contextlib.suppress(FileNotFoundError):
+                    shutil.rmtree(RunContext._get_folder(paths.step_folder, uid))
         # Success first → a mid-clear crash leaves a recoverable cached
         # error rather than a stale success (fail closed).
         with cd.write(), cd.frozen_cache_folder():
@@ -244,6 +251,47 @@ class LookupHandle:
                 exc_info=True,
             )
         return None
+
+
+@dataclasses.dataclass(frozen=True)
+class RunContext:
+    """Execution context of the running step, from ``Step._run_context()``."""
+
+    outer_step: Step
+    upstream_steps: tuple[Step, ...]
+    item_uids: tp.Sequence[str]
+    _step_folder: Path | None = dataclasses.field(default=None, repr=False)
+    _current_item_uid: str | None = dataclasses.field(default=None, repr=False)
+
+    def folder(self, item_uid: str | None = None) -> Path:
+        """Per-item persistent folder, created on call when available."""
+        if self._step_folder is None:
+            raise RuntimeError(
+                "folder() is unavailable because no enclosing step has infra.folder"
+            )
+        if item_uid is None:
+            item_uid = self._current_item_uid
+            if item_uid is None:
+                raise ValueError(
+                    f"folder() needs an item_uid for {len(self.item_uids)} items, "
+                    f"e.g. {self.item_uids[0]!r}"
+                )
+        elif item_uid not in self._item_uid_set:
+            raise ValueError(
+                f"{item_uid!r} is not one of the {len(self.item_uids)} item_uids, "
+                f"e.g. {self.item_uids[0]!r}"
+            )
+        folder = self._get_folder(self._step_folder, item_uid)
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @staticmethod
+    def _get_folder(step_folder: Path, item_uid: str) -> Path:
+        return step_folder / "runs" / hashlib.md5(item_uid.encode("utf8")).hexdigest()
+
+    @functools.cached_property
+    def _item_uid_set(self) -> frozenset[str]:
+        return frozenset(self.item_uids)
 
 
 def _fold_modes(*modes: identity.ModeType) -> identity.ModeType:
@@ -533,7 +581,7 @@ class CacheDispatch:
         clear_uids = [
             uid for uid, status in pending.items() if mode == "force" or status == "error"
         ]
-        task.cache.clear(clear_uids)
+        task.cache.clear(clear_uids, runs=mode == "force")  # retry keeps run folders
         if not pending:
             return None
         return task.select(list(pending))

@@ -262,20 +262,18 @@ class Step(exca.helpers.DiscriminatedModel):
         """Override in subclasses."""
         raise NotImplementedError
 
-    def _run_context(self) -> items.RunContext:
+    def _run_context(self) -> backends.RunContext:
         """Context of this active ``_run``/``_run_batch``.
 
         Lookup after the method returns, including from lazy results, is unsupported.
         """
         frame = sys._getframe(1)
-        # frame contract: _fused_run call/position/uids; _AnnotatedBatch.__iter__ self
-        stages = (items._fused_run.__code__, items._AnnotatedBatch.__iter__.__code__)
-        while frame.f_code not in stages:
+        while frame.f_code not in items._STAGES:
             if frame.f_back is None:
                 raise RuntimeError("_run_context() requires a running _run or _run_batch")
             frame = frame.f_back
         local = frame.f_locals
-        if frame.f_code is items._fused_run.__code__:
+        if frame.f_code is items._STAGES[0]:
             call, current, uids = local["call"], local["position"], local["uids"]
         else:
             stage = local["self"]
@@ -286,12 +284,13 @@ class Step(exca.helpers.DiscriminatedModel):
         if call.step is not self:
             raise RuntimeError(
                 f"{self!r}._run_context() must be called within its own "
-                f"_run/_run_batch, not while {call!r} runs"
+                f"_run/_run_batch, not while {call.step!r} runs"
             )
         item_uids = uids()
         runner = call.runner
-        return items.RunContext(
-            outer_step=call.step if runner.outer_step is None else runner.outer_step,
+        assert runner.outer_step is not None, "execution roots set Runner.outer_step"
+        return backends.RunContext(
+            outer_step=runner.outer_step,
             upstream_steps=runner.upstream_steps,
             item_uids=item_uids,
             _step_folder=None if runner.held is None else runner.held.folder,
