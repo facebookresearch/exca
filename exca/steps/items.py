@@ -158,11 +158,10 @@ class StepItems:
             return len(self._source)
         return len(self._uids)
 
-    def _append(self, call: _StepCall) -> StepItems:
+    def _append(self, step: Step, runner: Runner) -> StepItems:
         """Append a single leaf step's computation."""
-        return StepItems(
-            source=self._source, uids=self._uids, pending=self._pending + (call,)
-        )
+        pending = self._pending + (_StepCall(step, runner),)
+        return StepItems(source=self._source, uids=self._uids, pending=pending)
 
     def select(self, uids: tp.Sequence[str]) -> StepItems:
         """Subset to specific uids."""

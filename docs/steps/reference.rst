@@ -29,7 +29,7 @@ Batched execution
 .. autoexception:: exca.steps.items.BatchProtocolError
 
 .. autoclass:: exca.steps.backends.RunContext()
-    :members: outer_step, upstream_steps, item_uids, folder
+    :members: folder
 
 Cache lookup
 ------------

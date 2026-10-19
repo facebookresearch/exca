@@ -235,34 +235,6 @@ if job is not None:
     print(job.paths.stdout, job.paths.stderr)
 ```
 
-(keep-per-item-files)=
-
-## Inspect execution and keep per-item files
-
-Use `self._run_context()` for pipeline metadata and per-item working files.
-
-```python
-class Train(steps.Step):
-    def _run(self, data):
-        context = self._run_context()
-        print(context.outer_step, context.upstream_steps)
-        ckpt = context.folder() / "train.ckpt"
-        model = resume(ckpt) if ckpt.exists() else init()
-        return fit(model, data, ckpt)
-
-class TrainMany(steps.Step):
-    def _run_batch(self, values):
-        values = list(values)
-        context = self._run_context()
-        ckpts = [context.folder(uid) / "train.ckpt" for uid in context.item_uids]
-        yield from fit_many(values, ckpts)
-```
-
-`folder()` is available when the Step was planned inside a cached computation.
-It lives outside the result cache and survives failures and `mode="retry"`, while `mode="force"` and `clear_cache()` delete it; callers own file synchronization and validation.
-`item_uids` aligns with the values in the current read; `folder()` infers the item while a single one is in flight, otherwise it needs an explicit uid.
-An explicit nested `run`/`run_many` starts a new root and does not inherit storage.
-
 ## Keep cached data in RAM across calls
 
 Set `keep_in_ram=True` on the backend to avoid re-decoding the

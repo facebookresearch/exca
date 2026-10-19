@@ -79,21 +79,23 @@ class RecordingStep(base.Step):
 
 
 class Mult(RecordingStep):
-    """Multiplies input by coefficient."""
+    """Multiplies input by coefficient.
+
+    - with_context: also calls ``self._run_context()`` (see ``.contexts``)
+    """
 
     coeff: float = 2.0
+    with_context: bool = True
+
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return super()._exclude_from_cls_uid() + ["with_context"]
 
     def _run(self, value: float) -> float:
+        if self.with_context:
+            self._run_context()
         self.record(value)
         return value * self.coeff
-
-
-class MultWithContext(Mult):
-    """Mult that also calls ``self._run_context()`` in ``_run``."""
-
-    def _run(self, value: float) -> float:
-        self._run_context()
-        return super()._run(value)
 
 
 # =============================================================================

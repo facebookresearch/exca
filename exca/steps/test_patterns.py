@@ -82,7 +82,7 @@ def test_invalid_scatter_raises() -> None:
 
 def test_scatter_composition() -> None:
     # mid-chain: a scatter splits the value produced by an upstream step
-    body = conftest.MultWithContext(coeff=2.0)
+    body = conftest.Mult(coeff=2.0)
     chain = base.Chain(steps=[MakeDict(), ScatterDict(body=body)])
     assert chain.run(3.0) == {"0": 0.0, "1": 2.0, "2": 4.0}, "MakeDict(3)={0,1,2}, *2"
     upstream = [c.upstream_steps for c in body.contexts]
@@ -111,7 +111,7 @@ def test_downstream_cache_keyed_by_scatter_identity(tmp_path: Path) -> None:
 
 def test_batched_items_scatter_independently(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    body = conftest.MultWithContext(coeff=2.0, infra=infra)
+    body = conftest.Mult(coeff=2.0, infra=infra)
     scat = ScatterDict(body=body)
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"a": 10.0}]))
     assert out == [{"a": 2.0, "b": 4.0}, {"a": 20.0}], (

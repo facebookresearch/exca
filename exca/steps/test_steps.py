@@ -11,6 +11,7 @@ import itertools
 import pickle
 import traceback
 import typing as tp
+import weakref
 from pathlib import Path
 
 import pydantic
@@ -455,7 +456,7 @@ class _ResolvesToMult(Step):
         return value
 
     def _resolve_step(self) -> Step:
-        return conftest.MultWithContext(infra=self.infra)
+        return conftest.Mult(infra=self.infra)
 
 
 class _StepWithBody(Step):
@@ -467,9 +468,7 @@ class _StepWithBody(Step):
 
 def test_nested_resolution_drives_uid() -> None:
     resolving_uid = identity.step_uid([_StepWithBody(body=_ResolvesToMult())])
-    assert resolving_uid == identity.step_uid(
-        [_StepWithBody(body=conftest.MultWithContext())]
-    )
+    assert resolving_uid == identity.step_uid([_StepWithBody(body=conftest.Mult())])
 
 
 def test_parallel_caches_the_resolved_step_result(tmp_path: Path) -> None:
@@ -774,3 +773,47 @@ def test_chained_group_sizes_call_order() -> None:
         [400], [500],          # step3 drains
     ]
     # fmt: on
+
+
+# =============================================================================
+# Run context
+# =============================================================================
+
+
+class _MakePayload(conftest.RecordingStep):
+    def _run(self, value: tp.Any) -> set:
+        payload: set = set()
+        self.record(weakref.ref(payload))
+        return payload
+
+
+class _Nest(conftest.RecordingStep):
+    inner: Step
+
+    def _run(self, value: tp.Any) -> int:
+        self._run_context()
+        for _ in self.inner.run_many([1, 2]):
+            self._run_context()
+        return 0
+
+
+def test_run_context_nested_run_is_a_new_root(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    inner = conftest.Mult()
+    outer = _Nest(inner=inner, infra=infra)
+    outer.run(1)
+    assert all(c == outer.contexts[0] for c in outer.contexts), (
+        "stable across inner yields"
+    )
+    assert all(c.outer_step is inner and c.upstream_steps == () for c in inner.contexts)
+    assert [len(c.item_uids) for c in inner.contexts] == [2, 2], "the inner read's uids"
+    with pytest.raises(RuntimeError, match="unavailable"):
+        inner.contexts[0].folder()
+
+
+def test_run_context_releases_item_values() -> None:
+    make = _MakePayload()
+    results = iter(Chain(steps=[make, _Nest(inner=conftest.Mult())]).run_many([1, 2]))
+    next(results)
+    [payload] = make.calls
+    assert payload() is None, "context retained the previous item"

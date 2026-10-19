@@ -338,7 +338,7 @@ class Step(exca.helpers.DiscriminatedModel):
         extended to their position (e.g. ``runner.advance``), or their cache
         mis-keys silently.
         """
-        return batch._append(items._StepCall(self, runner))
+        return batch._append(self, runner)
 
     # =========================================================================
     # Identity
