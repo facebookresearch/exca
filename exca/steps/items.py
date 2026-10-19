@@ -13,14 +13,13 @@ pipeline: source + pending + uids. Users never construct it;
 
 from __future__ import annotations
 
-import dataclasses
 import itertools
 import typing as tp
 
 from . import identity
 
 if tp.TYPE_CHECKING:
-    from .base import Runner, Step
+    from .base import _StepCall
 
 _Uids = tp.Callable[[], tp.Sequence[str]]
 
@@ -37,14 +36,6 @@ class _Source(tp.Protocol):
 
 class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class _StepCall:
-    """A pending step with the runner that planned it."""
-
-    step: Step
-    runner: Runner
 
 
 class _AnnotatedBatch:
@@ -158,10 +149,11 @@ class StepItems:
             return len(self._source)
         return len(self._uids)
 
-    def _append(self, step: Step, runner: Runner) -> StepItems:
+    def _append(self, call: _StepCall) -> StepItems:
         """Append a single leaf step's computation."""
-        pending = self._pending + (_StepCall(step, runner),)
-        return StepItems(source=self._source, uids=self._uids, pending=pending)
+        return StepItems(
+            source=self._source, uids=self._uids, pending=self._pending + (call,)
+        )
 
     def select(self, uids: tp.Sequence[str]) -> StepItems:
         """Subset to specific uids."""

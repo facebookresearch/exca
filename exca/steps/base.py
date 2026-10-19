@@ -103,6 +103,14 @@ class Runner:
         return cache
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _StepCall:
+    """A pending step with the runner that planned it."""
+
+    step: Step
+    runner: Runner
+
+
 class Step(exca.helpers.DiscriminatedModel):
     """Base class for pipeline steps.
 
@@ -338,7 +346,7 @@ class Step(exca.helpers.DiscriminatedModel):
         extended to their position (e.g. ``runner.advance``), or their cache
         mis-keys silently.
         """
-        return batch._append(self, runner)
+        return batch._append(_StepCall(self, runner))
 
     # =========================================================================
     # Identity
