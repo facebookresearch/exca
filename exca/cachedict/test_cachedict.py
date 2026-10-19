@@ -256,6 +256,26 @@ def test_jsonl_reader_resets_on_rewrite_or_truncate(tmp_path: Path) -> None:
     assert "c" in reader.read()
 
 
+def test_frozen_cache_folder_is_per_thread(tmp_path: Path) -> None:
+    cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    writer: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
+    with writer.write():
+        writer["a"] = 0
+
+    def freeze_and_exit() -> None:
+        with cache.frozen_cache_folder():
+            pass
+
+    with cache.frozen_cache_folder():
+        assert "a" in cache
+        with futures.ThreadPoolExecutor(max_workers=1) as ex:
+            ex.submit(freeze_and_exit).result()
+        with writer.write():
+            writer["x"] = 0
+        assert "x" not in cache, "another thread's freeze must not unfreeze this one"
+    assert "x" in cache
+
+
 def test_2_caches(tmp_path: Path) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)

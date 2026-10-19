@@ -33,8 +33,8 @@ to wrong results.
 
 `WriteTask.run_and_cache()` runs the user function on the worker:
 
-- **Success**: `cd[uid] = result` (no-op if another worker already
-  wrote it — handles inflight reclaim).
+- **Success**: `cd[uid] = result` (no-op if another worker wrote it
+  before the loop's first lookup — handles inflight reclaim).
 - **Failure**: `INSERT OR REPLACE INTO errors (item_uid, exception, traceback)`
   with the pickled exception and formatted traceback, then re-raise.
 
