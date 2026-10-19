@@ -43,9 +43,9 @@ class RecordingStep(base.Step):
     # PrivateAttrs: kept out of the uid/config, but pickled to workers.
     _calls: list = pydantic.PrivateAttr(default_factory=list)
     _contexts: list = pydantic.PrivateAttr(default_factory=list)
-    _on_call: tp.Callable[[tp.Any], None] | None = pydantic.PrivateAttr(None)
+    _on_call: tp.Callable[[tp.Any], object] | None = pydantic.PrivateAttr(None)
 
-    def on_call(self, fn: tp.Callable[[tp.Any], None]) -> tp.Self:
+    def on_call(self, fn: tp.Callable[[tp.Any], object]) -> tp.Self:
         """Attach a side effect run on each ``_run``, in whichever process runs
         it (to observe calls across a process boundary). Returns self."""
         self._on_call = fn

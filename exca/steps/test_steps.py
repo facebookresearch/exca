@@ -809,6 +809,10 @@ def test_run_context_nested_run_is_a_new_root(tmp_path: Path) -> None:
     assert [len(c.item_uids) for c in inner.contexts] == [2, 2], "the inner read's uids"
     with pytest.raises(RuntimeError, match="unavailable"):
         inner.contexts[0].folder()
+    with pytest.raises(RuntimeError, match="requires a running"):
+        inner._run_context()
+    with pytest.raises(RuntimeError, match="within its own"):
+        conftest.Mult().on_call(lambda _: inner._run_context()).run(1)
 
 
 def test_run_context_releases_item_values() -> None:

@@ -88,6 +88,8 @@ def test_read_fuses_defaults_and_isolates_batched(
         assert [batch_context.folder(u) for u in uids] == per_item
         with pytest.raises(ValueError, match="needs an item_uid"):
             batch_context.folder()
+        with pytest.raises(ValueError, match="not one of"):
+            batch_context.folder("1")
     else:
         with pytest.raises(RuntimeError, match="unavailable"):
             contexts[0].folder()
