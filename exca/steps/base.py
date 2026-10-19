@@ -14,6 +14,7 @@ import dataclasses
 import functools
 import inspect
 import logging
+import sys
 import typing as tp
 import warnings
 
@@ -47,8 +48,10 @@ class Runner:
     mode folded from them."""
 
     prefix: tuple[Step, ...] = ()
+    upstream_steps: tuple[Step, ...] = ()
     mode: identity.ModeType = "cached"
     held: backends.inflight.InflightClaim | None = None  # of the enclosing WriteTask
+    outer_step: Step | None = dataclasses.field(default=None, repr=False)
 
     def dispatch(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Resolve, then route *batch*: reuse/remember warm carrier, run inline or
@@ -76,9 +79,11 @@ class Runner:
 
     def advance(self, step: Step) -> Runner:
         """Context of the step following *step*."""
+        steps = tuple(utils.resolved_step(step)._uid_steps())
         return dataclasses.replace(
             self,
-            prefix=self.prefix + tuple(utils.resolved_step(step)._uid_steps()),
+            prefix=self.prefix + steps,
+            upstream_steps=self.upstream_steps + steps,
             mode=backends._fold_modes(self.mode, backends._effective_mode(step)),
         )
 
@@ -96,6 +101,14 @@ class Runner:
                 cache_type=step._infer_cache_type(),
             )
         return cache
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _StepCall:
+    """A pending step with the runner that planned it."""
+
+    step: Step
+    runner: Runner
 
 
 class Step(exca.helpers.DiscriminatedModel):
@@ -257,6 +270,41 @@ class Step(exca.helpers.DiscriminatedModel):
         """Override in subclasses."""
         raise NotImplementedError
 
+    def _run_context(self) -> backends.RunContext:
+        """Context of this active ``_run``/``_run_batch``.
+
+        Lookup after the method returns, including from lazy results, is unsupported.
+        """
+        frame = sys._getframe(1)
+        while frame.f_code not in items._STAGES:
+            if frame.f_back is None:
+                raise RuntimeError("_run_context() requires a running _run or _run_batch")
+            frame = frame.f_back
+        local = frame.f_locals
+        if frame.f_code is items._STAGES[0]:
+            call, current, uids = local["call"], local["position"], local["uids"]
+        else:
+            stage = local["self"]
+            call, uids = stage.call, stage.uids
+            current = stage.n_in - 1 if stage.n_in == stage.n_out + 1 else None
+        if isinstance(local, dict):
+            local.clear()  # <3.13: this snapshot stays on the frame, pinning the item
+        if call.step is not self:
+            raise RuntimeError(
+                f"{self!r}._run_context() must be called within its own "
+                f"_run/_run_batch, not while {call.step!r} runs"
+            )
+        item_uids = uids()
+        runner = call.runner
+        assert runner.outer_step is not None, "execution roots set Runner.outer_step"
+        return backends.RunContext(
+            outer_step=runner.outer_step,
+            upstream_steps=runner.upstream_steps,
+            item_uids=item_uids,
+            _step_folder=None if runner.held is None else runner.held.folder,
+            _current_item_uid=None if current is None else item_uids[current],
+        )
+
     def _resolve_step(self) -> Step:
         """Override to decompose this step into a chain of steps.
 
@@ -281,9 +329,9 @@ class Step(exca.helpers.DiscriminatedModel):
         Must yield exactly one result per input value, in order.
         Default loops ``_run`` over inputs.
         """
+        run = self._run
         for v in values:
-            args = () if isinstance(v, identity.NoValue) else (v,)
-            yield self._run(*args)
+            yield run() if isinstance(v, identity.NoValue) else run(v)
 
     def _is_generator(self) -> bool:
         """Check if step is a generator (no required input in _run)."""
@@ -298,7 +346,7 @@ class Step(exca.helpers.DiscriminatedModel):
         extended to their position (e.g. ``runner.advance``), or their cache
         mis-keys silently.
         """
-        return batch._append(self)
+        return batch._append(_StepCall(self, runner))
 
     # =========================================================================
     # Identity
@@ -391,14 +439,11 @@ class Step(exca.helpers.DiscriminatedModel):
             Iterator yielding one result per input, in input order.
         """
         built = utils.resolved_step(self)
-        if built is not self:
-            return built.run_many(values)
-
         boundary = items.StepItems(
             source=list(values),
-            uids=functools.partial(identity.materialize_uid, self),
+            uids=functools.partial(identity.materialize_uid, built),
         )
-        return Runner().dispatch(self, boundary)
+        return Runner(outer_step=self).dispatch(built, boundary)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
         raise AttributeError("Step.forward() was removed; use run() instead")

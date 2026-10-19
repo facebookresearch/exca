@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pydantic
 
-from . import base, identity
+from . import backends, base, identity
 
 # =============================================================================
 # Test utilities
@@ -42,9 +42,10 @@ class RecordingStep(base.Step):
 
     # PrivateAttrs: kept out of the uid/config, but pickled to workers.
     _calls: list = pydantic.PrivateAttr(default_factory=list)
-    _on_call: tp.Callable[[tp.Any], None] | None = pydantic.PrivateAttr(None)
+    _contexts: list = pydantic.PrivateAttr(default_factory=list)
+    _on_call: tp.Callable[[tp.Any], object] | None = pydantic.PrivateAttr(None)
 
-    def on_call(self, fn: tp.Callable[[tp.Any], None]) -> tp.Self:
+    def on_call(self, fn: tp.Callable[[tp.Any], object]) -> tp.Self:
         """Attach a side effect run on each ``_run``, in whichever process runs
         it (to observe calls across a process boundary). Returns self."""
         self._on_call = fn
@@ -55,6 +56,16 @@ class RecordingStep(base.Step):
         """Inputs seen by ``_run`` in-process, in call order (a no-input call
         records ``identity.NoValue()``)."""
         return list(self._calls)
+
+    @property
+    def contexts(self) -> list:
+        """``self._run_context()`` results in-process, in call order."""
+        return list(self._contexts)
+
+    def _run_context(self) -> backends.RunContext:
+        context = super()._run_context()
+        self._contexts.append(context)
+        return context
 
     def record(self, value: tp.Any = identity.NoValue()) -> None:
         self._calls.append(value)
@@ -68,11 +79,21 @@ class RecordingStep(base.Step):
 
 
 class Mult(RecordingStep):
-    """Multiplies input by coefficient."""
+    """Multiplies input by coefficient.
+
+    - with_context: also calls ``self._run_context()`` (see ``.contexts``)
+    """
 
     coeff: float = 2.0
+    with_context: bool = True
+
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return super()._exclude_from_cls_uid() + ["with_context"]
 
     def _run(self, value: float) -> float:
+        if self.with_context:
+            self._run_context()
         self.record(value)
         return value * self.coeff
 

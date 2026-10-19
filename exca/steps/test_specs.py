@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from . import conftest
+from . import backends, conftest
 from .base import Chain, Step
 
 # -----------------------------------------------------------------------------
@@ -52,7 +52,9 @@ def test_downstream_cache_skips_upstream(
     monkeypatch.setattr(Chain, "item_uid", lambda _, value: uid_calls.append(value))
 
     def make_chain() -> Chain:
-        return Chain(steps=[upstream, conftest.Mult(coeff=10.0, infra=infra)])
+        return Chain(
+            steps=[upstream, conftest.Mult(coeff=10.0, infra=infra, with_context=False)]
+        )
 
     make_chain().run(1)
     make_chain().run(1)
@@ -296,6 +298,9 @@ def test_fail_fast_partial_cache(tmp_path: Path) -> None:
         list(step.run_many([1, 2, 3, 4, 5]))
     assert step.calls[-1] == 3, "fail-fast: nothing should compute after the failure"
     first_cached = set(step.calls[:-1])
+    handle = step.lookup(3)
+    run_folder = backends.RunContext._get_folder(handle.paths.step_folder, handle.uid)
+    run_folder.mkdir(parents=True)
 
     infra["mode"] = "retry"
     retried = conftest.Add(value=10, infra=infra)  # fail_on excluded from uid
@@ -303,6 +308,13 @@ def test_fail_fast_partial_cache(tmp_path: Path) -> None:
     assert result == [11, 12, 13, 14, 15]
     assert 3 in retried.calls
     assert first_cached.isdisjoint(set(retried.calls)), "cached items must not recompute"
+    assert run_folder.exists(), "retry keeps the failed item's run folder"
+    retried.lookup(3).clear_cache()
+    assert not run_folder.exists(), "clear_cache deletes it"
+    run_folder.mkdir(parents=True)
+    infra["mode"] = "force"
+    conftest.Add(value=10, infra=infra).run(3)
+    assert not run_folder.exists(), "and so does force"
 
 
 # -----------------------------------------------------------------------------

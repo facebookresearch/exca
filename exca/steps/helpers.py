@@ -6,6 +6,7 @@
 
 """Convenience Step subclasses for common patterns."""
 
+import dataclasses
 import inspect
 import typing as tp
 
@@ -202,7 +203,9 @@ class Parallel(base.Step):
             resolved = utils.resolved_step(variant)
             uids = [identity.materialize_uid(resolved, v) for v in batch]
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
-            runs.append((runner, resolved, child_batch))
+            runs.append(
+                (dataclasses.replace(runner, outer_step=variant), resolved, child_batch)
+            )
         submission = backends.CacheDispatch(self.infra, runs).submit()
         if submission is not None:
             submission.wait()
