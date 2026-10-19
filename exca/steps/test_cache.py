@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-import exca
+from exca.cachedict import core
 
 from . import backends, conftest, identity
 from .base import Chain, Step
@@ -597,14 +597,14 @@ def test_composed_head_warms_without_standalone_run(
 
 def test_run_many_index_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reads = 0
-    original = exca.cachedict.core.JsonlReader.read
+    original = core.JsonlReader.read
 
-    def counting_read(self: exca.cachedict.core.JsonlReader) -> tp.Any:
+    def counting_read(self: core.JsonlReader) -> tp.Any:
         nonlocal reads
         reads += 1
         return original(self)
 
-    monkeypatch.setattr(exca.cachedict.core.JsonlReader, "read", counting_read)
+    monkeypatch.setattr(core.JsonlReader, "read", counting_read)
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     counts = []
     for n in (4, 12):
