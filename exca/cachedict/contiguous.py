@@ -112,10 +112,9 @@ class ContiguousMemmap:
             fh = open(path, "rb", buffering=0)  # noqa: SIM115
             store[cache_key] = fh
         fh.seek(self._mm.offset + off)
-        view = memoryview(buf)
         n = 0
         while n < span:  # raw reads may return fewer bytes than requested
-            read = fh.readinto(view[n:])
+            read = fh.readinto(buf.data[n:])
             if not read:
                 break
             n += read
