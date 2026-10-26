@@ -204,7 +204,8 @@ def test_unbuffered_handles(tmp_path: Path) -> None:
     cm = _make_cm(tmp_path, original)
     np.testing.assert_array_equal(np.asarray(cm[10:30]), original[10:30])
     store = _get_store(_FILE_HANDLE_CACHE)
-    path = str(cm._mm.filename)
+    path = cm._mm.filename
+    assert path is not None
     key = ("ContiguousMemmap", path)
     assert type(store[key]) is io.FileIO
     store[key] = _ShortReads(path)
