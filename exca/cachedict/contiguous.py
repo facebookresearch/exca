@@ -106,10 +106,19 @@ class ContiguousMemmap:
         store = _get_store(self._cache)
         fh = store.get(cache_key)
         if fh is None or fh.closed:
-            fh = open(path, "rb")  # noqa: SIM115
+            # unbuffered: handles stay cached for the process lifetime, and a
+            # buffered reader would hold st_blksize bytes each (4 MiB on some
+            # network filesystems), i.e. GBs for thousands of cached files
+            fh = open(path, "rb", buffering=0)  # noqa: SIM115
             store[cache_key] = fh
         fh.seek(self._mm.offset + off)
-        n = fh.readinto(buf.data)  # type: ignore[union-attr,attr-defined]
+        view = memoryview(buf)
+        n = 0
+        while n < span:  # raw reads may return fewer bytes than requested
+            read = fh.readinto(view[n:])
+            if not read:
+                break
+            n += read
         if n != span:
             raise IOError(
                 f"ContiguousMemmap: short read on {path} "

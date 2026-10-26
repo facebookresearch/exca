@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `ContiguousMemmapArray`: cached file handles are unbuffered, so they no longer hold a `st_blksize` read buffer each (4 MiB on some network filesystems, GBs per process for thousands of cache files), and reads fetch only the requested bytes.
+
 ## 0.6.0 - 26-10-07
 
 ### Breaking
