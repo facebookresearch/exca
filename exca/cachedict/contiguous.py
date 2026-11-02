@@ -106,9 +106,7 @@ class ContiguousMemmap:
         store = _get_store(self._cache)
         fh = store.get(cache_key)
         if fh is None or fh.closed:
-            # unbuffered: handles stay cached for the process lifetime, and a
-            # buffered reader would hold st_blksize bytes each (4 MiB on some
-            # network filesystems), i.e. GBs for thousands of cached files
+            # Avoid a read buffer per cached handle.
             fh = open(path, "rb", buffering=0)  # noqa: SIM115
             store[cache_key] = fh
         fh.seek(self._mm.offset + off)

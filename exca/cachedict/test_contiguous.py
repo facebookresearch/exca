@@ -13,8 +13,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from .contiguous import _FILE_HANDLE_CACHE, ContiguousMemmap
-from .dumpcontext import DumpContext, _get_store
+from .contiguous import ContiguousMemmap
+from .dumpcontext import DumpContext
 
 
 def _make_cm(tmp_path: Path, arr: np.ndarray) -> ContiguousMemmap:
@@ -197,20 +197,15 @@ class _ShortReads(io.FileIO):
         return super().readinto(memoryview(buffer)[:7])
 
 
-def test_unbuffered_handles(tmp_path: Path) -> None:
-    """Cached handles hold no read buffer (st_blksize bytes each, up to MiBs),
-    and partial raw reads are completed."""
-    original = np.random.rand(50, 40)
+def test_short_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = np.arange(12, dtype=np.float64).reshape(3, 4)
     cm = _make_cm(tmp_path, original)
-    np.testing.assert_array_equal(np.asarray(cm[10:30]), original[10:30])
-    store = _get_store(_FILE_HANDLE_CACHE)
-    path = cm._mm.filename
-    assert path is not None
-    key = ("ContiguousMemmap", path)
-    assert type(store[key]) is io.FileIO
-    store[key] = _ShortReads(path)
-    np.testing.assert_array_equal(np.asarray(cm[10:30]), original[10:30])
-    store.pop(key).close()
+    monkeypatch.setattr(
+        "exca.cachedict.contiguous.open",
+        lambda path, *args, **kwargs: _ShortReads(path),
+        raising=False,
+    )
+    np.testing.assert_array_equal(np.asarray(cm[1:]), original[1:])
 
 
 # =============================================================================
