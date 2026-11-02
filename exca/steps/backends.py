@@ -80,6 +80,10 @@ class _StepCache:
     cache_dict: exca.cachedict.CacheDict[tp.Any] = dataclasses.field(init=False)
     attempted: set[str] = dataclasses.field(default_factory=set)
     configs_written: bool = False
+    # owned disposable caches, by step_uid
+    staged: dict[str, _StepCache] = dataclasses.field(default_factory=dict)
+    # uid -> the Scatter branch uids it read, also reclaimed when it commits
+    rekeyed: dict[str, list[str]] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self, keep_in_ram: bool, cache_type: str | None) -> None:
         self.cache_dict = exca.cachedict.CacheDict(
@@ -356,7 +360,7 @@ class WriteTask:
     step: Step
     cache: _StepCache
     items: items.StepItems
-    runner: Runner  # context of `step`, with the step's folded mode
+    runner: Runner  # context of `step`, with its folded mode and its cache as owner
     claim: inflight.InflightClaim | None = None
 
     def held_claim(self) -> inflight.InflightClaim | None:
@@ -384,6 +388,15 @@ class WriteTask:
     def select(self, uids: tp.Sequence[str]) -> WriteTask:
         """Sub-task over *uids*, sharing step/cache/claim."""
         return dataclasses.replace(self, items=self.items.select(uids))
+
+    def pulled(self) -> WriteTask:
+        """Same task, with a deferred (lazy) input dispatched under its cache."""
+        batch = self.items
+        if not isinstance(batch._source, _DeferredDispatch):
+            return self
+        source = batch._source.pull(self.cache)
+        pulled = items.StepItems(source=source, uids=batch.uids, pending=batch._pending)
+        return dataclasses.replace(self, items=pulled)
 
     def shuffled(self) -> WriteTask:
         """Same task with its uids in random order."""
@@ -431,6 +444,12 @@ class WriteTask:
                         reg.record(uid, e, tb)
             raise
         finally:
+            if self.cache.staged:
+                committed = [uid for uid in self.items.uids if uid in cd]
+                for uid in committed:  # extends: nested Scatter branches too
+                    committed.extend(self.cache.rekeyed.pop(uid, ()))
+                for staged in self.cache.staged.values():
+                    staged.clear(committed)
             self.release()  # free competitors as soon as this work ends
 
 
@@ -484,13 +503,13 @@ class CacheDispatch:
     def _prepare(self, runner: Runner, step: Step, batch: items.StepItems) -> WriteTask:
         """Resolve paths/cache/mode and force-clear before any claim is held."""
         at = runner.advance(step)
-        cache = runner.cache(step)
+        cache = runner.cache(step, batch.uids)
         cache.paths.step_folder.mkdir(parents=True, exist_ok=True)
         if not cache.configs_written:
             identity.write_configs(cache.paths.step_folder, at.prefix)
             cache.configs_written = True
         mode = at.mode
-        runner = dataclasses.replace(runner, mode=mode)
+        runner = dataclasses.replace(runner, mode=mode, owner=cache)
         # carries the full input set; _claim filters to pending
         task = WriteTask(step=step, cache=cache, items=batch, runner=runner)
         pending = cache.pending(batch.uids, mode)
@@ -545,7 +564,7 @@ class CacheDispatch:
             # step_uid order: concurrent dispatches agree on lock order
             ordered = sorted(self.tasks, key=lambda task: task.cache.paths.step_uid)
             claimed = [c for t in ordered if (c := self._claim(stack, t)) is not None]
-            ready = [r for c in claimed if (r := self._recheck(c)) is not None]
+            ready = [r.pulled() for c in claimed if (r := self._recheck(c)) is not None]
             submission = self.backend._submit(ready) if ready else None
             if submission is not None:
                 for task in ready:
@@ -616,8 +635,45 @@ class SubmissionSource:
         return self._cache.cache_dict.__reduce__()
 
 
+class _DeferredDispatch:
+    """Source of a lazy step, dispatched only once a cached consumer pulls the uids
+    it misses (:meth:`WriteTask.pulled`), as owner of a disposable stage."""
+
+    def __init__(
+        self,
+        runner: Runner,
+        step: Step,
+        batch: items.StepItems,
+        root: _DeferredDispatch | None = None,
+    ) -> None:
+        self._runner, self._step, self._batch = runner, step, batch
+        self._root = self if root is None else root
+        self._pulled: tp.Any = None
+
+    def select(self, uids: tp.Sequence[str]) -> _DeferredDispatch:
+        batch = self._batch.select(uids)
+        return _DeferredDispatch(self._runner, self._step, batch, self._root)
+
+    def pull(self, owner: _StepCache | None) -> tp.Any:
+        assert self._step.infra is not None
+        runner = dataclasses.replace(self._runner, owner=owner)
+        return self._step.infra._run(runner, self._step, self._batch)._source
+
+    def __getitem__(self, uid: str) -> tp.Any:  # no puller: all at once, enclosing owner
+        root = self._root
+        if root._pulled is None:
+            root._pulled = root.pull(root._runner.owner)
+        return root._pulled[uid]
+
+
 class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
-    """Base class for execution backends with integrated caching."""
+    """Base class for execution backends with integrated caching.
+
+    lifecycle: "eager", "lazy" or "disposable"
+        ``eager`` submits in ``run_many`` and waits on read;
+        ``lazy`` computes only what the next cached step misses;
+        ``disposable`` is lazy and deleted once that step caches (see the how-to).
+    """
 
     @classmethod
     def _exclude_from_cls_uid(cls) -> list[str]:
@@ -627,6 +683,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     mode: identity.ModeType = "cached"
     keep_in_ram: bool = False
+    lifecycle: tp.Literal["eager", "lazy", "disposable"] = "eager"
 
     @pydantic.field_validator("mode", mode="before")
     @classmethod

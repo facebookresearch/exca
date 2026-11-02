@@ -13,6 +13,7 @@ How a step's results, errors, and in-flight state are stored and how
 ├── inflight.db              # claim/release registry
 ├── errors.db                # cached exception per errored uid
 ├── jobs.db                  # latest submitit cluster/job/submission time per uid
+├── staging/{step_uid}/      # disposable caches this step owns
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```
@@ -52,6 +53,31 @@ cancels any running submitit job for the requested uids, then deletes
 CacheDict entries and `errors.db` rows. A partial mid-clear (success
 gone, error row still there) surfaces as a recoverable cached error —
 fail closed, not open.
+
+## Lazy and disposable caches (`Backend.lifecycle`)
+
+- **Defer/pull**: `Runner.dispatch` defers a `lazy` or `disposable` step
+  (`_DeferredDispatch`): the next cached consumer dispatches it in
+  `CacheDispatch.submit` for its claimed, rechecked pending uids, with its
+  own cache as `Runner.owner` (`WriteTask.pulled`); a warm consumer never
+  does. A read without such a puller (a `Chain` or `Scatter` reading its
+  own result, or the caller) dispatches the whole batch once, under the
+  `Runner.owner` captured at deferral: the `_StepCache` of the nearest
+  enclosing step running a `WriteTask` (set by `CacheDispatch._prepare`).
+- **Routing**: `Runner.cache(step, uids)` returns a disposable step's
+  ordinary cache if it holds all `uids` (and mode is not `force`) or if
+  there is no owner (no cached consumer or enclosing step, shared `Scatter`
+  branches): then it is a lazy cache, never reclaimed. Else it roots it at
+  `{owner step folder}/staging/{step_uid}/`, memoised in `owner.staged`.
+  Lookups do not see staged caches.
+- **Reclaim**: the owner's `run_and_cache` ends by clearing, from each
+  staged cache, the uids its own cache holds, plus the branch uids an
+  input-scoped `Scatter` recorded for them in `owner.rekeyed` while
+  gathering: in the owner's process, before releasing its per-uid inflight
+  claims, which keep concurrent runs of that owner off these entries. Bytes
+  come back once every entry of a CacheDict writer file is cleared.
+- **Two owners**: two different cached consumers are two owners: each
+  restages the producer.
 
 ## RAM caching and the per-Step cache
 

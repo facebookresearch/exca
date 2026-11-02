@@ -114,22 +114,28 @@ class _Gather:
         dispatched: items.StepItems,
         plan: dict[str, dict[str, tp.Any]],
         gather: tp.Callable[[list[BranchResult]], tp.Any],
+        owner: backends._StepCache | None,
     ) -> None:
         self._dispatched = dispatched
         self._gather = gather
         self._plan = plan
+        self._owner = owner
 
     def select(self, uids: tp.Sequence[str]) -> _Gather:
         plan = {u: self._plan[u] for u in uids if u in self._plan}
         branch_uids = list(dict.fromkeys(b for m in plan.values() for b in m))
-        return _Gather(self._dispatched.select(branch_uids), plan, self._gather)
+        dispatched = self._dispatched.select(branch_uids)
+        return _Gather(dispatched, plan, self._gather, self._owner)
 
     def __getitem__(self, uid: str) -> tp.Any:
         branches = self._plan[uid]  # {branch uid: branch}
         results = self._dispatched.read(list(branches))
-        return self._gather(
+        out = self._gather(
             [BranchResult(b, res) for b, res in zip(branches.values(), results)]
         )
+        if self._owner is not None and self._owner.staged:  # staged branches
+            self._owner.rekeyed[uid] = list(branches)
+        return out
 
 
 class Scatter(base.Step):
@@ -230,7 +236,9 @@ class Scatter(base.Step):
     def _run_items(self, runner: base.Runner, batch: items.StepItems) -> items.StepItems:
         keyer = _BranchKeyer.from_scatter(self, runner.prefix)
         # branch folder drops the selectors; the gathered output keeps full identity
-        branch_runner = dataclasses.replace(runner, prefix=keyer.steps)
+        # shared branches have no owner: an input's commit can't release them
+        owner = runner.owner if keyer._input_scoped else None
+        branch_runner = dataclasses.replace(runner, prefix=keyer.steps, owner=owner)
         # input uid -> {branch uid: branch}; feeds both _Parts and _Gather
         # (input-independent branches reuse one branch uid across inputs)
         plan: dict[str, dict[str, tp.Any]] = {}
@@ -252,6 +260,5 @@ class Scatter(base.Step):
         carrier = items.StepItems(source=_Parts(batch, self.take, origin), uids=uids)
         # one dispatch over all branches lets a backend submit them together
         dispatched = branch_runner.dispatch(self._body(), carrier)
-        return items.StepItems(
-            source=_Gather(dispatched, plan, self.gather), uids=batch.uids
-        )
+        gathered = _Gather(dispatched, plan, self.gather, owner)
+        return items.StepItems(source=gathered, uids=batch.uids)

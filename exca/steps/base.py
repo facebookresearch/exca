@@ -43,12 +43,14 @@ class _StepRuntime:
 
 @dataclasses.dataclass(frozen=True)
 class Runner:
-    """Pipeline context of a step: the steps before it (cache identity) and the
-    mode folded from them."""
+    """Pipeline context of a step: the steps before it (cache identity), the
+    mode folded from them, and the cache of the cached step pulling it, else of the
+    nearest enclosing step running it (the owner of disposable caches)."""
 
     prefix: tuple[Step, ...] = ()
     mode: identity.ModeType = "cached"
     held: backends.inflight.InflightClaim | None = None  # of the enclosing WriteTask
+    owner: backends._StepCache | None = None
 
     def dispatch(self, step: Step, batch: items.StepItems) -> items.StepItems:
         """Resolve, then route *batch*: reuse/remember warm carrier, run inline or
@@ -67,6 +69,9 @@ class Runner:
                 f"{type(step).__name__} has infra={type(step.infra).__name__!r} but no "
                 "folder set; set infra.folder (or run inside a Chain that provides one)"
             )
+        elif step.infra.lifecycle in ("lazy", "disposable"):
+            source = backends._DeferredDispatch(self, step, batch)
+            result = items.StepItems(source=source, uids=batch.uids)
         else:
             result = step.infra._run(self, step, batch)
         keep = standalone and isinstance(result._source, exca.cachedict.CacheDict)
@@ -82,20 +87,34 @@ class Runner:
             mode=backends._fold_modes(self.mode, backends._effective_mode(step)),
         )
 
-    def cache(self, step: Step) -> backends._StepCache:
-        """Cache of *step* (resolved, with a configured folder) here; freezes *step*."""
+    def cache(self, step: Step, uids: tp.Sequence[str] = ()) -> backends._StepCache:
+        """Cache of *step* (resolved, with a configured folder) here; freezes *step*.
+        A disposable step reads its ordinary cache if it holds all *uids*, else
+        uses the one staged under its owner."""
         if step.infra is None or step.infra.folder is None:
             raise RuntimeError("cache requires a configured infra with a folder")
         exca.utils.recursive_freeze(step)  # memoized cache relies on fixed config
-        step_uid = identity.step_uid(self.advance(step).prefix)
+        at = self.advance(step)
+        step_uid = identity.step_uid(at.prefix)
+        make = functools.partial(
+            backends._StepCache,
+            keep_in_ram=step.infra.keep_in_ram,
+            cache_type=step._infer_cache_type(),
+        )
         cache = step._runtime.caches.get(step_uid)
         if cache is None:
-            cache = step._runtime.caches[step_uid] = backends._StepCache(
-                backends.StepPaths(step.infra.folder, step_uid),
-                keep_in_ram=step.infra.keep_in_ram,
-                cache_type=step._infer_cache_type(),
-            )
-        return cache
+            paths = backends.StepPaths(step.infra.folder, step_uid)
+            cache = step._runtime.caches[step_uid] = make(paths)
+        if step.infra.lifecycle != "disposable" or self.owner is None:
+            return cache
+        if uids and at.mode != "force" and all(u in cache.cache_dict for u in uids):
+            return cache
+        staged = self.owner.staged.get(step_uid)
+        if staged is None:
+            paths = backends.StepPaths(self.owner.paths.step_folder / "staging", step_uid)
+            # atomic: the owner's pool threads must share one instance
+            staged = self.owner.staged.setdefault(step_uid, make(paths))
+        return staged
 
 
 class Step(exca.helpers.DiscriminatedModel):

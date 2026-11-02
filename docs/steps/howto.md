@@ -251,3 +251,36 @@ step.run(v)   # served from RAM
 The RAM cache is per-`Backend` instance and is wiped in lockstep
 with disk by `clear_cache()` and `mode="force"`. Cross-process
 workers get a fresh view (no shared RAM).
+
+## Discard an intermediate cache
+
+Set `lifecycle="disposable"` on a backend whose cache only serves the next
+steps (e.g. a heavy embedding reduced by a PCA):
+
+```python
+slurm = {"backend": "Slurm", "folder": cache, "gpus_per_node": 1}
+chain = steps.Chain(
+    steps=[
+        Embed(infra={**slurm, "lifecycle": "disposable"}),
+        PCA(n_components=128, infra={"backend": "Cached", "folder": cache}),  # owner
+    ],
+)
+chain.run_many(values)  # Embed entries are deleted once PCA caches its own
+```
+
+The cache lives under `<owner step folder>/staging/<step_uid>/` and each
+entry is deleted once its owner — wherever it runs — has cached the item
+computed from it. The owner is the next cached step reading it, which
+runs the disposable step only for the items it misses (none on a warm
+rerun), else the enclosing step with infra (a `Chain` or `Scatter`). Two
+different cached steps reading it each recompute it. If the owner fails
+on an item, that item's entry stays for the retry. If the step's ordinary
+cache already holds every requested item, it is read instead (and never
+deleted). Without owner (e.g. run alone, or a `Scatter` body shared across
+inputs), the step caches normally. `lookup()` does not see staged
+entries: delete leftovers (e.g. after a failure or a config change) with
+the owner's `staging/` folder.
+
+`lifecycle="lazy"` defers the same way into the ordinary cache: an unread
+`run_many` result computes nothing (default `"eager"` submits there and waits on
+read).

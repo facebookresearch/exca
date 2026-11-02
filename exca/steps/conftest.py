@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pydantic
 
+import exca
+
 from . import base, identity
 
 # =============================================================================
@@ -27,6 +29,12 @@ def extract_cache_folders(folder: Path) -> tuple[str, ...]:
     """Extract all cache folder paths relative to base folder."""
     caches = (str(x.relative_to(folder))[:-6] for x in folder.rglob("**/cache"))
     return tuple(sorted(caches))
+
+
+def count_staged(folder: Path) -> int:
+    """Number of entries in the disposable caches staged under ``folder``."""
+    caches = [c for c in folder.rglob("cache") if "staging" in c.parts]
+    return sum(len(exca.cachedict.CacheDict(folder=f)) for f in caches)
 
 
 class RecordingStep(base.Step):

@@ -8,8 +8,10 @@
 
 import contextlib
 import pickle
+import time
 import typing as tp
 from collections import defaultdict
+from concurrent import futures
 from pathlib import Path
 
 import pytest
@@ -535,6 +537,120 @@ def test_keep_in_ram(tmp_path: Path) -> None:
     step = step.clone({"infra.mode": "force"})
     out3 = step.run()
     assert out3 != out2
+
+
+# =============================================================================
+# Disposable caches
+# =============================================================================
+
+
+@pytest.mark.parametrize("owner", ["chain", "consumer", "sub-chain"])
+@pytest.mark.parametrize("backend", ["Cached", "ThreadPool"])
+def test_disposable_reclaimed_once_owner_caches(
+    tmp_path: Path, backend: str, owner: str
+) -> None:
+    infra: tp.Any = {"backend": backend, "folder": tmp_path}
+    staged: tp.Any = {**infra, "lifecycle": "disposable"}
+    producers: list[conftest.Add] = []
+
+    def chain(fail_on: set[float] | None = None) -> Chain:
+        producers.append(conftest.Add(value=1, infra=staged))  # fresh: no RAM memo
+        cached = None if owner == "chain" else infra
+        consumer = conftest.Add(value=10, fail_on=fail_on, infra=cached)
+        steps: list[Step] = [producers[-1], conftest.Mult(coeff=1), consumer]
+        if owner == "sub-chain":  # the puller is not the sub-chain's last step
+            steps = [producers[-1], Chain(steps=[consumer, conftest.Mult(coeff=1)])]
+        return Chain(steps=steps, infra=None if cached else infra)
+
+    with pytest.raises(ValueError, match="Triggered"):  # last read: no shard cancelled
+        list(chain(fail_on={3.0}).run_many([1.0, 2.0]))
+    assert conftest.count_staged(tmp_path) == 1, "the failed item stays staged"
+    infra["mode"] = "retry"
+    assert list(chain().run_many([1.0, 2.0])) == [12.0, 13.0]
+    infra["mode"] = "cached"
+    assert list(chain().run_many([1.0, 2.0])) == [12.0, 13.0]
+    calls = [sorted(p.calls) for p in producers]
+    assert calls == [[1.0, 2.0], [], []], "retry reuses the staged item, warm skips"
+    assert conftest.count_staged(tmp_path) == 0
+    durable = [f for f in conftest.extract_cache_folders(tmp_path) if "staging" not in f]
+    assert len(durable) == 1, f"only the owner caches outside staging/: {durable}"
+    with pytest.raises(ValueError, match="Triggered"):
+        chain(fail_on={4.0}).run(3.0)
+    assert conftest.count_staged(tmp_path) == 1
+
+
+def test_disposable_skipped_by_warm_inner_consumer(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    staged: tp.Any = {**infra, "lifecycle": "disposable"}
+    producers: list[conftest.Add] = []
+    for coeff in (2.0, 3.0):  # second chain misses, its Mult(10) is warm
+        producers.append(conftest.Add(value=1, infra=staged))
+        inner = conftest.Mult(coeff=10, infra=infra)
+        steps = [producers[-1], inner, conftest.Mult(coeff=coeff)]
+        assert Chain(steps=steps, infra=infra).run(1.0) == 20.0 * coeff
+    assert [p.calls for p in producers] == [[1.0], []]
+    assert conftest.count_staged(tmp_path) == 0
+
+
+def test_disposable_parent_like_uids_keep_data(tmp_path: Path) -> None:
+    class Length(Step):
+        def item_uid(self, value: str) -> str:
+            return value
+
+        def _run(self, value: str) -> float:
+            return float(len(value))
+
+    class SlowChild(conftest.Mult):
+        def _run_items(self, runner: tp.Any, batch: tp.Any) -> tp.Any:
+            if "a/b" in batch.uids:
+                time.sleep(0.3)  # reads after "a" committed
+            return super()._run_items(runner, batch)
+
+    staged: tp.Any = {"backend": "Cached", "folder": tmp_path, "lifecycle": "disposable"}
+    pool: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
+    chain = Chain(steps=[Length(infra=staged), SlowChild(infra=pool)])
+    assert list(chain.run_many(["a", "a/b"])) == [2.0, 6.0]
+
+
+def test_disposable_concurrent_identical_calls(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    staged: tp.Any = {**infra, "lifecycle": "disposable"}
+    calls: list[float] = []
+
+    def record(value: float) -> None:
+        calls.append(value)
+        time.sleep(0.2)  # overlaps the two calls
+
+    def run(_: int) -> list[float]:
+        producer = conftest.Add(value=1, infra=staged).on_call(record)
+        return list(Chain(steps=[producer, conftest.Mult(infra=infra)]).run_many([1, 2]))
+
+    with futures.ThreadPoolExecutor(2) as pool:
+        assert list(pool.map(run, range(2))) == [[4.0, 6.0]] * 2
+    assert sorted(calls) == [1.0, 2.0], "the waiting call must not restage"
+    assert conftest.count_staged(tmp_path) == 0
+
+
+def test_disposable_reads_complete_ordinary_cache(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    staged: tp.Any = {**infra, "lifecycle": "disposable"}
+    peer = conftest.Add(value=1, infra=infra)
+    list(peer.run_many([1.0, 2.0]))
+    producer = conftest.Add(value=1, infra=staged)
+    chain = Chain(steps=[producer, conftest.Mult()], infra=infra)
+    assert list(chain.run_many([1.0, 2.0])) == [4.0, 6.0]
+    assert not producer.calls and not (tmp_path / "staging").exists(), "read, not staged"
+    chain = Chain(steps=[producer, conftest.Mult(coeff=3)], infra=infra)
+    assert list(chain.run_many([2.0, 3.0])) == [9.0, 12.0]
+    assert producer.calls == [2.0, 3.0], "an incomplete ordinary cache is staged whole"
+    assert peer.lookup(2.0).cached(), "the ordinary cache is never reclaimed"
+
+
+def test_disposable_without_owner_is_an_ordinary_cache(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "lifecycle": "disposable"}
+    producer = conftest.Add(infra=infra)
+    assert producer.run(1.0) == 3.0
+    assert producer.lookup(1.0).cached() and not conftest.count_staged(tmp_path)
 
 
 # =============================================================================

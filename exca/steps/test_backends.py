@@ -138,6 +138,25 @@ def test_slurm_backend_param_forwarding(
     assert info[handle.uid].submitted_at > submitted_at
 
 
+@pytest.mark.parametrize("lifecycle,status", [("eager", "running"), ("lazy", None)])
+def test_lifecycle_submission_timing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lifecycle: str, status: str | None
+) -> None:
+    _CapturingAutoExecutor.captured = []
+    monkeypatch.setattr(submitit, "AutoExecutor", _CapturingAutoExecutor)
+    monkeypatch.setattr(_FakeJob, "gate", threading.Event())
+    infra: tp.Any = {"backend": "Slurm", "folder": tmp_path, "lifecycle": lifecycle}
+    step = conftest.Mult(coeff=2.0, infra=infra)
+    threading.Timer(0.2, _FakeJob.gate.set).start()
+    output = step.run_many([1.0])
+    assert step.lookup(1.0).status == status
+    assert len(_CapturingAutoExecutor.captured) == (lifecycle != "lazy")
+    assert list(output) == [2.0]
+    eager_infra: tp.Any = {**infra, "lifecycle": "eager"}
+    eager = conftest.Mult(coeff=2.0, infra=eager_infra)
+    assert eager.lookup(1.0).cached(), "lifecycle is not part of the cache identity"
+
+
 def test_backend_error_caching(tmp_path: Path) -> None:
     """LocalProcess backend caches errors correctly."""
     infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}

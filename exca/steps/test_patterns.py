@@ -11,7 +11,9 @@ from pathlib import Path
 import pydantic
 import pytest
 
-from . import base, conftest, items, patterns
+import exca
+
+from . import backends, base, conftest, items, patterns
 
 
 class MakeDict(base.Step):
@@ -113,6 +115,65 @@ def test_batched_items_scatter_independently(tmp_path: Path) -> None:
     assert out == [{"a": 2.0, "b": 4.0}, {"a": 20.0}], (
         "(uid, branch) keeps same-branch items apart"
     )
+
+
+def test_lazy_upstream_dispatched_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sizes: list[int] = []
+    run = backends.Backend._run
+
+    def counted(self: tp.Any, runner: tp.Any, step: tp.Any, batch: tp.Any) -> tp.Any:
+        sizes.append(len(batch.uids))
+        return run(self, runner, step, batch)
+
+    monkeypatch.setattr(backends.Backend, "_run", counted)
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "lifecycle": "lazy"}
+    chain = base.Chain(steps=[MakeDict(infra=infra), ScatterDict(body=conftest.Mult())])
+    assert list(chain.run_many([1.0, 2.0])) == [{"0": 0.0}, {"0": 0.0, "1": 2.0}]
+    assert sizes == [2], "per-uid reads of a lazy source dispatch it once"
+
+
+@pytest.mark.parametrize("backend", ["Cached", "ThreadPool"])
+def test_disposable_body_reclaimed_once_scatter_caches(
+    tmp_path: Path, backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    infra: tp.Any = {"backend": backend, "folder": tmp_path}
+    staged: tp.Any = {**infra, "backend": "Cached", "lifecycle": "disposable"}
+    body = conftest.Mult(infra=staged)
+    scatter = ScatterDict(body=body, infra=infra)
+    failing = [{"a": 6.0}]
+    setitem = exca.cachedict.CacheDict.__setitem__
+
+    def fail_once(cache: tp.Any, uid: str, value: tp.Any) -> None:
+        if value in failing:
+            failing.remove(value)
+            raise RuntimeError("write failed")
+        setitem(cache, uid, value)
+
+    monkeypatch.setattr(exca.cachedict.CacheDict, "__setitem__", fail_once)
+    inputs = [{"a": 1.0, "b": 2.0}, {"a": 4.0}, {"a": 3.0}]  # last input's write fails
+    with pytest.raises(RuntimeError, match="write failed"):
+        list(scatter.run_many(inputs))
+    scatter.lookup(inputs[1]).clear_cache()
+    assert conftest.count_staged(tmp_path) == 1, "the unwritten input keeps its branch"
+    calls = sorted(body.calls)
+    expected = [{"a": 2.0, "b": 4.0}, {"a": 8.0}, {"a": 6.0}]
+    assert list(scatter.run_many(inputs)) == expected
+    assert sorted(body.calls) == sorted(calls + [4.0]), "a retry reuses staged branches"
+    assert conftest.count_staged(tmp_path) == 0
+    shared = ScatterDict(body=body, exclude_input=True, infra=infra)
+    shared.run({"a": 1.0})
+    assert conftest.count_staged(tmp_path) == 0, "shared branches are an ordinary cache"
+
+
+def test_disposable_nested_scatter_body_reclaimed(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    staged: tp.Any = {**infra, "lifecycle": "disposable"}
+    outer = ScatterDict(body=ScatterDict(body=conftest.Mult(infra=staged)), infra=infra)
+    out = outer.run_many([{"a": {"x": 1.0, "y": 2.0}}, {"b": {"z": 3.0}}])
+    assert list(out) == [{"a": {"x": 2.0, "y": 4.0}}, {"b": {"z": 6.0}}]
+    assert conftest.count_staged(tmp_path) == 0
 
 
 @pytest.mark.parametrize("nested", [False, True])  # same cache, but lookup is !=

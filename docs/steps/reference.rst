@@ -45,7 +45,7 @@ All backends share the fields declared on the base
 :class:`Backend`:
 
 .. autoclass:: exca.steps.backends.Backend
-    :members: folder, mode, keep_in_ram
+    :members: folder, mode, keep_in_ram, lifecycle
 
 Submitit-based backends — ``LocalProcess``, ``SubmititDebug``,
 ``Slurm``, ``Auto`` — additionally accept:
