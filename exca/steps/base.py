@@ -98,6 +98,8 @@ class Runner:
         uses the one staged under its owner."""
         if step.infra is None or step.infra.folder is None:
             raise RuntimeError("cache requires a configured infra with a folder")
+        if uids and self.owner is None and step.infra.lifecycle == "disposable":
+            raise RuntimeError("disposable needs a cached owner; use lifecycle='lazy'")
         exca.utils.recursive_freeze(step)  # memoized cache relies on fixed config
         at = self.advance(step)
         step_uid = identity.step_uid(at.prefix)
@@ -118,7 +120,7 @@ class Runner:
         if staged is None:
             paths = backends.StepPaths(self.owner.paths.step_folder / "staging", step_uid)
             # atomic: the owner's pool threads must share one instance
-            staged = self.owner.staged.setdefault(step_uid, make(paths))
+            staged = self.owner.staged.setdefault(step_uid, make(paths, _fresh=True))
         return staged
 
 

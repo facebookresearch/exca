@@ -84,7 +84,8 @@ class _StepCache:
     paths: StepPaths
     keep_in_ram: dataclasses.InitVar[bool]
     cache_type: dataclasses.InitVar[str | None] = None
-    cache_dict: exca.cachedict.CacheDict[tp.Any] = dataclasses.field(init=False)
+    _cache_dict: exca.cachedict.CacheDict[tp.Any] = dataclasses.field(init=False)
+    _fresh: bool = False
     attempted: set[str] = dataclasses.field(default_factory=set)
     configs_written: bool = False
     # owned disposable caches, by step_uid
@@ -93,11 +94,21 @@ class _StepCache:
     rekeyed: dict[str, list[str]] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self, keep_in_ram: bool, cache_type: str | None) -> None:
-        self.cache_dict = exca.cachedict.CacheDict(
+        self._cache_dict = exca.cachedict.CacheDict(
             folder=self.paths.cache_folder,
             keep_in_ram=keep_in_ram,
             cache_type=cache_type,
         )
+
+    @property
+    def cache_dict(self) -> exca.cachedict.CacheDict[tp.Any]:
+        if self._fresh:
+            return exca.cachedict.CacheDict(
+                self.paths.cache_folder,
+                keep_in_ram=self._cache_dict._keep_in_ram,
+                cache_type=self._cache_dict.cache_type,
+            )
+        return self._cache_dict
 
     def __getstate__(self) -> dict[str, tp.Any]:
         return {**self.__dict__, "attempted": set()}
@@ -530,8 +541,13 @@ class WriteTask:
                 committed = [uid for uid in self.items.uids if uid in cd]
                 for uid in committed:  # extends: nested Scatter branches too
                     committed.extend(self.cache.rekeyed.pop(uid, ()))
-                for staged in self.cache.staged.values():
-                    staged.clear(committed)
+                for staged in list(self.cache.staged.values()):
+                    try:
+                        staged.clear(committed)
+                    except Exception:
+                        logger.warning(
+                            "Failed to reclaim %s", staged.paths.step_uid, exc_info=True
+                        )
             self.release()  # free competitors as soon as this work ends
 
 
@@ -754,7 +770,7 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     lifecycle: "eager", "lazy" or "disposable"
         ``eager`` submits in ``run_many`` and waits on read;
         ``lazy`` computes only what the next cached step misses;
-        ``disposable`` is lazy and deleted once that step caches (see the how-to).
+        ``disposable`` is lazy and requires a cached owner (see the how-to).
     """
 
     @classmethod

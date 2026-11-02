@@ -50,7 +50,7 @@ All backends have:
 - `folder`: Path for cache storage (optional, can be propagated from Chain)
 - `mode`: Execution mode (cached/force/read-only/retry)
 - `keep_in_ram`: keep cached values in RAM, per step instance
-- `lifecycle`: when to compute (`eager`/`lazy`), or `disposable` (lazy, staged under its owner and reclaimed once the owner caches; see [caching.md](caching.md))
+- `lifecycle`: when to compute (`eager`/`lazy`), or `disposable` (lazy, requires a cached owner; see [caching.md](caching.md))
 
 Cache serialization format comes from `Step.CACHE_TYPE` (class-level),
 not from the backend.

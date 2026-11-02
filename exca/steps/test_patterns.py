@@ -168,8 +168,8 @@ def test_disposable_body_reclaimed_once_scatter_caches(
     assert sorted(body.calls) == sorted(calls + [4.0]), "a retry reuses staged branches"
     assert conftest.count_staged(tmp_path) == 0
     shared = ScatterDict(body=body, exclude_input=True, infra=infra)
-    shared.run({"a": 1.0})
-    assert conftest.count_staged(tmp_path) == 0, "shared branches are an ordinary cache"
+    with pytest.raises(RuntimeError, match="needs a cached owner"):
+        shared.run({"a": 1.0})
 
 
 def test_disposable_nested_scatter_body_reclaimed(tmp_path: Path) -> None:

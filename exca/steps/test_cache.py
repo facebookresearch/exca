@@ -648,11 +648,11 @@ def test_disposable_reads_complete_ordinary_cache(tmp_path: Path) -> None:
     assert peer.lookup(2.0).cached(), "the ordinary cache is never reclaimed"
 
 
-def test_disposable_without_owner_is_an_ordinary_cache(tmp_path: Path) -> None:
+def test_disposable_requires_owner(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path, "lifecycle": "disposable"}
     producer = conftest.Add(infra=infra)
-    assert producer.run(1.0) == 3.0
-    assert producer.lookup(1.0).cached() and not conftest.count_staged(tmp_path)
+    with pytest.raises(RuntimeError, match="needs a cached owner"):
+        producer.run(1.0)
 
 
 # =============================================================================

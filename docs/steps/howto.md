@@ -276,8 +276,7 @@ rerun), else the enclosing step with infra (a `Chain` or `Scatter`). Two
 different cached steps reading it each recompute it. If the owner fails
 on an item, that item's entry stays for the retry. If the step's ordinary
 cache already holds every requested item, it is read instead (and never
-deleted). Without owner (e.g. run alone, or a `Scatter` body shared across
-inputs), the step caches normally. `lookup()` does not see staged
+deleted). Disposable execution requires a cached consumer or enclosing writer; use `lifecycle="lazy"` when running alone or in an input-independent `Scatter` body. `lookup()` does not see staged
 entries: delete leftovers (e.g. after a failure or a config change) with
 the owner's `staging/` folder.
 

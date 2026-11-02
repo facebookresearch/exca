@@ -65,12 +65,7 @@ fail closed, not open.
   own result, or the caller) dispatches the whole batch once, under the
   `Runner.owner` captured at deferral: the `_StepCache` of the nearest
   enclosing step running a `WriteTask` (set by `CacheDispatch._prepare`).
-- **Routing**: `Runner.cache(step, uids)` returns a disposable step's
-  ordinary cache if it holds all `uids` (and mode is not `force`) or if
-  there is no owner (no cached consumer or enclosing step, shared `Scatter`
-  branches): then it is a lazy cache, never reclaimed. Else it roots it at
-  `{owner step folder}/staging/{step_uid}/`, memoised in `owner.staged`.
-  Lookups do not see staged caches.
+- **Routing**: A disposable dispatch requires a cached owner. `Runner.cache(step, uids)` returns its ordinary cache if it holds all `uids` (and mode is not `force`); otherwise it roots the cache at `{owner step folder}/staging/{step_uid}/`, memoised in `owner.staged`. Lookups do not see staged caches.
 - **Reclaim**: the owner's `run_and_cache` ends by clearing, from each
   staged cache, the uids its own cache holds, plus the branch uids an
   input-scoped `Scatter` recorded for them in `owner.rekeyed` while
