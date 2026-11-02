@@ -17,9 +17,11 @@ import contextlib
 import dataclasses
 import datetime
 import functools
+import hashlib
 import logging
 import os
 import random
+import shutil
 import sys
 import traceback
 import typing as tp
@@ -64,6 +66,11 @@ class StepPaths:
     def cache_folder(self) -> Path:
         """CacheDict folder for results."""
         return self.step_folder / "cache"
+
+    def run_folder(self, item_uid: str) -> Path:
+        """Item folder returned by ``RunContext.folder()``."""
+        digest = hashlib.sha256(item_uid.encode("utf8")).hexdigest()[:16]
+        return self.step_folder / "runs" / digest
 
     @property
     def _logs_folder(self) -> str:
@@ -116,7 +123,8 @@ class _StepCache:
         return pending
 
     def clear(self, uids: tp.Iterable[str]) -> None:
-        """Drop everything cached for these uids (cd rows and error rows)."""
+        """Drop everything cached for these uids (cd rows, error rows and run
+        folders)."""
         uids = list(dict.fromkeys(uids))
         if not uids:
             return
@@ -135,6 +143,10 @@ class _StepCache:
                     kind.cancel(group)
             except Exception as e:
                 logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
+        # first: a mid-clear crash must not leave a run folder to resume
+        for uid in uids:
+            with contextlib.suppress(FileNotFoundError):
+                shutil.rmtree(paths.run_folder(uid))
         # Success first → a mid-clear crash leaves a recoverable cached
         # error rather than a stale success (fail closed).
         with cd.write(), cd.frozen_cache_folder():
@@ -244,6 +256,76 @@ class LookupHandle:
                 exc_info=True,
             )
         return None
+
+
+@dataclasses.dataclass(frozen=True)
+class RunContext:
+    """Execution context of the running step, from ``Step._run_context()``.
+
+    Attributes
+    ----------
+    outer_step:
+        Step whose ``run``/``run_many`` started this execution; ``Parallel`` variants
+        and nested ``run``/``run_many`` calls start their own.
+    upstream_steps:
+        Steps applied to these items before this one since ``outer_step`` started.
+    item_uids:
+        Uids of the values in the current read, in order.
+
+    Examples
+    --------
+    ::
+
+        def _run(self, data):
+            ckpt = self._run_context().folder() / "train.ckpt"
+            model = resume(ckpt) if ckpt.exists() else init()
+            return fit(model, data, ckpt)
+    """
+
+    outer_step: Step
+    upstream_steps: tuple[Step, ...]
+    item_uids: tp.Sequence[str]
+    _step_folder: Path | None = dataclasses.field(default=None, repr=False)
+    _current_item_uid: str | None = dataclasses.field(default=None, repr=False)
+
+    def folder(self, item_uid: str | None = None) -> Path:
+        """Per-item persistent folder, created on call when available.
+
+        Available when this step or an enclosing one (up to ``outer_step``) caches;
+        uncached steps computed within that cached step share it. Kept across killed
+        runs, deleted by ``clear_cache()``, ``mode="force"`` and ``mode="retry"`` of a
+        failed item; callers own synchronization and validation of its files.
+
+        Parameters
+        ----------
+        item_uid:
+            One of ``item_uids``; defaults to the item in flight, always known in
+            ``_run`` but in ``_run_batch`` only while a single input awaits its result.
+        """
+        if self._step_folder is None:
+            raise RuntimeError(
+                "folder() is unavailable because no enclosing step has infra.folder"
+            )
+        if item_uid is None:
+            item_uid = self._current_item_uid
+            if item_uid is None:
+                raise ValueError(
+                    f"folder() needs an item_uid for {len(self.item_uids)} items, "
+                    f"e.g. {self.item_uids[0]!r}"
+                )
+        elif item_uid not in self._item_uid_set:
+            raise ValueError(
+                f"{item_uid!r} is not one of the {len(self.item_uids)} item_uids, "
+                f"e.g. {self.item_uids[0]!r}"
+            )
+        paths = StepPaths(self._step_folder.parent, self._step_folder.name)
+        folder = paths.run_folder(item_uid)
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @functools.cached_property
+    def _item_uid_set(self) -> frozenset[str]:
+        return frozenset(self.item_uids)
 
 
 def _fold_modes(*modes: identity.ModeType) -> identity.ModeType:

@@ -28,6 +28,9 @@ Batched execution
 
 .. autoexception:: exca.steps.items.BatchProtocolError
 
+.. autoclass:: exca.steps.backends.RunContext()
+    :members: folder
+
 Cache lookup
 ------------
 

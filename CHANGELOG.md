@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `steps`: added `Step._run_context()` for execution metadata and per-item working folders. [#345]
+
 ## 0.6.0 - 26-10-07
 
 ### Breaking

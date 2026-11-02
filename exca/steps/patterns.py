@@ -230,7 +230,11 @@ class Scatter(base.Step):
     def _run_items(self, runner: base.Runner, batch: items.StepItems) -> items.StepItems:
         keyer = _BranchKeyer.from_scatter(self, runner.prefix)
         # branch folder drops the selectors; the gathered output keeps full identity
-        branch_runner = dataclasses.replace(runner, prefix=keyer.steps)
+        branch_runner = dataclasses.replace(
+            runner,
+            prefix=keyer.steps,
+            upstream_steps=runner.upstream_steps + (self,),
+        )
         # input uid -> {branch uid: branch}; feeds both _Parts and _Gather
         # (input-independent branches reuse one branch uid across inputs)
         plan: dict[str, dict[str, tp.Any]] = {}

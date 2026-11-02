@@ -13,6 +13,7 @@ How a step's results, errors, and in-flight state are stored and how
 ├── inflight.db              # claim/release registry
 ├── errors.db                # cached exception per errored uid
 ├── jobs.db                  # latest submitit cluster/job/submission time per uid
+├── runs/{sha256(item uid)[:16]}/ # RunContext.folder(), deleted by clear, force and retried errors
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```
@@ -49,7 +50,7 @@ cross-venv).
 
 `LookupHandle.clear_cache()` delegates to `_StepCache.clear()`: it
 cancels any running submitit job for the requested uids, then deletes
-CacheDict entries and `errors.db` rows. A partial mid-clear (success
+run folders, CacheDict entries and `errors.db` rows. A partial mid-clear (success
 gone, error row still there) surfaces as a recoverable cached error —
 fail closed, not open.
 
