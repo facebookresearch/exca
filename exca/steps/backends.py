@@ -67,6 +67,11 @@ class StepPaths:
         """CacheDict folder for results."""
         return self.step_folder / "cache"
 
+    def run_folder(self, item_uid: str) -> Path:
+        """Item folder returned by ``RunContext.folder()``."""
+        digest = hashlib.md5(item_uid.encode("utf8")).hexdigest()
+        return self.step_folder / "runs" / digest
+
     @property
     def _logs_folder(self) -> str:
         return str(self.step_folder / "logs" / "%j")
@@ -117,9 +122,9 @@ class _StepCache:
                 _CachedEntry.lookup(cd, uid).result()  # loads + re-raises
         return pending
 
-    def clear(self, uids: tp.Iterable[str], runs: bool = True) -> None:
-        """Drop everything cached for these uids (cd rows, error rows and, if
-        *runs*, run folders)."""
+    def clear(self, uids: tp.Iterable[str]) -> None:
+        """Drop everything cached for these uids (cd rows, error rows and run
+        folders)."""
         uids = list(dict.fromkeys(uids))
         if not uids:
             return
@@ -138,10 +143,10 @@ class _StepCache:
                     kind.cancel(group)
             except Exception as e:
                 logger.warning("Failed to cancel %s%s: %s", paths.step_uid, uids, e)
-        if runs:  # first: a mid-clear crash must not leave a run folder to resume
-            for uid in uids:
-                with contextlib.suppress(FileNotFoundError):
-                    shutil.rmtree(RunContext._get_folder(paths.step_folder, uid))
+        # first: a mid-clear crash must not leave a run folder to resume
+        for uid in uids:
+            with contextlib.suppress(FileNotFoundError):
+                shutil.rmtree(paths.run_folder(uid))
         # Success first → a mid-clear crash leaves a recoverable cached
         # error rather than a stale success (fail closed).
         with cd.write(), cd.frozen_cache_folder():
@@ -287,9 +292,9 @@ class RunContext:
         """Per-item persistent folder, created on call when available.
 
         Available when this step or an enclosing one (up to ``outer_step``) caches;
-        uncached steps computed within that cached step share it. Kept on failure and
-        by ``mode="retry"``, deleted by ``mode="force"`` and ``clear_cache()``; callers
-        own synchronization and validation of its files.
+        uncached steps computed within that cached step share it. Kept across killed
+        runs, deleted by ``clear_cache()``, ``mode="force"`` and ``mode="retry"`` of a
+        failed item; callers own synchronization and validation of its files.
 
         Parameters
         ----------
@@ -313,13 +318,10 @@ class RunContext:
                 f"{item_uid!r} is not one of the {len(self.item_uids)} item_uids, "
                 f"e.g. {self.item_uids[0]!r}"
             )
-        folder = self._get_folder(self._step_folder, item_uid)
+        paths = StepPaths(self._step_folder.parent, self._step_folder.name)
+        folder = paths.run_folder(item_uid)
         folder.mkdir(parents=True, exist_ok=True)
         return folder
-
-    @staticmethod
-    def _get_folder(step_folder: Path, item_uid: str) -> Path:
-        return step_folder / "runs" / hashlib.md5(item_uid.encode("utf8")).hexdigest()
 
     @functools.cached_property
     def _item_uid_set(self) -> frozenset[str]:
@@ -613,7 +615,7 @@ class CacheDispatch:
         clear_uids = [
             uid for uid, status in pending.items() if mode == "force" or status == "error"
         ]
-        task.cache.clear(clear_uids, runs=mode == "force")  # retry keeps run folders
+        task.cache.clear(clear_uids)
         if not pending:
             return None
         return task.select(list(pending))

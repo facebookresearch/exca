@@ -271,11 +271,9 @@ def test_force_clears_after_inflight_claim(
     original_clear = backends._StepCache.clear
     original_session = backends.inflight.inflight_session
 
-    def paused_clear(
-        self: backends._StepCache, uids: tp.Iterable[str], **kw: tp.Any
-    ) -> None:
+    def paused_clear(self: backends._StepCache, uids: tp.Iterable[str]) -> None:
         events.append("clear")
-        original_clear(self, uids, **kw)
+        original_clear(self, uids)
 
     @contextlib.contextmanager
     def paused_session(

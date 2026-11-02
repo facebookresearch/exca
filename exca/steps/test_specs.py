@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from . import backends, conftest
+from . import conftest
 from .base import Chain, Step
 
 # -----------------------------------------------------------------------------
@@ -299,7 +299,7 @@ def test_fail_fast_partial_cache(tmp_path: Path) -> None:
     assert step.calls[-1] == 3, "fail-fast: nothing should compute after the failure"
     first_cached = set(step.calls[:-1])
     handle = step.lookup(3)
-    run_folder = backends.RunContext._get_folder(handle.paths.step_folder, handle.uid)
+    run_folder = handle.paths.run_folder(handle.uid)
     run_folder.mkdir(parents=True)
 
     infra["mode"] = "retry"
@@ -308,7 +308,8 @@ def test_fail_fast_partial_cache(tmp_path: Path) -> None:
     assert result == [11, 12, 13, 14, 15]
     assert 3 in retried.calls
     assert first_cached.isdisjoint(set(retried.calls)), "cached items must not recompute"
-    assert run_folder.exists(), "retry keeps the failed item's run folder"
+    assert not run_folder.exists(), "retry deletes the failed item's run folder"
+    run_folder.mkdir(parents=True)
     retried.lookup(3).clear_cache()
     assert not run_folder.exists(), "clear_cache deletes it"
     run_folder.mkdir(parents=True)
