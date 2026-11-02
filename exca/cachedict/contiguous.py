@@ -106,12 +106,12 @@ class ContiguousMemmap:
         store = _get_store(self._cache)
         fh = store.get(cache_key)
         if fh is None or fh.closed:
-            # Avoid a read buffer per cached handle.
+            # cached handles: per-file buffer overhead
             fh = open(path, "rb", buffering=0)  # noqa: SIM115
             store[cache_key] = fh
         fh.seek(self._mm.offset + off)
         n = 0
-        while n < span:  # raw reads may return fewer bytes than requested
+        while n < span:  # short raw reads
             read = fh.readinto(buf.data[n:])
             if not read:
                 break
