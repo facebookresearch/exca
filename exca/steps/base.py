@@ -287,7 +287,7 @@ class Step(exca.helpers.DiscriminatedModel):
             stage = local["self"]
             call, uids = stage.call, stage.uids
             current = stage.n_in - 1 if stage.n_in == stage.n_out + 1 else None
-        if isinstance(local, dict):
+        if isinstance(local, dict) and frame.f_trace is None:  # tracer restores locals
             local.clear()  # <3.13: this snapshot stays on the frame, pinning the item
         if call.step is not self:
             raise RuntimeError(
