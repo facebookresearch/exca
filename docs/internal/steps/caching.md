@@ -13,7 +13,7 @@ How a step's results, errors, and in-flight state are stored and how
 ├── inflight.db              # claim/release registry
 ├── errors.db                # cached exception per errored uid
 ├── jobs.db                  # latest submitit cluster/job/submission time per uid
-├── runs/{md5(item uid)}/    # RunContext.folder(), deleted by clear, force and retried errors
+├── runs/{sha256(item uid)[:16]}/ # RunContext.folder(), deleted by clear, force and retried errors
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```

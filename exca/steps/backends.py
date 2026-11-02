@@ -69,7 +69,7 @@ class StepPaths:
 
     def run_folder(self, item_uid: str) -> Path:
         """Item folder returned by ``RunContext.folder()``."""
-        digest = hashlib.md5(item_uid.encode("utf8")).hexdigest()
+        digest = hashlib.sha256(item_uid.encode("utf8")).hexdigest()[:16]
         return self.step_folder / "runs" / digest
 
     @property
