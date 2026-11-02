@@ -106,10 +106,16 @@ class ContiguousMemmap:
         store = _get_store(self._cache)
         fh = store.get(cache_key)
         if fh is None or fh.closed:
-            fh = open(path, "rb")  # noqa: SIM115
+            # cached handles: per-file buffer overhead
+            fh = open(path, "rb", buffering=0)  # noqa: SIM115
             store[cache_key] = fh
         fh.seek(self._mm.offset + off)
-        n = fh.readinto(buf.data)  # type: ignore[union-attr,attr-defined]
+        n = 0
+        while n < span:  # short raw reads
+            read = fh.readinto(buf.data[n:])
+            if not read:
+                break
+            n += read
         if n != span:
             raise IOError(
                 f"ContiguousMemmap: short read on {path} "

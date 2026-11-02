@@ -259,11 +259,19 @@ def test_jsonl_reader_resets_on_rewrite_or_truncate(tmp_path: Path) -> None:
 def test_2_caches(tmp_path: Path) -> None:
     cache: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
     cache2: cd.CacheDict[int] = cd.CacheDict(folder=tmp_path, keep_in_ram=False)
-    with cache.write():
-        cache["blublu"] = 12
-        keys = list(cache2.keys())
-    keys = list(cache2.keys())
-    assert "blublu" in keys
+
+    def freeze_and_write() -> None:
+        with cache2.frozen_cache_folder(), cache.write():
+            cache["x"] = 0
+
+    with cache2.frozen_cache_folder():
+        with cache.write():
+            cache["blublu"] = 12
+            assert "blublu" in cache2
+        with futures.ThreadPoolExecutor(max_workers=1) as ex:
+            ex.submit(freeze_and_write).result()
+        assert "x" not in cache2, "another thread's freeze must not unfreeze this one"
+    assert "x" in cache2
 
 
 def test_2_caches_memmap(tmp_path: Path) -> None:

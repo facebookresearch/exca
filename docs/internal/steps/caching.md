@@ -14,6 +14,7 @@ How a step's results, errors, and in-flight state are stored and how
 ├── errors.db                # cached exception per errored uid
 ├── jobs.db                  # latest submitit cluster/job/submission time per uid
 ├── staging/{step_uid}/      # disposable caches this step owns
+├── runs/{sha256(item uid)[:16]}/ # RunContext.folder(), deleted by clear, force and retried errors
 └── logs/{job_id}/           # submitit-owned: stdout/stderr,
                              # <job_id>_0_result.pkl, etc.
 ```
@@ -34,8 +35,8 @@ to wrong results.
 
 `WriteTask.run_and_cache()` runs the user function on the worker:
 
-- **Success**: `cd[uid] = result` (no-op if another worker already
-  wrote it — handles inflight reclaim).
+- **Success**: `cd[uid] = result` (no-op if another worker wrote it
+  before the loop's first lookup — handles inflight reclaim).
 - **Failure**: `INSERT OR REPLACE INTO errors (item_uid, exception, traceback)`
   with the pickled exception and formatted traceback, then re-raise.
 
@@ -50,7 +51,7 @@ cross-venv).
 
 `LookupHandle.clear_cache()` delegates to `_StepCache.clear()`: it
 cancels any running submitit job for the requested uids, then deletes
-CacheDict entries and `errors.db` rows. A partial mid-clear (success
+run folders, CacheDict entries and `errors.db` rows. A partial mid-clear (success
 gone, error row still there) surfaces as a recoverable cached error —
 fail closed, not open.
 

@@ -238,7 +238,12 @@ class Scatter(base.Step):
         # branch folder drops the selectors; the gathered output keeps full identity
         # shared branches have no owner: an input's commit can't release them
         owner = runner.owner if keyer._input_scoped else None
-        branch_runner = dataclasses.replace(runner, prefix=keyer.steps, owner=owner)
+        branch_runner = dataclasses.replace(
+            runner,
+            prefix=keyer.steps,
+            upstream_steps=runner.upstream_steps + (self,),
+            owner=owner,
+        )
         # input uid -> {branch uid: branch}; feeds both _Parts and _Gather
         # (input-independent branches reuse one branch uid across inputs)
         plan: dict[str, dict[str, tp.Any]] = {}
