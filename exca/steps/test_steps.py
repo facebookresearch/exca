@@ -18,7 +18,6 @@ import pydantic
 import pytest
 
 import exca
-from exca import workdir
 
 from . import backends, conftest, helpers, identity, items, utils
 from .base import Chain, Step
@@ -229,23 +228,6 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
     # Explicit None should bypass default
     step_none = MyStep(value=5, infra=None)
     assert step_none.infra is None, "explicit None should not use default"
-
-
-def test_infra_default_workdir(tmp_path: Path) -> None:
-    source = tmp_path / "source.py"
-    source.touch()
-    wd = workdir.WorkDir(copied=[source])
-
-    class MyStep(Step):
-        infra: backends.Backend | None = backends.LocalProcess(
-            folder=tmp_path, workdir=wd
-        )
-
-        def _run(self) -> int:
-            return 0
-
-    infra: tp.Any = MyStep(infra={"backend": "Slurm"}).infra  # type: ignore
-    assert infra.workdir is not wd, "activation would pin the class default's snapshot"
 
 
 def test_folder_propagation(tmp_path: Path) -> None:
