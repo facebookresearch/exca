@@ -7,11 +7,15 @@
 """Tests for execution backends (LocalProcess, Slurm, submitit integration)."""
 
 import contextlib
+import gc
+import importlib
 import logging
-import stat
+import os
 import sys
+import threading
 import time
 import typing as tp
+from concurrent import futures
 from pathlib import Path
 
 import pydantic
@@ -20,17 +24,34 @@ import submitit
 
 import exca
 
-from . import backends, conftest, items, jobregistry
+from . import backends, base, conftest, helpers, items, jobregistry
 from .base import Chain, Step
 
 
 class _FakeJob:
-    """Pickleable stand-in for submitit.Job; used by fake executors below."""
+    """Stand-in for submitit.Job, run in a thread once ``gate`` is set; used by
+    fake executors below."""
 
     job_id = "fake-job"
+    gate = threading.Event()
+    gate.set()
 
-    def result(self) -> None:
-        return None
+    def __init__(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> None:
+        self._future: futures.Future[tp.Any] = futures.Future()
+        threading.Thread(target=self._run, args=(func, args), daemon=True).start()
+
+    def _run(self, func: tp.Callable[..., tp.Any], args: tuple[tp.Any, ...]) -> None:
+        _FakeJob.gate.wait()
+        try:
+            self._future.set_result(func(*args))
+        except Exception as e:
+            self._future.set_exception(e)
+
+    def done(self) -> bool:
+        return self._future.done()
+
+    def result(self) -> tp.Any:
+        return self._future.result()
 
 
 class _CapturingAutoExecutor:
@@ -46,8 +67,7 @@ class _CapturingAutoExecutor:
         type(self).captured.append((self._ctor, kw))
 
     def submit(self, func: tp.Callable[..., tp.Any], *args: tp.Any) -> _FakeJob:
-        func(*args)
-        return _FakeJob()
+        return _FakeJob(func, *args)
 
     def batch(self) -> contextlib.nullcontext[None]:
         return contextlib.nullcontext()
@@ -68,16 +88,6 @@ def test_backend_execution(tmp_path: Path, backend: str) -> None:
     assert (job is not None) == (backend == "LocalProcess")
 
 
-def test_step_permissions(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=1)], infra=infra)
-    intermediate = chain.lookup(1).paths.step_folder.parent
-    intermediate.mkdir(parents=True)
-    intermediate.chmod(0o700)
-    chain.run(1)
-    assert stat.S_IMODE(intermediate.stat().st_mode) == 0o777
-
-
 def test_slurm_backend_param_forwarding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -85,6 +95,7 @@ def test_slurm_backend_param_forwarding(
     unset generics (e.g. ``tasks_per_node``) don't leak through."""
     _CapturingAutoExecutor.captured = []
     monkeypatch.setattr(submitit, "AutoExecutor", _CapturingAutoExecutor)
+    monkeypatch.setattr(_FakeJob, "gate", threading.Event())
 
     infra: tp.Any = {
         "backend": "Slurm",
@@ -93,10 +104,17 @@ def test_slurm_backend_param_forwarding(
         "qos": "h100",
         "gpus_per_node": 4,
     }
-    step = conftest.Add(value=1, infra=infra)
-    assert step.run() == 1
+    step = conftest.Mult(coeff=2.0, infra=infra)
+    chain = Chain(steps=[step, conftest.Add(value=1)])
+    chain.run_many([1.0])  # results dropped: the job keeps its claim
+    handle = step.lookup(1.0)
+    assert handle.status == "running", "run_many returns before the jobs run"
+    threading.Timer(0.2, _FakeJob.gate.set).start()
+    assert chain.run(1.0) == 3.0
 
-    [(ctor, params)] = _CapturingAutoExecutor.captured
+    captured = _CapturingAutoExecutor.captured
+    assert len(captured) == 1, "a same-process rerun must wait for the pending job"
+    [(ctor, params)] = captured
     assert ctor["cluster"] == "slurm"
     assert params == {
         "slurm_partition": "gpu",
@@ -105,7 +123,6 @@ def test_slurm_backend_param_forwarding(
         "gpus_per_node": 4,
         "slurm_array_parallelism": 1,
     }
-    handle = step.lookup()
     job = handle.job()
     assert job is not None
     assert job.job_id == "fake-job"
@@ -116,7 +133,7 @@ def test_slurm_backend_param_forwarding(
 
     time.sleep(0.01)
     handle.clear_cache()
-    assert step.run() == 1
+    assert step.run(1.0) == 2.0
     with jobregistry.JobRegistry(handle.paths.step_folder) as registry:
         info = registry.get([handle.uid])
     assert info[handle.uid].submitted_at > submitted_at
@@ -203,8 +220,8 @@ def test_lookup_layout(tmp_path: Path) -> None:
     step = conftest.Mult(infra=backends.Cached(folder=tmp_path))
     handle = step.lookup(1.0)
     assert handle.paths.step_folder.exists() is False
-    handle.paths.cache_folder.mkdir(parents=True)
-    with backends.inflight.InflightRegistry(handle.paths.cache_folder) as reg:
+    handle.paths.step_folder.mkdir(parents=True)
+    with backends.inflight.InflightRegistry(handle.paths.step_folder) as reg:
         assert reg.claim([handle.uid]) == [handle.uid]
         assert handle.status == "running"
         assert not handle.cached()
@@ -281,9 +298,12 @@ def test_derive(tmp_path: Path) -> None:
 def test_pool_backend(tmp_path: Path, backend: str) -> None:
     infra: tp.Any = {"backend": backend, "folder": tmp_path}
     step = conftest.Mult(coeff=2.0, infra=infra)
-    result = list(step.run_many([1.0, 2.0, 3.0]))
-    assert result == [2.0, 4.0, 6.0]
-    assert step.lookup(1.0).paths.cache_folder.exists()
+    out = step.run_many([1.0, 2.0, 3.0])
+    assert list(out) == [2.0, 4.0, 6.0]
+    paths = step.lookup(1.0).paths
+    assert paths.cache_folder.exists()
+    with backends.inflight.InflightRegistry(paths.step_folder) as reg:
+        assert not reg.get(), "workers must release their claims (out is still alive)"
 
 
 class _PrintStep(Step):
@@ -313,37 +333,80 @@ def test_cached_capture_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     assert capsys.readouterr().out == ""
 
 
+class _SlowAdd(conftest.Add):
+    def _run(self, value: float = 0) -> float:
+        if value != 1.0:
+            time.sleep(0.1)
+        return super()._run(value)
+
+
 def test_pool_error_propagation(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path}
-    step = conftest.Add(value=1, fail_on="all", infra=infra)
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
+    step = _SlowAdd(value=1, fail_on={1.0}, infra=infra)
+    out = step.run_many([float(k) for k in range(1, 7)])  # 6 shards of 1 item
     with pytest.raises(ValueError, match="Triggered an error") as exc_info:
-        list(step.run_many([1.0, 2.0]))
+        next(out.read(out.uids[:1]))
     notes = exc_info.value.__notes__
     assert any("Add" in n for n in notes)
+    others = list(out.read(out.uids[1:]))
+    assert others == [k + 1.0 for k in range(2, 7)], "a failure must not cancel others"
 
 
-def test_recomputed_per_batch(tmp_path: Path) -> None:
+def test_pool_abandoned(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
+    step = _SlowAdd(value=1, infra=infra)
+    values = [float(k) for k in range(2, 8)]
+    out = step.run_many(values)  # 6 shards of 1 item, 2 running
+    folder = step.lookup(2.0).paths.step_folder
+    del out
+    gc.collect()
+    assert not all(step.lookup(v).cached() for v in values), "gc must not wait"
+    assert list(step.run_many(values)) == [v + 1 for v in values]
+    with backends.inflight.InflightRegistry(folder) as reg:
+        assert not reg.get(), "abandoned shards must release their claims"
+
+
+def test_pool_crash_releases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def crash(shard: list[backends.WriteTask]) -> None:  # e.g. an OOM-killed process
+        raise RuntimeError("worker died")
+
+    monkeypatch.setattr(backends, "_multi_run_and_cache", crash)
+    infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
+    step = conftest.Mult(coeff=2.0, infra=infra)
+    out = step.run_many([1.0, 2.0])
+    with pytest.raises(RuntimeError, match="worker died"):
+        list(out)
+    with backends.inflight.InflightRegistry(step.lookup(1.0).paths.step_folder) as reg:
+        for _ in range(50):  # done-callbacks may lag the raised result
+            if not reg.get():
+                break
+            time.sleep(0.1)
+        assert not reg.get(), "a crashed worker's claims must be released"
+
+
+def test_recomputed_per_task(tmp_path: Path) -> None:
     backend = backends.Cached(folder=tmp_path)
 
-    def prepare(step: Step, value: float) -> backends.ComputeBatch:
-        # force mode → _execute marks attempted uids as recomputed
+    def run(step: Step, value: float) -> tuple[base.Runner, Step, items.StepItems]:
+        # force mode → _submit marks attempted uids as recomputed
         infra = backend.model_copy(update={"mode": "force"})
         forced = step.model_copy(update={"infra": infra})
         uid = backends.identity.materialize_uid(forced, value)
-        return backend._prepare(forced, items.StepItems(source={uid: value}, uids=[uid]))
+        return base.Runner(), forced, items.StepItems(source={uid: value}, uids=[uid])
 
-    cb_fail = prepare(conftest.Add(fail_on="all"), 1.0)
-    cb_ok = prepare(conftest.Add(value=1), 1.0)
-    # _claim sorts by step_uid, so cb_fail must sort first to raise first
-    assert cb_fail.paths.step_uid < cb_ok.paths.step_uid, "cb_fail must sort first"
+    dispatch = backends.CacheDispatch(
+        backend, [run(conftest.Add(fail_on="all"), 1.0), run(conftest.Add(value=1), 1.0)]
+    )
+    fail, ok = dispatch.tasks
+    # claims sort by step_uid, so fail must sort first to raise first
+    assert fail.cache.paths.step_uid < ok.cache.paths.step_uid, "fail must sort first"
 
     with pytest.raises(ValueError, match="Triggered an error"):
-        with backend._claim([cb_fail, cb_ok]) as claimed:
-            if claimed.ready:
-                backend._execute(claimed.ready)
+        dispatch.submit()
 
-    key = (cb_ok.paths.step_folder, cb_ok.items.uids[0])
-    assert key not in backend._recomputed, "cb_ok never ran, so it must be unmarked"
+    assert ok.items.uids[0] not in ok.cache.attempted, (
+        "ok never ran, so it must be unmarked"
+    )
 
 
 def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
@@ -355,7 +418,7 @@ def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
     def run(value: float, fail: bool, mode: str) -> float:
         infra = backend.model_copy(update={"mode": mode})
         step = conftest.Add(value=value, fail_on="all" if fail else None, infra=infra)
-        return next(iter(backend._run(step, batch)))
+        return next(iter(backend._run(base.Runner(), step, batch)))
 
     # seed a cached error under each step's folder
     for value in (1.0, 5.0):
@@ -369,7 +432,48 @@ def test_recomputed_keyed_by_step(tmp_path: Path) -> None:
 
 def test_nested_dispatch_on_shared_cell(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "LocalProcess", "folder": tmp_path}
-    inner = Chain(steps=[conftest.Mult(coeff=3.0, infra=infra)], infra=infra)
+    inner = Chain(steps=[_SlowAdd(value=1, infra=infra)], infra=infra)
     chain = Chain(steps=[conftest.Add(value=1.0), inner], infra=infra)
     # identity flattens recursively: the 3 infras share one cache entry
-    assert chain.run(1.0) == 6.0
+    pids: set[int] = set()
+    folder = chain.lookup(1.0).paths.step_folder
+    with (
+        futures.ThreadPoolExecutor(1) as pool,
+        backends.inflight.InflightRegistry(folder) as reg,
+    ):
+        future = pool.submit(chain.run, 1.0)
+        while not future.done():
+            for worker in reg.get().values():
+                pids.add(worker.liveness.pid)  # type: ignore[attr-defined]
+            time.sleep(0.01)
+    assert future.result() == 3.0
+    jobs = pids - {os.getpid()}
+    assert len(jobs) == 3, "each nested job must take over the shared cell's row"
+
+
+class _SnapshotStep(Step):
+    offset: int = 0
+
+    def _run(self, value: int) -> int:
+        module = importlib.import_module("snapshot_package.value")
+        return value + module.VALUE + self.offset
+
+
+def test_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    code = Path("snapshot_package/value.py")
+    code.parent.mkdir()
+    (code.parent / "__init__.py").touch()
+    code.write_text("VALUE = 10\n", encoding="utf8")
+    infra: tp.Any = {"backend": "LocalProcess", "folder": "cache", "max_jobs": 1}
+    infra["workdir"] = {"copied": [code.parent]}
+    sweep = helpers.Parallel(
+        steps=[_SnapshotStep(offset=k) for k in range(2)], infra=infra
+    )
+    values = []
+    for value in (1, 2):
+        sweep.run(value)
+        code.write_text("VALUE = 20\n", encoding="utf8")
+        values += [s.lookup(value).result() for s in sweep.steps]
+    assert values == [11, 12, 12, 13], "edited code must not reach the reused snapshot"
+    assert sweep.clone().infra == sweep.infra

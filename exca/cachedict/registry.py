@@ -26,6 +26,7 @@ _CORRUPTION_HINTS = (
     "not a database",
     "no such table",
     "no such column",
+    "has no column named",  # INSERT on an older schema
 )
 # OperationalError substrings for transient lock contention (retried).
 _LOCK_HINTS = ("locked", "busy")
@@ -50,16 +51,6 @@ def select_in_chunks(
     return out
 
 
-def bulk_delete(
-    conn: sqlite3.Connection, table: str, column: str, values: list[str]
-) -> None:
-    """Delete rows from *table* where *column* matches *values*, in one
-    transaction (single fsync — matters for large recompute sets / NFS)."""
-    conn.execute("BEGIN")
-    conn.executemany(f"DELETE FROM {table} WHERE {column} = ?", [(v,) for v in values])
-    conn.execute("COMMIT")
-
-
 class AdvisoryRegistry:
     """Advisory SQLite-backed registry inside a folder.
 
@@ -73,9 +64,8 @@ class AdvisoryRegistry:
     _SCHEMA: tp.ClassVar[str]  # passed to executescript(), multi-statement OK
     _LABEL: tp.ClassVar[str]  # short prefix in log messages
 
-    def __init__(self, folder: Path | str, permissions: int | None = 0o777) -> None:
+    def __init__(self, folder: Path | str) -> None:
         self.db_path = Path(folder) / self._DB_NAME
-        self.permissions = permissions
         self._conn: sqlite3.Connection | None = None
 
     def _connect(self, *, create: bool = False) -> sqlite3.Connection | None:
@@ -107,19 +97,11 @@ class AdvisoryRegistry:
             str(self.db_path),
             timeout=20,
             isolation_level=None,
+            check_same_thread=False,  # claims may be released at gc, on any thread
         )
         # WAL needs cross-host shared memory (broken on NFS) -> DELETE journal
         conn.execute("PRAGMA journal_mode=DELETE")
         conn.executescript(self._SCHEMA)
-        if self.permissions is not None:
-            try:
-                self.db_path.chmod(self.permissions)
-            except Exception:
-                logger.warning(
-                    "Failed to set permissions on %s",
-                    self.db_path,
-                    exc_info=True,
-                )
         self._conn = conn
         return conn
 

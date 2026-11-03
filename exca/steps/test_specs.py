@@ -41,18 +41,27 @@ def test_chain_is_sequential(tmp_path: Path, with_infra: bool) -> None:
 
 
 @pytest.mark.parametrize("with_cache", [False, True])
-def test_downstream_cache_skips_upstream(tmp_path: Path, with_cache: bool) -> None:
+def test_downstream_cache_skips_upstream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_cache: bool
+) -> None:
     # Cache key comes from a uid carried from the root, not from the
     # transformed upstream output — else checking the cache requires _run.
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if with_cache else None
     upstream = conftest.Add(value=1.0)  # one instance so .calls spans both runs
+    uid_calls: list[int] = []
+    monkeypatch.setattr(Chain, "item_uid", lambda _, value: uid_calls.append(value))
 
     def make_chain() -> Chain:
-        return Chain(steps=[upstream, conftest.Mult(coeff=10.0, infra=infra)])
+        return Chain(
+            steps=[upstream, conftest.Mult(coeff=10.0, infra=infra, with_context=False)]
+        )
 
-    make_chain().run()
-    make_chain().run()
+    make_chain().run(1)
+    make_chain().run(1)
     assert len(upstream.calls) == (1 if with_cache else 2)
+    assert uid_calls == ([1, 1] if with_cache else []), (
+        "uid should only be computed if an infra needs it."
+    )
 
 
 @pytest.mark.parametrize("as_chain", [False, True])
@@ -198,14 +207,15 @@ def test_chain_no_infra_runs_inline(tmp_path: Path) -> None:
         steps=[
             _pid_recorder(tmp_path / "0.txt", cached),
             _pid_recorder(tmp_path / "1.txt", local),
+            _pid_recorder(tmp_path / "2.txt", local),  # pickles pending inputs
         ]
     )
-    assert chain.run(5.0) == 7.0
-    pids = [int((tmp_path / f"{k}.txt").read_text(encoding="utf-8")) for k in range(2)]
+    assert chain.run(5.0) == 8.0
+    pids = [int((tmp_path / f"{k}.txt").read_text(encoding="utf-8")) for k in range(3)]
     assert pids[0] == os.getpid(), "First step should run in the main process"
     assert pids[1] != os.getpid(), "Second step should run in a sub-process"
     # chain lookup falls back to the last step's cache
-    assert chain.lookup(5.0).result() == 7.0
+    assert chain.lookup(5.0).result() == 8.0
 
 
 # -----------------------------------------------------------------------------
@@ -228,6 +238,7 @@ def test_scalar_and_items_share_cache(tmp_path: Path, as_chain: bool) -> None:
 # -----------------------------------------------------------------------------
 # Lazy iteration
 # "Datasets too large to fit in memory must traverse the pipeline lazily."
+# (only outer values are consumed eagerly)
 # -----------------------------------------------------------------------------
 
 
@@ -287,6 +298,9 @@ def test_fail_fast_partial_cache(tmp_path: Path) -> None:
         list(step.run_many([1, 2, 3, 4, 5]))
     assert step.calls[-1] == 3, "fail-fast: nothing should compute after the failure"
     first_cached = set(step.calls[:-1])
+    handle = step.lookup(3)
+    run_folder = handle.paths.run_folder(handle.uid)
+    run_folder.mkdir(parents=True)
 
     infra["mode"] = "retry"
     retried = conftest.Add(value=10, infra=infra)  # fail_on excluded from uid
@@ -294,6 +308,14 @@ def test_fail_fast_partial_cache(tmp_path: Path) -> None:
     assert result == [11, 12, 13, 14, 15]
     assert 3 in retried.calls
     assert first_cached.isdisjoint(set(retried.calls)), "cached items must not recompute"
+    assert not run_folder.exists(), "retry deletes the failed item's run folder"
+    run_folder.mkdir(parents=True)
+    retried.lookup(3).clear_cache()
+    assert not run_folder.exists(), "clear_cache deletes it"
+    run_folder.mkdir(parents=True)
+    infra["mode"] = "force"
+    conftest.Add(value=10, infra=infra).run(3)
+    assert not run_folder.exists(), "and so does force"
 
 
 # -----------------------------------------------------------------------------

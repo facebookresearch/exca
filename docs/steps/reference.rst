@@ -123,6 +123,9 @@ Batched execution
 
 .. autoexception:: exca.steps.items.BatchProtocolError
 
+.. autoclass:: exca.steps.backends.RunContext()
+    :members: folder
+
 Cache lookup
 ------------
 
@@ -152,6 +155,9 @@ Submitit-based backends — ``LocalProcess``, ``SubmititDebug``,
 - ``max_jobs: int = 128`` — maximum number of array sub-jobs.
 - ``min_items_per_job: int = 1`` — combine items into one job
   below this count.
+
+- ``workdir: exca.workdir.WorkDir | None`` — copied code snapshot for
+  ``LocalProcess``, ``Slurm`` and ``Auto``; see :doc:`howto`.
 
 Pool backends — ``ProcessPool``, ``ThreadPool`` — additionally
 accept:

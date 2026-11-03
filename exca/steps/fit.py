@@ -20,8 +20,7 @@ import exca
 from exca import utils as xkutils
 from exca.cachedict import dumpcontext
 
-from . import backends, identity, items, utils
-from .base import Step
+from . import backends, base, identity, items, utils
 
 _FINGERPRINT = re.compile(r"^[0-9a-f]{16}$")
 
@@ -70,12 +69,10 @@ def _bind_cohort(
     paths: backends.StepPaths, name: str, fingerprint: str, fit_type: str
 ) -> None:
     record = _cohort_record(paths, name)
-    folder = record.parent
     if not record.exists():
-        xkutils.mkdir_with_permissions(folder, 0o777, root=paths.base_folder)
+        record.parent.mkdir(parents=True, exist_ok=True)
         tmp = record.with_name(f"{record.name}.{uuid.uuid4().hex}")
         tmp.write_text(fingerprint, "utf8")
-        tmp.chmod(0o666)
         try:
             os.link(tmp, record)  # atomic create; loser reads winner
         except FileExistsError:
@@ -95,21 +92,21 @@ class _ArtifactHandle(backends.LookupHandle):
     """The artifact entry, owning the ``cohorts/`` record that binds its name."""
 
     def __init__(self, handle: backends.LookupHandle, name: str | None) -> None:
-        super().__init__(handle._paths, handle._cache_dict, handle._backend, handle.uid)
+        super().__init__(handle._cache, handle.uid)
         self._name = name
 
     def clear_cache(self, recursive: bool = True) -> None:
         super().clear_cache(recursive)
-        if self._name is not None and self._paths is not None:
-            record = _cohort_record(self._paths, self._name)
+        if self._name is not None and self._cache is not None:
+            record = _cohort_record(self._cache.paths, self._name)
             record.unlink(missing_ok=True)
 
 
 def _find_fits(
-    step: Step,
+    step: base.Step,
     root: str = "",
     sharding: backends.Backend | None = None,
-    subtrees: dict[int, tuple[Step, frozenset[str]]] | None = None,
+    subtrees: dict[int, tuple[base.Step, frozenset[str]]] | None = None,
     resolve: bool = True,
 ) -> dict[str, tuple[Fit, backends.Backend | None]]:
     """Every ``Fit`` of *step*, keyed by declaration path, with the enclosing backend
@@ -134,8 +131,8 @@ def _find_fits(
     return found
 
 
-# moved by a declaration, put back by one that raises
-_FIT_STATE = ("_cohort_resolution", "_artifact", "_fitted", "_output_items")
+# moved by a declaration, put back by one that raises (with `_runtime.warm_items`)
+_FIT_STATE = ("_cohort_resolution", "_artifact", "_fitted")
 
 
 @dataclasses.dataclass
@@ -149,8 +146,8 @@ class _CohortPlan:
     """
 
     resolutions: tuple[tuple[Fit, _CohortResolution], ...]
-    boundaries: tuple[tuple[Step, frozenset[str]], ...]
-    fit_scope: items._FitScope
+    boundaries: tuple[tuple[base.Step, frozenset[str]], ...]
+    fit_keys: frozenset[str]
     _prior: tuple[tuple[Fit, dict[str, tp.Any]], ...] = dataclasses.field(
         default=(), init=False
     )
@@ -158,7 +155,11 @@ class _CohortPlan:
 
     def install(self) -> None:
         self._prior = tuple(
-            (fit, {name: getattr(fit, name) for name in _FIT_STATE})
+            (
+                fit,
+                {name: getattr(fit, name) for name in _FIT_STATE}
+                | {"warm_items": fit._runtime.warm_items},
+            )
             for fit, _ in self.resolutions
         )
         self._unfrozen = tuple(
@@ -173,20 +174,29 @@ class _CohortPlan:
             step._fit_keys = keys
         for fit, resolution in self.resolutions:
             fit._cohort_resolution = resolution
+        self._forget_uids()
 
     def restore(self) -> None:
         for fit, prior in self._prior:
+            prior = dict(prior)
+            fit._runtime.warm_items = prior.pop("warm_items")
             for name, value in prior.items():
                 setattr(fit, name, value)
         for model in self._unfrozen:
             xkutils._unfreeze(model)
+        self._forget_uids()
+
+    def _forget_uids(self) -> None:
+        # memoized uids embed the cohort key of the fits these steps hold
+        for step, _ in self.boundaries:
+            step._runtime.uid = None
 
 
 def _plan_cohorts(
-    step: Step, uids: tp.Sequence[str], name: str | None = None
+    step: base.Step, uids: tp.Sequence[str], name: str | None = None
 ) -> _CohortPlan:
     """Resolve every cohort up front: nothing is written and no ``Fit`` is moved."""
-    subtrees: dict[int, tuple[Step, frozenset[str]]] = {}
+    subtrees: dict[int, tuple[base.Step, frozenset[str]]] = {}
     fits = _find_fits(step, subtrees=subtrees)
     if name is not None:
         _check_name(name)
@@ -237,9 +247,7 @@ def _plan_cohorts(
                 f"in place is not supported, use clone() for {resolution.key!r}"
             )
         resolutions.append((fit, resolution))
-    return _CohortPlan(
-        tuple(resolutions), tuple(subtrees.values()), items._FitScope(fits)
-    )
+    return _CohortPlan(tuple(resolutions), tuple(subtrees.values()), frozenset(fits))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -257,7 +265,7 @@ class _ArtifactRef:
         return self.cache[self.cohort]
 
 
-class Fit(Step):
+class Fit(base.Step):
     """Fit one artifact over a cohort of items, then transform each item (N->1->N).
 
     .. warning:: Experimental -- API may change.
@@ -376,13 +384,15 @@ class Fit(Step):
             self._fitted = self._artifact.load()
         return self._fitted
 
-    def _dispatch(self, batch: items.StepItems) -> items.StepItems:
-        # before super(): the cohort must be fitted before the batch is narrowed
-        force_apply = self._resolve_artifact(batch)
-        batch._fit_scope.consume(self)
-        if force_apply:
-            batch = batch._replace(mode=backends._fold_modes(batch._mode, "force"))
-        return super()._dispatch(batch)
+    def _before_dispatch(
+        self, runner: base.Runner, batch: items.StepItems
+    ) -> base.Runner:
+        # before the backend: the cohort must be fitted before the batch is narrowed
+        force_apply = self._resolve_artifact(runner, batch)
+        mode = backends._fold_modes(runner.mode, "force") if force_apply else runner.mode
+        return dataclasses.replace(
+            runner, mode=mode, fit_keys=runner.fit_keys - self._fit_keys
+        )
 
     def _cohort_key(self) -> str | None:
         if self._cohort_resolution is not None:
@@ -400,13 +410,13 @@ class Fit(Step):
         self,
         value: tp.Any = identity.NoValue(),
         *,
-        _upstream: tp.Sequence[Step] = (),
+        _runner: base.Runner = base.Runner(),
         _uid: str | None = None,
     ) -> backends.LookupHandle:
         """Like :meth:`Step.lookup`, but ``clear_cache(recursive=True)`` also clears
         the cohort's artifact and the record binding its name, so a cleared fit can
         be refitted. ``recursive=False`` clears the item's output only."""
-        handle = super().lookup(value, _upstream=_upstream, _uid=_uid)
+        handle = super().lookup(value, _runner=_runner, _uid=_uid)
         resolution = self._cohort_resolution
         cohort = self._cohort_key()
         fit_infra = self.fit_infra
@@ -414,12 +424,12 @@ class Fit(Step):
             fit_infra = self.infra.derive("Cached", mode="cached")
         if cohort is None or fit_infra is None or fit_infra.folder is None:
             return handle
-        artifact = self._artifact_step(fit_infra).lookup(_upstream=_upstream, _uid=cohort)
+        artifact = self._artifact_step(fit_infra).lookup(_runner=_runner, _uid=cohort)
         name = self.cohort if resolution is None else resolution.name
         handle._sub_handles += (_ArtifactHandle(artifact, name),)
         return handle
 
-    def _resolve_artifact(self, batch: items.StepItems) -> bool:
+    def _resolve_artifact(self, runner: base.Runner, batch: items.StepItems) -> bool:
         """Returns whether item outputs must be forced, a refit voiding them."""
         fit_type = type(self).__name__
         cohort = self._cohort_key()
@@ -435,12 +445,12 @@ class Fit(Step):
                 fit_infra = self.infra.derive("Cached", mode="cached")
         else:
             fit_mode = fit_infra.mode
-        mode = backends._fold_modes(batch._mode, fit_mode)
+        mode = backends._fold_modes(runner.mode, fit_mode)
         infra = None if fit_infra is None else fit_infra.derive(mode=mode)
         artifact = self._artifact_step(infra)
-        upstream = tuple(batch._upstream)
-        handle = artifact.lookup(_upstream=upstream, _uid=cohort)
-        if handle._cache_dict is None and _FINGERPRINT.match(cohort) is None:
+        upstream = runner.prefix
+        handle = artifact.lookup(_runner=base.Runner(prefix=upstream), _uid=cohort)
+        if handle._cache is None and _FINGERPRINT.match(cohort) is None:
             raise RuntimeError(
                 f"{fit_type} names cohort {cohort!r} but resolves no folder to cache "
                 "its artifact in: set infra or fit_infra, or a name recovers nothing"
@@ -448,7 +458,7 @@ class Fit(Step):
         ref = _ArtifactRef(
             step_uid=identity.step_uid([*upstream, artifact]),
             cohort=cohort,
-            cache=handle._cache_dict,
+            cache=None if handle._cache is None else handle.cache_dict,
         )
         if self._artifact is not None:
             if self._artifact.step_uid != ref.step_uid:
@@ -461,7 +471,7 @@ class Fit(Step):
         else:
             status = handle.status
             recompute = status is None or backends._must_recompute(status, mode)
-            if recompute and not batch._fit_scope.pending:
+            if recompute and not runner.fit_keys & self._fit_keys:
                 if status == "error":
                     hint = "refit it, its cached fit failed"
                 else:
@@ -470,13 +480,9 @@ class Fit(Step):
                     f"{fit_type} must fit cohort {cohort!r} but was handed no items to "
                     f"fit on: run it with fit_many(items), or {hint}"
                 )
-            carrier = items.StepItems(
-                source={cohort: (batch,)},
-                uids=[cohort],
-                upstream=upstream,
-                mode=mode,
-            )
-            self._fitted = next(iter(artifact._dispatch(carrier)))
+            carrier = items.StepItems(source={cohort: (batch,)}, uids=[cohort])
+            fitting = dataclasses.replace(runner, mode=mode, fit_keys=frozenset())
+            self._fitted = next(iter(fitting.dispatch(artifact, carrier)))
             self._artifact = ref
             force_apply = recompute and mode == "force"
         # after the fit, never before: a failed fit must leave the name free
@@ -488,7 +494,7 @@ class Fit(Step):
         return force_apply
 
 
-class _Artifact(Step):
+class _Artifact(base.Step):
     """One cohort's artifact for a :class:`Fit`, cached as a single entry.
 
     ``owner`` is the fit's exported config: identity only, so that no config can

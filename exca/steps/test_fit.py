@@ -74,24 +74,17 @@ class _ResolvedOffset(steps.Step):
         return _SumOffset(infra=self.infra)
 
 
-class _ResolvedMult(steps.Step):
-    coeff: float = 2.0
-
-    def _resolve_step(self) -> steps.Step:
-        return conftest.Mult(coeff=self.coeff, infra=self.infra)
-
-
 @pytest.fixture
 def submitted_task_sizes(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     sizes: list[int] = []
-    original = backends._tasks_from_batches
+    original = backends._shard_tasks
 
-    def patched(cbatches: tp.Any, **kwargs: tp.Any) -> tp.Any:
-        tasks = original(cbatches, **kwargs)
-        sizes.extend(len(pickle.dumps(task)) for task in tasks)
-        return tasks
+    def patched(tasks: tp.Any, **kwargs: tp.Any) -> tp.Any:
+        shards = original(tasks, **kwargs)
+        sizes.extend(len(pickle.dumps(shard)) for shard in shards)
+        return shards
 
-    monkeypatch.setattr(backends, "_tasks_from_batches", patched)
+    monkeypatch.setattr(backends, "_shard_tasks", patched)
     return sizes
 
 
@@ -217,10 +210,10 @@ def test_fit_infra_controls_fit_dispatch(
     original_run = steps.backends.ThreadPool._run
 
     def tracked_run(
-        self: steps.backends.ThreadPool, step: steps.Step, batch: tp.Any
+        self: steps.backends.ThreadPool, runner: tp.Any, step: steps.Step, batch: tp.Any
     ) -> tp.Any:
         dispatched.append(type(step).__name__)
-        return original_run(self, step, batch)
+        return original_run(self, runner, step, batch)
 
     monkeypatch.setattr(steps.backends.ThreadPool, "_run", tracked_run)
     infra: tp.Any = {"folder": tmp_path, "backend": "ThreadPool"}
@@ -241,7 +234,7 @@ def test_cohort_marker_is_request_scoped(tmp_path: Path) -> None:
     upstream = conftest.Mult(coeff=2, infra=infra)
     chain = steps.Chain(steps=[upstream, _SumOffset(infra=infra)])
     list(chain.fit_many([1.0, 2.0]))
-    assert upstream._output_items is not None, "fitting must warm the cache as well"
+    assert upstream._runtime.warm_items is not None, "fitting must warm the cache as well"
 
     chain = steps.Chain(steps=[upstream, _SumOffset(cohort="train", infra=infra)])
     with pytest.raises(RuntimeError, match="handed no items"):
@@ -831,17 +824,6 @@ def test_parallel_refuses_a_variant_that_resolves_to_a_fit(tmp_path: Path) -> No
     assert not list(tmp_path.iterdir()), "a refused sweep must write nothing"
 
 
-def test_a_folderless_sweep_of_resolving_variants_inherits_one(tmp_path: Path) -> None:
-    variants = [_ResolvedMult(coeff=c) for c in (3.0, 4.0)]
-    folderless: tp.Any = {"backend": "Cached"}
-    sweep = steps.helpers.Parallel(steps=variants, infra=folderless)
-    outer: tp.Any = {"folder": tmp_path, "backend": "Cached"}
-    steps.Chain(steps=[sweep], infra=outer).run_many([2.0])
-    assert [v.lookup(2.0).result() for v in sweep.steps] == [6.0, 8.0], (
-        "the folder the enclosing chain propagates must reach each resolution"
-    )
-
-
 def test_a_fit_may_not_resolve_to_another_step() -> None:
     with pytest.raises(TypeError, match="cannot override _resolve_step"):
 
@@ -927,7 +909,9 @@ def test_fit_many_without_a_fit_is_run_many(
     )
 
     def tree(root: Path) -> list[tuple[str, bytes]]:
-        files = (p for p in root.rglob("*") if p.is_file())
+        # access timestamps differ between any two runs
+        stamp = exca.cachedict.core.LAST_USE_NAME
+        files = (p for p in root.rglob("*") if p.is_file() and p.name != stamp)
         return sorted(
             (str(p.relative_to(root)), p.read_bytes().replace(bytes(root), b"<root>"))
             for p in files

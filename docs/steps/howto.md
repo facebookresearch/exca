@@ -58,12 +58,7 @@ steps.helpers.Func(function=shift, input_param="x", by=1.5).run(2.0)  # 3.5
 
 ## Override `item_uid` for opaque inputs
 
-When a Step is called via `run_many`, the framework needs a stable
-string per input. By default it uses `exca.confdict.UidMaker` on
-the value, which is fine for paths, ints, small dicts, etc. For
-inputs the default can't key reliably — typically arrays or other
-unhashable / large objects — override `item_uid` to return a
-stable string. A content hash works well:
+When `run_many` reaches a cache or backend, the framework needs a stable string per input; fully inline execution usually does not compute one (fan-out steps like `Scatter` still do). By default it uses `exca.confdict.UidMaker` on the value, which is fine for paths, ints, small dicts, etc. For inputs the default can't key reliably — typically arrays or other unhashable / large objects — override `item_uid` to return a stable string. A content hash works well:
 
 ```python
 import hashlib
@@ -224,6 +219,20 @@ chain[1].lookup(value).clear_cache()          # one specific sub-step + input
 ```
 
 `Step.clear_cache()` (no `lookup()`) still works but is deprecated.
+
+## Run from a code snapshot
+
+`LocalProcess`, `Slurm` and `Auto` accept a {class}`exca.workdir.WorkDir`, so jobs run from a copy of your code while you keep editing it:
+
+```yaml
+infra:
+  backend: LocalProcess
+  folder: /cache/project
+  workdir:
+    copied: [my_package]
+```
+
+The copy is made at the first submission in `<step_folder>/code/<date>-<random>/` and reused by later submissions; a new `WorkDir` takes a fresh copy. Jobs run from the copy, so relative paths in your own fields and inputs resolve there.
 
 ## Inspect a running job
 

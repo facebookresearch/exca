@@ -11,6 +11,7 @@ import itertools
 import pickle
 import traceback
 import typing as tp
+import weakref
 from pathlib import Path
 
 import pydantic
@@ -475,6 +476,8 @@ def test_parallel_caches_the_resolved_step_result(tmp_path: Path) -> None:
     sweep = helpers.Parallel(steps=[_ResolvesToMult()], infra=infra)
     sweep.run(5.0)
     assert sweep.steps[0].lookup(5.0).result() == 10.0
+    resolved: tp.Any = utils.resolved_step(sweep.steps[0])
+    assert resolved.contexts[0].outer_step is sweep.steps[0], "variant is the root"
 
 
 def test_resolve_step_runtime_checks(tmp_path: Path) -> None:
@@ -497,21 +500,17 @@ def _format_exc(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
 
-def test_step_error_note() -> None:
-    step = conftest.Add(value=5, fail_on="all")
+@pytest.mark.parametrize("chained", [False, True])
+def test_step_error_note(chained: bool) -> None:
+    step: Step = conftest.Add(value=5, fail_on="all")
+    value = 0
+    if chained:
+        step = Chain(steps=[conftest.Mult(coeff=2), step])
+        value = 1
     with pytest.raises(ValueError) as exc_info:
-        step.run(0)
+        step.run(value)
     formatted = _format_exc(exc_info.value)
     assert "Add(" in formatted and "fail_on='all'" in formatted
-
-
-def test_chain_error_note() -> None:
-    chain = Chain(steps=[conftest.Mult(coeff=2), conftest.Add(value=5, fail_on="all")])
-    with pytest.raises(ValueError) as exc_info:
-        chain.run(1)
-    formatted = _format_exc(exc_info.value)
-    assert "Add" in formatted
-    assert identity.materialize_uid(chain, 1) in formatted, "uid missing in message"
 
 
 # =============================================================================
@@ -746,7 +745,16 @@ def test_batch_error_inflight_uids(tmp_path: Path, with_infra: bool) -> None:
     with pytest.raises(ValueError, match="boom") as exc_info:
         list(step.run_many([1, 2, 3, 4, 5, 6]))
     inflight = getattr(exc_info.value, "_inflight_uids", [])
-    assert len(inflight) == 2, f"expected 2 inflight uids, got {inflight}"
+    assert len(inflight) == 2 * with_infra, inflight
+
+
+def test_batch_error_inflight_uids_with_duplicates(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    step = _GroupedMult(group_size=2, fail_value=3, infra=infra)
+    with pytest.raises(ValueError, match="boom") as exc_info:
+        list(step.run_many([1, 2, 1, 3, 4]))
+    expected = [identity.materialize_uid(step, v) for v in (3, 4)]
+    assert exc_info.value._inflight_uids == expected  # type: ignore[attr-defined]
 
 
 def test_chained_group_sizes_call_order() -> None:
@@ -765,3 +773,51 @@ def test_chained_group_sizes_call_order() -> None:
         [400], [500],          # step3 drains
     ]
     # fmt: on
+
+
+# =============================================================================
+# Run context
+# =============================================================================
+
+
+class _MakePayload(conftest.RecordingStep):
+    def _run(self, value: tp.Any) -> set:
+        payload: set = set()
+        self.record(weakref.ref(payload))
+        return payload
+
+
+class _Nest(conftest.RecordingStep):
+    inner: Step
+
+    def _run(self, value: tp.Any) -> int:
+        self._run_context()
+        for _ in self.inner.run_many([1, 2]):
+            self._run_context()
+        return 0
+
+
+def test_run_context_nested_run_is_a_new_root(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    inner = conftest.Mult()
+    outer = _Nest(inner=inner, infra=infra)
+    outer.run(1)
+    assert all(c == outer.contexts[0] for c in outer.contexts), (
+        "stable across inner yields"
+    )
+    assert all(c.outer_step is inner and c.upstream_steps == () for c in inner.contexts)
+    assert [len(c.item_uids) for c in inner.contexts] == [2, 2], "the inner read's uids"
+    with pytest.raises(RuntimeError, match="unavailable"):
+        inner.contexts[0].folder()
+    with pytest.raises(RuntimeError, match="requires a running"):
+        inner._run_context()
+    with pytest.raises(RuntimeError, match="within its own"):
+        conftest.Mult().on_call(lambda _: inner._run_context()).run(1)
+
+
+def test_run_context_releases_item_values() -> None:
+    make = _MakePayload()
+    results = iter(Chain(steps=[make, _Nest(inner=conftest.Mult())]).run_many([1, 2]))
+    next(results)
+    [payload] = make.calls
+    assert payload() is None, "context retained the previous item"

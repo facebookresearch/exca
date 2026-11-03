@@ -128,6 +128,8 @@ The class is initialized with these parameters:
 
 For details on the serialization system and how to write custom handlers, see [Serialization](serialization.md).
 
+Files follow the process umask. For a cache shared between users, call `exca.utils.setup_shared_folder(folder)` once on its root before launching jobs. If default ACLs are unavailable, the function warns and writers must run with `umask 002`.
+
 **Example**
 ```python fixture:tmp_path
 import numpy as np

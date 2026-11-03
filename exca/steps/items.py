@@ -7,37 +7,21 @@
 """Carrier for batch execution.
 
 ``StepItems`` is the framework-internal carrier threaded through a
-pipeline: source + pending + upstream + uids + mode. Users never
-construct it; ``step.run_many`` returns one as its results iterator.
+pipeline: source + pending + uids. Users never construct it;
+``step.run_many`` returns one as its results iterator.
 """
 
 from __future__ import annotations
 
-import collections
 import itertools
 import typing as tp
 
 from . import identity
 
 if tp.TYPE_CHECKING:
-    from .base import Step
+    from .base import _StepCall
 
-
-class _FitScope:
-    """A carrier's pending fits, by declaration path: any keeps its uids whole."""
-
-    def __init__(self, keys: tp.Iterable[str] = ()) -> None:
-        # plain strings, so a boundary pickled into a worker still releases there
-        self._pending = set(keys)
-
-    @property
-    def pending(self) -> bool:
-        """Whether a pending fit still needs every uid of the batch."""
-        return bool(self._pending)
-
-    def consume(self, step: Step) -> None:
-        """Drop the fits *step* contains; idempotent."""
-        self._pending.difference_update(step._fit_keys)
+_Uids = tp.Callable[[], tp.Sequence[str]]
 
 
 class _Source(tp.Protocol):
@@ -54,79 +38,70 @@ class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
 
 
-def _note_inflight(exc: Exception, step: Step, uids: list[str]) -> None:
-    exc.add_note(f"  -> in {step!r}, inflight uids: {uids}")
-    if uids:
-        exc._inflight_uids = uids  # type: ignore[attr-defined]  # read by retry logic
-
-
 class _AnnotatedBatch:
     """Wraps ``step._run_batch`` with consumption tracking, yield validation, and error annotation.
 
-    On error, ``_inflight_uids`` on the exception contains the consumed-but-not-yielded uids.
+    On error, ``_inflight_positions`` contains the consumed-but-not-yielded positions.
     """
 
     def __init__(
-        self, step: Step, values: tp.Iterable[tp.Any], uids: tp.Sequence[str]
+        self, call: _StepCall, values: tp.Iterable[tp.Any], size: int, uids: _Uids
     ) -> None:
-        self.step = step
+        self.call = call
         self._values = values
-        self._uid_iter = iter(uids)
-        self._expected = len(uids)
-        self._inflight: collections.deque[str] = collections.deque()
-        self.n_out = 0
+        self._expected = size
+        self.uids = uids
+        self.n_in = self.n_out = 0
 
     def _tracked(self) -> tp.Iterator[tp.Any]:
-        for v in self._values:
-            self._inflight.append(next(self._uid_iter))
-            yield v
+        for value in self._values:
+            self.n_in += 1
+            yield value
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
         try:
-            for result in self.step._run_batch(self._tracked()):
+            for result in self.call.step._run_batch(self._tracked()):
                 if self.n_out >= self._expected:
                     raise BatchProtocolError(
-                        f"{self.step!r}._run_batch yielded more than {self._expected} results"
+                        f"{self.call.step!r}._run_batch yielded more than {self._expected} results"
                     )
-                if not self._inflight:
+                if self.n_out == self.n_in:
                     raise BatchProtocolError(
-                        f"{self.step!r}._run_batch yielded before consuming an input"
+                        f"{self.call.step!r}._run_batch yielded before consuming an input"
                     )
-                self._inflight.popleft()
                 self.n_out += 1
                 yield result
         except Exception as e:
-            _note_inflight(e, self.step, list(self._inflight))
+            e.add_note(f"  -> in {self.call.step!r}")
+            positions = range(self.n_out, self.n_in)
+            if positions:
+                e._inflight_positions = positions  # type: ignore[attr-defined]
             raise
         if self.n_out < self._expected:
             raise BatchProtocolError(
-                f"{self.step!r}._run_batch yielded {self.n_out} results for {self._expected} inputs"
+                f"{self.call.step!r}._run_batch yielded {self.n_out} results for {self._expected} inputs"
             )
 
 
-class _FusedRun:
-    """Run efficiently consecutive non-batched steps over the inputs in a single pass."""
+def _fused_run(
+    calls: tp.Sequence[_StepCall], values: tp.Iterable[tp.Any], uids: _Uids
+) -> tp.Iterator[tp.Any]:
+    """Run consecutive non-batched steps over the inputs in a single pass."""
+    # bound once: pydantic's __getattr__ makes each step._run lookup slow
+    runs = [(call, call.step._run) for call in calls]
+    for position, value in enumerate(values):
+        for call, run in runs:
+            try:
+                value = run() if isinstance(value, identity.NoValue) else run(value)
+            except Exception as e:
+                e.add_note(f"  -> in {call.step!r}")
+                e._inflight_positions = [position]  # type: ignore[attr-defined]
+                raise
+        yield value
 
-    def __init__(
-        self,
-        steps: tp.Sequence[Step],
-        values: tp.Iterable[tp.Any],
-        uids: tp.Sequence[str],
-    ) -> None:
-        self.steps = tuple(steps)
-        self._values = values
-        self.uids = uids
 
-    def __iter__(self) -> tp.Iterator[tp.Any]:
-        for value, uid in zip(self._values, self.uids):
-            for step in self.steps:
-                try:
-                    args = () if isinstance(value, identity.NoValue) else (value,)
-                    value = step._run(*args)
-                except Exception as e:
-                    _note_inflight(e, step, [uid])
-                    raise
-            yield value
+# frame contract: _fused_run call/position/uids; _AnnotatedBatch.__iter__ self
+_STAGES = (_fused_run.__code__, _AnnotatedBatch.__iter__.__code__)
 
 
 class StepItems:
@@ -135,87 +110,89 @@ class StepItems:
     For dict sources, uids default to the dict keys (insertion order).
     For CacheDict sources, explicit uids are required
     (the CacheDict may contain keys from other runs).
+    Callable uids keep a value list unaddressed until needed.
     """
 
     def __init__(
         self,
         *,
-        source: _Source,
-        uids: tp.Sequence[str] | None = None,
-        upstream: tp.Sequence[Step] = (),
-        pending: tp.Sequence[Step] = (),
-        mode: identity.ModeType = "cached",
-        fit_scope: _FitScope | None = None,
+        source: _Source | list[tp.Any],
+        uids: tp.Sequence[str] | tp.Callable[[tp.Any], str] | None = None,
+        pending: tp.Sequence[_StepCall] = (),
     ) -> None:
         if uids is None:
             if not isinstance(source, dict):
                 raise TypeError("CacheDict source requires explicit uids")
             uids = list(source)
-        # source: unique uid→value mapping; uids: full input sequence
-        # (may repeat uids — iteration reads the same value twice)
-        self._source = source
-        self.uids = list(uids)
-        self._upstream = tuple(upstream)
+        elif not callable(uids):
+            uids = list(uids)
+        # addressed: source=unique uid→value; uids=ordered sequence, duplicates allowed
+        self._source: tp.Any = source
+        self._uids = uids
         self._pending = tuple(pending)
-        self._mode = mode
-        self._fit_scope = _FitScope() if fit_scope is None else fit_scope
+
+    @property
+    def uids(self) -> list[str]:
+        self._address()
+        assert isinstance(self._uids, list)
+        return self._uids
+
+    def _address(self) -> _Source:
+        if callable(self._uids):
+            uids = [self._uids(value) for value in self._source]
+            self._source = dict(zip(uids, self._source))
+            self._uids = uids
+        return self._source
 
     def __len__(self) -> int:
-        return len(self.uids)
+        if callable(self._uids):
+            return len(self._source)
+        return len(self._uids)
 
-    def apply_step(self, step: Step) -> StepItems:
-        """Run *step* over the carrier, honoring its infra/caching (leaf or ``Chain``)."""
-        return step._dispatch(self)
-
-    def _replace(self, **changes: tp.Any) -> StepItems:
-        """Copy with *changes* applied; pass ``pending=()`` if *source* holds results."""
-        params: dict[str, tp.Any] = {
-            "source": self._source,
-            "uids": self.uids,
-            "upstream": self._upstream,
-            "pending": self._pending,
-            "mode": self._mode,
-            "fit_scope": self._fit_scope,
-        }
-        return StepItems(**{**params, **changes})
-
-    def _append(self, step: Step) -> StepItems:
-        """Append a single leaf step's computation and identity."""
-        return self._replace(
-            upstream=self._upstream + tuple(step._uid_steps()),
-            pending=self._pending + (step,),
+    def _append(self, call: _StepCall) -> StepItems:
+        """Append a single leaf step's computation."""
+        return StepItems(
+            source=self._source, uids=self._uids, pending=self._pending + (call,)
         )
 
-    def select(
-        self,
-        uids: tp.Sequence[str],
-        mode: identity.ModeType | None = None,
-    ) -> StepItems:
-        """Subset to specific uids, optionally overriding mode."""
-        source = self._source
+    def select(self, uids: tp.Sequence[str]) -> StepItems:
+        """Subset to specific uids."""
+        source = self._address()
         if isinstance(source, dict):
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
         elif hasattr(source, "select"):  # subset lazy sources before pickle
             source = source.select(uids)
-        return self._replace(
-            source=source,
-            uids=uids,
-            mode=mode if mode is not None else self._mode,
-        )
+        return StepItems(source=source, uids=uids, pending=self._pending)
 
     def read(self, uids: tp.Sequence[str]) -> tp.Iterator[tp.Any]:
         """Read these uids through the carrier's pending steps."""
-        current: tp.Iterable[tp.Any] = (self._source[uid] for uid in uids)
+        source = self._address()
+        try:
+            values = (source[uid] for uid in uids)
+            yield from self._pipeline(values, len(uids), lambda: uids)
+        except Exception as e:
+            positions = e.__dict__.pop("_inflight_positions", ())
+            if positions:
+                inflight = [uids[position] for position in positions]
+                e._inflight_uids = inflight  # type: ignore[attr-defined]
+                e.add_note(f"  -> inflight uids: {inflight}")
+            raise
+
+    def _pipeline(
+        self, current: tp.Iterable[tp.Any], size: int, uids: _Uids
+    ) -> tp.Iterator[tp.Any]:
         grouped = itertools.groupby(
-            self._pending, key=lambda s: "batched" in s._step_flags
+            self._pending, key=lambda call: "batched" in call.step._step_flags
         )
         for batched, group in grouped:
             if batched:
-                for step in group:
-                    current = _AnnotatedBatch(step, current, uids)
+                for call in group:
+                    current = _AnnotatedBatch(call, current, size, uids)
             else:
-                current = _FusedRun(list(group), current, uids)
+                current = _fused_run(list(group), current, uids)
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
-        return self.read(self.uids)
+        if callable(self._uids):
+            return self._pipeline(self._source, len(self), lambda: self.uids)
+        return self.read(self._uids)

@@ -9,11 +9,17 @@ import contextlib
 import copy
 import difflib
 import hashlib
+import itertools
+import json
 import logging
 import math
 import os
+import shlex
 import shutil
+import stat
+import subprocess
 import sys
+import tempfile
 import time
 import typing as tp
 import uuid
@@ -38,45 +44,122 @@ T = tp.TypeVar("T", bound=pydantic.BaseModel)
 X = tp.TypeVar("X")
 
 
-def best_effort_utime(folder: Path) -> None:
-    """Advance *folder*'s mtime, tolerating EPERM on foreign-owned directories."""
+def _current_umask() -> int:
+    """Read the process umask without changing it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "probe"
+        probe.mkdir()
+        mode = stat.S_IMODE(probe.stat().st_mode)
+    return 0o777 & ~mode
+
+
+def best_effort_utime(path: Path, *, keep_mtime: bool = False) -> None:
+    """Advance *path*'s atime and mtime, leaving mtime alone if *keep_mtime*."""
     # dir mtime unchanged on file-append → must stamp explicitly
-    # times=(t,t): owner-only, sub-jiffy; times=None: write-perm only (POSIX fallback)
-    t = time.time()
+    # ns=(...): owner-only, sub-jiffy; times=None: write-perm only (POSIX fallback)
+    now = time.time_ns()
     try:
-        os.utime(folder, times=(t, t))
-    except PermissionError:
-        try:
-            os.utime(folder)
-        except PermissionError:
-            pass
-
-
-def mkdir_with_permissions(
-    folder: Path | str,
-    permissions: int | None,
-    *,
-    root: Path | str,
-) -> None:
-    """Create a folder and chmod its directory chain within a root."""
-    root_path = Path(root)
-    folder_path = Path(folder)
-    parts = folder_path.relative_to(root_path).parts
-    if ".." in parts:
-        raise ValueError(f"Folder path must not contain '..': {folder}")
-    folder_path.mkdir(parents=True, exist_ok=True)
-    if permissions is None:
+        mtime = path.stat().st_mtime_ns if keep_mtime else now
+        os.utime(path, ns=(now, mtime))
         return
-    path = root_path
+    except OSError:
+        if keep_mtime:  # the fallback moves mtime, invalidating JsonlReader's cache
+            logger.debug("Failed to stamp %s", path, exc_info=True)
+            return
     try:
-        path.chmod(permissions)
-        for part in parts:
-            path /= part
-            path.chmod(permissions)
-    except Exception as e:
-        logger.warning(
-            "Failed to set permission to %s on '%s'\n(%s)", permissions, path, e
+        os.utime(path)
+    except OSError:
+        logger.debug("Failed to stamp %s", path, exc_info=True)
+
+
+def setup_shared_folder(folder: Path | str, group: str | int | None = None) -> None:
+    """Make a folder tree group-writable, including future files.
+
+    Symlinks and paths the caller cannot modify are skipped.
+
+    Parameters
+    ----------
+    folder: Path | str
+        Root of the shared tree.
+    group: str | int | None
+        Group name or ID to assign, or ``None`` to keep the current group.
+    """
+    root = Path(folder).resolve()
+    shared_mask = _current_umask() & 0o007
+    supports_setgid = not subprocess.run(
+        ["chmod", "g+s", str(root)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode
+    branches: list[str] = []
+    if group is not None:
+        group_name = shlex.quote(str(group))
+        script = shlex.quote(
+            'group=$1; mode=$2; shift 2; chgrp "$group" "$@"; status=$?; '
+            'chmod "$mode" "$@" || status=$?; exit "$status"'
         )
+        repair = f"-exec sh -c {script} sh {group_name}"
+        mode = "g+u,g+s" if supports_setgid else "g+u"
+        branches.append(f"-type d ! -group {group_name} {repair} {mode} {{}} +")
+        branches.append(f"! -type d ! -group {group_name} {repair} g+u {{}} +")
+    branches.append("-exec chmod g+u {} +")
+    for mask, bit, change in (
+        (0o004, 0o400, "o+r"),
+        (0o002, 0o200, "o+w"),
+        (0o001, 0o100, "o+x"),
+    ):
+        if not shared_mask & mask:
+            branches.append(f"-perm -{bit:o} -exec chmod {change} {{}} +")
+    if supports_setgid:
+        branches.append("-type d ! -perm -2000 -exec chmod g+s {} +")
+
+    setfacl = shutil.which("setfacl")
+    if setfacl is not None:
+        acl = "d:g::rwx,d:m::rwx"
+        probe = subprocess.run(
+            [setfacl, "-m", acl, str(root)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if probe.returncode:
+            setfacl = None
+        else:
+            setfacl_command = shlex.quote(setfacl)
+            branches.append(f"-type d -exec {setfacl_command} -m {acl} {{}} +")
+
+    expression = " -false -o ".join(branches)
+    command = shlex.split(
+        f"find -P {shlex.quote(str(root))} -user {os.getuid()} ! -type l "
+        f"\\( {expression} -false \\)"
+    )
+    result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if result.returncode:
+        warnings.warn(f"Some permission updates failed under {root}", stacklevel=2)
+    if setfacl is None or result.returncode:
+        warnings.warn(
+            f"Future files under {root} may not be writable by teammates; "
+            "run 'umask 002' in the shell before launching jobs that write there",
+            stacklevel=2,
+        )
+
+
+def widen_to_umask(folder: Path | str) -> None:
+    """Mirror owner access to group and other where allowed by the umask."""
+    mask = _current_umask()
+    root = Path(folder)
+    for path in itertools.chain((root,), root.rglob("*")):
+        path.chmod(_widened_mode(path, mask))
+
+
+def _widened_mode(path: Path, mask: int) -> int:
+    """*path*'s mode with the owner's access bits mirrored to group and other."""
+    mode = stat.S_IMODE(path.stat().st_mode)
+    owner = (mode >> 6) & 0o7
+    group_mask = (mask >> 3) & 0o7
+    other_mask = mask & 0o7
+    group = owner & ~group_mask
+    other = owner & ~other_mask
+    return mode | (group << 3) | other
 
 
 def to_chunks(
@@ -257,11 +340,19 @@ class ConfigExporter(pydantic.BaseModel):
                         break  # val is different from cfg default -> keep in cfg
                 else:
                     dump.pop(name)  # all equal to default, let's remove it
-        if isinstance(obj, (tuple, list, set)):
+        if isinstance(obj, (tuple, list, set, frozenset)):
             if not isinstance(dump, (tuple, list, set)) or len(obj) != len(dump):
                 raise RuntimeError(f"Weird exported dump for {obj}:\n{dump}")
             for obj2, dump2 in zip(obj, dump):
                 cfg._post_process_dump(obj2, dump2)
+            if isinstance(obj, (set, frozenset)) and isinstance(dump, list):
+                dump.sort(
+                    key=lambda v: (
+                        (0, v)
+                        if isinstance(v, (int, float))
+                        else (1, json.dumps(v, sort_keys=True))
+                    )
+                )
         return True
 
     def _dump(self, obj: tp.Any) -> tp.Any:

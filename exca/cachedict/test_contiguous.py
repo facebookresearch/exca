@@ -6,6 +6,8 @@
 
 """Tests for ContiguousMemmap."""
 
+import io
+import typing as tp
 from pathlib import Path
 
 import numpy as np
@@ -188,6 +190,22 @@ def test_no_shared_memory_with_memmap(tmp_path: Path) -> None:
     materialized = np.asarray(cm)
     assert not np.shares_memory(materialized, raw)
     np.testing.assert_array_equal(materialized, original)
+
+
+class _ShortReads(io.FileIO):
+    def readinto(self, buffer: tp.Any, /) -> tp.Any:
+        return super().readinto(memoryview(buffer)[:7])
+
+
+def test_short_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = np.arange(12, dtype=np.float64).reshape(3, 4)
+    cm = _make_cm(tmp_path, original)
+    monkeypatch.setattr(
+        "exca.cachedict.contiguous.open",
+        lambda path, *args, **kwargs: _ShortReads(path),
+        raising=False,
+    )
+    np.testing.assert_array_equal(np.asarray(cm[1:]), original[1:])
 
 
 # =============================================================================

@@ -9,7 +9,7 @@ The `Func` class achieves the same goal with a single concrete class (~60 lines)
 
 - No dynamic class creation — `Func` is always `Func`
 - Fully serializable via `ImportString` (round-trips through JSON/YAML)
-- `with_input` round-trip works cleanly (concrete class in discriminator registry)
+- Model round-trip works cleanly (concrete class in discriminator registry)
 
 ## Design
 
@@ -86,12 +86,9 @@ Extra fields are included in `model_dump()` output and flow through
 `_exclude_from_cls_uid` (it's metadata, not configuration — different input
 routing already produces different extras in the UID).
 
-### `with_input` round-trip
+### Model round-trip
 
-`Chain.with_input()` serializes steps via `model_dump()` then reconstructs them.
-Since `Func` is a concrete registered subclass of `Step`, the discriminated model
-system finds it via `type: "Func"`.  The `function` field round-trips via
-`ImportString`, and extras are restored by `extra="allow"`.
+Since `Func` is a concrete registered subclass of `Step`, the discriminated model system reconstructs it from `model_dump()` output via `type: "Func"`. The `function` field round-trips via `ImportString`, and extras are restored by `extra="allow"`.
 
 ### `extra="allow"` vs parent `extra="forbid"`
 

@@ -128,10 +128,6 @@ def model_with_infra_validator_before(obj: tp.Any) -> tp.Any:
 
 class BaseInfra(pydantic.BaseModel):
     folder: Path | str | None = None
-    # general permission for folders and files
-    # use os.chmod / path.chmod compatible numbers, or None to deactivate
-    # eg: 0o777 for all rights to all users
-    permissions: int | None = 0o777
     # {folder} will be replaced by the class folder
     # {user} by user id and %j by job id
     logs: Path | str = "{folder}/logs/{user}/%j"
@@ -197,6 +193,11 @@ class BaseInfra(pydantic.BaseModel):
     def model_post_init(self, log__: tp.Any) -> None:
         # Pydantic's private-attr hook would otherwise shadow SubmititMixin's hook.
         super().model_post_init(log__)
+        if ".." in Path(self.version).parts:
+            raise ValueError(
+                f"version={self.version!r} must not contain '..': it is a path "
+                "component of the cache folder and would escape the cache root"
+            )
 
     def __repr_args__(self) -> tp.Iterator[tuple[str | None, tp.Any]]:
         """Compact repr: only show fields that differ from their default value."""
@@ -250,15 +251,6 @@ class BaseInfra(pydantic.BaseModel):
         )
         dump.check_and_write(xpfolder, write=write)
         state.checked_configs = True
-        # Set permissions on written files
-        if write:
-            for name in ("uid", "full-uid", "config"):
-                fp = xpfolder / f"{name}.yaml"
-                if fp.exists():
-                    try:
-                        self._set_permissions(fp)
-                    except (OSError, FileNotFoundError):
-                        pass
 
     def _factory(self) -> str:
         state = _fast_state(self)
@@ -346,7 +338,7 @@ class BaseInfra(pydantic.BaseModel):
         folder = Path(self.folder) / self.uid()
         if not create:
             return folder
-        utils.mkdir_with_permissions(folder, self.permissions, root=self.folder)
+        folder.mkdir(parents=True, exist_ok=True)
         return folder
 
     def iter_cached(self) -> tp.Iterable[pydantic.BaseModel]:
@@ -361,14 +353,6 @@ class BaseInfra(pydantic.BaseModel):
                 continue  # not a task config file
             cfg = ConfDict.from_yaml(fp)
             yield cls(**cfg)
-
-    def _set_permissions(self, path: str | Path) -> None:
-        if self.permissions is not None:
-            try:
-                Path(path).chmod(self.permissions)
-            except Exception as e:
-                msg = f"Failed to set permission to {self.permissions} on '{path}'\n({e})"
-                logger.warning(msg)
 
     def clone_obj(self, *args: dict[str, tp.Any], **kwargs: tp.Any) -> tp.Any:
         """Create a new decorated object by applying a diff config to the underlying object"""

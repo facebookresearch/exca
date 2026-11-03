@@ -11,8 +11,7 @@ from pathlib import Path
 import pydantic
 import pytest
 
-from . import base, conftest, items
-from .patterns import Scatter
+from . import base, conftest, items, patterns
 
 
 class MakeDict(base.Step):
@@ -20,12 +19,13 @@ class MakeDict(base.Step):
         return {str(i): float(i) for i in range(int(n))}
 
 
-class ScatterDict(Scatter):
+class ScatterDict(patterns.Scatter):
     """Scatter a dict over its keys -- the shared baseline, configured per test."""
 
     body: base.Step
     limit: int = 0  # >0: scatter only the first N branches (a selector, not a branch key)
     exclude_input: bool = False  # key branches by name alone -> shared across inputs
+    exclude_upstream: bool = False  # drop upstream Scatters' selectors from branch keys
 
     def branches(self, item: dict[str, float]) -> list:
         ks = list(item)
@@ -35,7 +35,9 @@ class ScatterDict(Scatter):
         return item[branch]
 
     def _branch_excludes(self) -> list[str]:
-        return ["limit", Scatter._INPUT] if self.exclude_input else ["limit"]
+        input_ = [patterns.Scatter._INPUT] if self.exclude_input else []
+        upstream = [patterns.Scatter._UPSTREAM] if self.exclude_upstream else []
+        return ["limit", *input_, *upstream]
 
 
 def test_gather_override() -> None:
@@ -48,13 +50,13 @@ def test_gather_override() -> None:
 
 
 def test_invalid_scatter_raises() -> None:
-    class _Empty(Scatter):
+    class _Empty(patterns.Scatter):
         body: base.Step
 
         def branches(self, item: tp.Any) -> list:
             return []
 
-    class _TwoBodies(Scatter):
+    class _TwoBodies(patterns.Scatter):
         a: base.Step
         b: base.Step
 
@@ -64,7 +66,7 @@ def test_invalid_scatter_raises() -> None:
     class Cfg(pydantic.BaseModel):
         helper: base.Step
 
-    class _NestedOnly(Scatter):
+    class _NestedOnly(patterns.Scatter):
         cfg: Cfg
 
         def branches(self, item: tp.Any) -> list:
@@ -80,8 +82,11 @@ def test_invalid_scatter_raises() -> None:
 
 def test_scatter_composition() -> None:
     # mid-chain: a scatter splits the value produced by an upstream step
-    chain = base.Chain(steps=[MakeDict(), ScatterDict(body=conftest.Mult(coeff=2.0))])
+    body = conftest.Mult(coeff=2.0)
+    chain = base.Chain(steps=[MakeDict(), ScatterDict(body=body)])
     assert chain.run(3.0) == {"0": 0.0, "1": 2.0, "2": 4.0}, "MakeDict(3)={0,1,2}, *2"
+    upstream = [c.upstream_steps for c in body.contexts]
+    assert upstream == [tuple(chain.steps)] * 3, "the body runs after its Scatter"
     # nested: a scatter whose body is itself a scatter splits both levels
     nested = ScatterDict(body=ScatterDict(body=conftest.Mult(coeff=2.0)))
     item = {"g1": {"a": 1.0, "b": 2.0}, "g2": {"c": 3.0}}
@@ -106,11 +111,13 @@ def test_downstream_cache_keyed_by_scatter_identity(tmp_path: Path) -> None:
 
 def test_batched_items_scatter_independently(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
-    scat = ScatterDict(body=conftest.Mult(coeff=2.0, infra=infra))
+    body = conftest.Mult(coeff=2.0, infra=infra)
+    scat = ScatterDict(body=body)
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"a": 10.0}]))
     assert out == [{"a": 2.0, "b": 4.0}, {"a": 20.0}], (
         "(uid, branch) keeps same-branch items apart"
     )
+    assert len({c.folder() for c in body.contexts}) == 3, "and their run folders"
 
 
 @pytest.mark.parametrize("nested", [False, True])  # same cache, but lookup is !=
@@ -139,6 +146,16 @@ def test_scatter_branch_caching(tmp_path: Path, nested: bool) -> None:
     body_uid = "coeff=10,type=Mult-98baeffc"
     assert (tmp_path / scat_uid / body_uid / "cache").is_dir()
 
+    body = conftest.Add(fail_on="all", infra=infra)
+    scatter = ScatterDict(body=body, infra=infra)
+    step = base.Chain(steps=[scatter]) if nested else scatter
+    with pytest.raises(ValueError, match="Triggered"):
+        step.run(item)
+    step.lookup(item).clear_cache()
+    with pytest.raises(ValueError, match="Triggered"):
+        step.run(item)
+    assert body.calls == [1.0, 1.0]
+
 
 def test_scatter_pickle_scales_linearly() -> None:
     """Chunk pickle must not carry the full _Parts payload."""
@@ -146,7 +163,8 @@ def test_scatter_pickle_scales_linearly() -> None:
     def chunk_size(n: int) -> int:
         source = {str(i): {str(i): float(i)} for i in range(n)}
         scat = ScatterDict(body=conftest.Mult(coeff=2.0))
-        carrier = scat._run_items(items.StepItems(source=source, uids=list(source)))
+        batch = items.StepItems(source=source, uids=list(source))
+        carrier = scat._run_items(base.Runner(), batch)
         return len(pickle.dumps(carrier.select(carrier.uids[:10])))
 
     ratio = chunk_size(10_000) / chunk_size(100)
@@ -166,14 +184,29 @@ def test_process_backend_scatters_branches(tmp_path: Path, cached_upstream: bool
         assert ScatterDict(body=body).run({"a": 1.0, "b": 2.0}) == {"a": 2.0, "b": 4.0}
 
 
-def test_branch_excludes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("upstream", [False, True])  # limit on this or upstream Scatter
+def test_branch_excludes(tmp_path: Path, upstream: bool) -> None:
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
     body = conftest.Mult(coeff=2.0, infra=infra)
     item = {"a": 1.0, "b": 2.0, "c": 3.0}
-    assert ScatterDict(body=body, infra=infra).run(item) == {"a": 2.0, "b": 4.0, "c": 6.0}
+
+    def make(limit: int, exclude_upstream: bool = True) -> base.Step:
+        if not upstream:
+            return ScatterDict(body=body, limit=limit, infra=infra)
+        select = ScatterDict(body=conftest.Mult(coeff=1.0), limit=limit)
+        after = ScatterDict(body=body, exclude_upstream=exclude_upstream, infra=infra)
+        return base.Chain(steps=[select, after])
+
+    assert make(0).run(item) == {"a": 2.0, "b": 4.0, "c": 6.0}
     assert len(body.calls) == 3
-    assert ScatterDict(body=body, limit=2, infra=infra).run(item) == {"a": 2.0, "b": 4.0}
+    assert make(2).run(item) == {"a": 2.0, "b": 4.0}
     assert len(body.calls) == 3, "limit excluded from branch key -> subset reuses cache"
+    make(2).lookup(item).clear_cache()
+    make(2).run(item)
+    assert len(body.calls) == 5, "lookup clears the branch caches run wrote"
+    if upstream:
+        make(2, exclude_upstream=False).run(item)
+        assert len(body.calls) == 7, "upstream limit keys the branches unless excluded"
     shared = conftest.Mult(coeff=10.0, infra=infra)
     scat = ScatterDict(body=shared, exclude_input=True, infra=infra)
     out = list(scat.run_many([{"a": 1.0, "b": 2.0}, {"b": 2.0, "c": 3.0}]))

@@ -44,11 +44,8 @@ This works because:
 - **Discriminator key resolves correctly**: `NeuralStep.__dict__` explicitly
   sets `_exca_discriminator_key = "name"`, which the MRO finds before
   `DiscriminatedModel`'s default `"type"`.
-- **isinstance(x, Chain) works**: all custom chains are Chain subclasses, so
-  the existing isinstance checks in `_resolve_all`, `_set_mode_recursive`,
-  `_init`, and `_run` match without changes.
-- **Base order matters**: `Chain` must come before the custom Step so chain
-  methods (`_run`, `_step_sequence`, `with_input`, etc.) take MRO priority.
+- **isinstance(x, Chain) works**: all custom chains are Chain subclasses, so they share Chain execution and identity logic.
+- **Base order matters**: `Chain` must come before the custom Step so chain methods (`_run_items`, `_step_sequence`, etc.) take MRO priority.
 
 Trade-off: diamond inheritance requires `# type: ignore` on the `steps` field
 (narrowing violates Liskov substitution in mypy's view). This is acceptable

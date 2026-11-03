@@ -180,7 +180,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         cache_folder = self.uid_folder()
         if cache_folder is None:
             return None
-        return inflight.InflightRegistry(cache_folder, permissions=self.permissions)
+        return inflight.InflightRegistry(cache_folder)
 
     # pylint: disable=unused-argument
     def apply(
@@ -207,17 +207,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             fields that must be removed from the uid of the cache (in addition to
             the ones already removed from the class uid)
         cache_type: str
-            name of the cache class to use (inferred by default)
-            this can for instance be used to enforce eg a memmap instead of loading arrays
-            The available options include:
-            - :code:`NumpyArray`:  stores numpy arrays as npy files (default for np.ndarray)
-            - :code:`NumpyMemmapArray`: similar to NumpyArray but reloads arrays as memmaps
-            - :code:`MemmapArrayFile`: stores multiple np.ndarray into a unique memmap file
-              (strongly advised in case of many arrays)
-            - :code:`PandasDataFrame`: stores pandas dataframes as csv (default for dataframes)
-            - :code:`ParquetPandasDataFrame`: stores pandas dataframes as parquet files
-            - :code:`TorchTensor`: stores torch.Tensor as .pt file (default for tensors)
-            - :code:`Pickle`: stores object as pickle file (fallback default)
+            serialization handler passed to :class:`CacheDict`
 
         Usage
         -----
@@ -417,7 +407,6 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             np.random.shuffle(missing)
             reg = self._inflight_registry()
             with inflight.inflight_session(reg, [k for k, _ in missing]) as claim:
-                claim.record_worker_info()
                 missing = self._recheck_after_wait(missing, claim)
                 if pool is None and missing:
                     msg = "Computing %s missing items"

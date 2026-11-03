@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import threading
+import time
 import typing as tp
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +29,19 @@ from .dumpcontext import DumpContext
 X = tp.TypeVar("X")
 
 logger = logging.getLogger(__name__)
-METADATA_TAG = "metadata="
+LAST_USE_NAME = ".exca-last-use"
+
+
+def _record_use(folder: Path) -> None:
+    # fixed width: pwrite at 0 refreshes in place, never truncating
+    try:
+        fd = os.open(folder / LAST_USE_NAME, os.O_WRONLY | os.O_CREAT, 0o666)
+        try:
+            os.pwrite(fd, f"{time.time_ns():020d}\n".encode(), 0)
+        finally:
+            os.close(fd)
+    except OSError:
+        logger.debug("Failed to record use of %s", folder, exc_info=True)
 
 
 @dataclasses.dataclass
@@ -44,7 +57,7 @@ class DumpInfo:
         default=(), repr=False, compare=False
     )
 
-    def delete_info(self, *, ignore_errors: bool = False) -> None:
+    def delete_info(self, ctx: DumpContext, *, ignore_errors: bool = False) -> None:
         """Blank this entry so ``JsonlReader`` treats it as deleted.
 
         When *ignore_errors* is True, silently ignores missing/locked files."""
@@ -52,12 +65,12 @@ class DumpInfo:
         if start == end:
             return
         try:
-            with self.jsonl.open("rb+") as f:
-                f.seek(start)
-                f.write(b" ")  # atomic mark — survives partial bulk write
-                f.flush()
-                if end - start > 2:
-                    f.write(b" " * (end - start - 2))  # blank out
+            f = ctx.index_file(self.jsonl)
+            f.seek(start)
+            f.write(b" ")  # atomic mark — survives partial bulk write
+            f.flush()
+            if end - start > 2:
+                f.write(b" " * (end - start - 2))  # blank out
         except (FileNotFoundError, OSError):
             if not ignore_errors:
                 raise
@@ -73,27 +86,18 @@ class CacheDict(tp.Generic[X]):
     keep_in_ram: bool
         if True, adds a cache in RAM of the data once loaded (similar to LRU cache)
     cache_type: str or None
-        type of cache dumper to use (see dumperloader.py file to see existing
-        options, this include:
+        name of the serialization handler to use. Available options include:
           - :code:`"NumpyArray"`: one .npy file for each array, loaded in ram
-          - :code:`"NumpyMemmapArray"`: one .npy file for each array, loaded as a memmap
-          - :code:`"MemmapArrayFile"`: one bytes file per worker, loaded as a memmap, and keeping
-            an internal cache of the open memmap file (:code:`EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE` env
-            variable can be set to reset the cache at a given number of open files, defaults
-            to 100 000)
-          - :code:`"TorchTensor"`: one .pt file per tensor
-          - :code:`"PandasDataframe"`: one .csv file per pandas dataframe
-          - :code:`"ParquetPandasDataframe"`: one .parquet file per pandas dataframe (faster to dump and read)
-          - :code:`"DataDict"`: a dict for which (first-level) fields are dumped using the default
-            dumper. This is particularly useful to store dict of arrays which would be then loaded
-            as dict of memmaps.
-        If `None`, the type will be deduced automatically (Json for JSON-serializable values,
-        or a type-specific handler for numpy arrays, tensors, etc.).
+          - :code:`"MemmapArray"`: multiple arrays per worker file, loaded as
+            memmaps. :code:`EXCA_MEMMAP_ARRAY_FILE_MAX_CACHE` limits cached files.
+          - :code:`"TorchTensor"`: tensors stored through the memmap array format
+          - :code:`"PandasDataFrame"`: one .csv file per pandas dataframe
+          - :code:`"ParquetPandasDataFrame"`: one .parquet file per dataframe
+          - :code:`"Auto"`: nested values dispatched to type-specific handlers
+          - :code:`"Pickle"`: one pickle file per value
+        If `None`, the type is deduced automatically, with `Json` used for
+        JSON-compatible values.
         Loading is handled using the cache_type specified in info files.
-    permissions: optional int
-        permissions for generated files
-        use os.chmod / path.chmod compatible numbers, or None to deactivate
-        eg: 0o777 for all rights to all users
 
     Usage
     -----
@@ -124,10 +128,8 @@ class CacheDict(tp.Generic[X]):
         folder: Path | str | None,
         keep_in_ram: bool = False,
         cache_type: None | str = None,
-        permissions: int | None = 0o777,
     ) -> None:
         self.folder = None if folder is None else Path(folder)
-        self.permissions = permissions
         self.cache_type = cache_type
         self._keep_in_ram = keep_in_ram
         if self.folder is None and not keep_in_ram:
@@ -138,12 +140,12 @@ class CacheDict(tp.Generic[X]):
         # json info file reading
         self._folder_modified = -1.0
         self._jsonl_readers: dict[str, JsonlReader] = {}
-        self._jsonl_reading_allowance = float("inf")
         # DumpContext for this folder (load/delete; writes use per-thread _write_ctx)
         self._dumper: DumpContext | None = None
+        self._recorded_jsonls: set[Path] = set()  # one per writer, not per key
         if self.folder is not None:
-            self._dumper = DumpContext(self.folder, permissions=self.permissions)
-        self._local = threading.local()  # per-thread write context, see _write_ctx
+            self._dumper = DumpContext(self.folder)
+        self._local = threading.local()  # per-thread write context and freeze
 
     def __repr__(self) -> str:
         name = self.__class__.__name__
@@ -155,7 +157,7 @@ class CacheDict(tp.Generic[X]):
     def __reduce__(self) -> tp.Any:
         return (
             self.__class__,
-            (self.folder, self._keep_in_ram, self.cache_type, self.permissions),
+            (self.folder, self._keep_in_ram, self.cache_type),
         )
 
     def clear(self) -> None:
@@ -163,6 +165,7 @@ class CacheDict(tp.Generic[X]):
         self._key_info.clear()
         self._jsonl_readers.clear()
         self._folder_modified = -1.0
+        self._recorded_jsonls.clear()
         if self.folder is None or not self.folder.exists():
             return
         # let's remove content but not the folder to keep same permissions
@@ -206,7 +209,8 @@ class CacheDict(tp.Generic[X]):
         if self.folder is None or not self.folder.exists():
             return
         readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
-        if not force and self._jsonl_reading_allowance <= readings:
+        allowance = getattr(self._local, "reading_allowance", float("inf"))
+        if not force and allowance <= readings:
             return  # bypass reloading info files
         modified = self.folder.lstat().st_mtime
         nothing_new = self._folder_modified == modified
@@ -240,7 +244,7 @@ class CacheDict(tp.Generic[X]):
         referenced = {info.jsonl.name for info in self._key_info.values()}
         # use pop to be robust to concurrent del
         for name, reader in list(self._jsonl_readers.items()):
-            if name in referenced or not reader._meta:
+            if name in referenced:
                 continue
             if not reader._fp.exists():
                 self._jsonl_readers.pop(name, None)
@@ -250,8 +254,6 @@ class CacheDict(tp.Generic[X]):
             try:
                 with reader._fp.open("rb") as f:
                     line = f.readline()
-                    if line.startswith(METADATA_TAG.encode()):
-                        line = f.readline()  # skip metadata header (old format)
                     if not line.startswith(b" "):
                         continue
             except FileNotFoundError:
@@ -289,6 +291,11 @@ class CacheDict(tp.Generic[X]):
         if key not in self._key_info:
             _ = self.keys()  # reload keys
         dinfo = self._key_info[key]
+        if dinfo.jsonl not in self._recorded_jsonls:  # index + payloads: one batch
+            if not self._recorded_jsonls:  # record is per folder, stamps per index
+                _record_use(dinfo.jsonl.parent)
+            self._recorded_jsonls.add(dinfo.jsonl)
+            utils.best_effort_utime(dinfo.jsonl, keep_mtime=True)
         loaded = self._dumper.load(dinfo.content)
         if self._keep_in_ram:
             self._ram_data[key] = loaded
@@ -310,7 +317,7 @@ class CacheDict(tp.Generic[X]):
         if self._write_ctx is not None:
             raise RuntimeError("Cannot re-open an already open writer")
         if self.folder is not None:
-            self._write_ctx = DumpContext(self.folder, permissions=self.permissions)
+            self._write_ctx = DumpContext(self.folder)
         self._local.deleted_in_scope = False
         try:
             if self._write_ctx is not None:
@@ -329,8 +336,7 @@ class CacheDict(tp.Generic[X]):
                         logger.warning("Failed to sweep %s: %s", self.folder, e)
 
     @contextlib.contextmanager
-    def writer(self) -> tp.Iterator["CacheDict[X]"]:
-        """Deprecated: use write() instead."""
+    def writer(self) -> tp.Iterator["CacheDict[X]"]:  # deprecated
         warnings.warn(
             "writer() is deprecated, use write() instead",
             DeprecationWarning,
@@ -382,7 +388,7 @@ class CacheDict(tp.Generic[X]):
         self._ram_data.pop(key, None)
         dinfo = self._key_info.pop(key)
         for info in (dinfo, *dinfo._duplicates):
-            info.delete_info(ignore_errors=True)
+            info.delete_info(self._write_ctx, ignore_errors=True)
             self._dumper.delete(info.content)
 
     def __contains__(self, key: str) -> bool:
@@ -403,18 +409,17 @@ class CacheDict(tp.Generic[X]):
         items, which could trigger thousands of file rereads
         """
         readings = max((r.readings for r in self._jsonl_readers.values()), default=0)
-        self._jsonl_reading_allowance = readings + 1
+        self._local.reading_allowance = readings + 1
         try:
             yield
         finally:
-            self._jsonl_reading_allowance = float("inf")
+            self._local.reading_allowance = float("inf")
 
 
 class JsonlReader:
     def __init__(self, filepath: str | Path) -> None:
         self._fp = Path(filepath)
         self._last = 0
-        self._meta: dict[str, tp.Any] = {}
         self.readings = 0
         # (inode, mtime) at last read — drift triggers a full re-read.
         # mtime catches inode-reuse rewrites (FS recycles inodes after
@@ -425,7 +430,6 @@ class JsonlReader:
     def read(self) -> dict[str, DumpInfo]:
         out: dict[str, DumpInfo] = {}
         self.readings += 1
-        meta_tag = METADATA_TAG.encode("utf8")
         last = 0
         fail = b""
         try:
@@ -436,28 +440,12 @@ class JsonlReader:
         # Size shrink is a backstop for truncate when mtime resolution is coarse.
         if self._stamp != stamp or st.st_size < self._last:
             self._last = 0
-            self._meta = {}
         self._stamp = stamp
         try:
             f = self._fp.open("rb")
         except FileNotFoundError:
             return out
         with f:
-            if not self._meta:
-                first = f.readline()
-                if not first:
-                    return out  # empty file
-                if first.startswith(meta_tag[: len(first)]):
-                    # Old format: metadata header
-                    try:
-                        self._meta = orjson.loads(first[len(meta_tag) :])
-                    except (orjson.JSONDecodeError, ValueError):
-                        return out  # metadata line being written, retry later
-                    last = len(first)
-                else:
-                    # New format: no metadata header, rewind to parse first line as data
-                    self._meta = {"_new_format": True}  # truthy sentinel
-                    f.seek(0)
             if self._last > last:
                 msg = "Forwarding to byte %s in info file %s"
                 logger.debug(msg, self._last, self._fp.name)
@@ -479,8 +467,6 @@ class JsonlReader:
                     continue
                 last += count
                 key = info.pop("#key")
-                if "#type" not in info:
-                    info["#type"] = self._meta.get("cache_type", "Pickle")
                 dinfo = DumpInfo(
                     jsonl=self._fp,
                     byte_range=brange,

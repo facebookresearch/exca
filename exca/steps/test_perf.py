@@ -33,7 +33,7 @@ def _make_array(item: int, shape: tuple[int, ...]) -> np.ndarray:
 
 
 class MakeArray(base.Step):
-    CACHE_TYPE: tp.ClassVar[str | None] = "MemmapArrayFile"
+    CACHE_TYPE: tp.ClassVar[str | None] = "MemmapArray"
 
     shape: tuple[int, ...] = (32, 32)
 
@@ -42,7 +42,7 @@ class MakeArray(base.Step):
 
 
 class ArrayOp(base.Step):
-    CACHE_TYPE: tp.ClassVar[str | None] = "MemmapArrayFile"
+    CACHE_TYPE: tp.ClassVar[str | None] = "MemmapArray"
 
     add: float = 0
     scale: float = 1
@@ -60,7 +60,7 @@ class MapArray(pydantic.BaseModel):
     @infra.apply(
         item_uid=str,
         item_uid_max_length=None,
-        cache_type="MemmapArrayFile",
+        cache_type="MemmapArray",
     )
     def compute(self, values: tp.Sequence[int]) -> tp.Iterator[np.ndarray]:
         for value in values:

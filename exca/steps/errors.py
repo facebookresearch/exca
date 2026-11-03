@@ -109,7 +109,12 @@ class ErrorRegistry(registry.AdvisoryRegistry):
             return
 
         def _do(conn: sqlite3.Connection) -> None:
-            registry.bulk_delete(conn, "errors", "item_uid", item_uids)
+            # one transaction: single fsync (large recompute sets / NFS)
+            conn.execute("BEGIN")
+            conn.executemany(
+                "DELETE FROM errors WHERE item_uid = ?", [(uid,) for uid in item_uids]
+            )
+            conn.execute("COMMIT")
 
         self._safe_execute("clear", None, _do)
         logger.debug("Cleared %d error row(s)", len(item_uids))

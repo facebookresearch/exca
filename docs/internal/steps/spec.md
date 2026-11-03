@@ -37,7 +37,7 @@ A `Step` is the fundamental unit that:
 ### Backend (Discriminated Model)
 
 `Backend` is a discriminated model with `discriminator_key="backend"`.
-It receives `StepItems` batches from `Step._dispatch`, decides which
+It receives `StepItems` batches from `Runner.dispatch`, decides which
 item uids need work, and returns `StepItems` backed by CacheDict.
 
 - **Cached**: Inline execution + caching (base class for all)
@@ -49,7 +49,7 @@ item uids need work, and returns `StepItems` backed by CacheDict.
 All backends have:
 - `folder`: Path for cache storage (optional, can be propagated from Chain)
 - `mode`: Execution mode (cached/force/read-only/retry)
-- `keep_in_ram`: keep cached values in a per-Backend RAM dict
+- `keep_in_ram`: keep cached values in RAM, per step instance
 
 Cache serialization format comes from `Step.CACHE_TYPE` (class-level),
 not from the backend.
@@ -78,11 +78,11 @@ sequentially. It shares a cache entry with its last step (same
 │  │ (params) │  │  (discriminated)     │  │  -> output  │  │
 │  └──────────┘  └──────────────────────┘  └─────────────┘  │
 │                                                            │
-│  Identity: step_uid + uid computed by `identity` module    │
-│  from (aligned_steps, value) at call time.                 │
+│  Identity: step_uid + uid derived by `identity` module     │
+│  from (aligned_steps, value) when first addressed.         │
 │                                                            │
 │  lookup(value) → LookupHandle (cache introspection handle) │
-│  _dispatch: routes inline or through the configured Backend │
+│  Runner.dispatch: routes inline or through the Backend     │
 └────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────┐
@@ -90,7 +90,7 @@ sequentially. It shares a cache entry with its last step (same
 │                                                            │
 │  Backend (base)                                            │
 │  - folder, mode, keep_in_ram                               │
-│  - _run(step, batch) / _execute(...) / _clear_caches(...)   │
+│  - _run(runner, step, batch) / _submit                     │
 │        │                                                   │
 │   ┌────┴────┬────────────┬─────────────┐                   │
 │   ▼         ▼            ▼             ▼                   │
@@ -218,7 +218,7 @@ except ValueError:
     pass
 step.run(bad_input)               # re-raises from cache
 
-step.infra.mode = "retry"
+step = step.clone({"infra.mode": "retry"})  # run() froze step
 step.run(bad_input)               # clears error, recomputes
 ```
 
@@ -228,27 +228,19 @@ When `step.run(value)` is called:
 
 1. Resolve via `_resolve_step()` to a fixed point. If non-self,
    delegate to the resolved step.
-2. Eagerly materialize values and uids (a scalar `run(value)` is the
-   one-input case of `run_many`), then build the initial `StepItems`.
-3. `_dispatch(batch)` runs inline when no backend folder is configured;
-   otherwise it calls `Backend._run(step, batch)`.
+2. Eagerly materialize values and store a uid factory (a scalar `run(value)` is the one-input case of `run_many`), then build the initial `StepItems`. Fully inline execution only invokes the factory if a step needs uids (e.g. `Scatter`).
+3. `Runner().dispatch(step, batch)` runs inline when no backend folder is
+   configured; otherwise it calls `Backend._run(runner, step, batch)`.
 4. Backend handles cache modes, inflight coordination, and job
    submission. See `caching.md`.
 
-For chains: `Chain._walk_steps` resolves child steps and dispatches each
-one sequentially. `StepItems` carries the original item uid sequence plus
-the accumulated upstream identity so downstream cache hits can skip
-upstream execution.
-
-Uid-only or lazy item construction would let cache-only runs avoid
-rebuilding expensive inputs. That is a useful future optimization, but not
-required for MapInfra parity or current step semantics.
+For chains: `Chain._run_items` dispatches each child sequentially, then `runner.advance(child)` extends the `Runner` for the next one. `StepItems` carries the original values and uid factory through pending inline steps. Accessing uids, selecting items, or entering a backend converts them once to the addressed source-plus-uid representation. The `Runner` carries the accumulated upstream identity (`prefix`) and folded `mode`, so downstream cache hits can skip upstream execution.
 
 ### Safety Measures (from TaskInfra/MapInfra)
 
 - Config consistency checking (`identity.write_configs`)
-- Permissions on CacheDict (`permissions=0o777`)
-- Force/retry one-shot tracking per Backend lifetime
+- Shared cache access follows the process umask
+- Force/retry one-shot tracking per Step runtime and cache path
 - Job lifecycle status — `LookupHandle.status` returns `"success"` /
   `"error"` / `"running"` / `None`
 - Concurrent submission detection — `JobRegistry` / `jobs.db`

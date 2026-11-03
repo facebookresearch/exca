@@ -2,18 +2,27 @@
 
 ## [Unreleased]
 
-[breaking]
+- `steps`: added `Step._run_context()` for execution metadata and per-item working folders. [#345]
+- `steps`: `LocalProcess`, `Slurm` and `Auto` accept `workdir` to run jobs from a copied code snapshot. [#350]
+- `steps`: added experimental `Fit`/`Step.fit_many` to cache one cohort-wide artifact for per-item transforms; named cohorts can be recovered from config. [#TODO]
 
+## 0.6.0 - 26-10-07
+
+### Breaking
+
+- Cache files follow the process umask instead of being forced to `0o777`; `permissions` options were removed. For shared caches, call `exca.utils.setup_shared_folder(folder)` once on the cache root; without default ACL support, also set `umask 002`. [#324, #332]
 - `CacheDict`: deletions require a `write()` context (like writes). [#326]
+- Removed deprecated compatibility paths: `DumperLoader`, legacy handler classes, legacy `Auto` (`optimized`/`pickled`), `torch.save` tensor entries, and implicit `Auto` pickle fallback (use `AutoPickle`). [#331]
 - `DumpContext.shared_file`: content suffixes must start with `.`. [#326]
 - `steps`: `Parallel` cannot be a `Chain` step; call it directly. [#328, #329]
+- `steps`: submitit and pool backends return from `run_many` once jobs are submitted; results and job errors come when iterating. [#340, #341]
 
-[other]
+### Other
 
 - `DiscriminatedModel`: optimized look-up. [#313]
 - `steps`: fixed nested infra claim deadlock. [#323]
-- `steps`: added experimental `Fit`/`Step.fit_many` to cache one cohort-wide artifact for per-item transforms; named cohorts can be recovered from config. [#TODO]
-
+- `steps`: all backends now claim items in the inflight registry, deduplicating cached dispatches made inside workers. [#330]
+- `steps`: defer item UID computation until cache/backend addressing. [#338]
 
 ## 0.5.29 - 26-07-28
 

@@ -194,11 +194,3 @@ def test_graceful_degradation(
     reg2._plant(["recovered"])
     assert reg2.get(["recovered"]) == {"recovered"}
     reg2.close()
-
-
-def test_permissions_applied(tmp_path: Path) -> None:
-    reg = errors.ErrorRegistry(tmp_path, permissions=0o600)
-    reg._plant(["a"])
-    mode = stat.S_IMODE((tmp_path / "errors.db").stat().st_mode)
-    assert mode == 0o600
-    reg.close()
