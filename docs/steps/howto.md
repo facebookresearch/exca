@@ -220,6 +220,20 @@ chain[1].lookup(value).clear_cache()          # one specific sub-step + input
 
 `Step.clear_cache()` (no `lookup()`) still works but is deprecated.
 
+## Run from a code snapshot
+
+`LocalProcess`, `Slurm` and `Auto` accept a {class}`exca.workdir.WorkDir`, so jobs run from a copy of your code while you keep editing it:
+
+```yaml
+infra:
+  backend: LocalProcess
+  folder: /cache/project
+  workdir:
+    copied: [my_package]
+```
+
+The copy is made at the first submission in `<step_folder>/code/<date>-<random>/` and reused by later submissions; a new `WorkDir` takes a fresh copy. Jobs run from the copy, so relative paths in your own fields and inputs resolve there.
+
 ## Inspect a running job
 
 `LookupHandle.job()` returns the live submitit job for an in-flight

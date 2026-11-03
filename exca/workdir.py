@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
+import datetime
 import fnmatch
 import importlib
 import logging
@@ -13,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import typing as tp
+import uuid
 from pathlib import Path
 
 import pydantic
@@ -132,13 +134,21 @@ class WorkDir(pydantic.BaseModel):
                 self._commits[name] = githash
 
     @contextlib.contextmanager
-    def activate(self) -> tp.Iterator[None]:
+    def activate(self, *, base_folder: Path | None = None) -> tp.Iterator[None]:
+        """Activate the working directory. If ``folder`` is unset, it is created
+        once under ``base_folder/code/`` and kept for later activations."""
         if self._active:
             yield
             return
-        if self.folder is None:
-            raise RuntimeError("folder field must be filled before activation")
-        folder = Path(self.folder)
+        folder = self.folder
+        if folder is None:
+            if base_folder is None:
+                raise RuntimeError("folder field must be filled before activation")
+            tag = f"{datetime.datetime.now():%Y-%m-%d}-{uuid.uuid4().hex[:6]}"
+            folder = Path(base_folder) / "code" / tag
+            folder.parent.mkdir(parents=True, exist_ok=True)
+            object.__setattr__(self, "folder", folder)  # bypasses freezing checks
+        folder = Path(folder)
         folder.mkdir(exist_ok=True)
         ignore = Ignore(includes=self.includes, excludes=self.excludes)
         for name, path in zip(self.copied, self._paths):

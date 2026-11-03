@@ -12,8 +12,6 @@ import os
 import pickle
 import sys
 import typing as tp
-import uuid
-from datetime import datetime
 from pathlib import Path
 
 import pydantic
@@ -211,20 +209,13 @@ class SubmititMixin(pydantic.BaseModel):
         with contextlib.ExitStack() as estack:
             estack.enter_context(submitit.helpers.clean_env())
             if self.workdir is not None:
-                if self.workdir.folder is None:
-                    if self.folder is None:
-                        raise ValueError("Workdir requires a folder")
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    tag = f"{today}-{uuid.uuid4().hex[:6]}"
-                    uid_folder = self.uid_folder()
-                    assert uid_folder is not None  # for typing
-                    parts = uid_folder.relative_to(self.folder).parts
-                    # default to first sub-directory
-                    folder = Path(self.folder) / parts[0] / "code" / tag
-                    folder.parent.mkdir(parents=True, exist_ok=True)
-                    # bypasses freezing checks:
-                    object.__setattr__(self.workdir, "folder", folder)
-                estack.enter_context(self.workdir.activate())
+                uid_folder = self.uid_folder()
+                if self.folder is None or uid_folder is None:
+                    raise ValueError("Workdir requires a folder")
+                # default to first sub-directory
+                parts = uid_folder.relative_to(self.folder).parts
+                base_folder = Path(self.folder) / parts[0]
+                estack.enter_context(self.workdir.activate(base_folder=base_folder))
             base_dump: tp.Any = None
             if self.conda_env is not None:
                 base_dump = submitit_utils.cloudpickle_dump
