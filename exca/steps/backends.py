@@ -552,19 +552,42 @@ def _shard_tasks(
     max_shards: int | None,
     min_items_per_shard: int,
 ) -> list[list[WriteTask]]:
-    """Group the tasks' items into worker shards."""
+    """Group the tasks' items into worker shards.
+
+    A task whose fit is still pending is indivisible -- the fit needs every uid --
+    so it rides whole; several of them share a shard rather than overrun the budget.
+    Once the whole ones have taken every slot, the divisible items ride along with
+    them, so ``max_shards`` bounds the two kinds together.
+    """
+    shards: list[list[WriteTask]] = []
+    whole = [task for task in tasks if task.whole]
+    if whole:
+        tasks = [task for task in tasks if not task.whole]
+        n = len(whole) if max_shards is None else min(len(whole), max_shards)
+        shards = [[] for _ in range(n)]
+        for i, task in enumerate(whole):
+            shards[i % n].append(task)
+    spare = None if max_shards is None else max_shards - len(shards)
     labels = [i for i, task in enumerate(tasks) for _ in task.items.uids]
     cursors = [0] * len(tasks)
-    shards: list[list[WriteTask]] = []
-    for shard_labels in utils.to_chunks(
-        labels, max_chunks=max_shards, min_items_per_chunk=min_items_per_shard
+    for k, shard_labels in enumerate(
+        utils.to_chunks(
+            labels,
+            max_chunks=None if spare is None else (spare or len(shards)),
+            min_items_per_chunk=min_items_per_shard,
+        )
     ):
+        if whole and not shard_labels:
+            continue  # only the reserved slots make these; a fitless run keeps them
         shard: list[WriteTask] = []
         for i, count in collections.Counter(shard_labels).items():
             start = cursors[i]
             shard.append(tasks[i].select(tasks[i].items.uids[start : start + count]))
             cursors[i] = start + count
-        shards.append(shard)
+        if spare == 0:
+            shards[k % len(shards)].extend(shard)
+        else:
+            shards.append(shard)
     return shards
 
 

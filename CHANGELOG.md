@@ -4,7 +4,7 @@
 
 - `steps`: added `Step._run_context()` for execution metadata and per-item working folders. [#345]
 - `steps`: `LocalProcess`, `Slurm` and `Auto` accept `workdir` to run jobs from a copied code snapshot. [#350]
-- `steps`: added experimental `Fit`/`Step.fit_many` to cache one cohort-wide artifact for per-item transforms; named cohorts can be recovered from config. [#TODO]
+- `steps`: added experimental `Fit`/`Step.fit_many` to cache one cohort-wide artifact for per-item transforms; named cohorts can be recovered from config. A pending fit makes its batch indivisible, so a `Parallel` sweep or a sharding container runs each fitting variant whole in one job. [#TODO]
 
 ## 0.6.0 - 26-10-07
 

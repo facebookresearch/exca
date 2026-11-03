@@ -69,6 +69,40 @@ class _MegabyteFit(steps.Fit):
         return value + float(self.fitted.sum())
 
 
+class _PidFit(steps.Fit):
+    """Fits the pid that fitted it, so an item's output names that process."""
+
+    def _fit(self, values: tp.Iterable[float]) -> int:
+        return os.getpid()
+
+    def _run(self, value: float) -> int:
+        return self.fitted
+
+
+class _ReUid(steps.Step):
+    """Re-uids items without changing its own identity, so two of these differ in
+    what their cohort contains but not in what is upstream of it."""
+
+    prefix: str
+
+    @classmethod
+    def _exclude_from_cls_uid(cls) -> list[str]:
+        return super()._exclude_from_cls_uid() + ["prefix"]
+
+    def item_uid(self, value: tp.Any) -> str:
+        return f"{self.prefix}-{value}"
+
+    def _run(self, value: float) -> float:
+        return value
+
+
+class _NamedItems(_SumOffset):
+    """Uids its own items, so its cohort must fingerprint those uids."""
+
+    def item_uid(self, value: tp.Any) -> str:
+        return f"item-{value:g}"
+
+
 class _ResolvedOffset(steps.Step):
     def _resolve_step(self) -> steps.Step:
         return _SumOffset(infra=self.infra)
@@ -86,6 +120,20 @@ def submitted_task_sizes(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
     monkeypatch.setattr(backends, "_shard_tasks", patched)
     return sizes
+
+
+@pytest.fixture
+def submitted_task_counts(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    counts: list[int] = []
+    original = backends._shard_tasks
+
+    def patched(tasks: tp.Any, **kwargs: tp.Any) -> tp.Any:
+        shards = original(tasks, **kwargs)
+        counts.append(len(shards))
+        return shards
+
+    monkeypatch.setattr(backends, "_shard_tasks", patched)
+    return counts
 
 
 def test_fit_cohort_then_novel_items(tmp_path: Path) -> None:
@@ -332,6 +380,21 @@ def test_a_recovered_name_still_checks_the_items_it_is_handed(tmp_path: Path) ->
         list(scaled.fit_many(cohort="train"))
     assert list(scaled.fit_many(others, cohort="train")) == [14.0, 16.0], (
         "another config owns another artifact, so the label is free to reuse"
+    )
+
+
+def test_a_cohort_record_lost_under_its_artifact_is_refused(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
+    fitted = _SumOffset(infra=infra, cohort="train")
+    assert list(fitted.fit_many([1.0, 3.0])) == [5.0, 7.0]
+    (record,) = tmp_path.rglob("cohorts/*")
+    record.unlink()
+
+    handed_others = _SumOffset(infra=infra, cohort="train")
+    with pytest.raises(RuntimeError, match="no record of the items it was fitted on"):
+        list(handed_others.fit_many([10.0, 20.0]))
+    assert not list(tmp_path.rglob("cohorts/*")), (
+        "an artifact of unknown items must be refused, not rebound to these"
     )
 
 
@@ -591,20 +654,21 @@ def test_a_fitted_cohort_narrows_what_its_downstream_submits(
     )
 
 
-@pytest.mark.parametrize("backend", ["ThreadPool", "SubmititDebug"])
-def test_a_sharding_container_is_rejected_before_it_runs(
-    tmp_path: Path, backend: str
+@pytest.mark.parametrize("backend", ["ThreadPool", "ProcessPool", "SubmititDebug"])
+def test_a_sharding_container_keeps_the_cohort_in_one_task(
+    tmp_path: Path, backend: str, submitted_task_counts: list[int]
 ) -> None:
     infra: tp.Any = {"folder": tmp_path, "backend": backend, "max_jobs": 2}
     chain = steps.Chain(steps=[_SumOffset()], infra=infra)
-    with pytest.raises(ValueError, match="shard of the cohort"):
-        list(chain.fit_many([1.0, 2.0, 3.0, 4.0]))
-    assert not list(tmp_path.iterdir()), "a rejected fit must not create folders"
+    assert list(chain.fit_many([1.0, 2.0, 3.0, 4.0])) == [11.0, 12.0, 13.0, 14.0]
+    assert submitted_task_counts == [1], (
+        f"a pending fit must not be sharded, got {submitted_task_counts} tasks"
+    )
 
     fitless = steps.Chain(steps=[conftest.Mult(coeff=2)], infra=infra)
-    assert list(fitless.fit_many([1.0, 2.0])) == [2.0, 4.0], (
-        "the rejection must not fire on a pipeline with nothing to fit"
-    )
+    submitted_task_counts.clear()
+    assert list(fitless.fit_many([1.0, 2.0])) == [2.0, 4.0]
+    assert submitted_task_counts == [2], "nothing pending, so the ordinary split"
 
 
 class _ScatterValues(Scatter):
@@ -673,7 +737,7 @@ def test_fit_clone_for_another_upstream(tmp_path: Path) -> None:
     fit = _SumOffset(infra=infra)
     cohort = [1.0, 2.0]
     first = fit.fit_many(cohort)
-    with pytest.raises(RuntimeError, match="already holds artifact"):
+    with pytest.raises(RuntimeError, match="upstream or its own config has changed"):
         steps.Chain(steps=[conftest.Mult(coeff=10), fit]).fit_many(cohort)
     cloned = fit.clone()
     second = steps.Chain(steps=[conftest.Mult(coeff=10), cloned]).fit_many(cohort)
@@ -786,42 +850,275 @@ def test_clearing_a_fit_frees_its_artifact_and_its_name(tmp_path: Path) -> None:
     )
 
 
-_FIT_IN_A_SWEEP = "Parallel cannot contain Fit"
+def test_a_bound_name_is_refused_before_another_cohort_overwrites_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Interrupted between record and artifact, the name still serves its own items.
 
+    ``_Artifact._run`` records the fingerprint before the artifact is cached, so a
+    crash in between leaves the name bound to items that have no artifact yet. The
+    mismatch must be caught before the next cohort writes one under that name.
+    """
+    original = exca.cachedict.CacheDict.__setitem__
+    crashed = False
 
-def test_parallel_refuses_a_fit_variant(tmp_path: Path) -> None:
-    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
-    variants = [_SumOffset(infra=infra, scale=s) for s in (1, 2)]
-    with pytest.raises(NotImplementedError, match=_FIT_IN_A_SWEEP):
-        steps.helpers.Parallel(steps=variants, infra=infra)
-    assert not list(tmp_path.iterdir()), "a refused sweep must write nothing"
-    assert [v._cohort_resolution for v in variants] == [None, None], (
-        "a refused sweep must stamp no variant"
+    def crash_after_record(
+        cache: exca.cachedict.CacheDict[tp.Any], key: str, value: tp.Any
+    ) -> None:
+        nonlocal crashed
+        folder = "" if cache.folder is None else str(cache.folder)
+        if not crashed and key == "train" and "type=_Artifact" in folder:
+            crashed = True
+            raise KeyboardInterrupt("crash after the cohort record")
+        original(cache, key, value)
+
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    with monkeypatch.context() as patch:
+        patch.setattr(exca.cachedict.CacheDict, "__setitem__", crash_after_record)
+        with pytest.raises(KeyboardInterrupt, match="crash after"):
+            _SumOffset(infra=infra).fit_many([1.0, 3.0], cohort="train")
+    assert len(list(tmp_path.rglob("cohorts/*"))) == 1
+    assert not list(tmp_path.rglob("type=_Artifact*/cache/*")), "no artifact yet"
+
+    with pytest.raises(RuntimeError, match="was fitted on other items"):
+        _SumOffset(infra=infra).fit_many([10.0, 20.0], cohort="train")
+    assert not list(tmp_path.rglob("type=_Artifact*/cache/*")), (
+        "the refused cohort must not have written its artifact under that name"
     )
-    assert list(variants[0].fit_many([5.0])) == [10.0], (
-        "the remedy the message names must work, on any items"
+    assert list(_SumOffset(infra=infra).fit_many([1.0, 3.0], cohort="train")) == [
+        5.0,
+        7.0,
+    ], "and the items the name is bound to still complete it"
+
+
+def test_the_named_cohort_remedy_frees_the_name(tmp_path: Path) -> None:
+    """The command the mismatch error prints must actually clear the binding."""
+    infra: tp.Any = {"backend": "Cached", "folder": tmp_path}
+    assert list(_SumOffset(infra=infra).fit_many([1.0, 3.0], cohort="train")) == [
+        5.0,
+        7.0,
+    ]
+    rejected = _SumOffset(infra=infra)
+    with pytest.raises(RuntimeError, match="was fitted on other items") as error:
+        rejected.fit_many([10.0, 20.0], cohort="train")
+    assert "clone({'cohort': 'train'}).lookup(item)" in str(error.value)
+    assert list(tmp_path.rglob("cohorts/*")), "the name is bound before the remedy"
+
+    rejected.clone({"cohort": "train"}).lookup(10.0).clear_cache(recursive=True)
+    assert not list(tmp_path.rglob("cohorts/*")), "and free after it"
+    assert list(rejected.fit_many([10.0, 20.0], cohort="train")) == [40.0, 50.0], (
+        "so the retry the message promises goes through"
     )
 
 
-def test_parallel_refuses_a_fit_variant_when_nested(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "Cached", "folder": str(tmp_path)}
-    sweep = {
-        "type": "Parallel",
-        "infra": infra,
-        "steps": [{"type": "_SumOffset", "scale": s} for s in (1, 2)],
-    }
-    config = {"type": "Chain", "steps": [{"type": "Mult", "coeff": 2}, sweep]}
-    with pytest.raises(NotImplementedError, match=_FIT_IN_A_SWEEP):
-        steps.Step.model_validate(config)
-    assert not list(tmp_path.iterdir()), "a refused sweep must write nothing"
+def test_a_sweep_fits_each_variant_in_one_job(
+    tmp_path: Path, submitted_task_counts: list[int]
+) -> None:
+    solo, sweep_dir = tmp_path / "solo", tmp_path / "sweep"
+    cohort = [1.0, 2.0, 3.0]
+    cached: tp.Any = {"folder": solo, "backend": "Cached"}
+    for scale in (1, 2):
+        list(_SumOffset(infra=cached, scale=scale).fit_many(cohort))
+
+    pool: tp.Any = {"folder": sweep_dir, "backend": "LocalProcess", "max_jobs": 3}
+    sweep = steps.helpers.Parallel(
+        steps=[_SumOffset(scale=s) for s in (1, 2)], infra=pool
+    )
+    assert sweep.fit_many(cohort) == [None] * 3, "a sweep runs for effect"
+    assert submitted_task_counts == [2], (
+        f"one whole-cohort task per variant, got {submitted_task_counts}"
+    )
+    assert [[v.lookup(x).result() for x in cohort] for v in sweep.steps] == [
+        [7.0, 8.0, 9.0],
+        [13.0, 14.0, 15.0],
+    ]
+    assert conftest.extract_cache_folders(sweep_dir) == conftest.extract_cache_folders(
+        solo
+    ), "a swept fit must cache exactly where fitting the variant alone does"
 
 
-def test_parallel_refuses_a_variant_that_resolves_to_a_fit(tmp_path: Path) -> None:
+def test_a_swept_variant_fingerprints_its_own_item_uids(tmp_path: Path) -> None:
+    solo_dir, sweep_dir = tmp_path / "solo", tmp_path / "sweep"
+    cohort = [1.0, 3.0]
+    solo = _NamedItems(infra={"folder": solo_dir, "backend": "Cached"})  # type: ignore[arg-type]
+    assert list(solo.fit_many(cohort)) == [5.0, 7.0]
+
+    inline: tp.Any = {"folder": sweep_dir, "backend": "Cached"}
+    sweep = steps.helpers.Parallel(steps=[_NamedItems()], infra=inline)
+    sweep.fit_many(cohort)
+    swept = tp.cast(_NamedItems, sweep.steps[0])
+    assert swept._cohort_resolution == solo._cohort_resolution, (
+        "a variant uids its own items, so the sweep must fingerprint those, not its own"
+    )
+    assert conftest.extract_cache_folders(sweep_dir) == conftest.extract_cache_folders(
+        solo_dir
+    ), "so the swept fit caches exactly where fitting the variant alone does"
+
+
+def test_a_sweep_fit_runs_in_its_worker(tmp_path: Path) -> None:
+    pool: tp.Any = {"folder": tmp_path, "backend": "LocalProcess", "max_jobs": 2}
+    sweep = steps.helpers.Parallel(steps=[_PidFit()], infra=pool)
+    sweep.fit_many([1.0, 2.0])
+    variant = tp.cast(_PidFit, sweep.steps[0])
+    assert variant._artifact is None, "the driver neither fits nor holds the artifact"
+    assert variant.lookup(1.0).result() != os.getpid(), (
+        "the whole variant, fit included, runs in the worker"
+    )
+    assert variant.run(3.0) == variant.lookup(1.0).result(), (
+        "and the driver reads that worker's artifact back to apply a novel item"
+    )
+
+
+def test_a_sweep_variant_may_be_a_chain(tmp_path: Path) -> None:
+    pool: tp.Any = {"folder": tmp_path, "backend": "LocalProcess", "max_jobs": 3}
+    inline: tp.Any = {"backend": "Cached"}
+    sweep = steps.helpers.Parallel(
+        steps=[
+            steps.Chain(
+                steps=[
+                    conftest.Mult(coeff=2),
+                    _SumOffset(scale=s, fit_infra=inline),
+                    conftest.Add(value=1),
+                ]
+            )
+            for s in (1, 2)
+        ],
+        infra=pool,
+    )
+    sweep.fit_many([1.0, 2.0, 3.0], cohort="train")
+    assert [[v.lookup(x).result() for x in (1.0, 2.0, 3.0)] for v in sweep.steps] == [
+        [15.0, 17.0, 19.0],
+        [27.0, 29.0, 31.0],
+    ], "the cohort is the prefix's output, and the suffix applies after"
+    assert [p.name for p in sorted(tmp_path.rglob("cohorts/*"))] == [
+        "train-61b3a8fa",
+        "train-61b3a8fa",
+    ], "the nested fit_infra inherits the sweep folder, so the name is recorded"
+
+
+def test_a_sweep_fits_a_variant_that_resolves_to_a_fit(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
     sweep = steps.helpers.Parallel(steps=[_ResolvedOffset()], infra=infra)
-    with pytest.raises(NotImplementedError, match=_FIT_IN_A_SWEEP):
-        sweep.run_many([1.0])
-    assert not list(tmp_path.iterdir()), "a refused sweep must write nothing"
+    sweep.fit_many([1.0, 3.0])
+    assert sweep.steps[0].lookup(1.0).result() == 5.0, (
+        "the declaration's cohort is resolved and fitted like a declared one"
+    )
+
+
+def test_a_sweep_restores_every_variant_when_one_plan_is_invalid(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
+    variants = [_SumOffset(scale=1), _SumOffset(scale=2, cohort="train")]
+    sweep = steps.helpers.Parallel(steps=variants, infra=infra)
+    kept = [tp.cast(_SumOffset, v) for v in sweep.steps]
+    with pytest.raises(ValueError, match="incompatible with 'other'"):
+        sweep.fit_many([1.0, 2.0], cohort="other")
+    assert [v._cohort_resolution for v in kept] == [None, None], (
+        "a plan that fails validation must stamp no variant"
+    )
+    assert not list(tmp_path.iterdir()), "and must write nothing"
+    assert sweep.fit_many([1.0, 2.0], cohort="train") == [None, None], (
+        "so the corrected call can be retried on the same sweep"
+    )
+
+
+@pytest.mark.parametrize(
+    ("fitting", "plain", "max_jobs", "expected"),
+    [
+        (3, 1, 2, [6, 2]),  # 3 cohorts into 2 slots, the plain one rides along
+        (1, 1, 1, [4]),  # no slot left at all: one job holds both
+        (7, 0, 1, [14]),  # every cohort packs rather than overrun
+        (3, 1, 5, [2, 2, 2, 2]),  # slots to spare: the plain one gets its own
+    ],
+)
+def test_fitting_variants_share_the_job_budget(
+    tmp_path: Path, fitting: int, plain: int, max_jobs: int, expected: list[int]
+) -> None:
+    """Indivisible variants pack into ``max_jobs``, and so do the divisible ones."""
+    sizes: list[list[int]] = []
+    original = backends._shard_tasks
+
+    def patched(tasks: tp.Any, **kwargs: tp.Any) -> tp.Any:
+        shards = original(tasks, **kwargs)
+        sizes.append([sum(len(t.items.uids) for t in shard) for shard in shards])
+        return shards
+
+    infra: tp.Any = {
+        "folder": tmp_path,
+        "backend": "SubmititDebug",
+        "max_jobs": max_jobs,
+        "min_items_per_job": 100,
+    }
+    variants: list[steps.Step] = [_SumOffset(scale=s) for s in range(1, fitting + 1)]
+    variants += [conftest.Mult(coeff=10 * (k + 1)) for k in range(plain)]
+    sweep = steps.helpers.Parallel(steps=variants, infra=infra)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(backends, "_shard_tasks", patched)
+        sweep.fit_many([1.0, 2.0])
+    assert sizes == [expected], f"got {sizes}"
+    assert len(sizes[0]) <= max_jobs, "a whole cohort takes a slot, it does not add one"
+
+
+def test_a_fitless_run_keeps_the_empty_tasks_it_always_made(tmp_path: Path) -> None:
+    """The indivisible path must not reshape a run that has no fit in it."""
+    sizes: list[list[int]] = []
+    original = backends._shard_tasks
+
+    def patched(tasks: tp.Any, **kwargs: tp.Any) -> tp.Any:
+        shards = original(tasks, **kwargs)
+        sizes.append([sum(len(t.items.uids) for t in shard) for shard in shards])
+        return shards
+
+    infra: tp.Any = {"folder": tmp_path, "backend": "ThreadPool", "max_jobs": 2}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(backends, "_shard_tasks", patched)
+        conftest.Mult(coeff=2, infra=infra).run_many([float(x) for x in range(8)])
+    assert sizes == [[2, 2, 2, 2, 0, 0]], (
+        f"8 items over 3*2 chunks, two of them empty, as on main; got {sizes}"
+    )
+
+
+def test_one_fit_object_in_two_places_is_refused(tmp_path: Path) -> None:
+    """A Fit holds one cohort, so two declaration paths cannot share the object."""
+    solo = []
+    for prefix in "ab":
+        folder: tp.Any = {"backend": "Cached", "folder": tmp_path / f"solo-{prefix}"}
+        chain = steps.Chain(steps=[_ReUid(prefix=prefix), _SumOffset()], infra=folder)
+        list(chain.fit_many([1.0, 3.0]))
+        solo.append(chain.lookup(1.0).paths.step_uid)
+    assert solo[0] != solo[1], "the two cohorts differ, and only in their item uids"
+
+    inline: tp.Any = {"backend": "Cached", "folder": tmp_path / "shared"}
+    shared = _SumOffset()
+    sweep = steps.helpers.Parallel(
+        # own infra, or _unify_infra clones the variants and unshares the fit
+        steps=[
+            steps.Chain(steps=[_ReUid(prefix=prefix), shared], infra=inline)
+            for prefix in "ab"
+        ],
+        infra=inline,
+    )
+    with pytest.raises(ValueError, match="is one object at .* give each its own"):
+        sweep.fit_many([1.0, 3.0])
+    assert shared._cohort_resolution is None, "and nothing is stamped"
+
+    cloned: tp.Any = {"backend": "Cached", "folder": tmp_path / "cloned"}
+    fixed = steps.helpers.Parallel(
+        steps=[
+            steps.Chain(steps=[_ReUid(prefix=prefix), shared.clone()]) for prefix in "ab"
+        ],
+        infra=cloned,
+    )
+    fixed.fit_many([1.0, 3.0])
+    assert [v.lookup(1.0).paths.step_uid for v in fixed.steps] == solo, (
+        "the clone() the message names gives each variant the cohort it has alone"
+    )
+
+
+def test_a_sweep_is_not_a_chain_step(tmp_path: Path) -> None:
+    infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
+    sweep = steps.helpers.Parallel(steps=[_SumOffset()], infra=infra)
+    with pytest.raises(TypeError, match="cannot be a Chain step"):
+        steps.Chain(steps=[sweep]).fit_many([1.0, 2.0])
 
 
 def test_a_fit_may_not_resolve_to_another_step() -> None:
@@ -832,7 +1129,16 @@ def test_a_fit_may_not_resolve_to_another_step() -> None:
                 return _SumOffset(infra=self.infra)
 
 
-def test_parallel_refusal_leaves_a_fitted_variant_usable(tmp_path: Path) -> None:
+def test_a_fit_that_applies_nothing_is_rejected() -> None:
+    class _FitOnly(steps.Fit):
+        def _fit(self, values: tp.Iterable[float]) -> float:
+            return sum(values)
+
+    with pytest.raises(TypeError, match="must override _run or _run_batch"):
+        _FitOnly()
+
+
+def test_a_sweep_recovers_named_cohorts_it_did_not_fit(tmp_path: Path) -> None:
     infra: tp.Any = {"folder": tmp_path, "backend": "Cached"}
     train, novel = [1.0, 3.0], [7.0, 9.0]
     variants = [_SumOffset(infra=infra, cohort="train", scale=s) for s in (1, 2)]
@@ -840,13 +1146,14 @@ def test_parallel_refusal_leaves_a_fitted_variant_usable(tmp_path: Path) -> None
         list(variant.fit_many(train, cohort="train"))
     cached = conftest.extract_cache_folders(tmp_path)
 
-    with pytest.raises(NotImplementedError, match=_FIT_IN_A_SWEEP):
-        steps.helpers.Parallel(steps=[v.clone() for v in variants], infra=infra)
-
-    assert conftest.extract_cache_folders(tmp_path) == cached, "no entry, no folder"
-    fresh = _SumOffset(infra=infra, cohort="train")
-    assert list(fresh.run_many(novel)) == [11.0, 13.0], (
-        "a refused sweep must not cache its error against the variant"
+    sweep = steps.helpers.Parallel(steps=[v.clone() for v in variants], infra=infra)
+    assert sweep.run_many(novel) == [None, None]
+    assert [[v.lookup(x).result() for x in novel] for v in sweep.steps] == [
+        [11.0, 13.0],
+        [15.0, 17.0],
+    ], "each variant recovers its own artifact by name"
+    assert conftest.extract_cache_folders(tmp_path) == cached, (
+        "recovery adds entries to the folders the solo fits made, and no others"
     )
 
 

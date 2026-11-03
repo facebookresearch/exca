@@ -476,15 +476,24 @@ class Step(exca.helpers.DiscriminatedModel):
         held, free to be reconfigured and retried; cache writes already made
         remain. After returning, a failure while consuming the results leaves the
         fit declared and the completed outputs cached, as in :meth:`run_many`.
+        Which of the two a per-item failure gets is decided by ``infra``: a
+        backend that computes eagerly (``Cached``) raises at the call and is
+        restored, while no backend, the pools and the submitit backends raise on
+        consumption and stay declared. So a retry after a fixed field is possible
+        in the first case only; in the second, :meth:`clone` the fit.
 
         Parameters
         ----------
         values:
             The cohort's items. Omit to recover an already fitted named cohort.
         cohort:
-            Name the artifact for this call alone: it scopes the fit as it runs
-            but is not recorded in the config. Unset, the items' fingerprint names
-            it. A pipeline with no ``Fit`` has nothing to name, and ignores it.
+            Name the artifact for this call, scoping the fit as it runs. Unset,
+            the items' fingerprint names it. Only the *recording* is call-scoped:
+            the name is not written to the config, so a config dumped from this
+            run and re-handed these items fits a second artifact under their
+            fingerprint, beside the named one. Declare ``Fit.cohort`` instead to
+            have a reload recover it. A pipeline with no ``Fit`` has nothing to
+            name, and ignores it.
 
         Returns
         -------
@@ -499,8 +508,8 @@ class Step(exca.helpers.DiscriminatedModel):
         # `self`, not `built`: a resolution already carries the last declaration
         plan = fit._plan_cohorts(self, uids, cohort)
         keys = plan.fit_keys if uids else frozenset()  # nothing to fit on: plain run
-        plan.install()
         try:
+            plan.install()  # inside: a half-installed plan must be restored too
             boundary = items.StepItems(source=dict(zip(uids, inputs)), uids=uids)
             return Runner(outer_step=self, fit_keys=keys).dispatch(built, boundary)
         except BaseException:

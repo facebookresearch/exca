@@ -85,6 +85,13 @@ is created by writing a temp file and hard-linking it into place, so concurrent
 fits of one name race atomically and the loser reads the winner's record.
 `LookupHandle.clear_cache(recursive=True)` on the fit removes it with the artifact.
 
+`_Artifact._run` writes the record, after `_fit` returns and therefore before
+`run_and_cache` caches the artifact. Both ends matter: a failed fit writes no record
+and leaves the name free, while a cached artifact always has one, so an interrupted
+run cannot leave a nameless artifact for the next call to rebind to other items.
+`_resolve_artifact` then reads the record back and refuses a mismatch — or a missing
+record, which now means the entry was tampered with rather than merely unbound.
+
 ## Concurrency
 
 Two callers hitting the same `(step_uid, uid)` would race. The

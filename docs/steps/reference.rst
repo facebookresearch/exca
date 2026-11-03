@@ -66,13 +66,15 @@ fingerprint:
 
 The name is part of the config, which is what makes the recovery
 above need nothing else. ``fit_many(..., cohort="train2024")`` asks
-for the same name for that call alone: it scopes the fit as it runs
-but is not recorded, so re-presenting those items to a config dumped
-from that run fits again under an automatic name, beside the named
-artifact. Use it to point an unnamed instance at an existing cohort
-when the caller supplies the name explicitly. That takes a *fresh*
-instance: the one that fitted is already bound to its own cohort, and
-with no items the fresh one recovers the named cohort and fits nothing:
+for the same name, and binds it to the same items just as durably;
+what is scoped to the call is the *recording*, not the binding. The
+name never reaches the config, so re-presenting those items to a
+config dumped from that run fits again under an automatic name,
+beside the named artifact. Use it to point an unnamed instance at an
+existing cohort when the caller supplies the name explicitly. That
+takes a *fresh* instance: the one that fitted is already bound to its
+own cohort, and with no items the fresh one recovers the named cohort
+and fits nothing:
 
 .. code-block:: python
 
@@ -81,7 +83,8 @@ with no items the fresh one recovers the named cohort and fits nothing:
     list(recovered.run_many(test))
 
 A name stays bound to the items it was fitted on: handing it a
-different cohort raises rather than silently refitting.
+different cohort raises rather than silently refitting, and so does a
+cached artifact whose record of those items has gone missing.
 
 If ``fit_many`` raises before returning, every ``Fit`` it touched is
 restored to the declaration it held, so a field can be corrected and the
@@ -91,6 +94,14 @@ back instead of refitting. After ``fit_many`` returns, a failure while
 consuming the results leaves the fit declared and the completed outputs
 cached, as in ``run_many``.
 
+Which side of that boundary a per-item failure lands on is decided by
+``infra``, not by the code that raises. A backend that computes eagerly
+(``Cached``) raises at the call, so the fit is restored and the call can
+be retried; with no backend, a pool (``ThreadPool``, ``ProcessPool``) or a
+submitit backend (``LocalProcess``, ``Slurm``), the same failure surfaces while the results are being consumed and the fit
+stays declared — correct a field there and ``clone()`` the fit, because
+that instance is already bound to its cohort.
+
 ``fit_many`` lives on every :class:`Step`, not just on ``Fit``, because a
 ``Chain``, a ``Scatter`` or any resolving step can contain one. On a
 pipeline with no ``Fit`` it is exactly ``run_many`` — same outputs, same
@@ -98,19 +109,26 @@ identities, same cache entries — so two pipelines differing only in a
 fitting step stay comparable at one call site, and a ``cohort`` name
 given to one is checked for shape and then ignored.
 
-Three costs to plan for:
+Three things to plan for — a cost, a requirement, a restriction:
 
 - **The upstream is read twice**, once for the fit and once per item,
   so give an expensive upstream its own ``infra``.
 - **A cohort name needs a cache folder** to recover from: set ``infra``
   or ``fit_infra`` on the fit itself. An enclosing container may supply
   its folder, but does not create the backend.
-- **A fit cannot live inside a sweep or a sharding container.** A
-  ``Parallel`` variant holding one is refused before the sweep
-  dispatches anything, as is a fit under a backend that would hand it
-  a shard of the cohort. Fit each variant on its own, or put the
-  ``Fit`` before the sweep —
-  ``Chain(steps=[Fit(...), Parallel(...)])``.
+- **A cohort is indivisible**, so the container holding the fit sends its
+  whole batch to one job — ``max_jobs`` above a fit buys nothing. In a
+  ``Parallel`` sweep that is per variant: each fitting variant is one job,
+  and the variants still run concurrently::
+
+      sweep = Parallel(steps=variants, infra={"backend": "Slurm", "folder": cache})
+      sweep.fit_many(items)          # one job per fitting variant
+      sweep.steps[0].lookup(items[0])
+
+  The fit then runs in that worker, so a variant whose fit must survive the
+  job — to be recovered by name, or reused by a later run — needs somewhere
+  to cache the artifact: ``fit_infra={"backend": "Cached"}`` on a nested
+  ``Fit`` (the sweep's folder propagates into it).
 
 .. autoclass:: exca.steps.Fit
     :show-inheritance:

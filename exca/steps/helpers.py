@@ -120,12 +120,6 @@ class Func(base.Step):
         return self.function(**kwargs)
 
 
-_FIT_IN_A_SWEEP = (
-    "Parallel cannot contain Fit ({paths}); fit each variant separately, or place "
-    "Fit before Parallel in a Chain."
-)
-
-
 class Parallel(base.Step):
     """Run a fixed set of step variants over one shared item set.
 
@@ -143,9 +137,8 @@ class Parallel(base.Step):
         sweep.run_many(inputs)                   # populates each variant's cache
         out = sweep.steps[0].lookup(inputs[0])   # read one variant back
 
-    A :class:`~exca.steps.Fit` variant is refused before the sweep dispatches
-    anything: when the sweep is built if the variant declares it, when the sweep runs
-    if the variant only resolves to it.
+    A fitting variant runs whole in one job: its cohort cannot be sharded, so
+    ``max_jobs`` buys concurrency across variants, not inside one.
 
     Parameters
     ----------
@@ -156,18 +149,10 @@ class Parallel(base.Step):
     steps: tp.Sequence[base.Step]
 
     def model_post_init(self, __context: tp.Any) -> None:
-        from . import fit  # `fit` builds on this module
-
         super().model_post_init(__context)
         if not self.steps:
             raise ValueError("steps cannot be empty")
         self._unify_infra()
-        # not resolving: no folder has propagated yet, and resolving freezes what it reads
-        found = fit._find_fits(self, resolve=False)
-        if found:
-            raise NotImplementedError(
-                _FIT_IN_A_SWEEP.format(paths=", ".join(sorted(found)))
-            )
 
     def _unify_infra(self) -> None:
         infras = [s.infra for s in self.steps if s.infra is not None]
@@ -212,15 +197,7 @@ class Parallel(base.Step):
         )
 
     def _run_items(self, runner: base.Runner, batch: items.StepItems) -> items.StepItems:
-        from . import fit  # `fit` builds on this module
-
         assert self.infra is not None
-        # the resolutions the construction scan could not build; nothing dispatched yet
-        found = fit._find_fits(self)
-        if found:
-            raise NotImplementedError(
-                _FIT_IN_A_SWEEP.format(paths=", ".join(sorted(found)))
-            )
         if self.infra.folder is None:
             raise RuntimeError(
                 f"Parallel needs a cache folder; set infra.folder (on Parallel or "
@@ -231,9 +208,10 @@ class Parallel(base.Step):
             resolved = utils.resolved_step(variant)
             uids = [identity.materialize_uid(resolved, v) for v in batch]
             child_batch = items.StepItems(source=dict(zip(uids, batch)), uids=uids)
-            runs.append(
-                (dataclasses.replace(runner, outer_step=variant), resolved, child_batch)
-            )
+            # only this variant's fits: one cohort per variant, one job each
+            keys = runner.fit_keys & resolved._fit_keys
+            child = dataclasses.replace(runner, outer_step=variant, fit_keys=keys)
+            runs.append((child, resolved, child_batch))
         submission = backends.CacheDispatch(self.infra, runs).submit()
         if submission is not None:
             submission.wait()
@@ -245,14 +223,32 @@ class Parallel(base.Step):
     def fit_many(  # type: ignore[override]
         self, values: tp.Iterable[tp.Any] = (), *, cohort: str | None = None
     ) -> list[None]:
-        """Run as :meth:`run_many`: a sweep holds no ``Fit``, so ``cohort`` is checked
-        for shape and then ignored.
+        """Fit each variant on *values* as one cohort, then transform them.
+
+        Every variant gets its own cohort, fitted and applied by one worker task:
+        a cohort cannot be sharded, so the items of a fitting variant stay
+        together. ``Step.fit_many``'s declaration transaction applies unchanged.
         """
         from . import fit  # `fit` builds on this module
 
-        if cohort is not None:
-            fit._check_name(cohort)  # as the declaration walk would
-        return self.run_many(values)
+        values = list(values)
+        own: dict[int, list[str]] = {}
+        for variant in self.steps:
+            resolved = utils.resolved_step(variant)
+            # a variant uids its own items, so its fits fingerprint those, not ours
+            variant_uids = [identity.materialize_uid(resolved, v) for v in values]
+            own.update({id(f): variant_uids for f in fit._find_fits(resolved).values()})
+        uids = [identity.materialize_uid(self, v) for v in values]
+        plan = fit._plan_cohorts(self, lambda f: own[id(f)], cohort)
+        keys = plan.fit_keys if uids else frozenset()  # nothing to fit on: plain run
+        try:
+            plan.install()  # inside: a half-installed plan must be restored too
+            batch = items.StepItems(source=dict(zip(uids, values)), uids=uids)
+            self._run_items(base.Runner(fit_keys=keys), batch)
+        except BaseException:
+            plan.restore()
+            raise
+        return [None] * len(values)
 
     def run_many(self, values: tp.Iterable[tp.Any]) -> list[None]:  # type: ignore[override]
         values = list(values)
