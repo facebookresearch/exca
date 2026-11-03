@@ -8,6 +8,7 @@
 
 import contextlib
 import gc
+import importlib
 import logging
 import os
 import sys
@@ -23,7 +24,7 @@ import submitit
 
 import exca
 
-from . import backends, base, conftest, items, jobregistry
+from . import backends, base, conftest, helpers, items, jobregistry
 from .base import Chain, Step
 
 
@@ -448,3 +449,31 @@ def test_nested_dispatch_on_shared_cell(tmp_path: Path) -> None:
     assert future.result() == 3.0
     jobs = pids - {os.getpid()}
     assert len(jobs) == 3, "each nested job must take over the shared cell's row"
+
+
+class _SnapshotStep(Step):
+    offset: int = 0
+
+    def _run(self, value: int) -> int:
+        module = importlib.import_module("snapshot_package.value")
+        return value + module.VALUE + self.offset
+
+
+def test_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    code = Path("snapshot_package/value.py")
+    code.parent.mkdir()
+    (code.parent / "__init__.py").touch()
+    code.write_text("VALUE = 10\n", encoding="utf8")
+    infra: tp.Any = {"backend": "LocalProcess", "folder": "cache", "max_jobs": 1}
+    infra["workdir"] = {"copied": [code.parent]}
+    sweep = helpers.Parallel(
+        steps=[_SnapshotStep(offset=k) for k in range(2)], infra=infra
+    )
+    values = []
+    for value in (1, 2):
+        sweep.run(value)
+        code.write_text("VALUE = 20\n", encoding="utf8")
+        values += [s.lookup(value).result() for s in sweep.steps]
+    assert values == [11, 12, 12, 13], "edited code must not reach the reused snapshot"
+    assert sweep.clone().infra == sweep.infra
