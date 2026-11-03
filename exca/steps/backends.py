@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 CacheStatus = tp.Literal["success", "error", None]
 LookupStatus = tp.Literal["success", "error", "running", None]
+AbsolutePath = tp.Annotated[Path, pydantic.AfterValidator(Path.absolute)]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -706,15 +707,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     def _exclude_from_cls_uid(cls) -> list[str]:
         return ["."]  # force ignored in uid
 
-    folder: Path | None = None
+    folder: AbsolutePath | None = None
 
     mode: identity.ModeType = "cached"
     keep_in_ram: bool = False
-
-    @pydantic.field_validator("folder")
-    @classmethod
-    def _absolute_folder(cls, folder: Path | None) -> Path | None:
-        return None if folder is None else folder.absolute()
 
     @pydantic.field_validator("mode", mode="before")
     @classmethod
