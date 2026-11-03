@@ -849,12 +849,12 @@ class _SubmititBackend(Backend):
         if self._CLUSTER in ("slurm", None):
             params["slurm_array_parallelism"] = len(shards)
         executor.update_parameters(**params)
-        with submitit.helpers.clean_env(), contextlib.ExitStack() as stack:
-            if self.workdir is not None:
-                step_folder = tasks[0].cache.paths.step_folder
-                stack.enter_context(self.workdir.activate(base_folder=step_folder))
-            with executor.batch():
-                jobs = [executor.submit(_multi_run_and_cache, shard) for shard in shards]
+        workdir: contextlib.AbstractContextManager[None] = contextlib.nullcontext()
+        if self.workdir is not None:
+            workdir = self.workdir.activate(base_folder=tasks[0].cache.paths.step_folder)
+        # batch exit pickles the jobs, so it must run inside the workdir
+        with submitit.helpers.clean_env(), workdir, executor.batch():
+            jobs = [executor.submit(_multi_run_and_cache, shard) for shard in shards]
         # a shard may span variants: record each sub-task against the shared job
         by_folder: dict[Path, dict[str, tp.Sequence[str]]] = {}
         for shard, job in zip(shards, jobs):
