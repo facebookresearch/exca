@@ -232,7 +232,7 @@ infra:
     copied: [my_package]
 ```
 
-The default snapshot is `<step_folder>/code/<date>-<random>/`, copied before submission and shared by all `Parallel` variants in that batch. Each submission gets a fresh snapshot; an explicit `workdir.folder` reuses existing files. Filtering and commit checks follow `WorkDir`.
+The default snapshot is `<step_folder>/code/<date>-<random>/`, selected once per WorkDir and reused by later submissions. `Parallel` variants share that snapshot. To capture edited code, use a new WorkDir or reset its folder on a cloned configuration; an explicit `workdir.folder` reuses existing files. Filtering and commit checks follow `WorkDir`.
 
 Cache, log and `RunContext.folder()` locations are preserved, including relative cache folders and nested Steps. Nested submissions copy matching sources from the enclosing snapshot, so they cannot recover files excluded by its filters. Relative paths in user fields or inputs resolve from the snapshot.
 

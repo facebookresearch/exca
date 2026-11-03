@@ -133,24 +133,6 @@ class WorkDir(pydantic.BaseModel):
                 logger.info("Current git hash for %s is %s", name, githash)
                 self._commits[name] = githash
 
-    @contextlib.contextmanager
-    def _submission(self, base_folder: Path) -> tp.Iterator[None]:
-        folder = self.folder
-        if folder is None:
-            date = datetime.datetime.now().strftime("%Y-%m-%d")
-            folder = base_folder / "code" / f"{date}-{uuid.uuid4().hex[:8]}"
-        folder = Path(folder).absolute()
-        folder.parent.mkdir(parents=True, exist_ok=True)
-        snapshot = self.model_copy(update={"folder": folder})
-        snapshot._active = False
-        origin = Path.cwd()
-        with snapshot._activate() as copied:
-            token = utils._workdir_submission.set((origin, copied))
-            try:
-                yield
-            finally:
-                utils._workdir_submission.reset(token)
-
     def __getstate__(self) -> dict[str, tp.Any]:
         state = super().__getstate__()
         context = utils._workdir_submission.get()
@@ -161,31 +143,32 @@ class WorkDir(pydantic.BaseModel):
             fields["folder"] = utils._anchor_path(Path(self.folder))
         state["__dict__"] = fields
         private = dict(state["__pydantic_private__"])
-        sources = sorted(context[1], key=lambda p: len(p.parts), reverse=True)
-        paths = []
-        for path in self._paths:
-            for source in sources:
-                if path.is_relative_to(source):
-                    path = context[1][source] / path.relative_to(source)
-                    break
-            paths.append(path)
-        private.update(_paths=paths, _active=False)
+        private.update(
+            _paths=[utils._snapshot_source(p) for p in self._paths], _active=False
+        )
         state["__pydantic_private__"] = private
         return state
 
     @contextlib.contextmanager
-    def activate(self) -> tp.Iterator[None]:
-        with self._activate():
-            yield
-
-    @contextlib.contextmanager
-    def _activate(self) -> tp.Iterator[dict[Path, Path]]:
+    def activate(self, *, base_folder: Path | None = None) -> tp.Iterator[None]:
+        """Activate the chosen folder, selecting it once under base_folder if unset."""
         if self._active:
-            yield {}
+            yield
             return
-        if self.folder is None:
-            raise RuntimeError("folder field must be filled before activation")
-        folder = Path(self.folder)
+        outer = utils._workdir_submission.get()
+        origin = Path.cwd() if outer is None else outer[0]
+        folder = self.folder
+        if folder is None:
+            if base_folder is None:
+                raise RuntimeError("folder field must be filled before activation")
+            date = datetime.datetime.now().strftime("%Y-%m-%d")
+            root = utils._anchor_path(base_folder)
+            folder = (root / "code" / f"{date}-{uuid.uuid4().hex[:8]}").absolute()
+            folder.parent.mkdir(parents=True, exist_ok=True)
+            object.__setattr__(self, "folder", folder)
+        folder = Path(folder)
+        if base_folder is not None:
+            folder = origin / folder
         folder.mkdir(exist_ok=True)
         ignore = Ignore(includes=self.includes, excludes=self.excludes)
         copied: dict[Path, Path] = {}
@@ -195,23 +178,29 @@ class WorkDir(pydantic.BaseModel):
                 target = Path(target.name)
             out = folder / target
             copied[path] = out.absolute()
+            source = utils._snapshot_source(path) if base_folder is not None else path
             if not out.exists():
-                if path.is_dir():
-                    shutil.copytree(path, out, ignore=ignore)
+                if source.is_dir():
+                    shutil.copytree(source, out, ignore=ignore)
                     utils.widen_to_umask(out)  # copytree replicates source modes
                 else:
                     out.parent.mkdir(exist_ok=True, parents=True)
-                    shutil.copyfile(path, out, follow_symlinks=True)
-                logger.info("Copied %s to %s", path, out)
+                    shutil.copyfile(source, out, follow_symlinks=True)
+                logger.info("Copied %s to %s", source, out)
         if self._commits:
             string: str = _yaml.safe_dump(self._commits)
             fp = folder / "git-hashes.log"
             logger.info("Git hashes are dumped to %s", fp)
             fp.write_text(string, encoding="utf8")
-        with chdir(folder):
+        with chdir(folder), contextlib.ExitStack() as stack:
+            if base_folder is not None:
+                sources = {} if outer is None else dict(outer[1])
+                sources.update(copied)
+                token = utils._workdir_submission.set((origin, sources))
+                stack.callback(utils._workdir_submission.reset, token)
             self._active = True
             try:
-                yield copied
+                yield
             finally:
                 self._active = False
 

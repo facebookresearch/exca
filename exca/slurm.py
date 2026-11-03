@@ -12,15 +12,13 @@ import os
 import pickle
 import sys
 import typing as tp
-import uuid
-from datetime import datetime
 from pathlib import Path
 
 import pydantic
 import submitit
 from submitit.core import utils as submitit_utils
 
-from . import base
+from . import base, utils
 from .workdir import WorkDir
 
 submitit.Job._results_timeout_s = 4  # avoid too long a wait
@@ -211,20 +209,15 @@ class SubmititMixin(pydantic.BaseModel):
         with contextlib.ExitStack() as estack:
             estack.enter_context(submitit.helpers.clean_env())
             if self.workdir is not None:
-                if self.workdir.folder is None:
-                    if self.folder is None:
-                        raise ValueError("Workdir requires a folder")
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    tag = f"{today}-{uuid.uuid4().hex[:6]}"
-                    uid_folder = self.uid_folder()
-                    assert uid_folder is not None  # for typing
-                    parts = uid_folder.relative_to(self.folder).parts
-                    # default to first sub-directory
-                    folder = Path(self.folder) / parts[0] / "code" / tag
-                    folder.parent.mkdir(parents=True, exist_ok=True)
-                    # bypasses freezing checks:
-                    object.__setattr__(self.workdir, "folder", folder)
-                estack.enter_context(self.workdir.activate())
+                if self.folder is None:
+                    raise ValueError("Workdir requires a folder")
+                uid_folder = self.uid_folder()
+                assert uid_folder is not None
+                cache_folder = utils._anchor_path(Path(self.folder))
+                factory_folder = (
+                    cache_folder / uid_folder.relative_to(cache_folder).parts[0]
+                )
+                estack.enter_context(self.workdir.activate(base_folder=factory_folder))
             base_dump: tp.Any = None
             if self.conda_env is not None:
                 base_dump = submitit_utils.cloudpickle_dump

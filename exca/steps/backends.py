@@ -862,7 +862,7 @@ class _SubmititBackend(Backend):
         with submitit.helpers.clean_env(), contextlib.ExitStack() as stack:
             if self.workdir is not None:
                 step_folder = tasks[0].cache.paths.step_folder
-                stack.enter_context(self.workdir._submission(step_folder))
+                stack.enter_context(self.workdir.activate(base_folder=step_folder))
             with executor.batch():
                 jobs = [executor.submit(_multi_run_and_cache, shard) for shard in shards]
         # a shard may span variants: record each sub-task against the shared job

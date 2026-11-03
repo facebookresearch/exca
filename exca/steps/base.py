@@ -57,6 +57,9 @@ class Runner:
         """Resolve, then route *batch*: reuse/remember warm carrier, run inline or
         via backend."""
         step = utils.resolved_step(step)
+        if exca.utils._workdir_submission.get() is not None:
+            if step.infra is not None and step.infra.folder is not None:
+                self.cache(step)
         standalone = not self.prefix and not batch._pending and self.mode == "cached"
         warm = step._runtime.warm_items if standalone else None
         if warm is not None and isinstance(cd := warm._source, exca.cachedict.CacheDict):
@@ -93,10 +96,22 @@ class Runner:
             raise RuntimeError("cache requires a configured infra with a folder")
         exca.utils.recursive_freeze(step)  # memoized cache relies on fixed config
         step_uid = identity.step_uid(self.advance(step).prefix)
+        folder = exca.utils._anchor_path(step.infra.folder)
         cache = step._runtime.caches.get(step_uid)
+        if exca.utils._workdir_submission.get() is not None and cache is not None:
+            if cache.paths.base_folder != folder:
+                cache.paths = backends.StepPaths(folder, step_uid)
+                previous = cache.cache_dict
+                cache.cache_dict = exca.cachedict.CacheDict(
+                    folder=cache.paths.cache_folder,
+                    keep_in_ram=previous._keep_in_ram,
+                    cache_type=previous.cache_type,
+                )
+                cache.cache_dict._ram_data = previous._ram_data
+                step._runtime.warm_items = None
         if cache is None:
             cache = step._runtime.caches[step_uid] = backends._StepCache(
-                backends.StepPaths(step.infra.folder, step_uid),
+                backends.StepPaths(folder, step_uid),
                 keep_in_ram=step.infra.keep_in_ram,
                 cache_type=step._infer_cache_type(),
             )

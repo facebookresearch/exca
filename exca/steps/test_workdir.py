@@ -15,7 +15,7 @@ import pydantic
 import pytest
 import submitit
 
-from exca import utils
+from exca import utils, workdir
 
 from . import backends, base, conftest, helpers
 
@@ -61,26 +61,45 @@ class _WaitForFile(base.Step):
 
 
 @pytest.mark.parametrize(
-    "backend,folder",
-    [("Cached", None), ("LocalProcess", None), ("LocalProcess", "snapshot")],
+    "backend,folder,outer",
+    [
+        ("Cached", None, False),
+        ("LocalProcess", None, False),
+        ("LocalProcess", "snapshot", False),
+        ("LocalProcess", None, True),
+    ],
 )
-def test_workdir_nested(snapshot_infra: tp.Any, backend: str, folder: str | None) -> None:
+def test_workdir_nested(
+    snapshot_infra: tp.Any, backend: str, folder: str | None, outer: bool
+) -> None:
     if folder is not None:
         snapshot_infra["workdir"]["folder"] = folder
     child_infra: tp.Any = {"backend": backend, "folder": "inner"}
     if backend == "LocalProcess":
         child_infra["workdir"] = {**snapshot_infra["workdir"], "copied": [_CODE]}
     child = _SnapshotStep(infra=child_infra)
-    nested = base.Chain(
-        steps=[_WaitForFile(path=Path.cwd() / "ready"), child], infra=snapshot_infra
-    )
+    ready = Path.cwd() / "ready"
+    source = _CODE.absolute()
+    nested = base.Chain(steps=[_WaitForFile(path=ready), child], infra=snapshot_infra)
     upstream: tp.Any = {"backend": "Cached", "folder": "upstream"}
-    chain = base.Chain(steps=[conftest.Add(value=2, infra=upstream), nested])
-    result = chain.run_many([1])
-    _CODE.write_text("VALUE = 20\n", encoding="utf8")
-    Path("ready").touch()
-    [output] = list(result)
+    first = conftest.Add(value=2, infra=upstream)
+    if outer:
+        first.run(1)
+    chain = base.Chain(steps=[first, nested])
     handle = chain.lookup(1)._sub_handles[-1]._sub_handles[-1]
+    context = (
+        workdir.WorkDir(copied=[_CODE.parent]).activate(base_folder=Path("outer"))
+        if outer
+        else contextlib.nullcontext()
+    )
+    with context:
+        if outer:
+            source.write_text("VALUE = 20\n", encoding="utf8")
+        result = chain.run_many([1])
+        if not outer:
+            source.write_text("VALUE = 20\n", encoding="utf8")
+        ready.touch()
+        [output] = list(result)
     assert output["value"] == 13
     assert output["run_folder"] == str(handle.paths.run_folder(handle.uid).absolute())
     if folder is not None:
@@ -96,10 +115,13 @@ def test_workdir_parallel(snapshot_infra: tp.Any) -> None:
         _CODE.write_text(f"VALUE = {value}\n", encoding="utf8")
         sweep.run(value)
         outputs = [s.lookup(value).result() for s in sweep.steps]
-        assert [o["value"] for o in outputs] == [2 * value, 2 * value + 1]
+        assert [o["value"] for o in outputs] == [value + 10, value + 11]
         folders = {o["cwd"] for o in outputs}
-        assert len(folders) == 1 and folders != previous
+        assert len(folders) == 1
+        if previous is not None:
+            assert folders == previous
         previous = folders
+    assert sweep.clone().infra == sweep.infra
 
 
 def test_workdir_batch_exit(

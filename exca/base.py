@@ -150,6 +150,11 @@ class BaseInfra(pydantic.BaseModel):
         state = out["__pydantic_private__"].get("_state")
         if state is not None:
             out["__pydantic_private__"]["_state"] = type(state)()
+        if utils._workdir_submission.get() is not None and self.folder is not None:
+            out["__dict__"] = {
+                **out["__dict__"],
+                "folder": utils._anchor_path(Path(self.folder)),
+            }
         return out
 
     def __setstate__(self, state: tp.Any) -> None:
@@ -335,7 +340,7 @@ class BaseInfra(pydantic.BaseModel):
         """Folder where this task instance is stored"""
         if self.folder is None:
             return None
-        folder = Path(self.folder) / self.uid()
+        folder = utils._anchor_path(Path(self.folder)) / self.uid()
         if not create:
             return folder
         folder.mkdir(parents=True, exist_ok=True)
