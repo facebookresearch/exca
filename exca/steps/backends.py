@@ -852,7 +852,7 @@ class _SubmititBackend(Backend):
         workdir: contextlib.AbstractContextManager[None] = contextlib.nullcontext()
         if self.workdir is not None:
             workdir = self.workdir.activate(base_folder=tasks[0].cache.paths.step_folder)
-        # batch exit pickles the jobs, so it must run inside the workdir
+        # batch pickles jobs on exit → keep inside workdir
         with submitit.helpers.clean_env(), workdir, executor.batch():
             jobs = [executor.submit(_multi_run_and_cache, shard) for shard in shards]
         # a shard may span variants: record each sub-task against the shared job
