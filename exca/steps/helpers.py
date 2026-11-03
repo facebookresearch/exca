@@ -178,6 +178,7 @@ class Parallel(base.Step):
                     "Parallel requires one shared backend across itself and its "
                     f"steps; {self.infra!r} differs from {step.infra!r}"
                 )
+            # same object: workdir.folder is set on first activation
             object.__setattr__(step, "infra", self.infra)
 
     def lookup(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:

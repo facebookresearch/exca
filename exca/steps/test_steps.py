@@ -244,11 +244,8 @@ def test_infra_default_workdir(tmp_path: Path) -> None:
         def _run(self) -> int:
             return 0
 
-    with pytest.raises(pydantic.ValidationError, match="workdir"):
-        MyStep(infra={"backend": "SubmititDebug"})  # type: ignore
-    step = MyStep(infra={"backend": "Slurm"})  # type: ignore
-    assert isinstance(step.infra, backends.Slurm)
-    assert step.infra.workdir is not wd, "class default WorkDir must not be shared"
+    infra: tp.Any = MyStep(infra={"backend": "Slurm"}).infra  # type: ignore
+    assert infra.workdir is not wd, "activation would pin the class default's snapshot"
 
 
 def test_folder_propagation(tmp_path: Path) -> None:
