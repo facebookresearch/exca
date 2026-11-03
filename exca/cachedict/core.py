@@ -22,7 +22,7 @@ from pathlib import Path
 
 import orjson
 
-from exca import utils
+from exca import _workdir_scope, utils
 
 from .dumpcontext import DumpContext
 
@@ -155,10 +155,10 @@ class CacheDict(tp.Generic[X]):
     # View, not value: pickle / deepcopy give a fresh view; `_ram_data`
     # is dropped (would silently ship potentially-large data cross-process).
     def __reduce__(self) -> tp.Any:
-        return (
-            self.__class__,
-            (utils._anchor_path(self.folder), self._keep_in_ram, self.cache_type),
-        )
+        folder = self.folder
+        if folder is not None:
+            folder = _workdir_scope.current.get().anchor(folder)
+        return (self.__class__, (folder, self._keep_in_ram, self.cache_type))
 
     def clear(self) -> None:
         self._ram_data.clear()

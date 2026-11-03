@@ -18,7 +18,7 @@ import pydantic
 import submitit
 from submitit.core import utils as submitit_utils
 
-from . import base, utils
+from . import _workdir_scope, base
 from .workdir import WorkDir
 
 submitit.Job._results_timeout_s = 4  # avoid too long a wait
@@ -213,7 +213,7 @@ class SubmititMixin(pydantic.BaseModel):
                     raise ValueError("Workdir requires a folder")
                 uid_folder = self.uid_folder()
                 assert uid_folder is not None
-                cache_folder = utils._anchor_path(Path(self.folder))
+                cache_folder = _workdir_scope.current.get().anchor(Path(self.folder))
                 factory_folder = (
                     cache_folder / uid_folder.relative_to(cache_folder).parts[0]
                 )

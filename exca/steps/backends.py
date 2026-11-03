@@ -33,7 +33,7 @@ import pydantic
 import submitit
 
 import exca
-from exca import utils
+from exca import _workdir_scope, utils
 from exca import workdir as workdir_utils
 from exca.cachedict import inflight
 
@@ -59,7 +59,10 @@ class StepPaths:
     step_uid: str
 
     def __getstate__(self) -> dict[str, tp.Any]:
-        return {**self.__dict__, "base_folder": utils._anchor_path(self.base_folder)}
+        return {
+            **self.__dict__,
+            "base_folder": _workdir_scope.current.get().anchor(self.base_folder),
+        }
 
     @property
     def step_folder(self) -> Path:
@@ -716,10 +719,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
 
     def __getstate__(self) -> dict[str, tp.Any]:
         state = super().__getstate__()
-        state["__dict__"] = {
-            **state["__dict__"],
-            "folder": utils._anchor_path(self.folder),
-        }
+        folder = self.folder
+        if folder is not None:
+            folder = _workdir_scope.current.get().anchor(folder)
+        state["__dict__"] = {**state["__dict__"], "folder": folder}
         return state
 
     @pydantic.field_validator("mode", mode="before")

@@ -19,7 +19,7 @@ import pydantic
 # side-effect import: configures the package logger
 import exca.logconf  # noqa: F401
 
-from . import utils
+from . import _workdir_scope, utils
 from .confdict import ConfDict as ConfDict
 from .workdir import WorkDir
 
@@ -150,10 +150,11 @@ class BaseInfra(pydantic.BaseModel):
         state = out["__pydantic_private__"].get("_state")
         if state is not None:
             out["__pydantic_private__"]["_state"] = type(state)()
-        if utils._workdir_submission.get() is not None and self.folder is not None:
+        scope = _workdir_scope.current.get()
+        if scope.origin is not None and self.folder is not None:
             out["__dict__"] = {
                 **out["__dict__"],
-                "folder": utils._anchor_path(Path(self.folder)),
+                "folder": scope.anchor(Path(self.folder)),
             }
         return out
 
@@ -340,7 +341,7 @@ class BaseInfra(pydantic.BaseModel):
         """Folder where this task instance is stored"""
         if self.folder is None:
             return None
-        folder = utils._anchor_path(Path(self.folder)) / self.uid()
+        folder = _workdir_scope.current.get().anchor(Path(self.folder)) / self.uid()
         if not create:
             return folder
         folder.mkdir(parents=True, exist_ok=True)

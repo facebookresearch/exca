@@ -20,7 +20,7 @@ from pathlib import Path
 import pydantic
 import yaml as _yaml
 
-from . import utils
+from . import _workdir_scope, utils
 
 logger = logging.getLogger(__name__)
 
@@ -135,17 +135,15 @@ class WorkDir(pydantic.BaseModel):
 
     def __getstate__(self) -> dict[str, tp.Any]:
         state = super().__getstate__()
-        context = utils._workdir_submission.get()
-        if context is None:
+        context = _workdir_scope.current.get()
+        if context.origin is None:
             return state
         fields = dict(state["__dict__"])
         if self.folder is not None:
-            fields["folder"] = utils._anchor_path(Path(self.folder))
+            fields["folder"] = context.anchor(Path(self.folder))
         state["__dict__"] = fields
         private = dict(state["__pydantic_private__"])
-        private.update(
-            _paths=[utils._snapshot_source(p) for p in self._paths], _active=False
-        )
+        private.update(_paths=[context.source(p) for p in self._paths], _active=False)
         state["__pydantic_private__"] = private
         return state
 
@@ -155,14 +153,14 @@ class WorkDir(pydantic.BaseModel):
         if self._active:
             yield
             return
-        outer = utils._workdir_submission.get()
-        origin = Path.cwd() if outer is None else outer[0]
+        outer = _workdir_scope.current.get()
+        origin = Path.cwd() if outer.origin is None else outer.origin
         folder = self.folder
         if folder is None:
             if base_folder is None:
                 raise RuntimeError("folder field must be filled before activation")
             date = datetime.datetime.now().strftime("%Y-%m-%d")
-            root = utils._anchor_path(base_folder)
+            root = outer.anchor(base_folder)
             folder = (root / "code" / f"{date}-{uuid.uuid4().hex[:8]}").absolute()
             folder.parent.mkdir(parents=True, exist_ok=True)
             object.__setattr__(self, "folder", folder)
@@ -178,7 +176,7 @@ class WorkDir(pydantic.BaseModel):
                 target = Path(target.name)
             out = folder / target
             copied[path] = out.absolute()
-            source = utils._snapshot_source(path) if base_folder is not None else path
+            source = outer.source(path) if base_folder is not None else path
             if not out.exists():
                 if source.is_dir():
                     shutil.copytree(source, out, ignore=ignore)
@@ -194,10 +192,11 @@ class WorkDir(pydantic.BaseModel):
             fp.write_text(string, encoding="utf8")
         with chdir(folder), contextlib.ExitStack() as stack:
             if base_folder is not None:
-                sources = {} if outer is None else dict(outer[1])
-                sources.update(copied)
-                token = utils._workdir_submission.set((origin, sources))
-                stack.callback(utils._workdir_submission.reset, token)
+                scope = _workdir_scope.Scope(
+                    origin=origin, copied={**outer.copied, **copied}
+                )
+                token = _workdir_scope.current.set(scope)
+                stack.callback(_workdir_scope.current.reset, token)
             self._active = True
             try:
                 yield

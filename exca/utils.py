@@ -6,7 +6,6 @@
 
 import collections
 import contextlib
-import contextvars
 import copy
 import difflib
 import hashlib
@@ -43,25 +42,6 @@ logger = logging.getLogger(__name__)
 DISCRIMINATOR_FIELD = "#infra#pydantic#discriminator"
 T = tp.TypeVar("T", bound=pydantic.BaseModel)
 X = tp.TypeVar("X")
-
-_Path = tp.TypeVar("_Path", bound=Path | None)
-_workdir_submission: contextvars.ContextVar[tuple[Path, dict[Path, Path]] | None] = (
-    contextvars.ContextVar("workdir_submission", default=None)
-)
-
-
-def _anchor_path(path: _Path) -> _Path:
-    context = _workdir_submission.get()
-    return tp.cast(_Path, path if path is None or context is None else context[0] / path)
-
-
-def _snapshot_source(path: Path) -> Path:
-    context = _workdir_submission.get()
-    if context is not None:
-        for source in sorted(context[1], key=lambda p: len(p.parts), reverse=True):
-            if path.is_relative_to(source):
-                return context[1][source] / path.relative_to(source)
-    return path
 
 
 def _current_umask() -> int:

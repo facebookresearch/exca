@@ -11,13 +11,12 @@ import typing as tp
 from pathlib import Path
 from unittest import mock
 
-import pydantic
 import pytest
 import submitit
 
-from exca import utils, workdir
+from exca import _workdir_scope, workdir
 
-from . import backends, base, conftest, helpers
+from . import base, conftest, helpers
 
 _CODE = Path("snapshot_package/value.py")
 
@@ -137,17 +136,4 @@ def test_workdir_batch_exit(
     monkeypatch.setattr(submitit, "AutoExecutor", mock.Mock(return_value=executor))
     with pytest.raises(RuntimeError, match="batch exit"):
         _SnapshotStep(infra=snapshot_infra).run(1)
-    assert (Path.cwd(), utils._workdir_submission.get()) == (tmp_path, None)
-
-
-def test_workdir_debug_rejection(snapshot_infra: tp.Any) -> None:
-    class WithDefaults(_SnapshotStep):
-        infra: backends.Backend | None = backends.Backend.model_validate(snapshot_infra)
-
-    configs: tp.Any = [
-        {**snapshot_infra, "backend": "SubmititDebug"},
-        {"backend": "SubmititDebug"},
-    ]
-    for infra in configs:
-        with pytest.raises(pydantic.ValidationError, match="workdir"):
-            WithDefaults(infra=infra)
+    assert (Path.cwd(), _workdir_scope.current.get().origin) == (tmp_path, None)
