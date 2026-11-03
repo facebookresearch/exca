@@ -34,6 +34,7 @@ import submitit
 
 import exca
 from exca import utils
+from exca import workdir as workdir_utils
 from exca.cachedict import inflight
 
 from . import errors, identity, items, jobregistry
@@ -56,6 +57,9 @@ class StepPaths:
 
     base_folder: Path
     step_uid: str
+
+    def __getstate__(self) -> dict[str, tp.Any]:
+        return {**self.__dict__, "base_folder": utils._anchor_path(self.base_folder)}
 
     @property
     def step_folder(self) -> Path:
@@ -710,6 +714,14 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     mode: identity.ModeType = "cached"
     keep_in_ram: bool = False
 
+    def __getstate__(self) -> dict[str, tp.Any]:
+        state = super().__getstate__()
+        state["__dict__"] = {
+            **state["__dict__"],
+            "folder": utils._anchor_path(self.folder),
+        }
+        return state
+
     @pydantic.field_validator("mode", mode="before")
     @classmethod
     def _deprecate_force_forward(cls, v: str) -> str:
@@ -807,6 +819,7 @@ class _SubmititBackend(Backend):
     """Base for submitit backends."""
 
     job_name: str | None = None
+    workdir: workdir_utils.WorkDir | None = None
     timeout_min: int | None = None
     nodes: int | None = None
     tasks_per_node: int | None = None
@@ -821,7 +834,7 @@ class _SubmititBackend(Backend):
     def _submitit_params(self) -> dict[str, tp.Any]:
         """Build the kwargs dict forwarded to ``AutoExecutor.update_parameters``."""
         fields = set(type(self).model_fields) - set(Backend.model_fields)
-        skip = {"max_jobs", "min_items_per_job"}
+        skip = {"max_jobs", "min_items_per_job", "workdir"}
         params = {
             k: getattr(self, k) for k in fields - skip if getattr(self, k) is not None
         }
@@ -846,8 +859,12 @@ class _SubmititBackend(Backend):
         if self._CLUSTER in ("slurm", None):
             params["slurm_array_parallelism"] = len(shards)
         executor.update_parameters(**params)
-        with submitit.helpers.clean_env(), executor.batch():
-            jobs = [executor.submit(_multi_run_and_cache, shard) for shard in shards]
+        with submitit.helpers.clean_env(), contextlib.ExitStack() as stack:
+            if self.workdir is not None:
+                step_folder = tasks[0].cache.paths.step_folder
+                stack.enter_context(self.workdir._submission(step_folder))
+            with executor.batch():
+                jobs = [executor.submit(_multi_run_and_cache, shard) for shard in shards]
         # a shard may span variants: record each sub-task against the shared job
         by_folder: dict[Path, dict[str, tp.Sequence[str]]] = {}
         for shard, job in zip(shards, jobs):
@@ -874,6 +891,7 @@ class LocalProcess(_SubmititBackend):
 class SubmititDebug(_SubmititBackend):
     """Debug executor (inline but simulates submitit)."""
 
+    workdir: None = None
     _CLUSTER: tp.ClassVar[str | None] = "debug"
 
     def _submit(self, tasks: list[WriteTask]) -> Submission | None:

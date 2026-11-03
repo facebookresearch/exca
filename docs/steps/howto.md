@@ -220,6 +220,24 @@ chain[1].lookup(value).clear_cache()          # one specific sub-step + input
 
 `Step.clear_cache()` (no `lookup()`) still works but is deprecated.
 
+## Run from a code snapshot
+
+`LocalProcess`, `Slurm` and `Auto` accept `infra.workdir`, using {class}`exca.workdir.WorkDir`:
+
+```yaml
+infra:
+  backend: LocalProcess
+  folder: /cache/project
+  workdir:
+    copied: [my_package]
+```
+
+The default snapshot is `<step_folder>/code/<date>-<random>/`, copied before submission and shared by all `Parallel` variants in that batch. Each submission gets a fresh snapshot; an explicit `workdir.folder` reuses existing files. Filtering and commit checks follow `WorkDir`.
+
+Cache, log and `RunContext.folder()` locations are preserved, including relative cache folders and nested Steps. Nested submissions copy matching sources from the enclosing snapshot, so they cannot recover files excluded by its filters. Relative paths in user fields or inputs resolve from the snapshot.
+
+`SubmititDebug` rejects `workdir` because it cannot reload imported code; `Cached`, `ThreadPool` and `ProcessPool` do not accept it. Submission temporarily changes the process-wide working directory, including while waiting for upstream jobs: avoid concurrent threads using relative paths.
+
 ## Inspect a running job
 
 `LookupHandle.job()` returns the live submitit job for an in-flight

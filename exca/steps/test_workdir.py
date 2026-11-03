@@ -1,0 +1,131 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+
+import contextlib
+import importlib
+import time
+import typing as tp
+from pathlib import Path
+from unittest import mock
+
+import pydantic
+import pytest
+import submitit
+
+from exca import utils
+
+from . import backends, base, conftest, helpers
+
+_CODE = Path("snapshot_package/value.py")
+
+
+@pytest.fixture
+def snapshot_infra(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, tp.Any]:
+    monkeypatch.chdir(tmp_path)
+    _CODE.parent.mkdir()
+    (_CODE.parent / "__init__.py").touch()
+    _CODE.write_text("VALUE = 10\n", encoding="utf8")
+    return {
+        "backend": "LocalProcess",
+        "folder": "cache",
+        "max_jobs": 1,
+        "workdir": {"copied": [_CODE.parent]},
+    }
+
+
+class _SnapshotStep(base.Step):
+    offset: int = 0
+
+    def _run(self, value: int) -> dict[str, tp.Any]:
+        module = importlib.import_module("snapshot_package.value")
+        return {
+            "value": value + module.VALUE + self.offset,
+            "cwd": str(Path.cwd()),
+            "run_folder": str(self._run_context().folder().absolute()),
+        }
+
+
+class _WaitForFile(base.Step):
+    path: Path
+
+    def _run(self, value: int) -> int:
+        deadline = time.monotonic() + 20
+        while not self.path.exists():
+            if time.monotonic() > deadline:
+                raise TimeoutError(str(self.path))
+            time.sleep(0.01)
+        return value
+
+
+@pytest.mark.parametrize(
+    "backend,folder",
+    [("Cached", None), ("LocalProcess", None), ("LocalProcess", "snapshot")],
+)
+def test_workdir_nested(snapshot_infra: tp.Any, backend: str, folder: str | None) -> None:
+    if folder is not None:
+        snapshot_infra["workdir"]["folder"] = folder
+    child_infra: tp.Any = {"backend": backend, "folder": "inner"}
+    if backend == "LocalProcess":
+        child_infra["workdir"] = {**snapshot_infra["workdir"], "copied": [_CODE]}
+    child = _SnapshotStep(infra=child_infra)
+    nested = base.Chain(
+        steps=[_WaitForFile(path=Path.cwd() / "ready"), child], infra=snapshot_infra
+    )
+    upstream: tp.Any = {"backend": "Cached", "folder": "upstream"}
+    chain = base.Chain(steps=[conftest.Add(value=2, infra=upstream), nested])
+    result = chain.run_many([1])
+    _CODE.write_text("VALUE = 20\n", encoding="utf8")
+    Path("ready").touch()
+    [output] = list(result)
+    handle = chain.lookup(1)._sub_handles[-1]._sub_handles[-1]
+    assert output["value"] == 13
+    assert output["run_folder"] == str(handle.paths.run_folder(handle.uid).absolute())
+    if folder is not None:
+        assert output["cwd"] == str(Path(folder).absolute())
+
+
+def test_workdir_parallel(snapshot_infra: tp.Any) -> None:
+    sweep = helpers.Parallel(
+        steps=[_SnapshotStep(offset=k) for k in range(2)], infra=snapshot_infra
+    )
+    previous = None
+    for value in (10, 20):
+        _CODE.write_text(f"VALUE = {value}\n", encoding="utf8")
+        sweep.run(value)
+        outputs = [s.lookup(value).result() for s in sweep.steps]
+        assert [o["value"] for o in outputs] == [2 * value, 2 * value + 1]
+        folders = {o["cwd"] for o in outputs}
+        assert len(folders) == 1 and folders != previous
+        previous = folders
+
+
+def test_workdir_batch_exit(
+    tmp_path: Path, snapshot_infra: tp.Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @contextlib.contextmanager
+    def batch() -> tp.Iterator[None]:
+        yield
+        assert Path.cwd() != tmp_path
+        raise RuntimeError("batch exit")
+
+    executor = mock.Mock(cluster="local", batch=batch)
+    monkeypatch.setattr(submitit, "AutoExecutor", mock.Mock(return_value=executor))
+    with pytest.raises(RuntimeError, match="batch exit"):
+        _SnapshotStep(infra=snapshot_infra).run(1)
+    assert (Path.cwd(), utils._workdir_submission.get()) == (tmp_path, None)
+
+
+def test_workdir_debug_rejection(snapshot_infra: tp.Any) -> None:
+    class WithDefaults(_SnapshotStep):
+        infra: backends.Backend | None = backends.Backend.model_validate(snapshot_infra)
+
+    configs: tp.Any = [
+        {**snapshot_infra, "backend": "SubmititDebug"},
+        {"backend": "SubmititDebug"},
+    ]
+    for infra in configs:
+        with pytest.raises(pydantic.ValidationError, match="workdir"):
+            WithDefaults(infra=infra)

@@ -61,6 +61,9 @@ Submitit-based backends — ``LocalProcess``, ``SubmititDebug``,
 - ``min_items_per_job: int = 1`` — combine items into one job
   below this count.
 
+- ``workdir: exca.workdir.WorkDir | None`` — copied code snapshot for
+  ``LocalProcess``, ``Slurm`` and ``Auto``; see :doc:`howto`.
+
 Pool backends — ``ProcessPool``, ``ThreadPool`` — additionally
 accept:
 

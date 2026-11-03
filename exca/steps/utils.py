@@ -89,7 +89,9 @@ def infra_validator_after(self: tp.Any) -> tp.Any:
     # Propagate fields that exist on target and were set on default (but not overridden)
     for field in default_infra.model_fields_set & target_fields:
         if field not in infra.model_fields_set:
-            setattr(infra, field, getattr(default_infra, field))
+            infra.__pydantic_validator__.validate_assignment(
+                infra, field, getattr(default_infra, field)
+            )
 
     return self
 

@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
+import datetime
 import fnmatch
 import importlib
 import logging
@@ -13,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import typing as tp
+import uuid
 from pathlib import Path
 
 import pydantic
@@ -21,6 +23,12 @@ import yaml as _yaml
 from . import utils
 
 logger = logging.getLogger(__name__)
+
+
+def _copied_path(name: str | Path) -> Path:
+    path = Path(name)
+    # absolute source → basename
+    return Path(path.name) if path.is_absolute() else path
 
 
 @contextlib.contextmanager
@@ -132,6 +140,49 @@ class WorkDir(pydantic.BaseModel):
                 self._commits[name] = githash
 
     @contextlib.contextmanager
+    def _submission(self, base_folder: Path) -> tp.Iterator[None]:
+        folder = self.folder
+        if folder is None:
+            date = datetime.datetime.now().strftime("%Y-%m-%d")
+            folder = base_folder / "code" / f"{date}-{uuid.uuid4().hex[:8]}"
+        folder = Path(folder).absolute()
+        folder.parent.mkdir(parents=True, exist_ok=True)
+        snapshot = self.model_copy(update={"folder": folder})
+        snapshot._active = False
+        copied = {
+            source: folder / _copied_path(name)
+            for name, source in zip(self.copied, self._paths)
+        }
+        token = utils._workdir_submission.set((Path.cwd(), copied))
+        try:
+            with snapshot.activate():
+                yield
+        finally:
+            utils._workdir_submission.reset(token)
+
+    def __getstate__(self) -> dict[str, tp.Any]:
+        state = super().__getstate__()
+        context = utils._workdir_submission.get()
+        if context is None:
+            return state
+        fields = dict(state["__dict__"])
+        if self.folder is not None:
+            fields["folder"] = utils._anchor_path(Path(self.folder))
+        state["__dict__"] = fields
+        private = dict(state["__pydantic_private__"])
+        sources = sorted(context[1], key=lambda p: len(p.parts), reverse=True)
+        paths = []
+        for path in self._paths:
+            for source in sources:
+                if path.is_relative_to(source):
+                    path = context[1][source] / path.relative_to(source)
+                    break
+            paths.append(path)
+        private.update(_paths=paths, _active=False)
+        state["__pydantic_private__"] = private
+        return state
+
+    @contextlib.contextmanager
     def activate(self) -> tp.Iterator[None]:
         if self._active:
             yield
@@ -142,10 +193,7 @@ class WorkDir(pydantic.BaseModel):
         folder.mkdir(exist_ok=True)
         ignore = Ignore(includes=self.includes, excludes=self.excludes)
         for name, path in zip(self.copied, self._paths):
-            if Path(name).is_absolute():
-                # for local folder we keep the structures, for absolute we copy the last item
-                name = Path(name).name
-            out = folder / name
+            out = folder / _copied_path(name)
             if not out.exists():
                 if path.is_dir():
                     shutil.copytree(path, out, ignore=ignore)

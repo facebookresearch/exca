@@ -157,7 +157,7 @@ class CacheDict(tp.Generic[X]):
     def __reduce__(self) -> tp.Any:
         return (
             self.__class__,
-            (self.folder, self._keep_in_ram, self.cache_type),
+            (utils._anchor_path(self.folder), self._keep_in_ram, self.cache_type),
         )
 
     def clear(self) -> None:
