@@ -49,23 +49,6 @@ def test_decorator_deactivated() -> None:
     assert x.shape == (12, 13)
 
 
-def test_map_workdir_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    Path("source.py").touch()
-    infra: tp.Any = {"folder": "cache", "workdir": {"copied": ["source.py"]}}
-    obj = Whatever(infra=infra)
-    expected = tmp_path / "cache" / obj.infra.uid()
-    observed = []
-    for _ in range(2):
-        with obj.infra._work_env(), obj.infra._work_env():
-            restored = pickle.loads(pickle.dumps(obj))
-            observed.append(
-                (Path.cwd(), obj.infra.uid_folder(), restored.infra.uid_folder())
-            )
-    snapshot = observed[0][0]
-    assert observed == [(snapshot, expected, expected)] * 2
-
-
 def test_named_arg() -> None:
     whatever = Whatever(param1=13, infra=dict(keep_in_ram=False))  # type: ignore
     # pylint: disable=unexpected-keyword-arg,no-value-for-parameter

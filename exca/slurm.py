@@ -18,7 +18,7 @@ import pydantic
 import submitit
 from submitit.core import utils as submitit_utils
 
-from . import _workdir_scope, base
+from . import base
 from .workdir import WorkDir
 
 submitit.Job._results_timeout_s = 4  # avoid too long a wait
@@ -209,15 +209,13 @@ class SubmititMixin(pydantic.BaseModel):
         with contextlib.ExitStack() as estack:
             estack.enter_context(submitit.helpers.clean_env())
             if self.workdir is not None:
-                if self.folder is None:
-                    raise ValueError("Workdir requires a folder")
                 uid_folder = self.uid_folder()
-                assert uid_folder is not None
-                cache_folder = _workdir_scope.current.get().anchor(Path(self.folder))
-                factory_folder = (
-                    cache_folder / uid_folder.relative_to(cache_folder).parts[0]
-                )
-                estack.enter_context(self.workdir.activate(base_folder=factory_folder))
+                if self.folder is None or uid_folder is None:
+                    raise ValueError("Workdir requires a folder")
+                # default to first sub-directory
+                parts = uid_folder.relative_to(self.folder).parts
+                base_folder = Path(self.folder) / parts[0]
+                estack.enter_context(self.workdir.activate(base_folder=base_folder))
             base_dump: tp.Any = None
             if self.conda_env is not None:
                 base_dump = submitit_utils.cloudpickle_dump

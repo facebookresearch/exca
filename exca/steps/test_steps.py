@@ -196,9 +196,7 @@ def test_infra_not_shared(tmp_path: Path) -> None:
     assert step1.infra is not step2.infra, "Infra instances should not be shared"
 
 
-@pytest.mark.parametrize(
-    "target_backend", ["LocalProcess", "Cached", "Slurm", "SubmititDebug"]
-)
+@pytest.mark.parametrize("target_backend", ["LocalProcess", "Cached", "Slurm"])
 def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
     """Test that shared fields propagate when switching backend types.
 
@@ -231,16 +229,26 @@ def test_infra_default_propagation(tmp_path: Path, target_backend: str) -> None:
     # Explicit None should bypass default
     step_none = MyStep(value=5, infra=None)
     assert step_none.infra is None, "explicit None should not use default"
-    if target_backend == "SubmititDebug":
-        source = tmp_path / "source.py"
-        source.touch()
-        default = MyStep.model_fields["infra"].default
-        default.workdir = workdir.WorkDir(copied=[source])
-        with pytest.raises(pydantic.ValidationError, match="workdir"):
-            MyStep.model_validate({"infra": {"backend": target_backend}})
-        inherited = MyStep.model_validate({"infra": {"backend": "LocalProcess"}})
-        assert isinstance(inherited.infra, backends.LocalProcess)
-        assert inherited.infra.workdir is not default.workdir
+
+
+def test_infra_default_workdir(tmp_path: Path) -> None:
+    source = tmp_path / "source.py"
+    source.touch()
+    wd = workdir.WorkDir(copied=[source])
+
+    class MyStep(Step):
+        infra: backends.Backend | None = backends.LocalProcess(
+            folder=tmp_path, workdir=wd
+        )
+
+        def _run(self) -> int:
+            return 0
+
+    with pytest.raises(pydantic.ValidationError, match="workdir"):
+        MyStep(infra={"backend": "SubmititDebug"})  # type: ignore
+    step = MyStep(infra={"backend": "Slurm"})  # type: ignore
+    assert isinstance(step.infra, backends.Slurm)
+    assert step.infra.workdir is not wd, "class default WorkDir must not be shared"
 
 
 def test_folder_propagation(tmp_path: Path) -> None:

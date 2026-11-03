@@ -33,9 +33,9 @@ import pydantic
 import submitit
 
 import exca
-from exca import _workdir_scope, utils
-from exca import workdir as workdir_utils
+from exca import utils
 from exca.cachedict import inflight
+from exca.workdir import WorkDir
 
 from . import errors, identity, items, jobregistry
 
@@ -57,12 +57,6 @@ class StepPaths:
 
     base_folder: Path
     step_uid: str
-
-    def __getstate__(self) -> dict[str, tp.Any]:
-        return {
-            **self.__dict__,
-            "base_folder": _workdir_scope.current.get().anchor(self.base_folder),
-        }
 
     @property
     def step_folder(self) -> Path:
@@ -717,13 +711,10 @@ class Backend(exca.helpers.DiscriminatedModel, discriminator_key="backend"):
     mode: identity.ModeType = "cached"
     keep_in_ram: bool = False
 
-    def __getstate__(self) -> dict[str, tp.Any]:
-        state = super().__getstate__()
-        folder = self.folder
-        if folder is not None:
-            folder = _workdir_scope.current.get().anchor(folder)
-        state["__dict__"] = {**state["__dict__"], "folder": folder}
-        return state
+    @pydantic.field_validator("folder")
+    @classmethod
+    def _absolute_folder(cls, folder: Path | None) -> Path | None:
+        return None if folder is None else folder.absolute()
 
     @pydantic.field_validator("mode", mode="before")
     @classmethod
@@ -822,7 +813,7 @@ class _SubmititBackend(Backend):
     """Base for submitit backends."""
 
     job_name: str | None = None
-    workdir: workdir_utils.WorkDir | None = None
+    workdir: WorkDir | None = None
     timeout_min: int | None = None
     nodes: int | None = None
     tasks_per_node: int | None = None

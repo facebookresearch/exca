@@ -14,8 +14,6 @@ from unittest import mock
 import pytest
 import submitit
 
-from exca import _workdir_scope, workdir
-
 from . import base, conftest, helpers
 
 _CODE = Path("snapshot_package/value.py")
@@ -43,7 +41,7 @@ class _SnapshotStep(base.Step):
         return {
             "value": value + module.VALUE + self.offset,
             "cwd": str(Path.cwd()),
-            "run_folder": str(self._run_context().folder().absolute()),
+            "run_folder": str(self._run_context().folder()),
         }
 
 
@@ -60,47 +58,25 @@ class _WaitForFile(base.Step):
 
 
 @pytest.mark.parametrize(
-    "backend,folder,outer",
-    [
-        ("Cached", None, False),
-        ("LocalProcess", None, False),
-        ("LocalProcess", "snapshot", False),
-        ("LocalProcess", None, True),
-    ],
+    "backend,folder",
+    [("Cached", None), ("LocalProcess", None), ("LocalProcess", "snapshot")],
 )
-def test_workdir_nested(
-    snapshot_infra: tp.Any, backend: str, folder: str | None, outer: bool
-) -> None:
+def test_workdir_nested(snapshot_infra: tp.Any, backend: str, folder: str | None) -> None:
     if folder is not None:
         snapshot_infra["workdir"]["folder"] = folder
     child_infra: tp.Any = {"backend": backend, "folder": "inner"}
-    if backend == "LocalProcess":
-        child_infra["workdir"] = {**snapshot_infra["workdir"], "copied": [_CODE]}
     child = _SnapshotStep(infra=child_infra)
     ready = Path.cwd() / "ready"
-    source = _CODE.absolute()
     nested = base.Chain(steps=[_WaitForFile(path=ready), child], infra=snapshot_infra)
     upstream: tp.Any = {"backend": "Cached", "folder": "upstream"}
-    first = conftest.Add(value=2, infra=upstream)
-    if outer:
-        first.run(1)
-    chain = base.Chain(steps=[first, nested])
+    chain = base.Chain(steps=[conftest.Add(value=2, infra=upstream), nested])
     handle = chain.lookup(1)._sub_handles[-1]._sub_handles[-1]
-    context = (
-        workdir.WorkDir(copied=[_CODE.parent]).activate(base_folder=Path("outer"))
-        if outer
-        else contextlib.nullcontext()
-    )
-    with context:
-        if outer:
-            source.write_text("VALUE = 20\n", encoding="utf8")
-        result = chain.run_many([1])
-        if not outer:
-            source.write_text("VALUE = 20\n", encoding="utf8")
-        ready.touch()
-        [output] = list(result)
+    result = chain.run_many([1])
+    _CODE.write_text("VALUE = 20\n", encoding="utf8")
+    ready.touch()
+    [output] = list(result)
     assert output["value"] == 13
-    assert output["run_folder"] == str(handle.paths.run_folder(handle.uid).absolute())
+    assert output["run_folder"] == str(handle.paths.run_folder(handle.uid))
     if folder is not None:
         assert output["cwd"] == str(Path(folder).absolute())
 
@@ -109,17 +85,14 @@ def test_workdir_parallel(snapshot_infra: tp.Any) -> None:
     sweep = helpers.Parallel(
         steps=[_SnapshotStep(offset=k) for k in range(2)], infra=snapshot_infra
     )
-    previous = None
-    for value in (10, 20):
-        _CODE.write_text(f"VALUE = {value}\n", encoding="utf8")
+    outputs = []
+    for value in (1, 2):
         sweep.run(value)
-        outputs = [s.lookup(value).result() for s in sweep.steps]
-        assert [o["value"] for o in outputs] == [value + 10, value + 11]
-        folders = {o["cwd"] for o in outputs}
-        assert len(folders) == 1
-        if previous is not None:
-            assert folders == previous
-        previous = folders
+        _CODE.write_text("VALUE = 20\n", encoding="utf8")
+        outputs += [s.lookup(value).result() for s in sweep.steps]
+    values = [o["value"] for o in outputs]
+    assert values == [11, 12, 12, 13], "edited code must not reach the reused snapshot"
+    assert len({o["cwd"] for o in outputs}) == 1
     assert sweep.clone().infra == sweep.infra
 
 
@@ -136,4 +109,4 @@ def test_workdir_batch_exit(
     monkeypatch.setattr(submitit, "AutoExecutor", mock.Mock(return_value=executor))
     with pytest.raises(RuntimeError, match="batch exit"):
         _SnapshotStep(infra=snapshot_infra).run(1)
-    assert (Path.cwd(), _workdir_scope.current.get().origin) == (tmp_path, None)
+    assert Path.cwd() == tmp_path

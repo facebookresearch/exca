@@ -20,7 +20,7 @@ from pathlib import Path
 import pydantic
 import yaml as _yaml
 
-from . import _workdir_scope, utils
+from . import utils
 
 logger = logging.getLogger(__name__)
 
@@ -133,70 +133,43 @@ class WorkDir(pydantic.BaseModel):
                 logger.info("Current git hash for %s is %s", name, githash)
                 self._commits[name] = githash
 
-    def __getstate__(self) -> dict[str, tp.Any]:
-        state = super().__getstate__()
-        context = _workdir_scope.current.get()
-        if context.origin is None:
-            return state
-        fields = dict(state["__dict__"])
-        if self.folder is not None:
-            fields["folder"] = context.anchor(Path(self.folder))
-        state["__dict__"] = fields
-        private = dict(state["__pydantic_private__"])
-        private.update(_paths=[context.source(p) for p in self._paths], _active=False)
-        state["__pydantic_private__"] = private
-        return state
-
     @contextlib.contextmanager
     def activate(self, *, base_folder: Path | None = None) -> tp.Iterator[None]:
-        """Activate the chosen folder, selecting it once under base_folder if unset."""
+        """Activate the working directory. If ``folder`` is unset, it is created
+        once under ``base_folder/code/`` and kept for later activations."""
         if self._active:
             yield
             return
-        outer = _workdir_scope.current.get()
-        origin = Path.cwd() if outer.origin is None else outer.origin
         folder = self.folder
         if folder is None:
             if base_folder is None:
                 raise RuntimeError("folder field must be filled before activation")
-            date = datetime.datetime.now().strftime("%Y-%m-%d")
-            root = outer.anchor(base_folder)
-            folder = (root / "code" / f"{date}-{uuid.uuid4().hex[:8]}").absolute()
+            tag = f"{datetime.datetime.now():%Y-%m-%d}-{uuid.uuid4().hex[:6]}"
+            folder = Path(base_folder) / "code" / tag
             folder.parent.mkdir(parents=True, exist_ok=True)
-            object.__setattr__(self, "folder", folder)
+            object.__setattr__(self, "folder", folder)  # bypasses freezing checks
         folder = Path(folder)
-        if base_folder is not None:
-            folder = origin / folder
         folder.mkdir(exist_ok=True)
         ignore = Ignore(includes=self.includes, excludes=self.excludes)
-        copied: dict[Path, Path] = {}
         for name, path in zip(self.copied, self._paths):
-            target = Path(name)
-            if target.is_absolute():
-                target = Path(target.name)
-            out = folder / target
-            copied[path] = out.absolute()
-            source = outer.source(path) if base_folder is not None else path
+            if Path(name).is_absolute():
+                # for local folder we keep the structures, for absolute we copy the last item
+                name = Path(name).name
+            out = folder / name
             if not out.exists():
-                if source.is_dir():
-                    shutil.copytree(source, out, ignore=ignore)
+                if path.is_dir():
+                    shutil.copytree(path, out, ignore=ignore)
                     utils.widen_to_umask(out)  # copytree replicates source modes
                 else:
                     out.parent.mkdir(exist_ok=True, parents=True)
-                    shutil.copyfile(source, out, follow_symlinks=True)
-                logger.info("Copied %s to %s", source, out)
+                    shutil.copyfile(path, out, follow_symlinks=True)
+                logger.info("Copied %s to %s", path, out)
         if self._commits:
             string: str = _yaml.safe_dump(self._commits)
             fp = folder / "git-hashes.log"
             logger.info("Git hashes are dumped to %s", fp)
             fp.write_text(string, encoding="utf8")
-        with chdir(folder), contextlib.ExitStack() as stack:
-            if base_folder is not None:
-                scope = _workdir_scope.Scope(
-                    origin=origin, copied={**outer.copied, **copied}
-                )
-                token = _workdir_scope.current.set(scope)
-                stack.callback(_workdir_scope.current.reset, token)
+        with chdir(folder):
             self._active = True
             try:
                 yield

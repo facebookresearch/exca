@@ -234,7 +234,7 @@ infra:
 
 The default snapshot is `<step_folder>/code/<date>-<random>/`, selected once per WorkDir and reused by later submissions. `Parallel` variants share that snapshot. To capture edited code, use a new WorkDir or reset its folder on a cloned configuration; an explicit `workdir.folder` reuses existing files. Filtering and commit checks follow `WorkDir`.
 
-Cache, log and `RunContext.folder()` locations are preserved, including relative cache folders and nested Steps. Nested submissions copy matching sources from the enclosing snapshot, so they cannot recover files excluded by its filters. Relative paths in user fields or inputs resolve from the snapshot.
+Relative backend folders are made absolute when the Step is built, so cache, log and `RunContext.folder()` locations do not depend on the working directory. Jobs run from the snapshot: nested submissions without their own `workdir` reuse it, and relative paths in user fields or inputs resolve from it.
 
 `SubmititDebug` rejects `workdir` because it cannot reload imported code; `Cached`, `ThreadPool` and `ProcessPool` do not accept it. Submission temporarily changes the process-wide working directory, including while waiting for upstream jobs: avoid concurrent threads using relative paths.
 

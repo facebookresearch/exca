@@ -86,6 +86,7 @@ def infra_validator_after(self: tp.Any) -> tp.Any:
     default_infra = default_field.default
     target_fields = set(type(infra).model_fields.keys())
 
+    # Propagate fields that exist on target and were set on default (but not overridden)
     updates = default_infra.model_fields_set & target_fields - infra.model_fields_set
     if updates:
         values = infra.model_dump(exclude_unset=True)

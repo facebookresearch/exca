@@ -33,7 +33,7 @@ from pathlib import Path
 import pydantic
 import submitit
 
-from exca import _workdir_scope, helpers
+from exca import helpers
 
 from . import registry
 
@@ -429,10 +429,7 @@ class InflightClaim:
     )
 
     def __getstate__(self) -> dict[str, tp.Any]:
-        folder = self.folder
-        if folder is not None:
-            folder = _workdir_scope.current.get().anchor(folder)
-        return {**self.__dict__, "folder": folder, "_reg": None}
+        return {**self.__dict__, "_reg": None}
 
     def record_worker_info(self, job: tp.Any, uids: tp.Sequence[str]) -> None:
         """Stamp the submitit *job* running *uids* as their liveness signal."""
