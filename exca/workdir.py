@@ -25,12 +25,6 @@ from . import utils
 logger = logging.getLogger(__name__)
 
 
-def _copied_path(name: str | Path) -> Path:
-    path = Path(name)
-    # absolute source → basename
-    return Path(path.name) if path.is_absolute() else path
-
-
 @contextlib.contextmanager
 def chdir(folder: Path | str) -> tp.Iterator[None]:
     """Temporarily change the working directory and adds
@@ -149,16 +143,13 @@ class WorkDir(pydantic.BaseModel):
         folder.parent.mkdir(parents=True, exist_ok=True)
         snapshot = self.model_copy(update={"folder": folder})
         snapshot._active = False
-        copied = {
-            source: folder / _copied_path(name)
-            for name, source in zip(self.copied, self._paths)
-        }
-        token = utils._workdir_submission.set((Path.cwd(), copied))
-        try:
-            with snapshot.activate():
+        origin = Path.cwd()
+        with snapshot._activate() as copied:
+            token = utils._workdir_submission.set((origin, copied))
+            try:
                 yield
-        finally:
-            utils._workdir_submission.reset(token)
+            finally:
+                utils._workdir_submission.reset(token)
 
     def __getstate__(self) -> dict[str, tp.Any]:
         state = super().__getstate__()
@@ -184,16 +175,26 @@ class WorkDir(pydantic.BaseModel):
 
     @contextlib.contextmanager
     def activate(self) -> tp.Iterator[None]:
-        if self._active:
+        with self._activate():
             yield
+
+    @contextlib.contextmanager
+    def _activate(self) -> tp.Iterator[dict[Path, Path]]:
+        if self._active:
+            yield {}
             return
         if self.folder is None:
             raise RuntimeError("folder field must be filled before activation")
         folder = Path(self.folder)
         folder.mkdir(exist_ok=True)
         ignore = Ignore(includes=self.includes, excludes=self.excludes)
+        copied: dict[Path, Path] = {}
         for name, path in zip(self.copied, self._paths):
-            out = folder / _copied_path(name)
+            target = Path(name)
+            if target.is_absolute():
+                target = Path(target.name)
+            out = folder / target
+            copied[path] = out.absolute()
             if not out.exists():
                 if path.is_dir():
                     shutil.copytree(path, out, ignore=ignore)
@@ -210,7 +211,7 @@ class WorkDir(pydantic.BaseModel):
         with chdir(folder):
             self._active = True
             try:
-                yield
+                yield copied
             finally:
                 self._active = False
 
