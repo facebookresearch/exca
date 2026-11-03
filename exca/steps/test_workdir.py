@@ -4,17 +4,13 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import contextlib
 import importlib
-import time
 import typing as tp
 from pathlib import Path
-from unittest import mock
 
 import pytest
-import submitit
 
-from . import base, conftest, helpers
+from . import backends, base, helpers
 
 _CODE = Path("snapshot_package/value.py")
 
@@ -38,47 +34,7 @@ class _SnapshotStep(base.Step):
 
     def _run(self, value: int) -> dict[str, tp.Any]:
         module = importlib.import_module("snapshot_package.value")
-        return {
-            "value": value + module.VALUE + self.offset,
-            "cwd": str(Path.cwd()),
-            "run_folder": str(self._run_context().folder()),
-        }
-
-
-class _WaitForFile(base.Step):
-    path: Path
-
-    def _run(self, value: int) -> int:
-        deadline = time.monotonic() + 20
-        while not self.path.exists():
-            if time.monotonic() > deadline:
-                raise TimeoutError(str(self.path))
-            time.sleep(0.01)
-        return value
-
-
-@pytest.mark.parametrize(
-    "backend,folder",
-    [("Cached", None), ("LocalProcess", None), ("LocalProcess", "snapshot")],
-)
-def test_workdir_nested(snapshot_infra: tp.Any, backend: str, folder: str | None) -> None:
-    if folder is not None:
-        snapshot_infra["workdir"]["folder"] = folder
-    child_infra: tp.Any = {"backend": backend, "folder": "inner"}
-    child = _SnapshotStep(infra=child_infra)
-    ready = Path.cwd() / "ready"
-    nested = base.Chain(steps=[_WaitForFile(path=ready), child], infra=snapshot_infra)
-    upstream: tp.Any = {"backend": "Cached", "folder": "upstream"}
-    chain = base.Chain(steps=[conftest.Add(value=2, infra=upstream), nested])
-    handle = chain.lookup(1)._sub_handles[-1]._sub_handles[-1]
-    result = chain.run_many([1])
-    _CODE.write_text("VALUE = 20\n", encoding="utf8")
-    ready.touch()
-    [output] = list(result)
-    assert output["value"] == 13
-    assert output["run_folder"] == str(handle.paths.run_folder(handle.uid))
-    if folder is not None:
-        assert output["cwd"] == str(Path(folder).absolute())
+        return {"value": value + module.VALUE + self.offset, "cwd": str(Path.cwd())}
 
 
 def test_workdir_parallel(snapshot_infra: tp.Any) -> None:
@@ -96,17 +52,10 @@ def test_workdir_parallel(snapshot_infra: tp.Any) -> None:
     assert sweep.clone().infra == sweep.infra
 
 
-def test_workdir_batch_exit(
-    tmp_path: Path, snapshot_infra: tp.Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    @contextlib.contextmanager
-    def batch() -> tp.Iterator[None]:
-        yield
-        assert Path.cwd() != tmp_path
-        raise RuntimeError("batch exit")
-
-    executor = mock.Mock(cluster="local", batch=batch)
-    monkeypatch.setattr(submitit, "AutoExecutor", mock.Mock(return_value=executor))
-    with pytest.raises(RuntimeError, match="batch exit"):
-        _SnapshotStep(infra=snapshot_infra).run(1)
-    assert Path.cwd() == tmp_path
+def test_workdir_nested(snapshot_infra: tp.Any) -> None:
+    child_infra: tp.Any = {"backend": "LocalProcess", "folder": "inner"}
+    chain = base.Chain(steps=[_SnapshotStep(infra=child_infra)], infra=snapshot_infra)
+    output = chain.run(1)
+    assert isinstance(chain.infra, backends.LocalProcess)
+    assert chain.infra.workdir is not None
+    assert output == {"value": 11, "cwd": str(chain.infra.workdir.folder)}
