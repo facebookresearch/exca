@@ -222,7 +222,7 @@ chain[1].lookup(value).clear_cache()          # one specific sub-step + input
 
 ## Run from a code snapshot
 
-`LocalProcess`, `Slurm` and `Auto` accept `infra.workdir`, using {class}`exca.workdir.WorkDir`:
+`LocalProcess`, `Slurm` and `Auto` accept a {class}`exca.workdir.WorkDir`, so jobs run from a copy of your code while you keep editing it:
 
 ```yaml
 infra:
@@ -232,11 +232,7 @@ infra:
     copied: [my_package]
 ```
 
-The default snapshot is `<step_folder>/code/<date>-<random>/`, selected once per WorkDir and reused by later submissions. `Parallel` variants share that snapshot. To capture edited code, use a new WorkDir or reset its folder on a cloned configuration; an explicit `workdir.folder` reuses existing files. Filtering and commit checks follow `WorkDir`.
-
-Relative backend folders are made absolute when the Step is built, so cache, log and `RunContext.folder()` locations do not depend on the working directory. Jobs run from the snapshot: nested submissions without their own `workdir` reuse it, and relative paths in user fields or inputs resolve from it.
-
-`SubmititDebug` rejects `workdir` because it cannot reload imported code; `Cached`, `ThreadPool` and `ProcessPool` do not accept it. Submission temporarily changes the process-wide working directory, including while waiting for upstream jobs: avoid concurrent threads using relative paths.
+The copy is made at the first submission in `<step_folder>/code/<date>-<random>/` and reused by later submissions; a new `WorkDir` takes a fresh copy. Jobs run from the copy, so relative paths in your own fields and inputs resolve there.
 
 ## Inspect a running job
 
