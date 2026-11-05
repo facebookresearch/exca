@@ -110,6 +110,8 @@ errors (file malformed, not a database, schema-mismatch on future schema
 bumps) trigger a reset (`unlink` + recreate on next access). An open
 connection reconnects when its DB file is deleted or replaced (inode
 check), so a reset or manual deletion does not strand it on an orphaned file.
+File-level corruption hit mid-op (maybe a transient NFS misread) only
+reconnects: the reset is left to the connect-time check.
 
 ## Submitit interaction
 

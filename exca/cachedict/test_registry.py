@@ -55,8 +55,11 @@ def test_open_connection_follows_external_change(tmp_path: Path, mode: str) -> N
         with errors.ErrorRegistry(tmp_path) as other:
             other._plant(["new"])
     else:
-        db_path.write_bytes(b"NOT A SQLITE DB" * 1000)
+        garbage = b"NOT A SQLITE DB" * 1000
+        db_path.write_bytes(garbage)
         reg._plant(["lost"])
+        assert db_path.read_bytes() == garbage, "mid-op error must not reset"
+        reg._plant(["lost"])  # reconnect: connect gate resets
         reg._plant(["new"])
     assert reg.get(["old", "lost", "new"]) == {"new"}
     reg.close()

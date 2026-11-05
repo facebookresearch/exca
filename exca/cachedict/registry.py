@@ -32,14 +32,14 @@ _CORRUPTION_HINTS = (
 _LOCK_HINTS = ("locked", "busy")
 
 
-def _is_lock(error: BaseException) -> bool:
+def _is_lock(error: Exception) -> bool:
     msg = str(error).lower()
     return isinstance(error, sqlite3.OperationalError) and any(
         h in msg for h in _LOCK_HINTS
     )
 
 
-def _is_corruption(error: BaseException) -> bool:
+def _is_corruption(error: Exception) -> bool:
     msg = str(error).lower()
     return isinstance(error, sqlite3.DatabaseError) and any(
         h in msg for h in _CORRUPTION_HINTS
@@ -232,9 +232,12 @@ class AdvisoryRegistry:
             corrupt = _is_corruption(e)
             if _is_lock(e):
                 reason = "lock contention exhausted, skipping"
-            elif corrupt:
+            elif corrupt and isinstance(e, sqlite3.OperationalError):  # schema drift
                 reason = "corruption detected, resetting"
                 self._try_reset()
+            elif corrupt:  # maybe a transient NFS misread: connect gate decides
+                reason = "corruption suspected, reconnecting"
+                self.close()
             else:
                 reason = str(e)  # unexpected I/O hiccup, programming bug, ...
             # traceback only for the unexpected failures
