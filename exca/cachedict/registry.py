@@ -32,20 +32,6 @@ _CORRUPTION_HINTS = (
 _LOCK_HINTS = ("locked", "busy")
 
 
-def _is_lock(error: Exception) -> bool:
-    msg = str(error).lower()
-    return isinstance(error, sqlite3.OperationalError) and any(
-        h in msg for h in _LOCK_HINTS
-    )
-
-
-def _is_corruption(error: Exception) -> bool:
-    msg = str(error).lower()
-    return isinstance(error, sqlite3.DatabaseError) and any(
-        h in msg for h in _CORRUPTION_HINTS
-    )
-
-
 def select_in_chunks(
     conn: sqlite3.Connection,
     table: str,
@@ -83,12 +69,6 @@ class AdvisoryRegistry:
         self._conn: sqlite3.Connection | None = None
         self._conn_inode: int | None = None
 
-    def _inode(self) -> int | None:
-        try:
-            return self.db_path.stat().st_ino
-        except FileNotFoundError:
-            return None
-
     def _connect(self, *, create: bool = False) -> sqlite3.Connection | None:
         """Lazy-open the DB connection, creating the table if needed.
 
@@ -99,8 +79,12 @@ class AdvisoryRegistry:
             no-op-write paths leave the folder untouched). Writers that
             materialise rows pass ``True``.
         """
+        try:  # before connecting: a swap in between only reconnects
+            inode: int | None = self.db_path.stat().st_ino
+        except FileNotFoundError:
+            inode = None
         if self._conn is not None:
-            if self._inode() == self._conn_inode:
+            if inode == self._conn_inode:
                 return self._conn
             logger.warning(
                 "%s registry DB deleted or replaced externally, reconnecting: %s",
@@ -108,7 +92,6 @@ class AdvisoryRegistry:
                 self.db_path,
             )
             self.close()
-        inode = self._inode()  # before connecting: a swap in between only reconnects
         if inode is None:
             if not create:
                 return None
@@ -121,14 +104,10 @@ class AdvisoryRegistry:
             isolation_level=None,
             check_same_thread=False,  # claims may be released at gc, on any thread
         )
-        try:
-            # WAL needs cross-host shared memory (broken on NFS) -> DELETE journal
-            conn.execute("PRAGMA journal_mode=DELETE")
-            conn.executescript(self._SCHEMA)
-            self._conn_inode = self.db_path.stat().st_ino if inode is None else inode
-        except BaseException:
-            conn.close()
-            raise
+        # WAL needs cross-host shared memory (broken on NFS) -> DELETE journal
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.executescript(self._SCHEMA)
+        self._conn_inode = self.db_path.stat().st_ino if inode is None else inode
         self._conn = conn
         return conn
 
@@ -139,7 +118,7 @@ class AdvisoryRegistry:
             try:
                 return fn()
             except sqlite3.OperationalError as e:
-                if not _is_lock(e):
+                if not any(h in str(e).lower() for h in _LOCK_HINTS):
                     raise
                 logger.debug(
                     "%s registry lock contention at %s, retry %d",
@@ -157,7 +136,9 @@ class AdvisoryRegistry:
             # connect can hit a transient lock (journal/schema init) busy_timeout misses
             return self._retry_on_lock(lambda: self._connect(create=create))
         except Exception as e:
-            corrupt = _is_corruption(e)
+            corrupt = isinstance(e, sqlite3.DatabaseError) and any(
+                h in str(e).lower() for h in _CORRUPTION_HINTS
+            )
             logger.warning(
                 "%s registry unavailable at %s, treating as empty%s",
                 self._LABEL,
@@ -229,23 +210,26 @@ class AdvisoryRegistry:
         try:
             return self._retry_on_lock(run)
         except Exception as e:
-            corrupt = _is_corruption(e)
-            if _is_lock(e):
+            operational = isinstance(e, sqlite3.OperationalError)
+            msg = str(e).lower()
+            if operational and any(h in msg for h in _LOCK_HINTS):
                 reason = "lock contention exhausted, skipping"
-            elif corrupt and isinstance(e, sqlite3.OperationalError):  # schema drift
+            elif operational and any(h in msg for h in _CORRUPTION_HINTS):
                 reason = "corruption detected, resetting"
                 self._try_reset()
-            elif corrupt:  # maybe a transient NFS misread: connect gate decides
+            elif isinstance(e, sqlite3.DatabaseError) and any(
+                h in msg for h in _CORRUPTION_HINTS
+            ):  # maybe a transient NFS misread: connect gate decides
                 reason = "corruption suspected, reconnecting"
                 self.close()
             else:
                 reason = str(e)  # unexpected I/O hiccup, programming bug, ...
-            # traceback only for the unexpected failures
+            # traceback only for the unexpected (non-OperationalError) failures
             logger.warning(
                 "%s registry %s: %s",
                 self._LABEL,
                 op_name,
                 reason,
-                exc_info=not (corrupt or isinstance(e, sqlite3.OperationalError)),
+                exc_info=not operational,
             )
             return fallback
