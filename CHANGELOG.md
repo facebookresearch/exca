@@ -4,7 +4,6 @@
 
 - `steps`: added `Step._run_context()` for execution metadata and per-item working folders. [#345]
 - `steps`: `LocalProcess`, `Slurm` and `Auto` accept `workdir` to run jobs from a copied code snapshot. [#350]
-- `cachedict`: advisory registries (`inflight.db`, `errors.db`, `jobs.db`) follow a deleted or replaced DB file, and drop a connection that hits a corrupt file instead of reusing it.
 
 ## 0.6.0 - 26-10-07
 
