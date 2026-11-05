@@ -35,34 +35,14 @@ def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
     assert db_path.is_file(), "first write materialises the DB"
     assert reg.get(["a"]) == {"a"}
 
-    # External deletion mid-session: next op silently reconnects.
+    # External deletion + recreation mid-session: next op follows the new file.
     db_path.unlink()
-    assert reg.get(["a"]) == set()
-    reg._plant(["b"])
-    assert reg.get(["b"]) == {"b"}
+    with errors.ErrorRegistry(tmp_path) as other:
+        other._plant(["b"])
+    assert reg.get(["a", "b"]) == {"b"}
 
     reg.close()
     reg.close()  # idempotent
-
-
-@pytest.mark.parametrize("mode", ["replace", "overwrite"])
-def test_open_connection_follows_external_change(tmp_path: Path, mode: str) -> None:
-    reg = errors.ErrorRegistry(tmp_path)
-    reg._plant(["old"])
-    db_path = tmp_path / "errors.db"
-    if mode == "replace":
-        db_path.unlink()
-        with errors.ErrorRegistry(tmp_path) as other:
-            other._plant(["new"])
-    else:
-        garbage = b"NOT A SQLITE DB" * 1000
-        db_path.write_bytes(garbage)
-        reg._plant(["lost"])
-        assert db_path.read_bytes() == garbage, "mid-op error must not reset"
-        reg._plant(["lost"])  # reconnect: connect gate resets
-        reg._plant(["new"])
-    assert reg.get(["old", "lost", "new"]) == {"new"}
-    reg.close()
 
 
 def test_context_manager(tmp_path: Path) -> None:
@@ -130,8 +110,8 @@ def test_lock_exhaustion_preserves_db(
 
 
 def test_non_corruption_errors_preserve_db(tmp_path: Path) -> None:
-    """A programming bug or transient I/O error inside fn must not wipe the
-    DB — only known-corruption strings trigger _try_reset."""
+    """A programming bug, transient I/O error or mid-op misread inside fn
+    must not wipe the DB."""
     reg = errors.ErrorRegistry(tmp_path)
     reg._plant(["seed"])
     db_path = tmp_path / "errors.db"
@@ -142,8 +122,11 @@ def test_non_corruption_errors_preserve_db(tmp_path: Path) -> None:
     def bug(conn: sqlite3.Connection) -> None:
         raise sqlite3.ProgrammingError("oops, bad SQL")
 
-    assert reg._safe_execute("io", None, io_hiccup) is None
-    assert reg._safe_execute("bug", None, bug) is None
+    def misread(conn: sqlite3.Connection) -> None:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    for fn in (io_hiccup, bug, misread):
+        assert reg._safe_execute(fn.__name__, None, fn) is None
     assert db_path.exists()
     assert reg.get(["seed"]) == {"seed"}
     reg.close()
