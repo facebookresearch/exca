@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 T = tp.TypeVar("T")
 QUERY_BATCH_SIZE = 500
 
-# OperationalError substrings that mean the DB is unusable (vs transient
+# DatabaseError substrings that mean the DB is unusable (vs transient
 # lock/I-O hiccups). Triggers a reset; advisory layer can afford to lose rows.
 _CORRUPTION_HINTS = (
     "malformed",
@@ -30,6 +30,20 @@ _CORRUPTION_HINTS = (
 )
 # OperationalError substrings for transient lock contention (retried).
 _LOCK_HINTS = ("locked", "busy")
+
+
+def _is_lock(error: BaseException) -> bool:
+    msg = str(error).lower()
+    return isinstance(error, sqlite3.OperationalError) and any(
+        h in msg for h in _LOCK_HINTS
+    )
+
+
+def _is_corruption(error: BaseException) -> bool:
+    msg = str(error).lower()
+    return isinstance(error, sqlite3.DatabaseError) and any(
+        h in msg for h in _CORRUPTION_HINTS
+    )
 
 
 def select_in_chunks(
@@ -67,6 +81,13 @@ class AdvisoryRegistry:
     def __init__(self, folder: Path | str) -> None:
         self.db_path = Path(folder) / self._DB_NAME
         self._conn: sqlite3.Connection | None = None
+        self._conn_inode: int | None = None
+
+    def _inode(self) -> int | None:
+        try:
+            return self.db_path.stat().st_ino
+        except FileNotFoundError:
+            return None
 
     def _connect(self, *, create: bool = False) -> sqlite3.Connection | None:
         """Lazy-open the DB connection, creating the table if needed.
@@ -79,15 +100,16 @@ class AdvisoryRegistry:
             materialise rows pass ``True``.
         """
         if self._conn is not None:
-            if self.db_path.exists():
+            if self._inode() == self._conn_inode:
                 return self._conn
             logger.warning(
-                "%s registry DB deleted externally, reconnecting: %s",
+                "%s registry DB deleted or replaced externally, reconnecting: %s",
                 self._LABEL,
                 self.db_path,
             )
             self.close()
-        if not self.db_path.exists():
+        inode = self._inode()  # before connecting: a swap in between only reconnects
+        if inode is None:
             if not create:
                 return None
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,9 +121,14 @@ class AdvisoryRegistry:
             isolation_level=None,
             check_same_thread=False,  # claims may be released at gc, on any thread
         )
-        # WAL needs cross-host shared memory (broken on NFS) -> DELETE journal
-        conn.execute("PRAGMA journal_mode=DELETE")
-        conn.executescript(self._SCHEMA)
+        try:
+            # WAL needs cross-host shared memory (broken on NFS) -> DELETE journal
+            conn.execute("PRAGMA journal_mode=DELETE")
+            conn.executescript(self._SCHEMA)
+            self._conn_inode = self.db_path.stat().st_ino if inode is None else inode
+        except BaseException:
+            conn.close()
+            raise
         self._conn = conn
         return conn
 
@@ -112,7 +139,7 @@ class AdvisoryRegistry:
             try:
                 return fn()
             except sqlite3.OperationalError as e:
-                if not any(h in str(e).lower() for h in _LOCK_HINTS):
+                if not _is_lock(e):
                     raise
                 logger.debug(
                     "%s registry lock contention at %s, retry %d",
@@ -130,9 +157,7 @@ class AdvisoryRegistry:
             # connect can hit a transient lock (journal/schema init) busy_timeout misses
             return self._retry_on_lock(lambda: self._connect(create=create))
         except Exception as e:
-            corrupt = isinstance(e, sqlite3.DatabaseError) and any(
-                h in str(e).lower() for h in _CORRUPTION_HINTS
-            )
+            corrupt = _is_corruption(e)
             logger.warning(
                 "%s registry unavailable at %s, treating as empty%s",
                 self._LABEL,
@@ -204,21 +229,20 @@ class AdvisoryRegistry:
         try:
             return self._retry_on_lock(run)
         except Exception as e:
-            operational = isinstance(e, sqlite3.OperationalError)
-            msg = str(e).lower()
-            if operational and any(h in msg for h in _LOCK_HINTS):
+            corrupt = _is_corruption(e)
+            if _is_lock(e):
                 reason = "lock contention exhausted, skipping"
-            elif operational and any(h in msg for h in _CORRUPTION_HINTS):
+            elif corrupt:
                 reason = "corruption detected, resetting"
                 self._try_reset()
             else:
                 reason = str(e)  # unexpected I/O hiccup, programming bug, ...
-            # traceback only for the unexpected (non-OperationalError) failures
+            # traceback only for the unexpected failures
             logger.warning(
                 "%s registry %s: %s",
                 self._LABEL,
                 op_name,
                 reason,
-                exc_info=not operational,
+                exc_info=not (corrupt or isinstance(e, sqlite3.OperationalError)),
             )
             return fallback

@@ -45,6 +45,23 @@ def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
     reg.close()  # idempotent
 
 
+@pytest.mark.parametrize("mode", ["replace", "overwrite"])
+def test_open_connection_follows_external_change(tmp_path: Path, mode: str) -> None:
+    reg = errors.ErrorRegistry(tmp_path)
+    reg._plant(["old"])
+    db_path = tmp_path / "errors.db"
+    if mode == "replace":
+        db_path.unlink()
+        with errors.ErrorRegistry(tmp_path) as other:
+            other._plant(["new"])
+    else:
+        db_path.write_bytes(b"NOT A SQLITE DB" * 1000)
+        reg._plant(["lost"])
+        reg._plant(["new"])
+    assert reg.get(["old", "lost", "new"]) == {"new"}
+    reg.close()
+
+
 def test_context_manager(tmp_path: Path) -> None:
     """`with` closes the connection on exit and preserves subclass type."""
     with errors.ErrorRegistry(tmp_path) as reg:
