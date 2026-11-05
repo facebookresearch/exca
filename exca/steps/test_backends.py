@@ -466,7 +466,7 @@ def test_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (code.parent / "__init__.py").touch()
     code.write_text("VALUE = 10\n", encoding="utf8")
     infra: tp.Any = {"backend": "LocalProcess", "folder": "cache", "max_jobs": 1}
-    infra["workdir"] = {"copied": [code.parent]}
+    infra["workdir"] = {"copied": [code.parent, "exca"]}
     sweep = helpers.Parallel(
         steps=[_SnapshotStep(offset=k) for k in range(2)], infra=infra
     )
