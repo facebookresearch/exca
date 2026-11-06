@@ -789,9 +789,6 @@ def environment_variables(**kwargs: tp.Any) -> tp.Iterator[None]:
 # Config consistency checking (shared between TaskInfra/MapInfra and steps)
 # =============================================================================
 
-# Functions returning True to ignore default mismatches in check_configs()
-DEFAULT_CHECK_SKIPS: list[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
-
 
 class ConfigDump:
     """Config dump for cache consistency checks."""
@@ -884,8 +881,6 @@ class ConfigDump:
             nondefaults = set(as_confdict(self.uid).flat())
             for key, val in curr.items():
                 if key in nondefaults or key not in prev or val == prev[key]:
-                    continue
-                if any(skip(key, val, prev[key]) for skip in DEFAULT_CHECK_SKIPS):
                     continue
                 fp = folder / "full-uid.yaml"
                 raise self._error(
