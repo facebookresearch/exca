@@ -28,8 +28,7 @@ logger = logging.getLogger(__name__)
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
 ExcludeCallable = tp.Callable[[tp.Any], tp.Iterable[str]]
 Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tuple[str, tp.Any]]
-# add functions here that return True if mismatch with cached config can be ignored, else False
-DEFAULT_CHECK_SKIPS: list[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
+DEFAULT_CHECK_SKIPS = utils.DEFAULT_CHECK_SKIPS  # deprecated
 
 
 class Sentinel:
@@ -360,7 +359,7 @@ class BaseInfra(pydantic.BaseModel):
             if len(args) > 1:
                 raise ValueError(f"Only one positional argument allowed, got {args}")
             if kwargs:
-                msg = "Provide either args or kwargs, not both, got {args=} {kwargs=}"
+                msg = f"Provide either args or kwargs, not both, got {args=} {kwargs=}"
                 raise ValueError(msg)
             kwargs = args[0]
         cdict = self.config(exclude_defaults=True, uid=False)
@@ -452,7 +451,6 @@ class BaseInfraMethod:
             if not self.exclude_from_cache_uid.startswith("method:"):
                 msg = "exclude_from_cache_uid should be a list/tuple/set, or a string starting with 'method:'"
                 raise TypeError(msg)
-        self.exclude_from_cache_uid = self.exclude_from_cache_uid
         if not isinstance(self.exclude_from_cache_uid, str):
             if not callable(self.exclude_from_cache_uid):
                 self.exclude_from_cache_uid = tuple(self.exclude_from_cache_uid)
