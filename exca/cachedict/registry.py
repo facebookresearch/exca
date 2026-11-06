@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 T = tp.TypeVar("T")
 QUERY_BATCH_SIZE = 500
 
-# OperationalError substrings that mean the DB is unusable (vs transient
+# DatabaseError substrings that mean the DB is unusable (vs transient
 # lock/I-O hiccups). Triggers a reset; advisory layer can afford to lose rows.
 _CORRUPTION_HINTS = (
     "malformed",
@@ -67,6 +67,7 @@ class AdvisoryRegistry:
     def __init__(self, folder: Path | str) -> None:
         self.db_path = Path(folder) / self._DB_NAME
         self._conn: sqlite3.Connection | None = None
+        self._conn_inode: int | None = None
 
     def _connect(self, *, create: bool = False) -> sqlite3.Connection | None:
         """Lazy-open the DB connection, creating the table if needed.
@@ -78,16 +79,20 @@ class AdvisoryRegistry:
             no-op-write paths leave the folder untouched). Writers that
             materialise rows pass ``True``.
         """
+        try:  # before connecting: a swap in between only reconnects
+            inode: int | None = self.db_path.stat().st_ino
+        except FileNotFoundError:
+            inode = None
         if self._conn is not None:
-            if self.db_path.exists():
+            if inode == self._conn_inode:
                 return self._conn
             logger.warning(
-                "%s registry DB deleted externally, reconnecting: %s",
+                "%s registry DB deleted or replaced externally, reconnecting: %s",
                 self._LABEL,
                 self.db_path,
             )
             self.close()
-        if not self.db_path.exists():
+        if inode is None:
             if not create:
                 return None
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,6 +107,7 @@ class AdvisoryRegistry:
         # WAL needs cross-host shared memory (broken on NFS) -> DELETE journal
         conn.execute("PRAGMA journal_mode=DELETE")
         conn.executescript(self._SCHEMA)
+        self._conn_inode = self.db_path.stat().st_ino if inode is None else inode
         self._conn = conn
         return conn
 
@@ -211,6 +217,11 @@ class AdvisoryRegistry:
             elif operational and any(h in msg for h in _CORRUPTION_HINTS):
                 reason = "corruption detected, resetting"
                 self._try_reset()
+            elif isinstance(e, sqlite3.DatabaseError) and any(
+                h in msg for h in _CORRUPTION_HINTS
+            ):  # maybe a transient NFS misread: connect gate decides
+                reason = "corruption suspected, reconnecting"
+                self.close()
             else:
                 reason = str(e)  # unexpected I/O hiccup, programming bug, ...
             # traceback only for the unexpected (non-OperationalError) failures
