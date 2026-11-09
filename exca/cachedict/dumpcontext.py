@@ -121,7 +121,7 @@ class DumpContext:
         self._stack: contextlib.ExitStack | None = None
         self._files: dict[str, tp.IO[bytes]] = {}
         self._index_files: dict[Path, tp.IO[bytes]] = {}  # opened "rb+" to blank
-        self._created_files: list[Path] = []
+        self._created_files: set[Path] = set()
         self._dump_count: int = 0
         # read-side cache (per-thread, fork-safe via _get_store)
         self._resource_cache: threading.local = threading.local()
@@ -223,7 +223,7 @@ class DumpContext:
             f = path.open("ab")
             self._stack.enter_context(f)
             self._files[name] = f
-            self._created_files.append(path)
+            self._created_files.add(path)
         return self._files[name], name
 
     def index_file(self, path: Path) -> tp.IO[bytes]:
@@ -256,7 +256,7 @@ class DumpContext:
             # File written by a concurrent worker; handlers use
             # temporary_save_path (atomic rename) so this is safe.
             logger.debug("Concurrent write detected for %s, proceeding", basename)
-        self._created_files.append(path)
+        self._created_files.add(path)
         return name
 
     # -- Dispatch --
