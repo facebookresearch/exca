@@ -432,23 +432,22 @@ class InflightClaim:
         return {**self.__dict__, "_reg": None}
 
     def record_worker_info(self, job: tp.Any, uids: tp.Sequence[str]) -> None:
-        """Stamp the submitit *job* running *uids* as their liveness signal."""
+        """Stamp the submitit *job* running *uids* as their liveness signal, or any
+        `Liveness` (e.g. a job queue's task, whose runner then calls
+        ``WriteTask.run_and_cache``; processes reading the rows must import its kind,
+        else unclaimed)."""
+        if self._reg is None:
+            return
         liveness: Liveness
-        if isinstance(job, submitit.SlurmJob):
+        if isinstance(job, Liveness):
+            liveness = job
+        elif isinstance(job, submitit.SlurmJob):
             liveness = Slurm(job_id=str(job.job_id), folder=str(job.paths.folder))
         elif isinstance(job, submitit.LocalJob):  # job_id: the subprocess pid
             liveness = Pid(host=socket.gethostname(), pid=int(job.job_id))
         else:  # in-process (debug): the claimer's stays
             return
-        self.record_liveness(liveness, uids)
-
-    def record_liveness(self, liveness: Liveness, uids: tp.Sequence[str]) -> None:
-        """Stamp *liveness*, what runs or will run *uids*, on their rows; e.g. a backend
-        handing tasks to a job queue stamps the queued task, whose runner then calls
-        ``WriteTask.run_and_cache``. Processes reading the rows must import its kind
-        (else unclaimed)."""
-        if self._reg is not None:
-            self._reg.update_liveness(list(uids), liveness)
+        self._reg.update_liveness(list(uids), liveness)
 
     def hand_off(self, uids: tp.Iterable[str]) -> None:
         """Leave the release of *uids* to the work running them."""
@@ -466,8 +465,8 @@ def inflight_session(
     When *reg* is ``None`` (no cache folder), yields an unblocked claim
     so that callers never need a ``None`` guard.
 
-    Callers should call ``claim.record_liveness`` (``record_worker_info`` for submitit
-    jobs) inside the ``with`` block when other work runs the claimed items.
+    Callers should call ``claim.record_worker_info`` inside the ``with``
+    block when submitit jobs (or other runners) run the claimed items.
     """
     if reg is None:
         yield InflightClaim(tuple(item_uids))
