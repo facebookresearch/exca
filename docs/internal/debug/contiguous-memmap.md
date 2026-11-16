@@ -159,6 +159,22 @@ the view maps to a contiguous byte range in the file, a single
 This makes the cache fork-safe (children reopen their own FDs instead of
 inheriting the parent's shared kernel file descriptions) and thread-safe
 (each thread gets its own cache, auto-cleaned on thread exit).
+Handles are kept in least-recently-used order and closed beyond
+`EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES` per thread (default: half the soft
+`RLIMIT_NOFILE`; 0 for no limit). `ContiguousMemmapArray` uses the module-level
+cache, so the bound holds for the whole process (per thread) whatever the number
+of cache files and `CacheDict`s. On network filesystems each miss costs an
+`open()` (~0.8 ms on Lustre), hence a default that keeps every file open
+whenever the fd limit allows.
+
+**No memmap per instance:** a memmap (and its `mmap`) keeps a duplicated file
+descriptor and a mapping alive for as long as any view of it lives, e.g. items
+kept in RAM. `ContiguousMemmapArray` therefore builds proxies with
+`ContiguousMemmap.from_file` from the stored `(filename, offset, shape, dtype)`,
+without opening the file, and `ContiguousMemmap(memmap_view)` only reads the
+path and offset of the memmap. The view geometry lives on a shared zero
+"skeleton" buffer that is never read: basic indexing and view operations run
+on it, and the file offset is the view's address plus a fixed shift.
 
 ## Change to MemmapArray
 

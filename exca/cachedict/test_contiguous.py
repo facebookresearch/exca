@@ -11,6 +11,7 @@ import typing as tp
 from pathlib import Path
 
 import numpy as np
+import psutil
 import pytest
 
 from .contiguous import ContiguousMemmap
@@ -50,7 +51,9 @@ def test_roundtrip(tmp_path: Path) -> None:
     assert isinstance(sub, ContiguousMemmap)
     np.testing.assert_array_equal(np.asarray(sub), original[1:3])
     # scalar access returns plain value
-    assert cm[0, 0] == original[0, 0]
+    assert cm[3, 29] == original[3, 29]
+    assert cm[-1][-2] == original[-1, -2]
+    assert np.asarray(cm[3, 29, ...]).shape == ()
     assert not isinstance(cm[0, 0], ContiguousMemmap)
     # asarray with dtype conversion
     result = np.asarray(cm, dtype=np.float32)
@@ -88,6 +91,8 @@ def test_view_ops(tmp_path: Path) -> None:
     np.testing.assert_array_equal(np.asarray(cm.T), original.T)
     with pytest.raises(TypeError, match="Non-contiguous"):
         cm.T[0]
+    with pytest.raises(TypeError, match="copy"):
+        cm.T.reshape(-1)
 
 
 # =============================================================================
@@ -190,6 +195,34 @@ def test_no_shared_memory_with_memmap(tmp_path: Path) -> None:
     materialized = np.asarray(cm)
     assert not np.shares_memory(materialized, raw)
     np.testing.assert_array_equal(materialized, original)
+
+
+def test_open_files_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Loaded proxies hold no file open; reads keep at most the max number
+    of files open, and stay correct after their handles are evicted."""
+    process = psutil.Process()
+    try:
+        process.open_files()
+    except (psutil.AccessDenied, PermissionError) as error:
+        pytest.skip(f"psutil cannot list open files: {error}")
+    monkeypatch.setenv("EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES", "3")
+    (tmp_path / "data").mkdir()
+    ctx = DumpContext(tmp_path)
+    arrays = [np.full((4, 5), k, dtype=np.float32) for k in range(10)]
+    loaded = []
+    for k, arr in enumerate(arrays):
+        (tmp_path / "data" / f"{k}.data").write_bytes(arr.tobytes())
+        info = dict(filename=f"data/{k}.data", offset=0, shape=(4, 5), dtype="float32")
+        loaded.append(ctx.load({"#type": "ContiguousMemmapArray", **info}))
+
+    def num_open() -> int:
+        return sum(Path(f.path).is_relative_to(tmp_path) for f in process.open_files())
+
+    assert num_open() == 0
+    for _ in range(2):
+        for cm, arr in zip(loaded, arrays):
+            np.testing.assert_array_equal(np.asarray(cm[1:]), arr[1:])
+            assert num_open() <= 3
 
 
 class _ShortReads(io.FileIO):

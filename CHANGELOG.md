@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Other
+
+- `ContiguousMemmap`: holds no memmap, and reads keep at most `EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES` files open per thread (default: half the soft `RLIMIT_NOFILE`); reading many cache files no longer holds up to two file descriptors and a mapping per file. [#XXX]
+
 ## 0.6.1 - 26-11-16
 
 ### Breaking

@@ -7,6 +7,8 @@
 """ContiguousMemmap: a proxy around numpy memmap views that prevents RSS
 accumulation by using explicit file I/O instead of page faults."""
 
+import collections
+import os
 import threading
 import typing as tp
 
@@ -21,26 +23,86 @@ _SAFE_ATTRS = frozenset(
 _VIEW_OPS = frozenset(
     {"T", "reshape", "transpose", "swapaxes", "squeeze", "ravel", "view"}
 )
+_SKELETON = np.zeros(0, dtype=np.uint8)
+
+
+def _skeleton(nbytes: int) -> np.ndarray:
+    """Shared zero buffer: views on it only carry geometry and are never read."""
+    global _SKELETON
+    if _SKELETON.size < nbytes:
+        _SKELETON = np.zeros(max(nbytes, 2 * _SKELETON.size, 2**26), dtype=np.uint8)
+    return _SKELETON
+
+
+def _address(arr: np.ndarray) -> int:
+    return arr.__array_interface__["data"][0]  # type: ignore[no-any-return]
+
+
+def _extent(
+    shape: tp.Sequence[int], strides: tp.Sequence[int], itemsize: int
+) -> tuple[int, int]:
+    """Return (offset of the lowest byte from the first element, byte span)."""
+    if 0 in shape:
+        return 0, 0
+    low, span = 0, itemsize
+    for s, st in zip(shape, strides):
+        low += (s - 1) * min(st, 0)
+        span += (s - 1) * abs(st)
+    return low, span
+
+
+def _max_open_files() -> int:
+    """``EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES``, else half the soft fd limit."""
+    env = os.environ.get("EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES")
+    if env is not None:
+        return int(env)
+    try:
+        import resource
+    except ImportError:  # Windows
+        return 256
+    soft = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+    return 0 if soft == resource.RLIM_INFINITY else max(1, soft // 2)
+
+
+def _file_handle(cache: threading.local, path: str) -> tp.Any:
+    """Return an unbuffered handle on *path*, closing the least recently used
+    ones beyond ``_max_open_files()`` handles in *cache* (per thread)."""
+    store = _get_store(cache)
+    handles: collections.OrderedDict[str, tp.Any] | None = store.get("ContiguousMemmap")
+    if handles is None:
+        handles = store["ContiguousMemmap"] = collections.OrderedDict()
+    fh = handles.pop(path, None)
+    if fh is None or fh.closed:
+        limit = _max_open_files()
+        while 0 < limit <= len(handles):
+            handles.popitem(last=False)[1].close()
+        # cached handles: per-file buffer overhead
+        fh = open(path, "rb", buffering=0)  # noqa: SIM115
+    handles[path] = fh
+    return fh
 
 
 class ContiguousMemmap:
     """Proxy around a memmap view that reads data via file I/O.
 
-    View operations (__getitem__ with basic indexing) delegate to the
-    underlying memmap — they only adjust pointers/strides, no page faults.
-    Data is materialized via file I/O only when explicitly consumed through
-    ``np.asarray()``.
+    View operations (__getitem__ with basic indexing) only adjust the view
+    geometry — no page faults.  Data is materialized via file I/O only when
+    explicitly consumed through ``np.asarray()``.
 
     Non-contiguous access (fancy indexing, strided slicing) raises TypeError;
     the caller should materialize first via ``np.asarray()``.
 
-    An optional *cache* ``threading.local`` (e.g. ``DumpContext._resource_cache``)
-    stores open file handles keyed by ``("ContiguousMemmap", path)``, isolated
-    per thread and per process (fork-safe).  When *cache* is ``None``, a
-    module-level fallback is used.
+    Instances only keep the file path and the view geometry: no memmap, hence
+    no mapping nor file descriptor per instance (see also ``from_file``).
+    Reads go through unbuffered file handles stored in a ``threading.local``
+    *cache*, isolated per thread and per process (fork-safe), and closed in
+    least-recently-used order beyond ``EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES``
+    handles per thread (default: half the soft ``RLIMIT_NOFILE``, so all files
+    stay open whenever the limit allows; 0 for no limit).  When *cache* is
+    ``None``, a module-level cache shared by all instances is used.
     """
 
-    __slots__ = ("_arr", "_mm", "_cache")
+    __slots__ = ("_arr", "_path", "_shift", "_cache")
 
     def __init__(self, arr: np.ndarray, cache: threading.local | None = None) -> None:
         # Walk the base chain to the root file-level memmap.
@@ -55,18 +117,56 @@ class ContiguousMemmap:
                 f"ContiguousMemmap requires a memmap-backed array, "
                 f"got base type {type(mm).__name__}"
             )
-        self._arr = arr
-        self._mm: np.memmap = mm
+        offset = mm.offset + _address(arr) - _address(mm)
+        path: str = mm.filename  # type: ignore[assignment]
+        self._setup(path, offset, arr.shape, arr.dtype, arr.strides, cache)
+
+    @classmethod
+    def from_file(
+        cls,
+        path: str,
+        offset: int,
+        shape: tp.Sequence[int],
+        dtype: tp.Any,
+        cache: threading.local | None = None,
+    ) -> "ContiguousMemmap":
+        """Proxy for the C-ordered array stored at byte *offset* of the file
+        at *path*, without opening nor mapping the file."""
+        out = cls.__new__(cls)
+        out._setup(path, offset, tuple(shape), np.dtype(dtype), None, cache)
+        return out
+
+    def _setup(
+        self,
+        path: str,
+        offset: int,
+        shape: tuple[int, ...],
+        dtype: np.dtype[tp.Any],
+        strides: tuple[int, ...] | None,
+        cache: threading.local | None,
+    ) -> None:
+        if strides is None:
+            low, span = 0, int(np.prod(shape)) * dtype.itemsize
+        else:
+            low, span = _extent(shape, strides, dtype.itemsize)
+        skeleton = _skeleton(span)
+        self._arr = np.ndarray(
+            shape, dtype, buffer=skeleton, offset=-low, strides=strides
+        )
+        self._path = path
+        self._shift = offset - _address(self._arr)  # file offset - address
         self._cache = cache if cache is not None else _FILE_HANDLE_CACHE
 
-    def _byte_range(self, arr: np.ndarray) -> tuple[int, int]:
-        """Return (byte_offset, byte_span) of *arr* relative to the root memmap."""
-        off = arr.__array_interface__["data"][0]
-        off -= self._mm.__array_interface__["data"][0]
-        span = arr.dtype.itemsize
-        for s, st in zip(arr.shape, arr.strides):
-            span += (s - 1) * abs(st)
-        return off, span
+    def _view(self, arr: np.ndarray) -> "ContiguousMemmap":
+        if arr.size and not np.may_share_memory(arr, self._arr):
+            raise TypeError(
+                "ContiguousMemmap operation would copy data "
+                "— use np.asarray(arr) to read data first."
+            )
+        out = ContiguousMemmap.__new__(ContiguousMemmap)
+        out._arr, out._path, out._shift = arr, self._path, self._shift
+        out._cache = self._cache
+        return out
 
     def __len__(self) -> int:
         return len(self._arr)
@@ -81,17 +181,19 @@ class ContiguousMemmap:
                 "ContiguousMemmap does not support fancy indexing "
                 "— use np.asarray(arr)[key] to read data first."
             )
-        result = self._arr[key]
-        if not isinstance(result, np.ndarray):
-            return result  # scalar
+        ellipsis = any(k is Ellipsis for k in keys)
+        view_key = keys if ellipsis else (*keys, ...)  # 0-d view, not a scalar read
+        result = self._arr[view_key]
         if result.size == 0:
             return np.empty(result.shape, dtype=result.dtype)
+        if result.ndim == 0 and not ellipsis:  # scalar
+            return np.asarray(self._view(result))[()]
         if any(s < 0 for s in result.strides):
             raise TypeError("Non-contiguous read — use np.asarray(arr)[key] instead.")
-        _, span = self._byte_range(result)
+        _, span = _extent(result.shape, result.strides, result.itemsize)
         if span != result.size * result.dtype.itemsize:
             raise TypeError("Non-contiguous read — use np.asarray(arr)[key] instead.")
-        return ContiguousMemmap(result, self._cache)
+        return self._view(result)
 
     def __array__(
         self, dtype: np.dtype[tp.Any] | None = None, copy: bool | None = None
@@ -99,17 +201,11 @@ class ContiguousMemmap:
         if self._arr.size == 0:
             result = np.empty(self._arr.shape, dtype=self._arr.dtype)
             return result if dtype is None else result.astype(dtype)
-        off, span = self._byte_range(self._arr)
+        low, span = _extent(self._arr.shape, self._arr.strides, self._arr.itemsize)
+        offset = _address(self._arr) + low + self._shift
         buf = np.empty(span, dtype=np.uint8)
-        path: str = self._mm.filename  # type: ignore[assignment]
-        cache_key = ("ContiguousMemmap", path)
-        store = _get_store(self._cache)
-        fh = store.get(cache_key)
-        if fh is None or fh.closed:
-            # cached handles: per-file buffer overhead
-            fh = open(path, "rb", buffering=0)  # noqa: SIM115
-            store[cache_key] = fh
-        fh.seek(self._mm.offset + off)
+        fh = _file_handle(self._cache, self._path)
+        fh.seek(offset)
         n = 0
         while n < span:  # short raw reads
             read = fh.readinto(buf.data[n:])
@@ -118,16 +214,17 @@ class ContiguousMemmap:
             n += read
         if n != span:
             raise IOError(
-                f"ContiguousMemmap: short read on {path} "
-                f"(expected {span} bytes at offset {self._mm.offset + off}, got {n})"
+                f"ContiguousMemmap: short read on {self._path} "
+                f"(expected {span} bytes at offset {offset}, got {n})"
             )
         view: np.ndarray[tp.Any, np.dtype[tp.Any]] = np.ndarray(
             self._arr.shape,
             self._arr.dtype,
             buffer=buf.data,
+            offset=-low,
             strides=self._arr.strides,
         )
-        result = np.ascontiguousarray(view)
+        result = np.asarray(view, order="C")  # ascontiguousarray: 0-d -> 1-d
         if dtype is not None:
             result = result.astype(dtype)
         return result
@@ -152,10 +249,10 @@ class ContiguousMemmap:
             if callable(val):
 
                 def _wrap(*a: tp.Any, **kw: tp.Any) -> "ContiguousMemmap":
-                    return ContiguousMemmap(val(*a, **kw), self._cache)
+                    return self._view(val(*a, **kw))
 
                 return _wrap
-            return ContiguousMemmap(val, self._cache)
+            return self._view(val)
         if hasattr(np.ndarray, name):
             raise AttributeError(
                 f"ContiguousMemmap does not support '.{name}' directly "

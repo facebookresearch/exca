@@ -10,6 +10,7 @@ Each handler implements the __dump_info__ / __load_from_info__ protocol.
 One-file-per-entry handlers use ctx.key_path(suffix) for path allocation.
 """
 
+import os
 import pickle
 import typing as tp
 import warnings
@@ -92,19 +93,28 @@ class ContiguousMemmapArray:
     """Like MemmapArray but loads return a ContiguousMemmap proxy that reads
     data via file I/O instead of faulting memmap pages into RSS.
 
-    Memmap pages stay resident as long as the DumpContext cache holds the
-    memmap object; targeted file I/O reads into freeable heap buffers,
-    keeping RSS flat and often faster.  Trade-off: fancy indexing, stepped
-    slicing, and direct ndarray methods require ``np.asarray()`` first."""
+    Nothing is mapped: targeted file I/O reads into freeable heap buffers
+    through a process-wide, bounded set of open files (see ContiguousMemmap),
+    keeping RSS and file descriptors flat whatever the number of cache files,
+    and often faster.  Trade-off:
+    fancy indexing, stepped slicing, and direct ndarray methods require
+    ``np.asarray()`` first."""
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         return MemmapArray.__dump_info__(ctx, value)
 
     @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> tp.Any:
-        raw = MemmapArray.__load_from_info__(ctx, **kwargs)
-        return ContiguousMemmap(raw, ctx._resource_cache)
+    def __load_from_info__(
+        cls,
+        ctx: DumpContext,
+        filename: str,
+        offset: int,
+        shape: tp.Sequence[int],
+        dtype: str,
+    ) -> ContiguousMemmap:
+        path = os.path.abspath(ctx.folder / filename)
+        return ContiguousMemmap.from_file(path, offset, shape, dtype)
 
 
 @DumpContext.register
