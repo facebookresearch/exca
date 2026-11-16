@@ -361,7 +361,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                             )
                             jobs.append(j)
                     for chunk, j in zip(uid_item_chunks, jobs):
-                        claim.record_worker_info(j, uids=[uid for uid, _ in chunk])
+                        live = inflight.Liveness.from_job(j)
+                        claim.record_liveness(live, [uid for uid, _ in chunk])
                     # pylint: disable=expression-not-assigned
                     uid = self.uid()
                     msg = "Sent %s samples for %s into %s jobs on cluster '%s' (eg: %s)"

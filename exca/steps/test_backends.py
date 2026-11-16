@@ -487,10 +487,6 @@ class _Queued(backends.inflight.Liveness):  # a job queue's task, also its job h
     def here(cls) -> None:
         return None
 
-    @classmethod
-    def from_job(cls, job: tp.Any) -> tp.Self | None:
-        return job if isinstance(job, cls) else None
-
     def is_alive(self) -> bool:
         return os.path.exists(self.path)
 
@@ -508,7 +504,9 @@ class HandOffForTest(backends.Backend):  # tasks run later by a runner elsewhere
         with Path(job.path).open("wb") as f:
             pickle.dump(tasks, f)
         for task in tasks:
+            assert task.claim is not None
             task.mark_attempted()
+            task.claim.record_liveness(job, task.items.uids)
         return backends.Submission({job: tasks})
 
 
@@ -516,9 +514,7 @@ def test_hand_off(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "HandOffForTest", "folder": tmp_path}
     out = conftest.Add(value=10, infra=infra).run_many([1])
     failed = conftest.Add(fail_on="all", infra=infra).run_many([1])
-    folder = conftest.Add(value=10, infra=infra).lookup(1).paths.step_folder
-    with backends.inflight.InflightRegistry(folder) as reg:
-        assert {type(w.liveness) for w in reg.get().values()} == {_Queued}
+    assert conftest.Add(value=10, infra=infra).lookup(1).status == "running", "queued"
     for path in tmp_path.rglob("queued.pkl"):  # the runner
         with contextlib.suppress(ValueError), path.open("rb") as f:
             for task in pickle.load(f):
