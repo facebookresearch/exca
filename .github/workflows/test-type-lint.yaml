@@ -15,34 +15,21 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python 3.11
-      id: setup-python
-      uses: actions/setup-python@v5
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
       with:
-        python-version: '3.11'
-
-    # Building/caching the environment
-
-    - name: Cache venv
-      uses: actions/cache@v4
-      env:
-        # change name here (only) to invalidate cache
-        cache-name: cache-venv-v1
-      with:
-          key: ${{ env.cache-name }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('pyproject.toml') }}
-          path: ./ci_env
-
-    - name: Create venv
-      run: |
-        # creates the env if it does not exist (not loaded from cache)
-        if [ ! -d "./ci_env" ]; then python -m venv ./ci_env; fi
-        echo "$PWD/ci_env/bin" >> $GITHUB_PATH
+        enable-cache: true
+        cache-dependency-glob: pyproject.toml
 
     - name: Install dependencies
-      run: pip install -e .[dev]
+      run: |
+        uv venv --python 3.11 .venv
+        echo "$PWD/.venv/bin" >> $GITHUB_PATH
+        uv pip install --python .venv -e .[dev]
 
     - name: Print installed packages
-      run: pip freeze
+      run: uv pip freeze --python .venv
 
     # start checks
 
