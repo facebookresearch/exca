@@ -518,32 +518,17 @@ class WriteTask:
             self.release()  # free competitors as soon as this work ends
 
 
+def _multi_run_and_cache(shard: list[WriteTask]) -> None:
+    """``run_and_cache`` each task of one worker shard."""
+    for task in shard:
+        step_uid = task.cache.paths.step_uid
+        logger.info("Running %s items for %s", len(task.items.uids), step_uid)
+        task.run_and_cache()
+
+
 def _release_shard(shard: list[WriteTask], _: futures.Future[None]) -> None:
     for task in shard:
         task.release()
-
-
-def run_tasks(tasks: list[WriteTask]) -> None:
-    """Run a shard of claimed *tasks* in its worker: a submitit job, a pool, or an
-    external runner the backend's ``_submit`` handed them to (e.g. pickled into a job
-    queue). A task whose claim was lost meanwhile (released, or reclaimed as dead, e.g.
-    a replayed shard) is claimed anew and computed only if missing from the cache."""
-    for task in tasks:
-        assert task.claim is not None and task.claim.worker is not None
-        folder, token = task.cache.paths.step_folder, task.claim.worker.token
-        logger.info("Running %s items for %s", len(task.items.uids), folder.name)
-        with inflight.InflightRegistry(folder) as reg:
-            rows = reg.get(list(task.items.uids))
-        if all(uid in rows and rows[uid].token == token for uid in task.items.uids):
-            task.run_and_cache()
-            continue
-        task.release()  # partly lost: free the rest, else the reclaim waits on it
-        reg = inflight.InflightRegistry(folder)
-        with inflight.inflight_session(reg, task.items.uids) as claim:
-            pending = task.cache.pending(claim.uids, "cached")
-            if pending:
-                todo = task.select(list(pending))
-                dataclasses.replace(todo, claim=claim).run_and_cache()
 
 
 def _shard_tasks(
@@ -654,9 +639,9 @@ class CacheDispatch:
 
 
 class Submission:
-    """Running pool futures, submitit jobs or external runners' job handles (with
-    ``done()`` and ``result()``), one per shard of tasks. Each shard releases its
-    claims when it ends, whether or not the submission is waited on."""
+    """Running pool futures, submitit jobs or other job handles (with ``done()`` and
+    ``result()``), one per shard of tasks. Each shard releases its claims when it ends,
+    whether or not the submission is waited on."""
 
     def __init__(
         self,
@@ -700,7 +685,7 @@ class SubmissionSource:
 
     def __getitem__(self, uid: str) -> tp.Any:
         self._submission.wait((self._cache.paths.step_folder, uid))
-        # cached value or error: a job handle need not raise (e.g. an external runner's)
+        # cached value or error: a job handle need not raise (e.g. a job queue's)
         return LookupHandle(self._cache, uid).result()
 
     def select(self, uids: tp.Sequence[str]) -> SubmissionSource:
@@ -868,7 +853,7 @@ class _SubmititBackend(Backend):
                 stack.enter_context(self.workdir.activate(base_folder=step_folder))
             # batch pickles jobs on exit → registered last, inside workdir
             stack.enter_context(executor.batch())
-            jobs = [executor.submit(run_tasks, shard) for shard in shards]
+            jobs = [executor.submit(_multi_run_and_cache, shard) for shard in shards]
         # a shard may span variants: record each sub-task against the shared job
         by_folder: dict[Path, dict[str, tp.Sequence[str]]] = {}
         for shard, job in zip(shards, jobs):
@@ -959,7 +944,7 @@ class _PoolBackend(Backend):
         )
         pool = utils.make_pool_executor(self._POOL_TYPE, max_workers)
         logger.info("Sent %s items for %s steps into a %s", n_items, len(tasks), pool)
-        jobs = {pool.submit(run_tasks, shard): shard for shard in shards}
+        jobs = {pool.submit(_multi_run_and_cache, shard): shard for shard in shards}
         for job, shard in jobs.items():
             # a crashed process-pool worker never reaches run_and_cache's release
             job.add_done_callback(functools.partial(_release_shard, shard))

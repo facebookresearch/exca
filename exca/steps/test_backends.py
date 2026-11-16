@@ -12,6 +12,7 @@ import importlib
 import logging
 import os
 import pickle
+import socket
 import sys
 import threading
 import time
@@ -371,7 +372,7 @@ def test_pool_crash_releases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     def crash(shard: list[backends.WriteTask]) -> None:  # e.g. an OOM-killed process
         raise RuntimeError("worker died")
 
-    monkeypatch.setattr(backends, "run_tasks", crash)
+    monkeypatch.setattr(backends, "_multi_run_and_cache", crash)
     infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
     step = conftest.Mult(coeff=2.0, infra=infra)
     out = step.run_many([1.0, 2.0])
@@ -480,59 +481,33 @@ def test_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert sweep.clone().infra == sweep.infra
 
 
-class _Queued(backends.inflight.Liveness):  # also the job handle
-    path: str
-
-    @classmethod
-    def here(cls) -> None:
-        return None
-
-    def is_alive(self) -> bool:
-        return os.path.exists(self.path)
-
-    def done(self) -> bool:
-        return not self.is_alive()
-
-    def result(self) -> None:  # never raises: a failure is read from the cache
-        while not self.done():
-            time.sleep(0.01)
+_QUEUED = backends.inflight.Pid(host=socket.gethostname(), pid=os.getppid())  # alive
+_HANDED: list[tuple[futures.Future[None], bytes]] = []
 
 
-class ExternalQueueForTest(backends.Backend):
+class HandOffForTest(backends.Backend):  # a job queue served by a runner elsewhere
     def _submit(self, tasks: list[backends.WriteTask]) -> backends.Submission | None:
-        path = tasks[0].cache.paths.step_folder / "queued.pkl"  # the queue's task file
-        queued = _Queued(path=str(path))
+        job: futures.Future[None] = futures.Future()
         for task in tasks:
             assert task.claim is not None
             task.mark_attempted()
-            task.claim.record_liveness(queued, task.items.uids)
-        with path.open("wb") as f:
-            pickle.dump(tasks, f)
-        return backends.Submission({queued: tasks})
+            task.claim.record_liveness(_QUEUED, task.items.uids)
+        _HANDED.append((job, pickle.dumps(tasks)))
+        return backends.Submission({job: tasks})
 
 
-def test_external_runner(tmp_path: Path) -> None:
-    infra: tp.Any = {"backend": "ExternalQueueForTest", "folder": tmp_path}
-    step = conftest.Add(value=10, infra=infra)
-    out = step.run_many([1, 2])
+def test_hand_off(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "HandOffForTest", "folder": tmp_path}
+    out = conftest.Add(value=10, infra=infra).run_many([1])
     failed = conftest.Add(fail_on="all", infra=infra).run_many([1])
-    handle = step.lookup(1)
-    assert handle.status == "running", "queued counts as running"
-    folder = handle.paths.step_folder
+    folder = conftest.Add(value=10, infra=infra).lookup(1).paths.step_folder
     with backends.inflight.InflightRegistry(folder) as reg:
-        assert reg.claim([handle.uid]) == [], "queued items block competitors"
-    with (folder / "queued.pkl").open("rb") as f:
-        replayed = pickle.load(f)  # rerun at the end
-    with backends.inflight.InflightRegistry(folder, replayed[0].claim.worker) as reg:
-        reg.release([handle.uid])  # partly lost claim: must not wait on itself
-    for path in tmp_path.rglob("queued.pkl"):  # the runner, elsewhere
-        with contextlib.suppress(ValueError), path.open("rb") as f:
-            backends.run_tasks(pickle.load(f))
-        path.unlink()
-    assert list(out) == [11, 12]
+        assert [w.liveness for w in reg.get().values()] == [_QUEUED]
+    for job, raw in _HANDED:  # the runner
+        with contextlib.suppress(ValueError):
+            for task in pickle.loads(raw):
+                task.run_and_cache()
+        job.set_result(None)  # a queue reports the end, not the error
+    assert list(out) == [11]
     with pytest.raises(ValueError, match="Triggered an error"):
         list(failed)
-    backends.run_tasks(replayed)
-    assert not replayed[0].step.calls, "a replayed task reuses the cache"
-    with backends.inflight.InflightRegistry(folder) as reg:
-        assert reg.get() == {}
