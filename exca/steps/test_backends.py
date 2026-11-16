@@ -11,6 +11,7 @@ import gc
 import importlib
 import logging
 import os
+import pickle
 import sys
 import threading
 import time
@@ -370,7 +371,7 @@ def test_pool_crash_releases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     def crash(shard: list[backends.WriteTask]) -> None:  # e.g. an OOM-killed process
         raise RuntimeError("worker died")
 
-    monkeypatch.setattr(backends, "_multi_run_and_cache", crash)
+    monkeypatch.setattr(backends, "run_tasks", crash)
     infra: tp.Any = {"backend": "ThreadPool", "folder": tmp_path, "max_jobs": 2}
     step = conftest.Mult(coeff=2.0, infra=infra)
     out = step.run_many([1.0, 2.0])
@@ -477,3 +478,61 @@ def test_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         values += [s.lookup(value).result() for s in sweep.steps]
     assert values == [11, 12, 12, 13], "edited code must not reach the reused snapshot"
     assert sweep.clone().infra == sweep.infra
+
+
+class _Queued(backends.inflight.Liveness):  # also the job handle
+    path: str
+
+    @classmethod
+    def here(cls) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        return os.path.exists(self.path)
+
+    def done(self) -> bool:
+        return not self.is_alive()
+
+    def result(self) -> None:  # never raises: a failure is read from the cache
+        while not self.done():
+            time.sleep(0.01)
+
+
+class ExternalQueueForTest(backends.Backend):
+    def _submit(self, tasks: list[backends.WriteTask]) -> backends.Submission | None:
+        path = tasks[0].cache.paths.step_folder / "queued.pkl"  # the queue's task file
+        queued = _Queued(path=str(path))
+        for task in tasks:
+            assert task.claim is not None
+            task.mark_attempted()
+            task.claim.record_liveness(queued, task.items.uids)
+        with path.open("wb") as f:
+            pickle.dump(tasks, f)
+        return backends.Submission({queued: tasks})
+
+
+def test_external_runner(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "ExternalQueueForTest", "folder": tmp_path}
+    step = conftest.Add(value=10, infra=infra)
+    out = step.run_many([1, 2])
+    failed = conftest.Add(fail_on="all", infra=infra).run_many([1])
+    handle = step.lookup(1)
+    assert handle.status == "running", "queued counts as running"
+    folder = handle.paths.step_folder
+    with backends.inflight.InflightRegistry(folder) as reg:
+        assert reg.claim([handle.uid]) == [], "queued items block competitors"
+    with (folder / "queued.pkl").open("rb") as f:
+        replayed = pickle.load(f)  # rerun at the end
+    with backends.inflight.InflightRegistry(folder, replayed[0].claim.worker) as reg:
+        reg.release([handle.uid])  # partly lost claim: must not wait on itself
+    for path in tmp_path.rglob("queued.pkl"):  # the runner, elsewhere
+        with contextlib.suppress(ValueError), path.open("rb") as f:
+            backends.run_tasks(pickle.load(f))
+        path.unlink()
+    assert list(out) == [11, 12]
+    with pytest.raises(ValueError, match="Triggered an error"):
+        list(failed)
+    backends.run_tasks(replayed)
+    assert not replayed[0].step.calls, "a replayed task reuses the cache"
+    with backends.inflight.InflightRegistry(folder) as reg:
+        assert reg.get() == {}

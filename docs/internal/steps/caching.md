@@ -89,6 +89,7 @@ A dispatch is one `CacheDispatch` over its `WriteTask`s (one per step); the cons
 2. **Claim**: one `inflight_session` per task, in `step_uid` order (concurrent dispatches agree on lock order).
 3. **Recheck** under the claims: re-read cache state, clear what gets recomputed. Stops a competitor that populated mid-wait from handing its value back to a `force`; lets `retry` recompute cached errors.
 4. **Submit**: `Backend._submit(tasks)`, the only per-backend hook. All tasks go into one submission (a sweep of step variants shares one submitit array or pool), split into one shard per worker job. `WriteTask.mark_attempted` records force/retry attempts on the task's `_StepCache`.
+   Each worker (submitit job, pool future, or an external runner such as a job queue, given the pickled shard) runs its shard with `run_tasks`; a replayed shard (requeued job) reclaims lost claims and computes only what is missing. A backend handing work to an external runner stamps the claims with a liveness covering the queued and running task (`InflightClaim.record_liveness`).
 5. **Release**:
    - by the worker: each shard releases its claims when `run_and_cache` ends (success or failure), or for pools when its future is done (crashed processes included);
    - by the session exit, for what was not handed off to a `Submission`; dropping a `Submission` neither waits nor releases;
