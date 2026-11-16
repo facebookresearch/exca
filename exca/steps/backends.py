@@ -685,7 +685,6 @@ class SubmissionSource:
 
     def __getitem__(self, uid: str) -> tp.Any:
         self._submission.wait((self._cache.paths.step_folder, uid))
-        # cached value or error: a job handle need not raise (e.g. a job queue's)
         return LookupHandle(self._cache, uid).result()
 
     def select(self, uids: tp.Sequence[str]) -> SubmissionSource:
