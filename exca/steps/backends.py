@@ -859,7 +859,7 @@ class _SubmititBackend(Backend):
         for shard, job in zip(shards, jobs):
             for task in shard:
                 assert task.claim is not None  # inherited from its variant
-                task.claim.record_worker_info(job, uids=task.items.uids)
+                task.claim.record_liveness(inflight.job_liveness(job), task.items.uids)
                 folder = task.cache.paths.step_folder
                 by_folder.setdefault(folder, {})[job.job_id] = task.items.uids
         for folder, records in by_folder.items():

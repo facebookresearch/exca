@@ -491,7 +491,7 @@ class HandOffForTest(backends.Backend):  # a job queue served by a runner elsewh
         for task in tasks:
             assert task.claim is not None
             task.mark_attempted()
-            task.claim.record_worker_info(_QUEUED, task.items.uids)
+            task.claim.record_liveness(_QUEUED, task.items.uids)
         _HANDED.append((job, pickle.dumps(tasks)))
         return backends.Submission({job: tasks})
 

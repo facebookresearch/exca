@@ -145,6 +145,17 @@ class Slurm(Liveness):
         return f"{self.job_id.split('_')[0]} [slurm:{state}]"
 
 
+def job_liveness(job: submitit.Job[tp.Any]) -> Liveness:
+    """What runs the submitted submitit *job*."""
+    if isinstance(job, submitit.SlurmJob):
+        return Slurm(job_id=str(job.job_id), folder=str(job.paths.folder))
+    if isinstance(job, submitit.LocalJob):  # job_id: the subprocess pid
+        return Pid(host=socket.gethostname(), pid=int(job.job_id))
+    here = Liveness.here()  # in-process (debug): this process, like the claimer
+    assert here is not None, "Pid always detects"
+    return here
+
+
 @dataclasses.dataclass(frozen=True)
 class WorkerInfo:
     """Identity of the worker that claimed an item.
@@ -431,23 +442,12 @@ class InflightClaim:
     def __getstate__(self) -> dict[str, tp.Any]:
         return {**self.__dict__, "_reg": None}
 
-    def record_worker_info(self, job: tp.Any, uids: tp.Sequence[str]) -> None:
-        """Stamp the submitit *job* running *uids* as their liveness signal, or any
-        `Liveness` (e.g. a job queue's task, whose runner then calls
-        ``WriteTask.run_and_cache``; processes reading the rows must import its kind,
-        else unclaimed)."""
-        if self._reg is None:
-            return
-        liveness: Liveness
-        if isinstance(job, Liveness):
-            liveness = job
-        elif isinstance(job, submitit.SlurmJob):
-            liveness = Slurm(job_id=str(job.job_id), folder=str(job.paths.folder))
-        elif isinstance(job, submitit.LocalJob):  # job_id: the subprocess pid
-            liveness = Pid(host=socket.gethostname(), pid=int(job.job_id))
-        else:  # in-process (debug): the claimer's stays
-            return
-        self._reg.update_liveness(list(uids), liveness)
+    def record_liveness(self, liveness: Liveness, uids: tp.Sequence[str]) -> None:
+        """Stamp *liveness*, what runs *uids* (e.g. `job_liveness` of a submitit job, or a
+        job queue's task whose runner then calls ``WriteTask.run_and_cache``), on their
+        rows; processes reading the rows must import its kind (else unclaimed)."""
+        if self._reg is not None:
+            self._reg.update_liveness(list(uids), liveness)
 
     def hand_off(self, uids: tp.Iterable[str]) -> None:
         """Leave the release of *uids* to the work running them."""
@@ -465,8 +465,8 @@ def inflight_session(
     When *reg* is ``None`` (no cache folder), yields an unblocked claim
     so that callers never need a ``None`` guard.
 
-    Callers should call ``claim.record_worker_info`` inside the ``with``
-    block when submitit jobs (or other runners) run the claimed items.
+    Callers should call ``claim.record_liveness`` inside the ``with``
+    block when other work (e.g. submitit jobs) runs the claimed items.
     """
     if reg is None:
         yield InflightClaim(tuple(item_uids))
