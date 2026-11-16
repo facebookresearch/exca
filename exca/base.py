@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 C = tp.TypeVar("C", bound=tp.Callable[..., tp.Any])
 ExcludeCallable = tp.Callable[[tp.Any], tp.Iterable[str]]
 Mapping = tp.MutableMapping[str, tp.Any] | tp.Iterable[tuple[str, tp.Any]]
+# deprecated and ignored, only kept so that neuralset<=0.4 can still import it
+DEFAULT_CHECK_SKIPS: list[tp.Callable[[str, tp.Any, tp.Any], bool]] = []
 
 
 class Sentinel:

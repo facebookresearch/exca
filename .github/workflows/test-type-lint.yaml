@@ -14,60 +14,32 @@ jobs:
       max-parallel: 5
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
       with:
-        python-version: '3.11'
-
-    # Building/caching the environment
-
-    - name: Add conda to system path
-      run: |
-        # $CONDA is an environment variable pointing to the root of the miniconda directory
-        echo $CONDA
-        echo $CONDA/bin >> $GITHUB_PATH
-        echo $CONDA_PREFIX
-
-    - name: Cache conda env
-      id: cache-conda
-      uses: actions/cache@v4
-      env:
-        # change name here (only) to invalidate cache
-        cache-name: cache-conda-env-v1
-      with:
-          key: ${{ env.cache-name }}-${{ hashFiles('pyproject.toml') }}
-          path: ./ci_env
-
-    - name: Create conda env
-      run: |
-        # creates the env if it does not exist (not loaded from cache)
-        sudo apt-get update
-        if [ ! -d "./ci_env" ]; then \
-          conda create -p ./ci_env python=3.11 ipython -y
-        fi
+        enable-cache: true
+        cache-dependency-glob: pyproject.toml
 
     - name: Install dependencies
       run: |
-        source activate ./ci_env
-        pip install -e .[dev]
+        uv venv --python 3.11 .venv
+        echo "$PWD/.venv/bin" >> $GITHUB_PATH
+        uv pip install --python .venv -e .[dev]
 
     - name: Print installed packages
-      run: |
-        source activate ./ci_env
-        pip freeze
+      run: uv pip freeze --python .venv
 
     # start checks
 
     - name: Run type hint checks with mypy
       run: |
-        source activate ./ci_env
         pip show mypy
         mypy exca
 
     - name: Test with pytest
       run: |
-        source activate ./ci_env
         pip show pytest
         pytest exca --durations=10
         python -m exca.test_safeguard  # checks no unneeded imports
@@ -76,7 +48,6 @@ jobs:
     - name: Test README code blocks
       if: false
       run: |
-        source activate ./ci_env
         # update readmes to avoid running on slurm:
         sed -i 's/cluster: slurm/cluster: null/g' docs/infra/*.md
         sed -i 's/\"auto\"/None/g' README.md
@@ -85,11 +56,11 @@ jobs:
         pytest --markdown-docs -m markdown-docs README.md docs/
 
     # keep ruff version in sync with .pre-commit-config.yaml
-    - uses: astral-sh/ruff-action@v3
+    - uses: astral-sh/ruff-action@4919ec5cf1f49eff0871dbcea0da843445b837e6  # v3.6.1
       with:
         version: "0.15.8"
         args: "check"
-    - uses: astral-sh/ruff-action@v3
+    - uses: astral-sh/ruff-action@4919ec5cf1f49eff0871dbcea0da843445b837e6  # v3.6.1
       with:
         version: "0.15.8"
         args: "format --check"

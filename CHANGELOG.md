@@ -2,8 +2,18 @@
 
 ## [Unreleased]
 
+## 0.6.1 - 26-11-16
+
+### Breaking
+
+- `set`/`frozenset` config fields are sorted in uids (were process-dependent); uids of such configs may change. [#343]
+
+### Other
+
 - `steps`: added `Step._run_context()` for execution metadata and per-item working folders. [#345]
 - `steps`: `LocalProcess`, `Slurm` and `Auto` accept `workdir` to run jobs from a copied code snapshot. [#350]
+- `ContiguousMemmap`: much lower memory use when reading many cache files (e.g. `DataLoader` workers). [#347]
+- `workdir`: packages installed in a virtual environment are no longer mistaken for editable ones. [#357]
 
 ## 0.6.0 - 26-10-07
 

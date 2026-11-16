@@ -9,6 +9,7 @@ import gc
 import logging
 import os
 import pickle
+import threading
 import time
 import typing as tp
 from concurrent import futures
@@ -312,9 +313,15 @@ def test_orphaned_data_file_cleanup(
     cache: cd.CacheDict[tp.Any] = cd.CacheDict(
         folder=tmp_path, keep_in_ram=False, cache_type=cache_type
     )
+    barrier = threading.Barrier(3)  # 3 live threads -> 3 writers/info files
+
+    def write(c: str) -> None:
+        barrier.wait()
+        _write_items(cache, [f"{c}1", f"{c}2"], data)
+
     with futures.ThreadPoolExecutor(max_workers=3) as ex:
         for c in "abc":
-            ex.submit(_write_items, cache, [f"{c}1", f"{c}2"], data)
+            ex.submit(write, c)
     assert len(list(tmp_path.glob("*-info.jsonl"))) == 3
     if read_before_delete:
         assert len(set(cache.keys())) == 6
