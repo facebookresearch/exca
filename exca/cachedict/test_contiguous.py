@@ -7,6 +7,7 @@
 """Tests for ContiguousMemmap."""
 
 import io
+import shutil
 import typing as tp
 from pathlib import Path
 
@@ -19,11 +20,13 @@ from .dumpcontext import DumpContext
 
 
 def _make_cm(tmp_path: Path, arr: np.ndarray) -> ContiguousMemmap:
-    """Dump an array via MemmapArray and return it wrapped as ContiguousMemmap."""
+    """Dump an array via ContiguousMemmapArray and load it back."""
     ctx = DumpContext(tmp_path)
     with ctx:
-        info = ctx.dump(arr, cache_type="MemmapArray")
-    return ContiguousMemmap(ctx.load(info))
+        info = ctx.dump(arr, cache_type="ContiguousMemmapArray")
+    cm = ctx.load(info)
+    assert isinstance(cm, ContiguousMemmap)
+    return cm
 
 
 # =============================================================================
@@ -62,6 +65,10 @@ def test_roundtrip(tmp_path: Path) -> None:
     # empty slice returns plain ndarray
     empty = cm[2:2]
     assert isinstance(empty, np.ndarray) and empty.shape == (0, 30)
+    shutil.rmtree(tmp_path / "data")
+    recreated = np.asarray(_make_cm(tmp_path, -original))
+    msg = "stale handle on a file recreated under the same name"
+    np.testing.assert_array_equal(recreated, -original, err_msg=msg)
 
 
 # =============================================================================
@@ -125,12 +132,6 @@ def test_options_replace(tmp_path: Path) -> None:
 # =============================================================================
 
 
-def test_requires_memmap_backed() -> None:
-    """Wrapping a plain ndarray raises TypeError."""
-    with pytest.raises(TypeError, match="memmap-backed"):
-        ContiguousMemmap(np.arange(10))
-
-
 @pytest.mark.parametrize(
     "key,match",
     [
@@ -191,15 +192,13 @@ def test_no_shared_memory_with_memmap(tmp_path: Path) -> None:
     # raw memmap: shares memory with the mapped file
     assert np.shares_memory(np.asarray(raw), raw)
     # ContiguousMemmap: does NOT share memory — data came from file I/O
-    cm = ContiguousMemmap(raw)
+    cm = ctx.load({**info, "#type": "ContiguousMemmapArray"})
     materialized = np.asarray(cm)
     assert not np.shares_memory(materialized, raw)
     np.testing.assert_array_equal(materialized, original)
 
 
 def test_open_files_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Loaded proxies hold no file open; reads keep at most the max number
-    of files open, and stay correct after their handles are evicted."""
     process = psutil.Process()
     try:
         process.open_files()
@@ -218,11 +217,11 @@ def test_open_files_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     def num_open() -> int:
         return sum(Path(f.path).is_relative_to(tmp_path) for f in process.open_files())
 
-    assert num_open() == 0
-    for _ in range(2):
+    assert num_open() == 0, "loaded proxies must not hold files open"
+    for _ in range(2):  # 2nd pass reads evicted files
         for cm, arr in zip(loaded, arrays):
             np.testing.assert_array_equal(np.asarray(cm[1:]), arr[1:])
-            assert num_open() <= 3
+            assert num_open() <= 3, "more open files than the cap"
 
 
 class _ShortReads(io.FileIO):

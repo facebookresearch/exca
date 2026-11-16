@@ -90,15 +90,7 @@ class MemmapArray:
 
 @DumpContext.register
 class ContiguousMemmapArray:
-    """Like MemmapArray but loads return a ContiguousMemmap proxy that reads
-    data via file I/O instead of faulting memmap pages into RSS.
-
-    Nothing is mapped: targeted file I/O reads into freeable heap buffers
-    through a process-wide, bounded set of open files (see ContiguousMemmap),
-    keeping RSS and file descriptors flat whatever the number of cache files,
-    and often faster.  Trade-off:
-    fancy indexing, stepped slicing, and direct ndarray methods require
-    ``np.asarray()`` first."""
+    """Like MemmapArray but loads return a lazy ContiguousMemmap."""
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
@@ -114,7 +106,7 @@ class ContiguousMemmapArray:
         dtype: str,
     ) -> ContiguousMemmap:
         path = os.path.abspath(ctx.folder / filename)
-        return ContiguousMemmap.from_file(path, offset, shape, dtype)
+        return ContiguousMemmap(path, offset, shape, dtype)
 
 
 @DumpContext.register
