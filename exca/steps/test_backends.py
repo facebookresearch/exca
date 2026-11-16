@@ -488,7 +488,7 @@ class _Queued(backends.inflight.Liveness):  # a job queue's task, also its job h
         return None
 
     @classmethod
-    def of_job(cls, job: tp.Any) -> tp.Self | None:
+    def from_job(cls, job: tp.Any) -> tp.Self | None:
         return job if isinstance(job, cls) else None
 
     def is_alive(self) -> bool:
