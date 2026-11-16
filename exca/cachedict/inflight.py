@@ -443,8 +443,8 @@ class InflightClaim:
         return {**self.__dict__, "_reg": None}
 
     def record_liveness(self, liveness: Liveness, uids: tp.Sequence[str]) -> None:
-        """Stamp *liveness*, what runs *uids*, on their rows: e.g. `Liveness.from_job` of a
-        submitit job, or a job queue's task whose runner then calls
+        """Stamp *liveness*, what runs *uids*, on their rows: e.g. `Liveness.from_job`
+        of a submitit job, or a job queue's task whose runner then calls
         ``WriteTask.run_and_cache``. Processes reading the rows must import its kind
         (else unclaimed)."""
         if self._reg is not None:
