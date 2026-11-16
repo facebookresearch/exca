@@ -443,8 +443,10 @@ class InflightClaim:
         self.record_liveness(liveness, uids)
 
     def record_liveness(self, liveness: Liveness, uids: tp.Sequence[str]) -> None:
-        """Stamp *liveness*, what runs or will run *uids* (e.g. a job queue's task), on
-        their rows; processes reading them must import its kind (else unclaimed)."""
+        """Stamp *liveness*, what runs or will run *uids*, on their rows; e.g. a backend
+        handing tasks to a job queue stamps the queued task, whose runner then calls
+        ``WriteTask.run_and_cache``. Processes reading the rows must import its kind
+        (else unclaimed)."""
         if self._reg is not None:
             self._reg.update_liveness(list(uids), liveness)
 
