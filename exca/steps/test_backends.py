@@ -481,14 +481,14 @@ def test_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _Queued(backends.inflight.Liveness):  # a job queue's task, also its job handle
-    path: str
+    path: Path
 
     @classmethod
     def here(cls) -> None:
         return None
 
     def is_alive(self) -> bool:
-        return os.path.exists(self.path)
+        return self.path.exists()
 
     def done(self) -> bool:
         return not self.is_alive()
@@ -498,10 +498,10 @@ class _Queued(backends.inflight.Liveness):  # a job queue's task, also its job h
             time.sleep(0.01)
 
 
-class HandOffForTest(backends.Backend):  # tasks run later by a runner elsewhere
+class HandOffForTest(backends.Backend):
     def _submit(self, tasks: list[backends.WriteTask]) -> backends.Submission | None:
-        job = _Queued(path=str(tasks[0].cache.paths.step_folder / "queued.pkl"))
-        with Path(job.path).open("wb") as f:
+        job = _Queued(path=tasks[0].cache.paths.step_folder / "queued.pkl")
+        with job.path.open("wb") as f:
             pickle.dump(tasks, f)
         for task in tasks:
             assert task.claim is not None
@@ -514,7 +514,10 @@ def test_hand_off(tmp_path: Path) -> None:
     infra: tp.Any = {"backend": "HandOffForTest", "folder": tmp_path}
     out = conftest.Add(value=10, infra=infra).run_many([1])
     failed = conftest.Add(fail_on="all", infra=infra).run_many([1])
-    assert conftest.Add(value=10, infra=infra).lookup(1).status == "running", "queued"
+    removed = conftest.Add(value=20, infra=infra)
+    removed.run_many([1])
+    (removed.lookup(1).paths.step_folder / "queued.pkl").unlink()
+    assert removed.lookup(1).status is None, "claim must die with its queued task"
     for path in tmp_path.rglob("queued.pkl"):  # the runner
         with contextlib.suppress(ValueError), path.open("rb") as f:
             for task in pickle.load(f):
