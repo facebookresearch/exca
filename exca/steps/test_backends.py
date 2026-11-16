@@ -11,6 +11,7 @@ import gc
 import importlib
 import logging
 import os
+import pickle
 import sys
 import threading
 import time
@@ -477,3 +478,51 @@ def test_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         values += [s.lookup(value).result() for s in sweep.steps]
     assert values == [11, 12, 12, 13], "edited code must not reach the reused snapshot"
     assert sweep.clone().infra == sweep.infra
+
+
+class _Queued(backends.inflight.Liveness):  # a job queue's task, also its job handle
+    path: Path
+
+    @classmethod
+    def here(cls) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        return self.path.exists()
+
+    def done(self) -> bool:
+        return not self.is_alive()
+
+    def result(self) -> None:  # a queue reports the end, not the error
+        while not self.done():
+            time.sleep(0.01)
+
+
+class HandOffForTest(backends.Backend):
+    def _submit(self, tasks: list[backends.WriteTask]) -> backends.Submission | None:
+        job = _Queued(path=tasks[0].cache.paths.step_folder / "queued.pkl")
+        with job.path.open("wb") as f:
+            pickle.dump(tasks, f)
+        for task in tasks:
+            assert task.claim is not None
+            task.mark_attempted()
+            task.claim.record_liveness(job, task.items.uids)
+        return backends.Submission({job: tasks})
+
+
+def test_hand_off(tmp_path: Path) -> None:
+    infra: tp.Any = {"backend": "HandOffForTest", "folder": tmp_path}
+    out = conftest.Add(value=10, infra=infra).run_many([1])
+    failed = conftest.Add(fail_on="all", infra=infra).run_many([1])
+    removed = conftest.Add(value=20, infra=infra)
+    removed.run_many([1])
+    (removed.lookup(1).paths.step_folder / "queued.pkl").unlink()
+    assert removed.lookup(1).status is None, "claim must die with its queued task"
+    for path in tmp_path.rglob("queued.pkl"):  # the runner
+        with contextlib.suppress(ValueError), path.open("rb") as f:
+            for task in pickle.load(f):
+                task.run_and_cache()
+        path.unlink()
+    assert list(out) == [11]
+    with pytest.raises(ValueError, match="Triggered an error"):
+        list(failed)
