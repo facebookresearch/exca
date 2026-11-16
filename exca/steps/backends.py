@@ -860,7 +860,8 @@ class _SubmititBackend(Backend):
             live = inflight.Liveness.from_job(job)
             for task in shard:
                 assert task.claim is not None  # inherited from its variant
-                task.claim.record_liveness(live, task.items.uids)
+                if live is not None:  # else (debug job) the claimer's stays
+                    task.claim.record_liveness(live, task.items.uids)
                 folder = task.cache.paths.step_folder
                 by_folder.setdefault(folder, {})[job.job_id] = task.items.uids
         for folder, records in by_folder.items():
