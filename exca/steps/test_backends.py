@@ -12,7 +12,6 @@ import importlib
 import logging
 import os
 import pickle
-import socket
 import sys
 import threading
 import time
@@ -481,18 +480,37 @@ def test_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert sweep.clone().infra == sweep.infra
 
 
-_QUEUED = backends.inflight.Pid(host=socket.gethostname(), pid=os.getppid())  # alive
-_HANDED: list[tuple[futures.Future[None], bytes]] = []
+class _Queued(backends.inflight.Liveness):  # a job queue's task, also its job handle
+    path: str
+
+    @classmethod
+    def here(cls) -> None:
+        return None
+
+    @classmethod
+    def of_job(cls, job: tp.Any) -> tp.Self | None:
+        return job if isinstance(job, cls) else None
+
+    def is_alive(self) -> bool:
+        return os.path.exists(self.path)
+
+    def done(self) -> bool:
+        return not self.is_alive()
+
+    def result(self) -> None:  # a queue reports the end, not the error
+        while not self.done():
+            time.sleep(0.01)
 
 
-class HandOffForTest(backends.Backend):  # a job queue served by a runner elsewhere
+class HandOffForTest(backends.Backend):  # tasks run later by a runner elsewhere
     def _submit(self, tasks: list[backends.WriteTask]) -> backends.Submission | None:
-        job: futures.Future[None] = futures.Future()
+        job = _Queued(path=str(tasks[0].cache.paths.step_folder / "queued.pkl"))
+        with Path(job.path).open("wb") as f:
+            pickle.dump(tasks, f)
         for task in tasks:
             assert task.claim is not None
             task.mark_attempted()
-            task.claim.record_liveness(_QUEUED, task.items.uids)
-        _HANDED.append((job, pickle.dumps(tasks)))
+            task.claim.record_worker_info(job, task.items.uids)
         return backends.Submission({job: tasks})
 
 
@@ -502,12 +520,12 @@ def test_hand_off(tmp_path: Path) -> None:
     failed = conftest.Add(fail_on="all", infra=infra).run_many([1])
     folder = conftest.Add(value=10, infra=infra).lookup(1).paths.step_folder
     with backends.inflight.InflightRegistry(folder) as reg:
-        assert [w.liveness for w in reg.get().values()] == [_QUEUED]
-    for job, raw in _HANDED:  # the runner
-        with contextlib.suppress(ValueError):
-            for task in pickle.loads(raw):
+        assert {type(w.liveness) for w in reg.get().values()} == {_Queued}
+    for path in tmp_path.rglob("queued.pkl"):  # the runner
+        with contextlib.suppress(ValueError), path.open("rb") as f:
+            for task in pickle.load(f):
                 task.run_and_cache()
-        job.set_result(None)  # a queue reports the end, not the error
+        path.unlink()
     assert list(out) == [11]
     with pytest.raises(ValueError, match="Triggered an error"):
         list(failed)
