@@ -65,15 +65,6 @@ class Liveness(helpers.DiscriminatedModel, discriminator_key="kind"):
         kinds = reversed(Liveness.__subclasses__())  # later kinds enclose earlier ones
         return next(x for kind in kinds if (x := kind.here()) is not None)
 
-    @classmethod
-    def from_job(cls, job: tp.Any) -> Liveness | None:
-        """What runs the submitted *job*: the first kind describing it (kinds override
-        this for their scheduler's jobs), else ``None``."""
-        if cls is not Liveness:
-            return None
-        kinds = Liveness.__subclasses__()
-        return next((x for kind in kinds if (x := kind.from_job(job)) is not None), None)
-
     def is_alive(self) -> bool | None:
         """Whether it still runs; ``None`` when unknown from this host."""
         raise NotImplementedError
@@ -92,12 +83,6 @@ class Pid(Liveness):  # defined first: innermost (fallback)
     @classmethod
     def here(cls) -> Pid:
         return cls(host=socket.gethostname(), pid=os.getpid())
-
-    @classmethod
-    def from_job(cls, job: tp.Any) -> Pid | None:
-        if isinstance(job, submitit.LocalJob):  # job_id: the subprocess pid
-            return cls(host=socket.gethostname(), pid=int(job.job_id))
-        return None
 
     def is_alive(self) -> bool | None:
         if self.host != socket.gethostname():
@@ -130,12 +115,6 @@ class Slurm(Liveness):
             return None
         return cls(job_id=env.job_id, folder=str(env.paths.folder))
 
-    @classmethod
-    def from_job(cls, job: tp.Any) -> Slurm | None:
-        if isinstance(job, submitit.SlurmJob):
-            return cls(job_id=str(job.job_id), folder=str(job.paths.folder))
-        return None
-
     @functools.cached_property
     def job(self) -> submitit.SlurmJob[tp.Any] | None:
         if shutil.which("sacct") is None:  # else done() stays False: dead looks alive
@@ -164,6 +143,17 @@ class Slurm(Liveness):
         except Exception:
             state = "?"
         return f"{self.job_id.split('_')[0]} [slurm:{state}]"
+
+
+def submitit_liveness(job: submitit.Job[tp.Any]) -> Liveness:
+    """What runs the submitted submitit *job*."""
+    if isinstance(job, submitit.SlurmJob):
+        return Slurm(job_id=str(job.job_id), folder=str(job.paths.folder))
+    if isinstance(job, submitit.LocalJob):  # job_id: the subprocess pid
+        return Pid(host=socket.gethostname(), pid=int(job.job_id))
+    here = Liveness.here()  # debug job: runs in this process, like the claimer
+    assert here is not None, "Pid always detects"
+    return here
 
 
 @dataclasses.dataclass(frozen=True)
@@ -453,7 +443,7 @@ class InflightClaim:
         return {**self.__dict__, "_reg": None}
 
     def record_liveness(self, liveness: Liveness, uids: tp.Sequence[str]) -> None:
-        """Stamp *liveness*, what runs *uids*, on their rows: e.g. `Liveness.from_job`
+        """Stamp *liveness*, what runs *uids*, on their rows: e.g. `submitit_liveness`
         of a submitit job, or a job queue's task whose runner then calls
         ``WriteTask.run_and_cache``. Processes reading the rows must import its kind
         (else unclaimed)."""
