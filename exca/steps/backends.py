@@ -632,6 +632,10 @@ class CacheDispatch:
             ready = [r for c in claimed if (r := self._recheck(c)) is not None]
             submission = self.backend._submit(ready) if ready else None
             if submission is not None:
+                for job, shard in submission._shards.items():
+                    for task in shard:  # claims name what runs them (Liveness.from_job)
+                        assert task.claim is not None
+                        task.claim.record_worker_info(job, task.items.uids)
                 for task in ready:
                     assert task.claim is not None
                     task.claim.hand_off(task.items.uids)
@@ -647,7 +651,7 @@ class Submission:
         self,
         jobs: dict[tp.Any, list[WriteTask]],  # job handle → shard
     ) -> None:
-        self._jobs = list(jobs)
+        self._shards = jobs
         self._entry_jobs = {
             (task.cache.paths.step_folder, uid): job
             for job, shard in jobs.items()
@@ -665,7 +669,7 @@ class Submission:
                     logger.info("Waiting for job %s", getattr(job, "job_id", job))
                 job.result()
             return
-        for job in self._jobs:
+        for job in self._shards:
             job.result()
         steps = {folder for folder, _ in self._entry_jobs}
         msg = "Finished processing %s items for %s steps"
@@ -858,8 +862,6 @@ class _SubmititBackend(Backend):
         by_folder: dict[Path, dict[str, tp.Sequence[str]]] = {}
         for shard, job in zip(shards, jobs):
             for task in shard:
-                assert task.claim is not None  # inherited from its variant
-                task.claim.record_worker_info(job, uids=task.items.uids)
                 folder = task.cache.paths.step_folder
                 by_folder.setdefault(folder, {})[job.job_id] = task.items.uids
         for folder, records in by_folder.items():

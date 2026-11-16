@@ -508,9 +508,7 @@ class HandOffForTest(backends.Backend):  # tasks run later by a runner elsewhere
         with Path(job.path).open("wb") as f:
             pickle.dump(tasks, f)
         for task in tasks:
-            assert task.claim is not None
             task.mark_attempted()
-            task.claim.record_worker_info(job, task.items.uids)
         return backends.Submission({job: tasks})
 
 
