@@ -14,10 +14,10 @@ jobs:
       max-parallel: 5
 
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
     - name: Install uv
-      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       with:
         enable-cache: true
         cache-dependency-glob: pyproject.toml
@@ -56,11 +56,11 @@ jobs:
         pytest --markdown-docs -m markdown-docs README.md docs/
 
     # keep ruff version in sync with .pre-commit-config.yaml
-    - uses: astral-sh/ruff-action@4919ec5cf1f49eff0871dbcea0da843445b837e6  # v3.6.1
+    - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89  # v4.1.0
       with:
         version: "0.15.8"
         args: "check"
-    - uses: astral-sh/ruff-action@4919ec5cf1f49eff0871dbcea0da843445b837e6  # v3.6.1
+    - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89  # v4.1.0
       with:
         version: "0.15.8"
         args: "format --check"
