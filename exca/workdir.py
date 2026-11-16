@@ -177,6 +177,11 @@ class WorkDir(pydantic.BaseModel):
                 self._active = False
 
 
+def _is_installed(path: str | Path) -> bool:
+    """Whether path is within the Python installation or the active virtual environment"""
+    return any(Path(path).is_relative_to(p) for p in (sys.prefix, sys.base_prefix))
+
+
 def identify_path(name: str | Path) -> Path:
     """Returns the absolute Path corresponding to the name.
     The name must either represent:
@@ -188,7 +193,7 @@ def identify_path(name: str | Path) -> Path:
     """
     # local files or folder get precedence
     folders = ["."] + os.environ.get("PYTHONPATH", "").split(os.pathsep)
-    folders.extend([x for x in sys.path if not Path(x).is_relative_to(sys.base_prefix)])
+    folders.extend([x for x in sys.path if not _is_installed(x)])
     for folder in folders:
         fp = Path(folder) / name
         if fp.exists():
@@ -202,7 +207,7 @@ def identify_path(name: str | Path) -> Path:
     fp = Path(spec.origin)
     if fp.name == "__init__.py":
         fp = fp.parent
-    if fp.is_relative_to(sys.base_prefix):
+    if _is_installed(fp):
         msg = f"Package {name} is not editable (installed in {fp})"
         raise ValueError(msg)
     if not fp.exists():
