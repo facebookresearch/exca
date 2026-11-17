@@ -2,14 +2,9 @@
 
 ## [Unreleased]
 
-### Breaking
-
-- `ContiguousMemmap(path, offset, shape, dtype)` replaces `ContiguousMemmap(memmap_view)`. [#360]
-
 ### Other
 
-- `ContiguousMemmap` holds no file descriptor nor mapping, and reads keep at most `EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES` files open per thread (default: half the soft `RLIMIT_NOFILE`). [#360]
-- Cache reads no longer return stale data from a data file deleted and recreated under the same name (e.g. after `CacheDict.clear()`). [#360]
+- `ContiguousMemmap`: faster loading and fewer open files when reading many cache files. [#360]
 
 ## 0.6.1 - 26-11-16
 

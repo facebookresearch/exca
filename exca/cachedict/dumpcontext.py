@@ -31,9 +31,7 @@ import orjson
 logger = logging.getLogger(__name__)
 
 _UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
-
-
-_NUM_CREATED_FILES = 0  # names are reused: cached readers may hold a deleted file
+_NUM_CREATED_FILES = 0
 
 
 def _get_store(tls: threading.local) -> dict[tp.Hashable, tp.Any]:
@@ -226,7 +224,7 @@ class DumpContext:
             path = self.folder / name
             path.parent.mkdir(parents=True, exist_ok=True)
             f = path.open("ab")
-            if not f.tell():
+            if f.tell() == 0:
                 _NUM_CREATED_FILES += 1
             self._stack.enter_context(f)
             self._files[name] = f

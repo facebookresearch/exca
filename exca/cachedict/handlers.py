@@ -10,7 +10,6 @@ Each handler implements the __dump_info__ / __load_from_info__ protocol.
 One-file-per-entry handlers use ctx.key_path(suffix) for path allocation.
 """
 
-import os
 import pickle
 import typing as tp
 import warnings
@@ -105,8 +104,7 @@ class ContiguousMemmapArray:
         shape: tp.Sequence[int],
         dtype: str,
     ) -> ContiguousMemmap:
-        path = os.path.abspath(ctx.folder / filename)
-        return ContiguousMemmap(path, offset, shape, dtype)
+        return ContiguousMemmap((ctx.folder / filename).absolute(), offset, shape, dtype)
 
 
 @DumpContext.register

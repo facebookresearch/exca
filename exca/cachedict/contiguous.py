@@ -4,13 +4,11 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""ContiguousMemmap: a lazy array proxy that reads data via file I/O instead of
-memmap page faults."""
-
 import collections
 import os
 import threading
 import typing as tp
+from pathlib import Path
 
 import numpy as np
 
@@ -26,17 +24,7 @@ _VIEW_OPS = frozenset(
 _SKELETON = np.zeros(0, dtype=np.uint8)
 
 
-def _address(arr: np.ndarray) -> int:
-    return int(arr.__array_interface__["data"][0])
-
-
-def _span(arr: np.ndarray) -> int:
-    """Bytes between the first and last element of *arr* (positive strides)."""
-    return arr.itemsize + sum((s - 1) * st for s, st in zip(arr.shape, arr.strides))
-
-
 def _max_open_files() -> int:
-    """``EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES``, else half the soft fd limit."""
     env = os.environ.get("EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES")
     if env is not None:
         return int(env)
@@ -48,9 +36,7 @@ def _max_open_files() -> int:
     return 0 if soft == resource.RLIM_INFINITY else max(1, soft // 2)
 
 
-def _read(path: str, offset: int, nbytes: int) -> np.ndarray:
-    """Read *nbytes* at *offset* of *path* through a per-thread LRU of unbuffered
-    handles, closing the oldest beyond ``_max_open_files()``."""
+def _read(path: Path, offset: int, nbytes: int) -> np.ndarray:
     store = _get_store(_FILE_HANDLE_CACHE)
     handles = store.setdefault("handles", collections.OrderedDict())
     fh = handles.pop(path, None)
@@ -97,10 +83,15 @@ class ContiguousMemmap:
     51 KB reads: same speed, RSS growth 0 vs 1.3 GB.
     """
 
-    __slots__ = ("_arr", "_path", "_shift")
+    __slots__ = ("_arr", "_path", "_offset")
 
     def __init__(
-        self, path: str, offset: int, shape: tp.Sequence[int], dtype: tp.Any
+        self,
+        path: Path,
+        offset: int,
+        shape: tp.Sequence[int],
+        dtype: tp.Any,
+        strides: tp.Sequence[int] | None = None,
     ) -> None:
         global _SKELETON
         dtype = np.dtype(dtype)
@@ -108,9 +99,13 @@ class ContiguousMemmap:
         if _SKELETON.size < nbytes:
             _SKELETON = np.zeros(max(nbytes, 2 * _SKELETON.size, 2**26), np.uint8)
         # geometry only: a view on a shared zero buffer, never read
-        self._arr = np.ndarray(tuple(shape), dtype, buffer=_SKELETON)
+        self._arr = np.ndarray(tuple(shape), dtype, buffer=_SKELETON, strides=strides)
         self._path = path
-        self._shift = offset - _address(self._arr)  # file offset - view address
+        self._offset = offset
+
+    def __reduce__(self) -> tuple[tp.Any, ...]:
+        arr = self._arr
+        return type(self), (self._path, self._offset, arr.shape, arr.dtype, arr.strides)
 
     def _view(self, arr: np.ndarray) -> "ContiguousMemmap":
         if arr.size and not np.may_share_memory(arr, self._arr):
@@ -119,7 +114,8 @@ class ContiguousMemmap:
                 "— use np.asarray(arr) to read data first."
             )
         out = ContiguousMemmap.__new__(ContiguousMemmap)
-        out._arr, out._path, out._shift = arr, self._path, self._shift
+        out._arr, out._path = arr, self._path
+        out._offset = self._offset + arr.ctypes.data - self._arr.ctypes.data
         return out
 
     def __len__(self) -> int:
@@ -140,9 +136,8 @@ class ContiguousMemmap:
             return np.asarray(self._view(self._arr[(*keys, ...)]))[()]
         if result.size == 0:
             return np.empty(result.shape, dtype=result.dtype)
-        if any(s < 0 for s in result.strides):
-            raise TypeError("Non-contiguous read — use np.asarray(arr)[key] instead.")
-        if _span(result) != result.nbytes:
+        span = sum((n - 1) * abs(s) for n, s in zip(result.shape, result.strides))
+        if span + result.itemsize != result.nbytes or any(s < 0 for s in result.strides):
             raise TypeError("Non-contiguous read — use np.asarray(arr)[key] instead.")
         return self._view(result)
 
@@ -153,9 +148,9 @@ class ContiguousMemmap:
         if arr.size == 0:
             result = np.empty(arr.shape, dtype=arr.dtype)
         else:
-            buf = _read(self._path, _address(arr) + self._shift, _span(arr))
+            buf = _read(self._path, self._offset, arr.nbytes)
             view = np.ndarray(arr.shape, arr.dtype, buffer=buf, strides=arr.strides)
-            result = np.asarray(view, order="C")  # ascontiguousarray: 0-d -> 1-d
+            result = np.asarray(view, order="C")
         return result if dtype is None else result.astype(dtype)
 
     def __array_ufunc__(

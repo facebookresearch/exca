@@ -7,6 +7,7 @@
 """Tests for ContiguousMemmap."""
 
 import io
+import pickle
 import shutil
 import typing as tp
 from pathlib import Path
@@ -53,10 +54,13 @@ def test_roundtrip(tmp_path: Path) -> None:
     sub = cm[1:3]
     assert isinstance(sub, ContiguousMemmap)
     np.testing.assert_array_equal(np.asarray(sub), original[1:3])
+    np.testing.assert_array_equal(
+        np.asarray(pickle.loads(pickle.dumps(sub))), original[1:3]
+    )
     # scalar access returns plain value
     assert cm[3, 29] == original[3, 29]
     assert cm[-1][-2] == original[-1, -2]
-    assert np.asarray(cm[3, 29, ...]).shape == ()
+    assert np.asarray(cm[3, 29, ...]).shape == (), "0-d read must stay 0-d"
     assert not isinstance(cm[0, 0], ContiguousMemmap)
     # asarray with dtype conversion
     result = np.asarray(cm, dtype=np.float32)
@@ -66,9 +70,11 @@ def test_roundtrip(tmp_path: Path) -> None:
     empty = cm[2:2]
     assert isinstance(empty, np.ndarray) and empty.shape == (0, 30)
     shutil.rmtree(tmp_path / "data")
-    recreated = np.asarray(_make_cm(tmp_path, -original))
-    msg = "stale handle on a file recreated under the same name"
-    np.testing.assert_array_equal(recreated, -original, err_msg=msg)
+    np.testing.assert_array_equal(
+        np.asarray(_make_cm(tmp_path, -original)),
+        -original,
+        err_msg="stale handle on a file recreated under the same name",
+    )
 
 
 # =============================================================================
@@ -200,10 +206,6 @@ def test_no_shared_memory_with_memmap(tmp_path: Path) -> None:
 
 def test_open_files_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     process = psutil.Process()
-    try:
-        process.open_files()
-    except (psutil.AccessDenied, PermissionError) as error:
-        pytest.skip(f"psutil cannot list open files: {error}")
     monkeypatch.setenv("EXCA_CONTIGUOUS_MEMMAP_MAX_OPEN_FILES", "3")
     (tmp_path / "data").mkdir()
     ctx = DumpContext(tmp_path)
