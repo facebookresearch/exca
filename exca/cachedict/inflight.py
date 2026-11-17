@@ -125,6 +125,8 @@ class Slurm(Liveness):
         if self.job is None:
             return None
         try:
+            if self.job.state == "UNKNOWN":  # not in sacct (yet, or anymore)
+                return None
             return not self.job.done()
         except Exception:
             return False
