@@ -234,11 +234,7 @@ class _ShortReads(io.FileIO):
 def test_short_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     original = np.arange(12, dtype=np.float64).reshape(3, 4)
     cm = _make_cm(tmp_path, original)
-    monkeypatch.setattr(
-        "exca.cachedict.contiguous.open",
-        lambda path, *args, **kwargs: _ShortReads(path),
-        raising=False,
-    )
+    monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: _ShortReads(self))
     np.testing.assert_array_equal(np.asarray(cm[1:]), original[1:])
 
 

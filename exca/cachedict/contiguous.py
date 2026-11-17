@@ -44,7 +44,7 @@ def _read(path: Path, offset: int, nbytes: int) -> np.ndarray:
         limit = _max_open_files()
         while 0 < limit <= len(handles):
             handles.popitem(last=False)[1].close()
-        fh = open(path, "rb", buffering=0)  # noqa: SIM115
+        fh = path.open("rb", buffering=0)  # noqa: SIM115
     handles[path] = fh
     buf = np.empty(nbytes, dtype=np.uint8)
     fh.seek(offset)
