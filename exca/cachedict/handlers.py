@@ -89,7 +89,21 @@ class MemmapArray:
 
 @DumpContext.register
 class ContiguousMemmapArray:
-    """Like MemmapArray but loads return a lazy ContiguousMemmap."""
+    """Load MemmapArray files as lazy ``ContiguousMemmap`` arrays.
+
+    Reads copy only the requested bytes into regular arrays, so memory stays
+    flat while items are kept (memmap pages stay resident as long as the item
+    lives).
+
+    Warnings
+    --------
+    Items are not ndarrays: methods, ufuncs, fancy and strided indexing need
+    ``np.asarray(item)`` first.
+
+    See Also
+    --------
+    MemmapArray : same files, loaded as memmaps.
+    """
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
