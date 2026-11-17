@@ -89,8 +89,8 @@ html_favicon = "_static/exca.png"
 
 html_theme_options = {
     "logo": {
-        "image_light": "_static/exca.png",
-        "image_dark": "_static/exca.png",
+        "image_light": "_static/exca-mark-on-light.svg",
+        "image_dark": "_static/exca-mark-on-dark.svg",
         "text": "Exca",
     },
     "icon_links": [
