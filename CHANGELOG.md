@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Other
+
+- `ContiguousMemmap`: faster loading and fewer open files when reading many cache files. [#360]
+
 ## 0.6.1 - 26-11-16
 
 ### Breaking
