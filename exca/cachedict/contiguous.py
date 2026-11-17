@@ -37,6 +37,8 @@ def _max_open_files() -> int:
 
 
 def _read(path: Path, offset: int, nbytes: int) -> np.ndarray:
+    """Read *nbytes* at *offset* of *path*, keeping the file open in this thread's
+    least-recently-used cache (at most ``_max_open_files()`` files)."""
     store = _get_store(_FILE_HANDLE_CACHE)
     handles = store.setdefault("handles", collections.OrderedDict())
     fh = handles.pop(path, None)
