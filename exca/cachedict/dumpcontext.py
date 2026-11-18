@@ -31,15 +31,17 @@ import orjson
 logger = logging.getLogger(__name__)
 
 _UNSAFE_TABLE = {ord(char): "-" for char in "/\\\n\t "}
+_NUM_CREATED_FILES = 0
 
 
 def _get_store(tls: threading.local) -> dict[tp.Hashable, tp.Any]:
-    """Return the per-thread dict from *tls*, resetting after fork."""
-    pid = os.getpid()
+    """Return the per-thread dict from *tls*, reset after fork and whenever
+    this process creates a shared file."""
+    state = (os.getpid(), _NUM_CREATED_FILES)
     d = tp.cast(dict[tp.Hashable, tp.Any], tls.__dict__)
-    if d.get("__pid__") != pid:
+    if d.get("__state__") != state:
         d.clear()
-        d["__pid__"] = pid
+        d["__state__"] = state
     return d
 
 
@@ -207,6 +209,7 @@ class DumpContext:
         """Open a shared file for appending. Returns (handle, relative_name).
         Content files go under DATA_DIR/; info files (-info.jsonl)
         stay in the root folder. Reused across calls with the same suffix."""
+        global _NUM_CREATED_FILES
         is_info = suffix == self.INFO_SUFFIX
         if not is_info and not suffix.startswith("."):
             msg = f"suffix must start with '.' to be reclaimable, got {suffix!r}"
@@ -221,6 +224,8 @@ class DumpContext:
             path = self.folder / name
             path.parent.mkdir(parents=True, exist_ok=True)
             f = path.open("ab")
+            if f.tell() == 0:
+                _NUM_CREATED_FILES += 1
             self._stack.enter_context(f)
             self._files[name] = f
             self._created_files.add(path)

@@ -89,22 +89,36 @@ class MemmapArray:
 
 @DumpContext.register
 class ContiguousMemmapArray:
-    """Like MemmapArray but loads return a ContiguousMemmap proxy that reads
-    data via file I/O instead of faulting memmap pages into RSS.
+    """Load MemmapArray files as lazy ``ContiguousMemmap`` arrays.
 
-    Memmap pages stay resident as long as the DumpContext cache holds the
-    memmap object; targeted file I/O reads into freeable heap buffers,
-    keeping RSS flat and often faster.  Trade-off: fancy indexing, stepped
-    slicing, and direct ndarray methods require ``np.asarray()`` first."""
+    Reads copy only the requested bytes into regular arrays, so memory stays
+    flat while items are kept (memmap pages stay resident as long as the item
+    lives).
+
+    Warnings
+    --------
+    Items are not ndarrays: methods, ufuncs, fancy and strided indexing need
+    ``np.asarray(item)`` first.
+
+    See Also
+    --------
+    MemmapArray : same files, loaded as memmaps.
+    """
 
     @classmethod
     def __dump_info__(cls, ctx: DumpContext, value: tp.Any) -> dict[str, tp.Any]:
         return MemmapArray.__dump_info__(ctx, value)
 
     @classmethod
-    def __load_from_info__(cls, ctx: DumpContext, **kwargs: tp.Any) -> tp.Any:
-        raw = MemmapArray.__load_from_info__(ctx, **kwargs)
-        return ContiguousMemmap(raw, ctx._resource_cache)
+    def __load_from_info__(
+        cls,
+        ctx: DumpContext,
+        filename: str,
+        offset: int,
+        shape: tp.Sequence[int],
+        dtype: str,
+    ) -> ContiguousMemmap:
+        return ContiguousMemmap((ctx.folder / filename).absolute(), offset, shape, dtype)
 
 
 @DumpContext.register

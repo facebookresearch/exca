@@ -679,12 +679,13 @@ class CacheDispatch:
 
 
 class Submission:
-    """Running pool futures or submitit jobs, one per shard of tasks. Each shard
-    releases its claims when it ends, whether or not the submission is waited on."""
+    """Running pool futures, submitit jobs or other job handles (with ``done()`` and
+    ``result()``), one per shard of tasks. Each shard releases its claims when it ends,
+    whether or not the submission is waited on."""
 
     def __init__(
         self,
-        jobs: dict[tp.Any, list[WriteTask]],  # pool future or submitit job → shard
+        jobs: dict[tp.Any, list[WriteTask]],  # job handle → shard
     ) -> None:
         self._jobs = list(jobs)
         self._entry_jobs = {
@@ -724,12 +725,7 @@ class SubmissionSource:
 
     def __getitem__(self, uid: str) -> tp.Any:
         self._submission.wait((self._cache.paths.step_folder, uid))
-        try:
-            return self._cache.cache_dict[uid]
-        except KeyError:
-            raise RuntimeError(
-                f"Worker completed but cache missing: {self._cache.paths.step_uid}[{uid}]"
-            ) from None
+        return LookupHandle(self._cache, uid).result()
 
     def select(self, uids: tp.Sequence[str]) -> SubmissionSource:
         return SubmissionSource(self._cache, self._submission, uids)
@@ -900,9 +896,10 @@ class _SubmititBackend(Backend):
         # a shard may span variants: record each sub-task against the shared job
         by_folder: dict[Path, dict[str, tp.Sequence[str]]] = {}
         for shard, job in zip(shards, jobs):
+            live = inflight.submitit_liveness(job)
             for task in shard:
                 assert task.claim is not None  # inherited from its variant
-                task.claim.record_worker_info(job, uids=task.items.uids)
+                task.claim.record_liveness(live, task.items.uids)
                 folder = task.cache.paths.step_folder
                 by_folder.setdefault(folder, {})[job.job_id] = task.items.uids
         for folder, records in by_folder.items():
