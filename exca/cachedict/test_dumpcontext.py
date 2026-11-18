@@ -300,6 +300,19 @@ def test_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     np.testing.assert_array_almost_equal(loaded["weights"], [[1.0, 2.0], [3.0, 4.0]])
 
 
+def test_auto_tuple_loads_as_list(tmp_path: Path) -> None:
+    ctx = DumpContext(tmp_path, key="test")
+    with ctx:
+        info = ctx.dump((np.array([1.0, 2.0]), 3), cache_type="Auto")
+    loaded = ctx.load(info)
+    assert isinstance(loaded, list), "inline and JSON-backed tuples must load alike"
+    np.testing.assert_array_equal(loaded[0], [1.0, 2.0])
+    assert loaded[1] == 3
+
+    loaded = ctx.load({**info, "content": tuple(info["content"])})
+    np.testing.assert_array_equal(loaded[0], [1.0, 2.0])
+
+
 class _Opaque:
     """Module-level class so it's picklable (local classes are not)."""
 
