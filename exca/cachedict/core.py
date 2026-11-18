@@ -10,6 +10,7 @@ Disk, RAM caches
 
 import contextlib
 import dataclasses
+import hashlib
 import logging
 import os
 import shutil
@@ -369,9 +370,6 @@ class CacheDict(tp.Generic[X]):
                 content=content,
             )
             self._key_info[key] = dinfo
-            self._jsonl_readers.setdefault(
-                jsonl_path.name, JsonlReader(jsonl_path)
-            )._last = result["byte_range"][1]
             utils.best_effort_utime(self.folder)
 
     def __delitem__(self, key: str) -> None:
@@ -421,11 +419,12 @@ class JsonlReader:
         self._fp = Path(filepath)
         self._last = 0
         self.readings = 0
-        # (inode, mtime) at last read — drift triggers a full re-read.
+        # (inode, mtime) at last read — drift re-hashes the read bytes:
+        # unchanged = append, read the rest; else full re-read.
         # mtime catches inode-reuse rewrites (FS recycles inodes after
-        # unlink+recreate, common on tmpfs/ext4). Appends also re-read
-        # in full; JSONLs are small key indexes, cost is negligible.
+        # unlink+recreate, common on tmpfs/ext4).
         self._stamp: tuple[int, float] | None = None
+        self._read_hash = hashlib.blake2b()  # of bytes [0, _last)
 
     def read(self) -> dict[str, DumpInfo]:
         out: dict[str, DumpInfo] = {}
@@ -437,15 +436,19 @@ class JsonlReader:
         except FileNotFoundError:
             return out
         stamp = (st.st_ino, st.st_mtime)
-        # Size shrink is a backstop for truncate when mtime resolution is coarse.
-        if self._stamp != stamp or st.st_size < self._last:
-            self._last = 0
-        self._stamp = stamp
         try:
             f = self._fp.open("rb")
         except FileNotFoundError:
             return out
         with f:
+            # Size shrink is a backstop for truncate when mtime resolution is coarse.
+            if self._stamp != stamp or st.st_size < self._last:
+                prefix = f.read(self._last)
+                if hashlib.blake2b(prefix).digest() != self._read_hash.digest():
+                    self._last = 0
+                    self._read_hash = hashlib.blake2b()
+                    f.seek(0)
+            self._stamp = stamp
             if self._last > last:
                 msg = "Forwarding to byte %s in info file %s"
                 logger.debug(msg, self._last, self._fp.name)
@@ -459,6 +462,7 @@ class JsonlReader:
                 brange = (last, last + count)
                 if line[:1] == b" " or not line.strip():  # deleted — DumpInfo.delete_info
                     last += count
+                    self._read_hash.update(line)
                     continue
                 try:
                     info = orjson.loads(line)
@@ -466,6 +470,7 @@ class JsonlReader:
                     fail = line
                     continue
                 last += count
+                self._read_hash.update(line)
                 key = info.pop("#key")
                 dinfo = DumpInfo(
                     jsonl=self._fp,
