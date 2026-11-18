@@ -370,7 +370,8 @@ class Auto:
                     )
             return {k: cls._dump_value(ctx, v, f"{key}[{k}]") for k, v in val.items()}
         if isinstance(val, (list, tuple)):
-            return [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
+            items = [cls._dump_value(ctx, v, f"{key}[{i}]") for i, v in enumerate(val)]
+            return tuple(items) if isinstance(val, tuple) else items
         handler = DumpContext._find_handler(type(val))
         if handler is not None or hasattr(val, "__dump_info__"):
             ctx.key = key
