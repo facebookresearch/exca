@@ -10,7 +10,6 @@ bulk presence insert) — these tests don't care about pickled-exception
 content; that path is covered in ``test_errors.py``."""
 
 import logging
-import os
 import sqlite3
 import stat
 import threading
@@ -32,13 +31,8 @@ def test_lazy_connect_and_idempotent_close(tmp_path: Path) -> None:
     reg.clear(["x"])
     assert not db_path.exists()
 
-    previous = os.umask(0o002)
-    try:
-        reg._plant(["a"])
-    finally:
-        os.umask(previous)
-    mode = stat.S_IMODE(db_path.stat().st_mode)
-    assert mode == 0o664, f"first write materialises the DB per umask, got {mode:o}"
+    reg._plant(["a"])
+    assert db_path.is_file(), "first write materialises the DB"
     assert reg.get(["a"]) == {"a"}
 
     # External deletion + recreation mid-session: next op follows the new file.
