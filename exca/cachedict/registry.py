@@ -96,8 +96,7 @@ class AdvisoryRegistry:
             if not create:
                 return None
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            # else sqlite creates it 0o644, ignoring the umask
-            self.db_path.touch()
+            self.db_path.touch()  # per umask; sqlite alone forces 0o644
         # Autocommit lets subclasses choose per-op between implicit
         # per-statement transactions and explicit BEGIN IMMEDIATE.
         conn = sqlite3.connect(
