@@ -8,6 +8,7 @@
 lazy connection, busy-timeout retries, graceful degradation on corruption."""
 
 import logging
+import os
 import random
 import sqlite3
 import time
@@ -96,6 +97,8 @@ class AdvisoryRegistry:
             if not create:
                 return None
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            # else sqlite creates it 0o644, ignoring the umask
+            os.close(os.open(self.db_path, os.O_WRONLY | os.O_CREAT, 0o666))
         # Autocommit lets subclasses choose per-op between implicit
         # per-statement transactions and explicit BEGIN IMMEDIATE.
         conn = sqlite3.connect(
