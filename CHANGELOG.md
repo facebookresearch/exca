@@ -5,6 +5,7 @@
 ### Other
 
 - `ContiguousMemmap`: faster loading and fewer open files when reading many cache files. [#360]
+- `CacheDict`/`steps`: registry databases (`inflight.db`, `errors.db`) follow the process umask, so they can be group-writable. [#366]
 
 ## 0.6.1 - 26-11-16
 
