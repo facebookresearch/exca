@@ -238,8 +238,12 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
 
         return applier
 
-    def _find_missing(self, items: dict[str, tp.Any]) -> dict[str, tp.Any]:
-        missing = items
+    def _find_missing(
+        self, uids: list[str], items: tp.Sequence[tp.Any]
+    ) -> dict[str, tp.Any]:
+        # items read by position if missing: held items make the GC rescan them
+        positions = {uid: k for k, uid in enumerate(uids)}
+        missing = positions
         state: _MapInfraState = base._fast_state(self)  # type: ignore[assignment]
         # deduplicate and check in cache
         cache: dict[str, tp.Any] = {}
@@ -255,33 +259,33 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 raise TypeError(f"Unexpected type for cache: {cache}")
             with cache.frozen_cache_folder():
                 # context: avoid reloading info files for each missing __contain__ check
-                missing = {k: item for k, item in missing.items() if k not in cache}
+                missing = {k: pos for k, pos in missing.items() if k not in cache}
         if not state.checked_configs:
             self._check_configs(write=True)
         if self.mode == "force":
-            to_remove = set(items) - set(missing) - state.recomputed
+            to_remove = set(positions) - set(missing) - state.recomputed
             if to_remove and isinstance(cache, CacheDict):
                 msg = "Clearing %s items for %s (infra.mode=%s)"
                 logger.warning(msg, len(to_remove), self.uid(), self.mode)
                 with cache.write():
                     for uid in to_remove:
                         del cache[uid]
-            missing = {x: y for x, y in items.items() if x not in state.recomputed}
+            missing = {x: y for x, y in positions.items() if x not in state.recomputed}
             if isinstance(cache, CacheDict):
                 # dont record computed items if no cache
                 state.recomputed |= set(missing)
         if missing:
             if self.mode == "read-only":
                 raise RuntimeError(f"{self.mode=} but found {len(missing)} missing items")
-        if len(items) == len(missing) == 1 and self.forbid_single_item_computation:
-            key, item = next(iter(missing.items()))
+        if len(positions) == len(missing) == 1 and self.forbid_single_item_computation:
+            key, pos = next(iter(missing.items()))
             raise RuntimeError(
-                f"Trying to compute single item {item!r} with key {key!r}\n"
+                f"Trying to compute single item {items[pos]!r} with key {key!r}\n"
                 f"for model with config {self.config(uid=True, exclude_defaults=True)}\n"
                 "but this is is forbidden by 'infra.forbid_single_item_computation=True'\n"
                 f"\nmodel={self._obj!r}"
             )
-        return missing
+        return {k: items[pos] for k, pos in missing.items()}
 
     def _recheck_after_wait(
         self, missing: list[tuple[str, tp.Any]], claim: inflight.InflightClaim
@@ -324,13 +328,14 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 msg = f"Method {imethod.method} takes parameters {exp}, got {params}"
                 raise NameError(msg)
             items = next(iter(kwargs.values()))
+        if not isinstance(items, collections.abc.Sequence):
+            items = list(items)  # indexed for missing items
         # specific function for thread and process pool executors
         if self.cluster in [None, "threadpool", "processpool"]:
             return self._method_override_futures(items)
         uid_func = imethod.item_uid
-        # we need to keep order for output:
-        uid_items = [(uid_func(item), item) for item in items]
-        missing = list(self._find_missing(dict(uid_items)).items())
+        uids = [uid_func(item) for item in items]  # output order
+        missing = list(self._find_missing(uids, items).items())
         if missing:
             executor = self.executor()
             if executor is None:
@@ -384,7 +389,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         cache_dict = self.cache_dict
         msg = "Recovering %s items for %s from %s"
         logger.debug(msg, len(items), self._factory(), cache_dict)
-        return (cache_dict[k] for k, _ in uid_items)
+        return (cache_dict[k] for k in uids)
 
     def _method_override_futures(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
         state: _MapInfraState = base._fast_state(self)  # type: ignore[assignment]
@@ -395,10 +400,8 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
         uid_func = imethod.item_uid  # type: ignore
-        uid_items = [
-            (uid_func(item), item) for item in items
-        ]  # we need to keep order for output
-        missing = list(self._find_missing(dict(uid_items)).items())
+        uids = [uid_func(item) for item in items]  # output order
+        missing = list(self._find_missing(uids, items).items())
         out = {}
         if missing:
             pool = self.cluster
@@ -448,14 +451,14 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         try:
             cache_dict = self.cache_dict
         except ValueError:  # no caching
-            return (out[k] for k, _ in uid_items)
+            return (out[k] for k in uids)
         if out:  # keep in ram activated but no folder
             with cache_dict.write():
                 for x, y in out.items():
                     cache_dict[x] = y
         msg = "Recovering %s items for %s from %s"
-        logger.debug(msg, len(uid_items), state.factory, cache_dict)
-        return (cache_dict[k] for k, _ in uid_items)
+        logger.debug(msg, len(uids), state.factory, cache_dict)
+        return (cache_dict[k] for k in uids)
 
     def _call_and_store(
         self, items: tp.Sequence[tp.Any], use_cache_dict: bool = True

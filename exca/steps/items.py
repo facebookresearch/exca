@@ -34,6 +34,20 @@ class _Source(tp.Protocol):
     def __getitem__(self, uid: str) -> tp.Any: ...
 
 
+class _Positions:
+    """Lazy carrier source: uid -> value of a sequence, read by position."""
+
+    def __init__(self, values: tp.Sequence[tp.Any], uids: tp.Sequence[str]) -> None:
+        self._values = values
+        self._positions = {uid: k for k, uid in enumerate(uids)}
+
+    def __getitem__(self, uid: str) -> tp.Any:
+        return self._values[self._positions[uid]]
+
+    def select(self, uids: tp.Sequence[str]) -> dict[str, tp.Any]:
+        return {uid: self[uid] for uid in dict.fromkeys(uids)}
+
+
 class BatchProtocolError(RuntimeError):
     """Raised when ``_run_batch`` does not yield one result per consumed input."""
 
@@ -110,13 +124,13 @@ class StepItems:
     For dict sources, uids default to the dict keys (insertion order).
     For CacheDict sources, explicit uids are required
     (the CacheDict may contain keys from other runs).
-    Callable uids keep a value list unaddressed until needed.
+    Callable uids keep a value sequence unaddressed until needed.
     """
 
     def __init__(
         self,
         *,
-        source: _Source | list[tp.Any],
+        source: _Source | tp.Sequence[tp.Any],
         uids: tp.Sequence[str] | tp.Callable[[tp.Any], str] | None = None,
         pending: tp.Sequence[_StepCall] = (),
     ) -> None:
@@ -140,7 +154,7 @@ class StepItems:
     def _address(self) -> _Source:
         if callable(self._uids):
             uids = [self._uids(value) for value in self._source]
-            self._source = dict(zip(uids, self._source))
+            self._source = _Positions(self._source, uids)  # held values: GC rescans
             self._uids = uids
         return self._source
 

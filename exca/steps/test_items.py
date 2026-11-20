@@ -72,7 +72,7 @@ def test_read_fuses_defaults_and_isolates_batched(
     mult, batched = conftest.Mult(), _Batched()
     infra: tp.Any = {"backend": "Cached", "folder": tmp_path} if cached else None
     chain = base.Chain(steps=[mult, mult, batched, mult], infra=infra)
-    result = list(chain.run_many([1, 2, 3]))
+    result = list(chain.run_many(iter([1, 2, 3])))
     assert result == [8, 16, 24], "x2, x2, identity batch, x2"
     assert fused == [2, 1], "two defaults fuse; the batched step splits, then one default"
     contexts = batched.contexts + mult.contexts
