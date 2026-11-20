@@ -383,7 +383,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                         utils.best_effort_utime(folder)
         cache_dict = self.cache_dict
         msg = "Recovering %s items for %s from %s"
-        logger.debug(msg, len(items), self._factory(), cache_dict)
+        logger.debug(msg, len(uid_items), self._factory(), cache_dict)
         return (cache_dict[k] for k, _ in uid_items)
 
     def _method_override_futures(self, items: tp.Sequence[tp.Any]) -> tp.Iterator[tp.Any]:
