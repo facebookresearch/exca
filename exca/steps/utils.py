@@ -97,11 +97,11 @@ def infra_validator_after(self: tp.Any) -> tp.Any:
 def resolved_step(step: base.Step) -> base.Step:
     """Return the fixed point of ``step._resolve_step()`` (``step`` itself if it
     does not resolve). Raises on circular or self-containing resolutions."""
-    if "has_resolve" not in step._step_flags:
-        return step
     # Memoise distinct resolutions: their runtime state must outlive a run.
     if step._runtime.resolution is not None:
         return step._runtime.resolution
+    if "has_resolve" not in step._step_flags:
+        return step
     built = step
     for _ in range(10):
         nxt = built._resolve_step()
