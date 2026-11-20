@@ -270,7 +270,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
                 with cache.write():
                     for uid in to_remove:
                         del cache[uid]
-            missing = {x: y for x, y in positions.items() if x not in state.recomputed}
+            missing = {k: pos for k, pos in positions.items() if k not in state.recomputed}
             if isinstance(cache, CacheDict):
                 # dont record computed items if no cache
                 state.recomputed |= set(missing)
@@ -334,7 +334,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if self.cluster in [None, "threadpool", "processpool"]:
             return self._method_override_futures(items)
         uid_func = imethod.item_uid
-        uids = [uid_func(item) for item in items]  # output order
+        uids = [uid_func(item) for item in items]
         missing = list(self._find_missing(uids, items).items())
         if missing:
             executor = self.executor()
@@ -400,7 +400,7 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
         if imethod is None:
             raise RuntimeError(f"Infra was not applied: {self!r}")
         uid_func = imethod.item_uid  # type: ignore
-        uids = [uid_func(item) for item in items]  # output order
+        uids = [uid_func(item) for item in items]
         missing = list(self._find_missing(uids, items).items())
         out = {}
         if missing:

@@ -154,7 +154,7 @@ class StepItems:
     def _address(self) -> _Source:
         if callable(self._uids):
             uids = [self._uids(value) for value in self._source]
-            self._source = _Positions(self._source, uids)  # held values: GC rescans
+            self._source = _Positions(self._source, uids)  # held values slow the GC
             self._uids = uids
         return self._source
 
