@@ -13,7 +13,6 @@ pipeline: source + pending + uids. Users never construct it;
 
 from __future__ import annotations
 
-import collections
 import itertools
 import typing as tp
 
@@ -111,14 +110,13 @@ class StepItems:
     For dict sources, uids default to the dict keys (insertion order).
     For CacheDict sources, explicit uids are required
     (the CacheDict may contain keys from other runs).
-    Sequence sources hold the values in uids order; callable uids compute them on
-    first need.
+    Callable uids keep a value list unaddressed until needed.
     """
 
     def __init__(
         self,
         *,
-        source: _Source | tp.Sequence[tp.Any],
+        source: _Source | list[tp.Any],
         uids: tp.Sequence[str] | tp.Callable[[tp.Any], str] | None = None,
         pending: tp.Sequence[_StepCall] = (),
     ) -> None:
@@ -128,16 +126,23 @@ class StepItems:
             uids = list(source)
         elif not callable(uids):
             uids = list(uids)
-        # source: uid→value, or values in uids order; uids: duplicates allowed
+        # addressed: source=unique uid→value; uids=ordered sequence, duplicates allowed
         self._source: tp.Any = source
         self._uids = uids
         self._pending = tuple(pending)
 
     @property
     def uids(self) -> list[str]:
-        if callable(self._uids):
-            self._uids = [self._uids(value) for value in self._source]
+        self._address()
+        assert isinstance(self._uids, list)
         return self._uids
+
+    def _address(self) -> _Source:
+        if callable(self._uids):
+            uids = [self._uids(value) for value in self._source]
+            self._source = dict(zip(uids, self._source))
+            self._uids = uids
+        return self._source
 
     def __len__(self) -> int:
         if callable(self._uids):
@@ -152,12 +157,8 @@ class StepItems:
 
     def select(self, uids: tp.Sequence[str]) -> StepItems:
         """Subset to specific uids."""
-        source = self._source
-        if isinstance(source, collections.abc.Sequence):  # values not all held (GC)
-            wanted = set(uids)
-            positions = {uid: k for k, uid in enumerate(self.uids) if uid in wanted}
-            source = {uid: source[k] for uid, k in positions.items()}
-        elif isinstance(source, dict):
+        source = self._address()
+        if isinstance(source, dict):
             source = {uid: source[uid] for uid in dict.fromkeys(uids)}
         elif hasattr(source, "select"):  # subset lazy sources before pickle
             source = source.select(uids)
@@ -165,7 +166,7 @@ class StepItems:
 
     def read(self, uids: tp.Sequence[str]) -> tp.Iterator[tp.Any]:
         """Read these uids through the carrier's pending steps."""
-        source = self._source
+        source = self._address()
         try:
             values = (source[uid] for uid in uids)
             yield from self._pipeline(values, len(uids), lambda: uids)
@@ -192,6 +193,6 @@ class StepItems:
         return iter(current)
 
     def __iter__(self) -> tp.Iterator[tp.Any]:
-        if isinstance(self._source, collections.abc.Sequence):
+        if callable(self._uids):
             return self._pipeline(self._source, len(self), lambda: self.uids)
         return self.read(self._uids)

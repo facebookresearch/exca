@@ -238,9 +238,8 @@ class Scatter(base.Step):
         # input uid -> {branch uid: branch}; feeds both _Parts and _Gather
         # (input-independent branches reuse one branch uid across inputs)
         plan: dict[str, dict[str, tp.Any]] = {}
-        for uid, item in zip(batch.uids, batch):  # one driver read to enumerate
-            if uid in plan:
-                continue
+        for uid in dict.fromkeys(batch.uids):
+            item = next(iter(batch.select([uid])))  # one driver read to enumerate
             branches = list(self.branches(item))
             if not branches:
                 raise ValueError(
@@ -254,8 +253,7 @@ class Scatter(base.Step):
             for uid, m in plan.items()
             for branch_uid, branch in m.items()
         }
-        keyed = batch.select(list(plan))  # once: _Parts reads inputs one by one
-        carrier = items.StepItems(source=_Parts(keyed, self.take, origin), uids=uids)
+        carrier = items.StepItems(source=_Parts(batch, self.take, origin), uids=uids)
         # one dispatch over all branches lets a backend submit them together
         dispatched = branch_runner.dispatch(self._body(), carrier)
         return items.StepItems(

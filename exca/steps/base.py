@@ -439,10 +439,8 @@ class Step(exca.helpers.DiscriminatedModel):
             Iterator yielding one result per input, in input order.
         """
         built = utils.resolved_step(self)
-        if not isinstance(values, collections.abc.Sequence):
-            values = list(values)  # generators: read twice (uids, then values)
         boundary = items.StepItems(
-            source=values,
+            source=list(values),
             uids=functools.partial(identity.materialize_uid, built),
         )
         return Runner(outer_step=self).dispatch(built, boundary)
