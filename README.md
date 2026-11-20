@@ -1,4 +1,4 @@
-# Exca - ⚔
+<p align="center"><img src="https://raw.githubusercontent.com/facebookresearch/exca/main/docs/_static/exca-on-light.svg#gh-light-mode-only" alt="exca" height="90"><img src="https://raw.githubusercontent.com/facebookresearch/exca/main/docs/_static/exca-on-dark.svg#gh-dark-mode-only" alt="exca" height="90"></p>
 
 Execute and cache seamlessly in python.
 
