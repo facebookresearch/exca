@@ -299,6 +299,10 @@ def test_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     np.testing.assert_array_almost_equal(loaded["metrics"]["loss"], [0.5, 0.3, 0.1])
     np.testing.assert_array_almost_equal(loaded["weights"], [[1.0, 2.0], [3.0, 4.0]])
 
+    with ctx:
+        info = ctx.dump((np.array([1.0, 2.0]), 3), cache_type="Auto")
+    np.testing.assert_array_equal(ctx.load(info)[0], [1.0, 2.0])
+
 
 class _Opaque:
     """Module-level class so it's picklable (local classes are not)."""
