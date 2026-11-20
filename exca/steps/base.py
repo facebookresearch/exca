@@ -441,8 +441,10 @@ class Step(exca.helpers.DiscriminatedModel):
         built = utils.resolved_step(self)
         if not isinstance(values, collections.abc.Sequence):
             values = list(values)  # generators: read twice (uids, then values)
-        uid = functools.partial(identity.materialize_uid, built)
-        boundary = items.StepItems(source=items._Inputs(values, uid))
+        boundary = items.StepItems(
+            source=values,
+            uids=functools.partial(identity.materialize_uid, built),
+        )
         return Runner(outer_step=self).dispatch(built, boundary)
 
     def forward(self, *args: tp.Any, **kwargs: tp.Any) -> tp.NoReturn:  # removed
