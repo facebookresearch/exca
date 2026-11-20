@@ -537,6 +537,9 @@ class Chain(Step):
 
     def _exca_uid_dict_override(self) -> dict[str, tp.Any]:
         """Flatten chain for UID export (matches old Chain behavior)."""
+        built = utils.resolved_step(self)
+        if built is not self:
+            return exca.utils.ConfigExporter(uid=True, exclude_defaults=True).apply(built)
         chain = type(self)(steps=tuple(self._uid_steps()))
         exporter = exca.utils.ConfigExporter(
             uid=True, exclude_defaults=True, ignore_first_override=True
