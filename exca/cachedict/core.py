@@ -289,7 +289,7 @@ class CacheDict(tp.Generic[X]):
         if self._dumper is None:
             raise RuntimeError("This should not happen")
         if key not in self._key_info:
-            _ = self.keys()  # reload keys
+            self._read_info_files()
         dinfo = self._key_info[key]
         if dinfo.jsonl not in self._recorded_jsonls:  # index + payloads: one batch
             if not self._recorded_jsonls:  # record is per folder, stamps per index
@@ -351,7 +351,7 @@ class CacheDict(tp.Generic[X]):
         if self.folder is not None and self._write_ctx is None:
             raise RuntimeError("Cannot write outside of a write() context")
         if self._folder_modified <= 0:
-            _ = self.keys()
+            self._read_info_files()
         if key in self._ram_data or key in self._key_info:
             raise ValueError(f"Overwriting a key is currently not implemented ({key=})")
         if self._keep_in_ram and self.folder is None:

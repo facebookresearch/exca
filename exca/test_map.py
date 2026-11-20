@@ -78,7 +78,7 @@ def test_map_infra(tmp_path: Path) -> None:
     _ = base.infra.config(uid=False, exclude_defaults=False)
     objs = list(whatever.infra.iter_cached())
     assert not objs
-    out = list(whatever.process([1, 2, 2, 3]))
+    out = list(whatever.process(iter([1, 2, 2, 3])))
     assert [x.shape for x in out] == [(1, 13), (2, 13), (2, 13), (3, 13)]
     path = tmp_path
     uid = f"{__name__}.Whatever.process,1/param1=13-4c541560"
