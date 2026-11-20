@@ -440,7 +440,7 @@ class Step(exca.helpers.DiscriminatedModel):
         """
         built = utils.resolved_step(self)
         if not isinstance(values, collections.abc.Sequence):
-            values = list(values)  # iterated again when addressed
+            values = list(values)  # generators: read twice (uids, then values)
         boundary = items.StepItems(
             source=values,
             uids=functools.partial(identity.materialize_uid, built),
