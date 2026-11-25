@@ -183,6 +183,7 @@ item:
         [{"a": {ConfDict.ops.AFTER: "b"}}, {"a": {ConfDict.ops.REPLACE: True, "y": 2}}],
         [{"new": {ConfDict.ops.AFTER: "a"}}, {"new": {ConfDict.ops.BEFORE: "c"}}],
         [{"a.x": 1}, {"b": {ConfDict.ops.AFTER: "a"}}, {"b": {ConfDict.ops.AFTER: "c"}}],
+        [{"b": {ConfDict.ops.REPLACE: True, "y": 2}}],
     ],
 )
 def test_update_merged_layers_match_sequential(layers: list[dict[str, tp.Any]]) -> None:

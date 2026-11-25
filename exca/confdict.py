@@ -197,11 +197,13 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             patched.update(val)  # degrades to dict
             sub.clear()
             sub.update(OrderedDict(patched.items()))
-        elif not isinstance(sub, ConfDict):
-            sub = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
-            dict.__setitem__(obj, p, sub)
-            sub.update(val)
         else:
+            if not isinstance(sub, ConfDict):
+                sub = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
+                dict.__setitem__(obj, p, sub)
+            if existed and val.get(ConfDict.ops.REPLACE, False):  # applies even on {}
+                sub._replace()
+                val = {k: v for k, v in val.items() if k != ConfDict.ops.REPLACE}
             sub.update(val)
         move = _Move.from_value(p, obj[p])  # given, or pending from an earlier patch
         if move is not None and move.apply(obj, p):
@@ -333,10 +335,10 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
           relative to an existing sibling.
 
-        Operations stay visible in a patch until they apply, then the ConfDict records
-        them and replays them when it patches another ConfDict, so merging patches first
-        gives the same result as applying them one by one. Copies keep the records, dict
-        and flat conversions drop them.
+        An operation stays in the content until its key (delete, replace) or anchor
+        (move) exists, then the ConfDict records it and replays it when it patches
+        another ConfDict, so merging patches first gives the same result as applying
+        them one by one. Copies keep the records, dict and flat conversions drop them.
 
         Example
         -------
