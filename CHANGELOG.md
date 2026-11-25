@@ -7,6 +7,7 @@
 - `ContiguousMemmap`: faster loading and fewer open files when reading many cache files. [#360]
 - `CacheDict`/`steps`: registry databases (`inflight.db`, `errors.db`) follow the process umask, so they can be group-writable. [#366]
 - `ConfDict`: merging patches first gives the same result as applying them one by one: deletes, replaces and moves used up inside a patch are replayed when it updates another `ConfDict`. [#373]
+- `ConfDict`: array values (e.g. numpy) no longer raise on construction or update. [#373]
 
 ## 0.6.1 - 26-11-16
 

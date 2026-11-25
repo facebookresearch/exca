@@ -150,11 +150,13 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             raise ValueError(f"Unexpected ConfDict op value {val!r}")
         if isinstance(obj, dict):
             ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
+    delete = isinstance(val, str) and val == ConfDict.ops.DELETE
     if isinstance(obj, ConfDict):
-        if dict.get(obj, p) == ConfDict.ops.DELETE and val != ConfDict.ops.DELETE:
+        current = dict.get(obj, p)
+        if isinstance(current, str) and current == ConfDict.ops.DELETE and not delete:
             obj._delete(p)  # pending delete followed by content: a re-add
         if p in obj._ops.deleted and p not in obj:
-            if not rest and val == ConfDict.ops.DELETE:
+            if not rest and delete:
                 return
             dict.__setitem__(obj, p, ConfDict())  # re-added: fresh, tombstone kept
     if isinstance(obj, dict):
@@ -177,7 +179,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         _set_item(sub, rest[0], val)
         return
     # final part
-    if val == ConfDict.ops.DELETE and existed:
+    if delete and existed:
         if _is_seq(obj):
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
         if isinstance(obj, ConfDict):

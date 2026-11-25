@@ -371,6 +371,12 @@ def test_to_uid(version: int, expected: str) -> None:
     assert confdict.ConfDict(data).to_uid(version=version) == expected
 
 
+def test_update_array_values() -> None:
+    cfg = ConfDict({"a": np.array([1, 2])})
+    cfg.update({"a": np.array([3, 4])})
+    assert cfg["a"].tolist() == [3, 4]
+
+
 def test_empty(tmp_path: Path) -> None:
     fp = tmp_path / "cfg.yaml"
     cdict = confdict.ConfDict()
