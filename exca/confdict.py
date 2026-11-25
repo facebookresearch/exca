@@ -205,7 +205,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     LATEST_UID_VERSION = 3
     UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", LATEST_UID_VERSION))
     ops = ConfDictOps
-    # applied moves, replayed when patching a ConfDict (reassigned, never mutated)
+    # moves applied by update; shared default: reassign, never mutate
     _moves: dict[str, _Move] = {}
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
@@ -302,8 +302,8 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
           existing content with the new one instead of merging recursively.
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
           relative to an existing sibling. A ConfDict replays the moves it applied when
-          it patches another one, so patches merged before their base keep them;
-          copies keep them, dict and flat conversions drop them.
+          it patches another one, so merging patches before their base keeps them;
+          copies keep these records, dict and flat conversions drop them.
 
         Example
         -------
