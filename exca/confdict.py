@@ -102,7 +102,7 @@ class _Move(tp.NamedTuple):
         return True
 
 
-class _Ops(tp.NamedTuple):
+class _Consumed(tp.NamedTuple):
     """Operations a ConfDict consumed, replayed when it patches another ConfDict"""
 
     replaced: bool = False
@@ -191,7 +191,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
                 for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
                     dict.pop(sub, op, None)
             if isinstance(obj, ConfDict):
-                obj._record_move(p, None)
+                obj._consumed = obj._consumed.moving(p, None)
         if isinstance(sub, OrderedDict):
             patched = ConfDict(sub)
             patched.update(val)  # degrades to dict
@@ -209,7 +209,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         if move is not None and move.apply(obj, p):
             dict.pop(obj[p], move.op)
             if isinstance(obj, ConfDict):
-                obj._record_move(p, move)
+                obj._consumed = obj._consumed.moving(p, move)
     else:
         dict.__setitem__(obj, p, val)
 
@@ -236,7 +236,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     LATEST_UID_VERSION = 3
     UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", LATEST_UID_VERSION))
     ops = ConfDictOps
-    _ops = _Ops()
+    _consumed = _Consumed()
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
@@ -308,7 +308,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             default = () if default is _sentinel else (default,)
             out = dict.pop(sub, parts[-1], *default)
             if isinstance(sub, ConfDict):
-                sub._ops = sub._ops.forgetting(parts[-1])
+                sub._consumed = sub._consumed.forgetting(parts[-1])
         elif default is _sentinel:
             raise KeyError(key)
         else:
@@ -324,8 +324,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         -----
         - dict values merge recursively.
         - non-dict values replace existing values.
-        - operations (see below) apply top to bottom; unresolved ops stay in the config until
-          applicable.
+        - operations (see below) apply top to bottom.
 
         Operations
         -----------
@@ -336,9 +335,9 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
           relative to an existing sibling.
 
         An operation stays in the content until its key (delete, replace) or anchor
-        (move) exists, then the ConfDict records it and replays it when it patches
-        another ConfDict, so merging patches first gives the same result as applying
-        them one by one. Copies keep the records, dict and flat conversions drop them.
+        (move) exists. Once applied, the ConfDict records it and replays it when it
+        patches another ConfDict, so operations used up inside merged patches still reach
+        their base. Copies keep the records, dict and flat conversions drop them.
 
         Example
         -------
@@ -356,8 +355,8 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             if not isinstance(mapping, abc.Mapping):
                 mapping = dict(mapping)
             kwargs.update(mapping)
-        consumed = mapping._ops if isinstance(mapping, ConfDict) else _Ops()
-        if not kwargs and consumed == _Ops():
+        consumed = mapping._consumed if isinstance(mapping, ConfDict) else _Consumed()
+        if not kwargs and consumed == _Consumed():
             return
         # before the content: replace, and delete re-added keys (back fresh and last)
         if consumed.replaced or (self and kwargs.pop(ConfDict.ops.REPLACE, False)):
@@ -370,13 +369,10 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             _set_item(self, key, val)
         # after the content: moves, then deletes
         for key, move in consumed.moves:
-            self._record_move(key, move)
+            self._consumed = self._consumed.moving(key, move)
             move.apply(self, key)
         for key in consumed.deleted - kwargs.keys():
             self._delete(key)
-
-    def _record_move(self, key: str, move: _Move | None) -> None:
-        self._ops = self._ops.moving(key, move)
 
     def _replace(self) -> None:
         position = {
@@ -384,16 +380,16 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         }
         dict.clear(self)
         dict.update(self, position)  # a replace keeps the position
-        self._ops = _Ops(replaced=True)
+        self._consumed = _Consumed(replaced=True)
 
     def _delete(self, key: str) -> None:
         dict.pop(self, key, None)
-        self._ops = self._ops.deleting(key)
+        self._consumed = self._consumed.deleting(key)
 
     def _is_deleted(self, key: str) -> bool:
         value = dict.get(self, key)
         pending = isinstance(value, str) and value == ConfDict.ops.DELETE
-        return pending or (key not in self and key in self._ops.deleted)
+        return pending or (key not in self and key in self._consumed.deleted)
 
     def _readd(self, key: str) -> None:
         """Gives a deleted key fresh content; the delete still replays on a target"""
@@ -402,11 +398,11 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
 
     def clear(self) -> None:
         super().clear()
-        self._ops = _Ops()
+        self._consumed = _Consumed()
 
     def popitem(self) -> tuple[str, tp.Any]:
         key, val = super().popitem()
-        self._ops = self._ops.forgetting(key)
+        self._consumed = self._consumed.forgetting(key)
         return key, val
 
     def flat(self) -> dict[str, tp.Any]:
