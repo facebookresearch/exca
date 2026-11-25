@@ -157,9 +157,12 @@ item:
     with pytest.raises(ValueError, match="unresolved config"):
         data.to_uid()
 
-    data.update({"steps": {"missing": {}, "late": {"t": 1}}})
+    data.update(
+        {"steps": {"missing": {}, "late": {"t": 1}}, "item.size": np.array([1, 2])}
+    )
     assert " ".join(data["steps"]) == "a new d c missing late"
     assert data["steps.late"] == {"t": 1}
+    assert data["item.size"].tolist() == [1, 2], "arrays are not compared to ops"
 
     grid = ConfDict({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
     data.update({"item": grid.flat()["item"][0]})
@@ -369,12 +372,6 @@ def test_to_uid(version: int, expected: str) -> None:
         "t": torch.Tensor([1.2, 1.4]),
     }
     assert confdict.ConfDict(data).to_uid(version=version) == expected
-
-
-def test_update_array_values() -> None:
-    cfg = ConfDict({"a": np.array([1, 2])})
-    cfg.update({"a": np.array([3, 4])})
-    assert cfg["a"].tolist() == [3, 4]
 
 
 def test_empty(tmp_path: Path) -> None:
