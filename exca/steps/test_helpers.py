@@ -76,7 +76,7 @@ def test_validation_errors(kwargs: dict[str, tp.Any], match: str) -> None:
         Func(function=scale, **kwargs)
 
 
-def test_reserved_param_names() -> None:
+def test_rejected_functions() -> None:
     with pytest.raises(ValueError, match="conflict with Func fields"):
         Func(function=bad_infra_param)
     with pytest.raises(ValueError, match="must be importable"):
