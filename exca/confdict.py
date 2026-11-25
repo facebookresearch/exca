@@ -64,44 +64,45 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-def _apply_move(obj: dict[str, tp.Any], key: str) -> None:
-    sub = obj[key]
-    present = [op for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in sub]
-    if len(present) > 1:
-        raise ValueError(
-            f"Use either {ConfDict.ops.BEFORE!r} or {ConfDict.ops.AFTER!r}, not both"
-        )
-    if not present:
-        return
-    op = present[0]
-    anchor = sub[op]
-    if not isinstance(anchor, str):
-        raise TypeError(f"{op!r} expects a key name, got {anchor!r}")
-    if anchor == key:
-        raise ValueError(f"Cannot move {key!r} relative to itself")
-    if anchor not in obj:
-        return
-    dict.pop(sub, op, None)
-    if isinstance(obj, ConfDict):
-        _moves(obj)[key] = (op, anchor)
-    _place(obj, key, op, anchor)
+class _Move(tp.NamedTuple):
+    """Reorder from a BEFORE/AFTER op: places a key next to its anchor"""
 
+    op: str
+    anchor: str
 
-def _moves(obj: "ConfDict") -> dict[str, tuple[str, str]]:
-    """Moves applied to obj, replayed when obj patches another ConfDict"""
-    return vars(obj).setdefault("_moves", {})
+    @classmethod
+    def from_value(cls, key: str, value: tp.Any) -> tp.Self | None:
+        ops = [op for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in value]
+        if len(ops) > 1:
+            raise ValueError(
+                f"Use either {ConfDict.ops.BEFORE!r} or {ConfDict.ops.AFTER!r}, not both"
+            )
+        if not ops:
+            return None
+        anchor = value[ops[0]]
+        if not isinstance(anchor, str):
+            raise TypeError(f"{ops[0]!r} expects a key name, got {anchor!r}")
+        if anchor == key:
+            raise ValueError(f"Cannot move {key!r} relative to itself")
+        return cls(ops[0], anchor)
 
-
-def _place(obj: dict[str, tp.Any], key: str, op: str, anchor: str) -> None:
-    value = dict.pop(obj, key)
-    items = list(obj.items())
-    obj.clear()
-    for name, item in items:
-        if op == ConfDict.ops.BEFORE and name == anchor:
-            dict.__setitem__(obj, key, value)
-        dict.__setitem__(obj, name, item)
-        if op == ConfDict.ops.AFTER and name == anchor:
-            dict.__setitem__(obj, key, value)
+    def apply(self, obj: dict[str, tp.Any], key: str) -> bool:
+        """Moves obj[key] next to the anchor, False if either is missing"""
+        if key not in obj or self.anchor not in obj:
+            return False
+        value = dict.pop(obj, key)
+        items = list(obj.items())
+        obj.clear()
+        for name, item in items:
+            if self.op == ConfDict.ops.BEFORE and name == self.anchor:
+                dict.__setitem__(obj, key, value)
+            dict.__setitem__(obj, name, item)
+            if self.op == ConfDict.ops.AFTER and name == self.anchor:
+                dict.__setitem__(obj, key, value)
+        if isinstance(obj, ConfDict):
+            moves = {k: m for k, m in obj._moves.items() if k != key}
+            obj._moves = moves | {key: self}
+        return True
 
 
 def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
@@ -157,9 +158,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
         dict.pop(obj, p, None)
         if isinstance(obj, ConfDict):
-            moves = _moves(obj)
-            for name in [n for n, (_, a) in moves.items() if p in (n, a)]:
-                del moves[name]
+            obj._moves = {k: m for k, m in obj._moves.items() if p not in (k, m.anchor)}
         return
     # list case
     if _is_seq(obj):
@@ -177,7 +176,9 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             sub.update(val)
         else:
             sub.update(val)
-        _apply_move(obj, p)
+        move = _Move.from_value(p, obj[p])
+        if move is not None and move.apply(obj, p):
+            dict.pop(obj[p], move.op)
     else:
         dict.__setitem__(obj, p, val)
 
@@ -204,6 +205,8 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     LATEST_UID_VERSION = 3
     UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", LATEST_UID_VERSION))
     ops = ConfDictOps
+    # applied moves, replayed when patching a ConfDict (reassigned, never mutated)
+    _moves: dict[str, _Move] = {}
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
@@ -323,16 +326,14 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             return
         if self and kwargs.pop(ConfDict.ops.REPLACE, False):
             self.clear()
-            _moves(self).clear()
+            self._moves = {}
         for key, val in kwargs.items():
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
             _set_item(self, key, val)
         if isinstance(mapping, ConfDict):  # moves consumed in the patch itself
-            for key, (op, anchor) in _moves(mapping).items():
-                if key in self and anchor in self:
-                    _moves(self)[key] = (op, anchor)
-                    _place(self, key, op, anchor)
+            for key, move in mapping._moves.items():
+                move.apply(self, key)
 
     def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as
@@ -341,7 +342,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         return _flatten(self)  # type: ignore
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, ConfDict) and _moves(self) != _moves(other):
+        if isinstance(other, ConfDict) and self._moves != other._moves:
             return False
         return super().__eq__(other)
 
@@ -351,7 +352,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
 
     def copy(self) -> tp.Self:
         out = self.__class__(super().copy())
-        _moves(out).update(_moves(self))
+        out._moves = self._moves
         return out
 
     @classmethod
