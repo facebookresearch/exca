@@ -298,3 +298,56 @@ def test_no_pydantic_getattr_on_cached_path(
     # sanity: verify the patch actually catches PrivateAttr access
     _ = whatever.infra._infra_method
     assert calls, "Monkeypatch failed to detect __getattr__"
+
+
+class OrderRecorder(pydantic.BaseModel):
+    infra: MapInfra = MapInfra()
+
+    _received: list[str] = []
+
+    @infra.apply(item_uid=str)
+    def process(self, items: list[str]) -> tp.Iterator[str]:
+        items = list(items)
+        self._received.extend(items)
+        yield from items
+
+
+def test_map_infra_inline_keeps_input_order(tmp_path: Path) -> None:
+    # cluster=None computes everything in a single inline call, so the
+    # decorated method must receive the missing items in input order
+    model = OrderRecorder(infra={"folder": tmp_path})  # type: ignore
+    items = [f"{f}{i}" for f in "abc" for i in range(3)]
+    out = list(model.process(items))
+    assert out == items
+    assert model._received == items
+
+
+def test_map_infra_inline_does_not_advance_global_rng(tmp_path: Path) -> None:
+    # the inline path must not shuffle, hence not touch the global RNG state
+    model = OrderRecorder(infra={"folder": tmp_path})  # type: ignore
+    items = [f"{f}{i}" for f in "abc" for i in range(3)]
+    np.random.seed(1234)
+    expected = np.random.rand(4)
+    np.random.seed(1234)
+    _ = list(model.process(items))
+    np.testing.assert_array_equal(np.random.rand(4), expected)
+
+
+def test_map_infra_threadpool_still_shuffles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # pool dispatch keeps shuffling so overlapping jobs do not process
+    # the same items at the same time (output order is preserved anyway)
+    shuffles: list[int] = []
+    orig_shuffle = np.random.shuffle
+
+    def spy(x: tp.Any, *args: tp.Any, **kwargs: tp.Any) -> None:
+        shuffles.append(len(x))
+        orig_shuffle(x, *args, **kwargs)
+
+    monkeypatch.setattr(np.random, "shuffle", spy)
+    model = OrderRecorder(infra={"folder": tmp_path, "cluster": "threadpool"})  # type: ignore
+    items = [f"{f}{i}" for f in "abc" for i in range(3)]
+    out = list(model.process(items))
+    assert out == items
+    assert shuffles, "pool dispatch should still shuffle the missing items"
