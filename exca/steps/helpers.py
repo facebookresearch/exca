@@ -62,6 +62,12 @@ class Func(base.Step):
         return super()._exclude_from_cls_uid() + ["input_param"]
 
     def model_post_init(self, __context: tp.Any) -> None:
+        name = getattr(self.function, "__qualname__", "")
+        if "<" in name:  # <lambda>, <locals>: one dumped path for distinct functions
+            raise ValueError(
+                f"function {name!r} must be importable (module-level): its dumped "
+                "path is its identity, shared by every lambda or local function"
+            )
         sig = inspect.signature(self.function)
         params = list(sig.parameters.values())
         param_map = {p.name: p for p in params}
