@@ -340,15 +340,6 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         """
         return _flatten(self)  # type: ignore
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, dict) and self._moves != getattr(other, "_moves", {}):
-            return False
-        return super().__eq__(other)
-
-    def __ne__(self, other: object) -> bool:
-        eq = self.__eq__(other)
-        return eq if eq is NotImplemented else not eq
-
     def copy(self) -> tp.Self:
         out = self.__class__(super().copy())
         out._moves = self._moves

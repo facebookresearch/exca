@@ -99,10 +99,10 @@ def test_update_docstring_examples() -> None:
 def test_update_delete_and_move() -> None:
     base = """
         steps:
-          read.t: read
-          clean.t: clean
-          resample.t: resample
-          pad.t: pad
+          a.t: a
+          b.t: b
+          c.t: c
+          d.t: d
         item:
           name: old
           size: 1
@@ -111,15 +111,15 @@ def test_update_delete_and_move() -> None:
     patch = ConfDict.from_yaml(
         f"""
         steps:
-          clean: {ConfDict.ops.DELETE}
-          project:
-            {ConfDict.ops.AFTER}: read
-            t: project
-          resample:
-            {ConfDict.ops.AFTER}: project
-            frequency: 2
-          pad:
-            {ConfDict.ops.BEFORE}: resample
+          b: {ConfDict.ops.DELETE}
+          new:
+            {ConfDict.ops.AFTER}: a
+            t: new
+          c:
+            {ConfDict.ops.AFTER}: new
+            x: 2
+          d:
+            {ConfDict.ops.BEFORE}: c
           late:
             {ConfDict.ops.AFTER}: missing
         """
@@ -127,30 +127,27 @@ def test_update_delete_and_move() -> None:
     assert (
         patch.to_yaml()
         == f"""steps:
-  clean: {ConfDict.ops.DELETE}
-  project:
-    {ConfDict.ops.AFTER}: read
-    t: project
-  pad: {{}}
-  resample.frequency: 2
+  b: {ConfDict.ops.DELETE}
+  new:
+    {ConfDict.ops.AFTER}: a
+    t: new
+  d: {{}}
+  c.x: 2
   late.{ConfDict.ops.AFTER}: missing
 """
     ), "patch should have resolved eagerly what could be"
-    assert patch.copy() == patch != ConfDict.from_yaml(patch.to_yaml()), (
-        "applied moves follow copies, not yaml dumps"
-    )
 
     data.update(patch)
 
     assert (
         data.to_yaml()
         == f"""steps:
-  read.t: read
-  project.t: project
-  pad.t: pad
-  resample:
-    t: resample
-    frequency: 2
+  a.t: a
+  new.t: new
+  d.t: d
+  c:
+    t: c
+    x: 2
   late.{ConfDict.ops.AFTER}: missing
 item:
   name: old
@@ -161,28 +158,36 @@ item:
         data.to_uid()
 
     data.update({"steps": {"missing": {}, "late": {"t": 1}}})
-    assert list(data["steps"]) == [
-        "read",
-        "project",
-        "pad",
-        "resample",
-        "missing",
-        "late",
-    ]
+    assert " ".join(data["steps"]) == "a new d c missing late"
     assert data["steps.late"] == {"t": 1}
-    patch = ConfDict({"steps.read.t": 2})
-    patch.update({"steps": {"new": {ConfDict.ops.AFTER: "read"}}})
-    patch.update({"steps.read": ConfDict.ops.DELETE})
-    data.update(patch)
-    assert list(data["steps"])[:2] == ["read", "new"], (
-        "anchor deleted from the patch, not the base"
-    )
 
     grid = ConfDict({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
     data.update({"item": grid.flat()["item"][0]})
     assert data["item"] == {"name": "new"}
     data.update({"item.name": ConfDict.ops.DELETE})
     assert data["item"] == {}
+
+
+@pytest.mark.parametrize(
+    "layers,expected",
+    [
+        ([{"a.x": 1}, {"new": {ConfDict.ops.AFTER: "a"}}], "a new b c"),
+        ([{"c.x": 1}, {"new": {ConfDict.ops.BEFORE: "c"}}], "a b new c"),
+        (
+            [{"a.x": 1}, {"new": {ConfDict.ops.AFTER: "a"}}, {"a": ConfDict.ops.DELETE}],
+            "a new b c",
+        ),
+    ],
+)
+def test_update_replays_patch_moves(
+    layers: list[dict[str, tp.Any]], expected: str
+) -> None:
+    patch = ConfDict(layers[0])
+    for layer in layers[1:]:
+        patch.update(layer)
+    base = ConfDict({"a": {}, "b": {}, "c": {}})
+    base.update(patch.copy())  # records follow copies
+    assert " ".join(base) == expected
 
 
 @pytest.mark.parametrize(
