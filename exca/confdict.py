@@ -49,6 +49,9 @@ class ConfDictOps:
         return True
 
 
+_MOVE_OPS = (ConfDictOps.BEFORE, ConfDictOps.AFTER)
+
+
 class _ConfDictMeta(type):
     @property
     def OVERRIDE(cls) -> str:  # noqa: N802
@@ -72,7 +75,7 @@ class _Move(tp.NamedTuple):
 
     @classmethod
     def from_value(cls, key: str, value: tp.Any) -> tp.Self | None:
-        ops = [op for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in value]
+        ops = [op for op in _MOVE_OPS if op in value]
         if len(ops) > 1:
             raise ValueError(
                 f"Use either {ConfDict.ops.BEFORE!r} or {ConfDict.ops.AFTER!r}, not both"
@@ -191,7 +194,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         return
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
         if isinstance(sub, dict) and _Move.from_value(p, val) is not None:
-            for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
+            for op in _MOVE_OPS:
                 dict.pop(sub, op, None)  # the latest move wins
             if isinstance(obj, ConfDict):
                 obj._ops = obj._ops.moving(p, None)
@@ -374,9 +377,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             self._delete(key)
 
     def _replace(self) -> None:
-        position = {
-            op: self[op] for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in self
-        }
+        position = {op: self[op] for op in _MOVE_OPS if op in self}
         dict.clear(self)
         dict.update(self, position)  # a replace keeps the position
         self._ops = _Ops(replaced=True)
