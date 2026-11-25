@@ -99,8 +99,6 @@ class _Move(tp.NamedTuple):
             dict.__setitem__(obj, name, item)
             if self.op == ConfDict.ops.AFTER and name == self.anchor:
                 dict.__setitem__(obj, key, value)
-        if isinstance(obj, ConfDict):
-            obj._ops = obj._ops.moving(key, self)
         return True
 
 
@@ -151,14 +149,10 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         if isinstance(obj, dict):
             ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
     delete = isinstance(val, str) and val == ConfDict.ops.DELETE
-    if isinstance(obj, ConfDict):
-        current = dict.get(obj, p)
-        if isinstance(current, str) and current == ConfDict.ops.DELETE and not delete:
-            obj._delete(p)  # pending delete followed by content: a re-add
-        if p in obj._ops.deleted and p not in obj:
-            if not rest and delete:
-                return
-            dict.__setitem__(obj, p, ConfDict())  # re-added: fresh, tombstone kept
+    if isinstance(obj, ConfDict) and obj._is_deleted(p):
+        if delete and not rest:
+            return
+        obj._readd(p)
     if isinstance(obj, dict):
         existed = p in obj
         sub = obj.setdefault(p, ConfDict())
@@ -192,11 +186,12 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         obj[p] = val  # type: ignore
         return
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
-        if isinstance(sub, dict) and _Move.from_value(p, val) is not None:
-            for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
-                dict.pop(sub, op, None)  # the latest move wins
+        if _Move.from_value(p, val) is not None:  # the latest move wins
+            if isinstance(sub, dict):
+                for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
+                    dict.pop(sub, op, None)
             if isinstance(obj, ConfDict):
-                obj._ops = obj._ops.moving(p, None)
+                obj._record_move(p, None)
         if isinstance(sub, OrderedDict):
             patched = ConfDict(sub)
             patched.update(val)  # degrades to dict
@@ -208,9 +203,11 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             sub.update(val)
         else:
             sub.update(val)
-        move = _Move.from_value(p, obj[p])
+        move = _Move.from_value(p, obj[p])  # given, or pending from an earlier patch
         if move is not None and move.apply(obj, p):
             dict.pop(obj[p], move.op)
+            if isinstance(obj, ConfDict):
+                obj._record_move(p, move)
     else:
         dict.__setitem__(obj, p, val)
 
@@ -336,9 +333,10 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
           relative to an existing sibling.
 
-        A ConfDict replays the operations it consumed when it patches another one, so
-        merging patches first gives the same result as applying them one by one; copies
-        keep these records, dict and flat conversions drop them.
+        Operations stay visible in a patch until they apply, then the ConfDict records
+        them and replays them when it patches another ConfDict, so merging patches first
+        gives the same result as applying them one by one. Copies keep the records, dict
+        and flat conversions drop them.
 
         Example
         -------
@@ -370,10 +368,13 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             _set_item(self, key, val)
         # after the content: moves, then deletes
         for key, move in consumed.moves:
-            if not move.apply(self, key):
-                self._ops = self._ops.moving(key, move)  # for a later base
+            self._record_move(key, move)
+            move.apply(self, key)
         for key in consumed.deleted - kwargs.keys():
             self._delete(key)
+
+    def _record_move(self, key: str, move: _Move | None) -> None:
+        self._ops = self._ops.moving(key, move)
 
     def _replace(self) -> None:
         position = {
@@ -386,6 +387,16 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     def _delete(self, key: str) -> None:
         dict.pop(self, key, None)
         self._ops = self._ops.deleting(key)
+
+    def _is_deleted(self, key: str) -> bool:
+        value = dict.get(self, key)
+        pending = isinstance(value, str) and value == ConfDict.ops.DELETE
+        return pending or (key not in self and key in self._ops.deleted)
+
+    def _readd(self, key: str) -> None:
+        """Gives a deleted key fresh content; the delete still replays on a target"""
+        self._delete(key)
+        dict.__setitem__(self, key, ConfDict())
 
     def clear(self) -> None:
         super().clear()
