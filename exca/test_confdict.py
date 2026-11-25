@@ -170,6 +170,13 @@ item:
         "late",
     ]
     assert data["steps.late"] == {"t": 1}
+    patch = ConfDict({"steps.read.t": 2})
+    patch.update({"steps": {"new": {ConfDict.ops.AFTER: "read"}}})
+    patch.update({"steps.read": ConfDict.ops.DELETE})
+    data.update(patch)
+    assert list(data["steps"])[:2] == ["read", "new"], (
+        "anchor deleted from the patch, not the base"
+    )
 
     grid = ConfDict({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
     data.update({"item": grid.flat()["item"][0]})
