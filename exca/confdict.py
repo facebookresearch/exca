@@ -82,6 +82,17 @@ def _apply_move(obj: dict[str, tp.Any], key: str) -> None:
     if anchor not in obj:
         return
     dict.pop(sub, op, None)
+    if isinstance(obj, ConfDict):
+        _moves(obj)[key] = (op, anchor)
+    _place(obj, key, op, anchor)
+
+
+def _moves(obj: "ConfDict") -> dict[str, tuple[str, str]]:
+    """Moves applied to obj, replayed when obj patches another ConfDict"""
+    return vars(obj).setdefault("_moves", {})
+
+
+def _place(obj: dict[str, tp.Any], key: str, op: str, anchor: str) -> None:
     value = dict.pop(obj, key)
     items = list(obj.items())
     obj.clear()
@@ -145,6 +156,10 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         if _is_seq(obj):
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
         dict.pop(obj, p, None)
+        if isinstance(obj, ConfDict):
+            moves = _moves(obj)
+            for name in [n for n, (_, a) in moves.items() if p in (n, a)]:
+                del moves[name]
         return
     # list case
     if _is_seq(obj):
@@ -283,7 +298,10 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         - :code:`ConfDict.ops.REPLACE` as key with True value replaces the whole
           existing content with the new one instead of merging recursively.
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
-          relative to an existing sibling.
+          relative to an existing sibling. A ConfDict records the moves it applies and
+          replays them when it patches another ConfDict, so patches merged together
+          before reaching their base keep them (records follow copies and count in
+          equality).
 
         Example
         -------
@@ -305,10 +323,16 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             return
         if self and kwargs.pop(ConfDict.ops.REPLACE, False):
             self.clear()
+            _moves(self).clear()
         for key, val in kwargs.items():
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
             _set_item(self, key, val)
+        if isinstance(mapping, ConfDict):  # moves consumed in the patch itself
+            for key, (op, anchor) in _moves(mapping).items():
+                if key in self and anchor in self:
+                    _moves(self)[key] = (op, anchor)
+                    _place(self, key, op, anchor)
 
     def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as
@@ -316,8 +340,19 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         """
         return _flatten(self)  # type: ignore
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, ConfDict) and _moves(self) != _moves(other):
+            return False
+        return super().__eq__(other)
+
+    def __ne__(self, other: object) -> bool:
+        eq = self.__eq__(other)
+        return eq if eq is NotImplemented else not eq
+
     def copy(self) -> tp.Self:
-        return self.__class__(super().copy())
+        out = self.__class__(super().copy())
+        _moves(out).update(_moves(self))
+        return out
 
     @classmethod
     def from_yaml(

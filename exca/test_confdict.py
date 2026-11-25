@@ -136,6 +136,9 @@ def test_update_delete_and_move() -> None:
   late.{ConfDict.ops.AFTER}: missing
 """
     ), "patch should have resolved eagerly what could be"
+    assert patch.copy() == patch != ConfDict.from_yaml(patch.to_yaml()), (
+        "applied moves follow copies, not yaml dumps"
+    )
 
     data.update(patch)
 
@@ -144,10 +147,10 @@ def test_update_delete_and_move() -> None:
         == f"""steps:
   read.t: read
   project.t: project
+  pad.t: pad
   resample:
     t: resample
     frequency: 2
-  pad.t: pad
   late.{ConfDict.ops.AFTER}: missing
 item:
   name: old
@@ -161,8 +164,8 @@ item:
     assert list(data["steps"]) == [
         "read",
         "project",
-        "resample",
         "pad",
+        "resample",
         "missing",
         "late",
     ]
