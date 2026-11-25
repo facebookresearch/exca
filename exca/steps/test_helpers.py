@@ -69,17 +69,18 @@ def test_input_param() -> None:
         (dict(x=1.0), "conflicts with input"),
         (dict(unknown_kwarg=1.0), "not a parameter"),
         (dict(factor="not_a_float"), ""),  # type validation
-        (dict(function=lambda x: x), "must be importable"),  # else cache collisions
     ],
 )
 def test_validation_errors(kwargs: dict[str, tp.Any], match: str) -> None:
     with pytest.raises((ValueError, Exception), match=match):
-        Func(**{"function": scale, **kwargs})
+        Func(function=scale, **kwargs)
 
 
 def test_reserved_param_names() -> None:
     with pytest.raises(ValueError, match="conflict with Func fields"):
         Func(function=bad_infra_param)
+    with pytest.raises(ValueError, match="must be importable"):
+        Func(function=lambda x: x)
 
 
 def test_serialization_and_uid() -> None:
