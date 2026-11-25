@@ -133,6 +133,13 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             raise ValueError(f"Unexpected ConfDict op value {val!r}")
         if isinstance(obj, dict):
             ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
+    if isinstance(obj, ConfDict):
+        if dict.get(obj, p) == ConfDict.ops.DELETE and val != ConfDict.ops.DELETE:
+            obj._delete(p)  # pending delete followed by content: a re-add
+        if p in obj._deleted and p not in obj:
+            if not rest and val == ConfDict.ops.DELETE:
+                return
+            dict.__setitem__(obj, p, ConfDict())  # re-added: fresh, tombstone kept
     if isinstance(obj, dict):
         existed = p in obj
         sub = obj.setdefault(p, ConfDict())
@@ -156,15 +163,19 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     if val == ConfDict.ops.DELETE and existed:
         if _is_seq(obj):
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
-        dict.pop(obj, p, None)
         if isinstance(obj, ConfDict):
-            obj._moves = {k: m for k, m in obj._moves.items() if k != p}
+            obj._delete(p)
+        else:
+            dict.pop(obj, p, None)
         return
     # list case
     if _is_seq(obj):
         obj[p] = val  # type: ignore
         return
     if isinstance(val, dict) and not isinstance(val, OrderedDict):
+        if isinstance(sub, dict) and _Move.from_value(p, val) is not None:
+            for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
+                dict.pop(sub, op, None)  # the latest move wins
         if isinstance(sub, OrderedDict):
             patched = ConfDict(sub)
             patched.update(val)  # degrades to dict
@@ -205,7 +216,9 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     LATEST_UID_VERSION = 3
     UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", LATEST_UID_VERSION))
     ops = ConfDictOps
-    # moves applied by update; shared default: reassign, never mutate
+    # ops consumed by update, replayed when patching (shared: reassign, never mutate)
+    _replaced: bool = False
+    _deleted: frozenset[str] = frozenset()
     _moves: dict[str, _Move] = {}
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
@@ -301,9 +314,11 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         - :code:`ConfDict.ops.REPLACE` as key with True value replaces the whole
           existing content with the new one instead of merging recursively.
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
-          relative to an existing sibling. A ConfDict replays the moves it applied when
-          it patches another one, so merging patches before their base keeps them;
-          copies keep these records, dict and flat conversions drop them.
+          relative to an existing sibling.
+
+        A ConfDict replays the operations it consumed when it patches another one, so
+        merging patches first gives the same result as applying them one by one; copies
+        keep these records, dict and flat conversions drop them.
 
         Example
         -------
@@ -321,18 +336,32 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             if not isinstance(mapping, abc.Mapping):
                 mapping = dict(mapping)
             kwargs.update(mapping)
-        if not kwargs:
+        patch = mapping if isinstance(mapping, ConfDict) else ConfDict  # class: no ops
+        if not kwargs and not (patch._replaced or patch._deleted):
             return
-        if self and kwargs.pop(ConfDict.ops.REPLACE, False):
+        replace = bool(self) and kwargs.pop(ConfDict.ops.REPLACE, False)
+        if replace or patch._replaced:
+            ops = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
+            position = {op: self[op] for op in ops if op in self}
             self.clear()
-            self._moves = {}
+            dict.update(self, position)  # a replace keeps the position
+            self._replaced, self._deleted, self._moves = True, frozenset(), {}
+        for key in patch._deleted & kwargs.keys():  # re-added: deleted, then appended
+            self._delete(key)
         for key, val in kwargs.items():
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
             _set_item(self, key, val)
-        if isinstance(mapping, ConfDict):  # moves consumed in the patch itself
-            for key, move in mapping._moves.items():
-                move.apply(self, key)
+        for key, move in patch._moves.items():  # ops consumed in the patch itself
+            if not move.apply(self, key):
+                self._moves = self._moves | {key: move}  # for a later base
+        for key in patch._deleted - kwargs.keys():
+            self._delete(key)
+
+    def _delete(self, key: str) -> None:
+        dict.pop(self, key, None)
+        self._deleted |= {key}
+        self._moves = {k: m for k, m in self._moves.items() if k != key}
 
     def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as
@@ -341,9 +370,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         return _flatten(self)  # type: ignore
 
     def copy(self) -> tp.Self:
-        out = self.__class__(super().copy())
-        out._moves = self._moves
-        return out
+        return self.__class__(self)
 
     @classmethod
     def from_yaml(
@@ -375,8 +402,8 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
 
         Note
         ----
-        Moves recorded by :code:`update` are not exported: once reloaded, the patch
-        no longer replays them.
+        Operations consumed by :code:`update` are not exported: once reloaded, the
+        patch no longer replays them.
         """
         out: str = _yaml.safe_dump(_to_simplified_dict(self), sort_keys=False)
         if filepath is not None:

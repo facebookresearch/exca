@@ -169,25 +169,28 @@ item:
 
 
 @pytest.mark.parametrize(
-    "layers,expected",
+    "layers",
     [
-        ([{"a.x": 1}, {"new": {ConfDict.ops.AFTER: "a"}}], "a new b c"),
-        ([{"c.x": 1}, {"new": {ConfDict.ops.BEFORE: "c"}}], "a b new c"),
-        (
-            [{"a.x": 1}, {"new": {ConfDict.ops.AFTER: "a"}}, {"a": ConfDict.ops.DELETE}],
-            "a new b c",
-        ),
+        [{"a.x": 1}, {"new": {ConfDict.ops.AFTER: "a"}}],
+        [{"c.x": 1}, {"new": {ConfDict.ops.BEFORE: "c"}}],
+        [{"a.x": 1}, {"new": {ConfDict.ops.AFTER: "a"}}, {"a": ConfDict.ops.DELETE}],
+        [{"a.x": 1}, {"a": {ConfDict.ops.REPLACE: True, "y": 2}}],
+        [{"a.x": 1}, {"a": ConfDict.ops.DELETE}, {"a": {"y": 1}}],
+        [{"a": ConfDict.ops.DELETE}, {"a.x": 1}],
+        [{"a": {ConfDict.ops.AFTER: "b"}}, {"a": {ConfDict.ops.REPLACE: True, "y": 2}}],
+        [{"new": {ConfDict.ops.AFTER: "a"}}, {"new": {ConfDict.ops.BEFORE: "c"}}],
     ],
 )
-def test_update_replays_patch_moves(
-    layers: list[dict[str, tp.Any]], expected: str
-) -> None:
+def test_update_merged_layers_match_sequential(layers: list[dict[str, tp.Any]]) -> None:
+    sequential = ConfDict({"a": {"x": 0, "z": 0}, "b": {}, "c": {}})
+    merged = sequential.copy()
+    for layer in layers:
+        sequential.update(layer)
     patch = ConfDict(layers[0])
     for layer in layers[1:]:
         patch.update(layer)
-    base = ConfDict({"a": {}, "b": {}, "c": {}})
-    base.update(patch.copy())  # records follow copies
-    assert " ".join(base) == expected
+    merged.update(patch.copy())  # ops follow copies
+    assert list(merged.items()) == list(sequential.items())
 
 
 @pytest.mark.parametrize(
