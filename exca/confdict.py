@@ -158,7 +158,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
         dict.pop(obj, p, None)
         if isinstance(obj, ConfDict):
-            obj._moves = {k: m for k, m in obj._moves.items() if p not in (k, m.anchor)}
+            obj._moves = {k: m for k, m in obj._moves.items() if k != p}
         return
     # list case
     if _is_seq(obj):
@@ -301,10 +301,9 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         - :code:`ConfDict.ops.REPLACE` as key with True value replaces the whole
           existing content with the new one instead of merging recursively.
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
-          relative to an existing sibling. A ConfDict records the moves it applies and
-          replays them when it patches another ConfDict, so patches merged together
-          before reaching their base keep them (records follow copies and count in
-          equality).
+          relative to an existing sibling. A ConfDict replays the moves it applied when
+          it patches another one, so patches merged before their base keep them;
+          copies keep them, dict, flat and yaml conversions drop them.
 
         Example
         -------
@@ -342,7 +341,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         return _flatten(self)  # type: ignore
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, ConfDict) and self._moves != other._moves:
+        if isinstance(other, dict) and self._moves != getattr(other, "_moves", {}):
             return False
         return super().__eq__(other)
 
