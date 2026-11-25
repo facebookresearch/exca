@@ -176,6 +176,8 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         if isinstance(sub, dict) and _Move.from_value(p, val) is not None:
             for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
                 dict.pop(sub, op, None)  # the latest move wins
+            if isinstance(obj, ConfDict):
+                obj._moves = {k: m for k, m in obj._moves.items() if k != p}
         if isinstance(sub, OrderedDict):
             patched = ConfDict(sub)
             patched.update(val)  # degrades to dict
