@@ -303,7 +303,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
           relative to an existing sibling. A ConfDict replays the moves it applied when
           it patches another one, so patches merged before their base keep them;
-          copies keep them, dict, flat and yaml conversions drop them.
+          copies keep them, dict and flat conversions drop them.
 
         Example
         -------
@@ -381,6 +381,11 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     def to_yaml(self, filepath: Path | str | None = None) -> str:
         """Exports the ConfDict to yaml string
         and optionally to a file if a filepath is provided
+
+        Note
+        ----
+        Moves recorded by :code:`update` are not exported: once reloaded, the patch
+        no longer replays them.
         """
         out: str = _yaml.safe_dump(_to_simplified_dict(self), sort_keys=False)
         if filepath is not None:
