@@ -92,7 +92,7 @@ class _Move(tp.NamedTuple):
             return False
         value = dict.pop(obj, key)
         items = list(obj.items())
-        obj.clear()
+        dict.clear(obj)
         for name, item in items:
             if self.op == ConfDict.ops.BEFORE and name == self.anchor:
                 dict.__setitem__(obj, key, value)
@@ -100,9 +100,26 @@ class _Move(tp.NamedTuple):
             if self.op == ConfDict.ops.AFTER and name == self.anchor:
                 dict.__setitem__(obj, key, value)
         if isinstance(obj, ConfDict):
-            moves = {k: m for k, m in obj._moves.items() if k != key}
-            obj._moves = moves | {key: self}
+            obj._ops = obj._ops.moving(key, self)
         return True
+
+
+class _Ops(tp.NamedTuple):
+    """Operations a ConfDict consumed, replayed when it patches another ConfDict"""
+
+    replaced: bool = False
+    deleted: frozenset[str] = frozenset()
+    moves: tuple[tuple[str, _Move], ...] = ()
+
+    def moving(self, key: str, move: _Move | None) -> tp.Self:
+        moves = tuple((k, m) for k, m in self.moves if k != key)
+        return self._replace(moves=moves if move is None else moves + ((key, move),))
+
+    def deleting(self, key: str) -> tp.Self:
+        return self.moving(key, None)._replace(deleted=self.deleted | {key})
+
+    def forgetting(self, key: str) -> tp.Self:
+        return self.moving(key, None)._replace(deleted=self.deleted - {key})
 
 
 def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
@@ -136,7 +153,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     if isinstance(obj, ConfDict):
         if dict.get(obj, p) == ConfDict.ops.DELETE and val != ConfDict.ops.DELETE:
             obj._delete(p)  # pending delete followed by content: a re-add
-        if p in obj._deleted and p not in obj:
+        if p in obj._ops.deleted and p not in obj:
             if not rest and val == ConfDict.ops.DELETE:
                 return
             dict.__setitem__(obj, p, ConfDict())  # re-added: fresh, tombstone kept
@@ -177,7 +194,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
             for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
                 dict.pop(sub, op, None)  # the latest move wins
             if isinstance(obj, ConfDict):
-                obj._moves = {k: m for k, m in obj._moves.items() if k != p}
+                obj._ops = obj._ops.moving(p, None)
         if isinstance(sub, OrderedDict):
             patched = ConfDict(sub)
             patched.update(val)  # degrades to dict
@@ -218,10 +235,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     LATEST_UID_VERSION = 3
     UID_VERSION = int(os.environ.get("CONFDICT_UID_VERSION", LATEST_UID_VERSION))
     ops = ConfDictOps
-    # ops consumed by update, replayed when patching (shared: reassign, never mutate)
-    _replaced: bool = False
-    _deleted: frozenset[str] = frozenset()
-    _moves: dict[str, _Move] = {}
+    _ops = _Ops()
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
@@ -292,6 +306,8 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         if isinstance(sub, dict):
             default = () if default is _sentinel else (default,)
             out = dict.pop(sub, parts[-1], *default)
+            if isinstance(sub, ConfDict):
+                sub._ops = sub._ops.forgetting(parts[-1])
         elif default is _sentinel:
             raise KeyError(key)
         else:
@@ -338,32 +354,45 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             if not isinstance(mapping, abc.Mapping):
                 mapping = dict(mapping)
             kwargs.update(mapping)
-        patch = mapping if isinstance(mapping, ConfDict) else ConfDict  # class: no ops
-        if not kwargs and not (patch._replaced or patch._deleted):
+        consumed = mapping._ops if isinstance(mapping, ConfDict) else _Ops()
+        if not kwargs and consumed == _Ops():
             return
-        replace = bool(self) and kwargs.pop(ConfDict.ops.REPLACE, False)
-        if replace or patch._replaced:
-            ops = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
-            position = {op: self[op] for op in ops if op in self}
-            self.clear()
-            dict.update(self, position)  # a replace keeps the position
-            self._replaced, self._deleted, self._moves = True, frozenset(), {}
-        for key in patch._deleted & kwargs.keys():  # re-added: deleted, then appended
+        # before the content: replace, and delete re-added keys (back fresh and last)
+        if consumed.replaced or (self and kwargs.pop(ConfDict.ops.REPLACE, False)):
+            self._replace()
+        for key in consumed.deleted & kwargs.keys():
             self._delete(key)
         for key, val in kwargs.items():
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
             _set_item(self, key, val)
-        for key, move in patch._moves.items():  # ops consumed in the patch itself
+        # after the content: moves, then deletes
+        for key, move in consumed.moves:
             if not move.apply(self, key):
-                self._moves = self._moves | {key: move}  # for a later base
-        for key in patch._deleted - kwargs.keys():
+                self._ops = self._ops.moving(key, move)  # for a later base
+        for key in consumed.deleted - kwargs.keys():
             self._delete(key)
+
+    def _replace(self) -> None:
+        position = {
+            op: self[op] for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in self
+        }
+        dict.clear(self)
+        dict.update(self, position)  # a replace keeps the position
+        self._ops = _Ops(replaced=True)
 
     def _delete(self, key: str) -> None:
         dict.pop(self, key, None)
-        self._deleted |= {key}
-        self._moves = {k: m for k, m in self._moves.items() if k != key}
+        self._ops = self._ops.deleting(key)
+
+    def clear(self) -> None:
+        super().clear()
+        self._ops = _Ops()
+
+    def popitem(self) -> tuple[str, tp.Any]:
+        key, val = super().popitem()
+        self._ops = self._ops.forgetting(key)
+        return key, val
 
     def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as

@@ -194,6 +194,19 @@ def test_update_merged_layers_match_sequential(layers: list[dict[str, tp.Any]]) 
     assert list(merged.items()) == list(sequential.items())
 
 
+def test_pop_and_clear_forget_consumed_ops() -> None:
+    patch = ConfDict({"a.x": 1, "c.x": 1})
+    patch.update({"b": {ConfDict.ops.AFTER: "a"}, "c": ConfDict.ops.DELETE})
+    patch.pop("b")
+    base = ConfDict({"b": {}, "a": {}, "c": {}})
+    base.update(patch)
+    assert " ".join(base) == "b a", "pop forgets the move of b, not the delete of c"
+    patch.clear()
+    base = ConfDict({"b": {}, "a": {}, "c": {}})
+    base.update(patch)
+    assert " ".join(base) == "b a c", "clear forgets every op"
+
+
 @pytest.mark.parametrize(
     "data",
     [
