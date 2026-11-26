@@ -119,7 +119,7 @@ class TaskInfra(base.BaseInfra, slurm.SubmititMixin):
             def compute(self) -> int:
                 return 2 * self.x
 
-        cfg = MyTask(12, infra={"folder": "tmp", "cluster": "slurm"})
+        cfg = MyTask(x=12, infra={"folder": "tmp", "cluster": "slurm"})
         assert cfg.compute() == 24  # "compute" runs on slurm and is cached
     """
 
@@ -504,13 +504,13 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
 
         class MyTask(pydantic.BaseModel):
             x: int
-            infra: exca.TaskInfra = exca.TaskInfra()
+            infra: exca.SubmitInfra = exca.SubmitInfra()
 
             @infra.apply
             def compute(self, y: int) -> int:
-                return 2 * self.x
+                return 2 * self.x + y
 
-        cfg = MyTask(12, infra={"folder": "tmp", "cluster": "slurm"})
+        cfg = MyTask(x=12, infra={"folder": "tmp", "cluster": "slurm"})
         assert cfg.compute(y=1) == 25  # "compute" runs on slurm but is not cached
         job = cfg.infra.submit(y=1)  # runs the computation asynchronously
         assert job.result() == 25
@@ -600,8 +600,6 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
                 estack.enter_context(executor.batch())
             try:
                 yield
-            except Exception:
-                raise
             finally:
                 self._array_executor = None
 
@@ -617,6 +615,6 @@ class SubmitInfra(base.BaseInfra, slurm.SubmititMixin):
     def _log_path(self) -> Path:
         logs = super()._log_path()
         if self.folder is None:
-            raise ValueError("A folder is required for SubmitInfra on {self._obj}")
+            raise ValueError(f"A folder is required for SubmitInfra on {self._obj}")
         logs = Path(str(logs).replace("{folder}", str(self.folder)))
         return logs
