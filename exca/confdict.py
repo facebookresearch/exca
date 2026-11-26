@@ -121,18 +121,17 @@ class _Replace(_Op):
 
 @dataclasses.dataclass(frozen=True)
 class _ReplaceAll(_Op):
-    """Replaces the content of a ConfDict that has no parent (a REPLACE at its root);
-    if empty, the marker stays for what this ConfDict later updates
+    """Replaces the content of a ConfDict (a REPLACE at its root, its parent's
+    _Replace otherwise); a new one shows the marker instead, for what it later updates
     """
 
     def apply(self, cfg: "ConfDict") -> bool:
-        empty = all(ConfDict.ops.is_op(k) or _Delete.is_marker(v) for k, v in cfg.items())
-        moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
-        position = [(k, v) for k, v in cfg.items() if k in moves]  # its parent's move
-        dict.clear(cfg)
-        dict.update(cfg, position)
-        if empty:
+        if not cfg._log and all(ConfDict.ops.is_op(k) for k in cfg):  # new
             dict.__setitem__(cfg, ConfDict.ops.REPLACE, True)
+            return False  # pending, visible
+        markers = [(k, v) for k, v in cfg.items() if ConfDict.ops.is_op(k)]
+        dict.clear(cfg)
+        dict.update(cfg, markers)
         return True
 
 
@@ -173,6 +172,8 @@ class _Move(_Stay):
         return cls(key, ops[0], anchor)
 
     def apply(self, cfg: "ConfDict") -> bool:
+        if _Delete.is_marker(dict.get(cfg, self.key, ConfDict.ops.DELETE)):
+            return False  # no key to place
         super().apply(cfg)
         if _Delete.is_marker(dict.get(cfg, self.anchor, ConfDict.ops.DELETE)):
             sub = _as_confdict(cfg, self.key)  # waits for its anchor, shown first
@@ -193,10 +194,12 @@ class _Move(_Stay):
 
 
 class _Patch(tp.NamedTuple):
-    """What an update applies: operations (one tuple per update they come from), then
-    values. A ConfDict is itself a patch: its log, then its content.
+    """What an update applies: a REPLACE at its root, operations (one tuple per update
+    they come from), then values. A ConfDict is itself a patch: its visible REPLACE,
+    its log, then its content.
     """
 
+    replace: bool
     ops: list[tuple[_Op, ...]]
     values: list[tuple[str, tp.Any]]
 
@@ -209,9 +212,10 @@ class _Patch(tp.NamedTuple):
                     val
                 ):  # pending: in log
                     values.append((key, val))
-            return cls(mapping._log, values)
-        replace_all = mapping.get(ConfDict.ops.REPLACE, False)
-        ops: list[_Op] = [_ReplaceAll()] if replace_all else []
+            return cls(
+                dict.__contains__(mapping, ConfDict.ops.REPLACE), mapping._log, values
+            )
+        ops: list[_Op] = []
         for key, val in mapping.items():
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
@@ -226,11 +230,14 @@ class _Patch(tp.NamedTuple):
                 if val != ConfDict.ops.DELETE:
                     raise ValueError(f"Unexpected ConfDict op value {val!r}")
                 ops.append(_Delete(head))
+                values = [(k, v) for k, v in values if k.split(".")[0] != head]  # deleted
                 continue
             is_dict = (
                 not rest and isinstance(val, dict) and not isinstance(val, OrderedDict)
             )
             replace = is_dict and val.get(ConfDict.ops.REPLACE, False)
+            if replace:  # written earlier: replaced
+                values = [(k, v) for k, v in values if k.split(".")[0] != head]
             ops.append(_Replace(head) if replace else _Add(head))
             move = _Move.parse(head, val) if is_dict else None
             if move is not None:
@@ -238,9 +245,10 @@ class _Patch(tp.NamedTuple):
             if replace or (is_dict and not isinstance(val, ConfDict)):  # ops taken above
                 val = {k: v for k, v in val.items() if not ConfDict.ops.is_op(k)}
             values.append((key, val))
-        return cls([tuple(ops)], values)
+        return cls(bool(mapping.get(ConfDict.ops.REPLACE, False)), [tuple(ops)], values)
 
     def apply(self, cfg: "ConfDict") -> None:
+        """Applies the operations and values (a REPLACE at the root is the caller's)"""
         for ops in self.ops:
             cfg._apply(ops)
         for key, val in self.values:
@@ -299,7 +307,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         sub.clear()
         sub.update(OrderedDict(patched.items()))
     else:
-        _as_confdict(obj, p).update(val)
+        _Patch.of(val).apply(_as_confdict(obj, p))  # its root REPLACE: our _Replace
 
 
 def _as_confdict(obj: tp.Any, p: tp.Any) -> "ConfDict":
@@ -429,6 +437,8 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         - non-dict values replace existing values.
         - operations (see below) apply top to bottom; unresolved ops stay in the config until
           applicable.
+        - applied operations replay when this ConfDict (or a copy) updates another one;
+          dict, flat and yaml exports only carry the content.
 
         Operations
         -----------
@@ -437,12 +447,6 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
           existing content with the new one instead of merging recursively.
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
           relative to an existing sibling.
-
-        An operation with nothing to act on yet (missing key, content or anchor) stays
-        in the content. Applied operations are logged instead, and replayed in order
-        when this ConfDict (or a copy or pickle of it) updates another ConfDict, so
-        merging patches first matches applying them one by one; dict, flat and yaml
-        exports only carry the content.
 
         Example
         -------
@@ -455,13 +459,23 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         ... )
         >>> cfg
         {'b': {'x': 2, 'y': 12}, 'a': {'y': 4}}
+        >>> patch = ConfDict({"a": 1})
+        >>> patch.update({"a": ConfDict.ops.DELETE, "b": ConfDict.ops.DELETE})
+        >>> patch  # the delete of b waits for a b
+        {'b': '=delete='}
+        >>> cfg.update(patch)  # replays the delete of a
+        >>> cfg
+        {}
         """
         if mapping is not None and kwargs:
             self.update(kwargs)  # then mapping, which wins
             kwargs = {}
         if mapping is not None and not isinstance(mapping, abc.Mapping):
             mapping = dict(mapping)
-        _Patch.of(kwargs if mapping is None else mapping).apply(self)
+        patch = _Patch.of(kwargs if mapping is None else mapping)
+        if patch.replace:
+            self._apply([_ReplaceAll()])
+        patch.apply(self)
 
     def _apply(self, ops: tp.Iterable[_Op]) -> None:
         """Applies operations and logs them as one update"""

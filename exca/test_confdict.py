@@ -203,6 +203,11 @@ item:
             id="replace-key-set-earlier-empty-or-non-dict",
         ),
         pytest.param(
+            [{"b.x": 1, "b": ConfDict.ops.DELETE}, {"b": {ConfDict.ops.AFTER: "a"}}],
+            {"a": {"x": 0, "z": 0}, "b": {}, "c": {}},
+            id="delete-after-a-dotted-key-then-move",
+        ),
+        pytest.param(
             [{"a": ConfDict.ops.DELETE}, {"a": {"y": 1}}],
             {"b": {}, "c": {}, "a": {"y": 1}},
             id="re-added-after-delete-is-fresh",
@@ -280,6 +285,14 @@ def test_update_converted_patch(convert: tp.Callable[[ConfDict], tp.Any]) -> Non
     base = ConfDict({"a": {}, "b": {}, "c": {"x": 0}})
     base.update(convert(patch))
     assert list(base.items()) == [("a", {}), ("n", {}), ("c", {"y": 1})]
+
+
+def test_update_from_child_with_pending_replace() -> None:
+    cfg = ConfDict()
+    cfg.update({"steps": {ConfDict.ops.REPLACE: True, "read": {}, "flat": {}}})
+    default = ConfDict({"read": {}, "pad": {}})
+    default.update(cfg["steps"])
+    assert list(default) == ["read", "flat"]
 
 
 def test_update_after_pop() -> None:
