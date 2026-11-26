@@ -214,8 +214,10 @@ class _Patch(tp.NamedTuple):
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
             head, *rest = key.split(".", maxsplit=1)
-            if ConfDict.ops.is_op(head):
-                continue  # REPLACE: above, BEFORE/AFTER: the move of the parent's key
+            if ConfDict.ops.is_op(head):  # REPLACE: above, a root move: kept visible
+                if head != ConfDict.ops.REPLACE:
+                    values.append((key, val))
+                continue
             if rest and ConfDict.ops.is_op(rest[0]):  # to_yaml writes {"a.=after=": "b"}
                 key, rest, val = head, [], {rest[0]: val}
             if not rest and ConfDict.ops.is_op(val):
@@ -223,16 +225,16 @@ class _Patch(tp.NamedTuple):
                     raise ValueError(f"Unexpected ConfDict op value {val!r}")
                 ops.append(_Delete(head))
                 continue
-            is_dict = not rest and isinstance(val, dict)
-            if is_dict and val.get(ConfDict.ops.REPLACE, False):
-                ops.append(_Replace(head))
-                val = {k: v for k, v in val.items() if k != ConfDict.ops.REPLACE}
-            else:
-                ops.append(_Add(head))
-            if is_dict and not isinstance(val, OrderedDict):
-                move = _Move.parse(head, val)
-                if move is not None:
-                    ops.append(move)
+            is_dict = (
+                not rest and isinstance(val, dict) and not isinstance(val, OrderedDict)
+            )
+            replace = is_dict and val.get(ConfDict.ops.REPLACE, False)
+            ops.append(_Replace(head) if replace else _Add(head))
+            move = _Move.parse(head, val) if is_dict else None
+            if move is not None:
+                ops.append(move)
+            if replace or (is_dict and not isinstance(val, ConfDict)):  # ops taken above
+                val = {k: v for k, v in val.items() if not ConfDict.ops.is_op(k)}
             values.append((key, val))
         return cls([tuple(ops)], values)
 
