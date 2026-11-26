@@ -284,6 +284,17 @@ def test_update_after_pop() -> None:
     assert list(cfg.items()) == expected, "pop forgets the key and its ops"
 
 
+def test_setdefault() -> None:
+    patch = ConfDict({"a.x": 1, "d": ConfDict.ops.DELETE})
+    assert patch.setdefault("a.x", 2) == 1
+    patch.setdefault("b.y", 2)
+    # TODO: behaviour TBC, a pending delete could count as absent
+    assert patch.setdefault("d", {}) == ConfDict.ops.DELETE
+    cfg = ConfDict({"a": {}, "b": {}, "d": {}})
+    cfg.update(patch)
+    assert cfg == {"a": {"x": 1}, "b": {"y": 2}}, "dotted keys split, not 'b.y'"
+
+
 @pytest.mark.parametrize(
     "data",
     [
