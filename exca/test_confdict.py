@@ -237,6 +237,26 @@ item:
             {"a": {"x": 0, "z": 0}, "c": {}, "b": {}},
             id="dotted-op-key",
         ),
+        pytest.param(
+            [{"n": ConfDict.ops.DELETE}],
+            {"a": {"x": 0, "z": 0}, "b": {}, "c": {}, "n": ConfDict.ops.DELETE},
+            id="unmatched-delete-stays-visible",
+        ),
+        pytest.param(
+            [{"n": {ConfDict.ops.AFTER: "m"}}],
+            {"a": {"x": 0, "z": 0}, "b": {}, "c": {}, "n": {ConfDict.ops.AFTER: "m"}},
+            id="unmatched-move-stays-visible",
+        ),
+        pytest.param(
+            [{"b": {ConfDict.ops.REPLACE: True, "y": 2}}],
+            {"a": {"x": 0, "z": 0}, "b": {"y": 2}, "c": {}},
+            id="replace-existing-empty-key",
+        ),
+        pytest.param(
+            [{ConfDict.ops.REPLACE: True, "n": {}}],
+            {"n": {}},
+            id="root-replace",
+        ),
     ],
 )
 def test_update_layers(
