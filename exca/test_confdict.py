@@ -51,12 +51,6 @@ def test_simplified_dict_2() -> None:
     assert sub == {"uid": "D1", "sub.uid": "D2"}
 
 
-def test_update_override() -> None:
-    data = ConfDict({"a": 12, "b": 12})
-    data.update({ConfDict.ops.REPLACE: True, "d": 13})
-    assert data == {"d": 13}
-
-
 def test_override_deprecation() -> None:
     with pytest.warns(DeprecationWarning, match="ConfDict.ops.REPLACE"):
         assert ConfDict.OVERRIDE == ConfDict.ops.REPLACE
@@ -197,19 +191,16 @@ item:
             id="delete-key-set-by-an-earlier-layer",
         ),
         pytest.param(
-            [{"a.x": 1}, {"a": {ConfDict.ops.REPLACE: True, "y": 2}}],
-            {"a": {"y": 2}, "b": {}, "c": {}},
-            id="replace-key-set-by-an-earlier-layer",
-        ),
-        pytest.param(
-            [{"b": {ConfDict.ops.REPLACE: True, "y": 2}}, {"c": None}],
-            {"a": {"x": 0, "z": 0}, "b": {"y": 2}, "c": None},
-            id="replace-existing-empty-key",
-        ),
-        pytest.param(
-            [{"c": None}, {"c": {ConfDict.ops.REPLACE: True, "y": 2}}],
-            {"a": {"x": 0, "z": 0}, "b": {}, "c": {"y": 2}},
-            id="replace-existing-non-dict-value",
+            [
+                {"a.x": 1, "c": None},
+                {
+                    "a": {ConfDict.ops.REPLACE: True, "y": 2},
+                    "b": {ConfDict.ops.REPLACE: True, "y": 3},
+                    "c": {ConfDict.ops.REPLACE: True, "y": 4},
+                },
+            ],
+            {"a": {"y": 2}, "b": {"y": 3}, "c": {"y": 4}},
+            id="replace-key-set-earlier-empty-or-non-dict",
         ),
         pytest.param(
             [{"a": ConfDict.ops.DELETE}, {"a": {"y": 1}}],
@@ -249,6 +240,11 @@ item:
             [{f"b.{ConfDict.ops.AFTER}": "c"}],
             {"a": {"x": 0, "z": 0}, "c": {}, "b": {}},
             id="dotted-op-key",
+        ),
+        pytest.param(
+            [{ConfDict.ops.REPLACE: True, "n": {}}],
+            {"n": {}},
+            id="root-replace",
         ),
     ],
 )
