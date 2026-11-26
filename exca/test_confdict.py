@@ -184,6 +184,11 @@ item:
             id="move-to-anchor-in-base",
         ),
         pytest.param(
+            [{"a.x": 1, "n": {ConfDict.ops.AFTER: "a"}}],
+            {"a": {"x": 1, "z": 0}, "n": {}, "b": {}, "c": {}},
+            id="move-to-anchor-set-in-the-same-layer",
+        ),
+        pytest.param(
             [{"a.x": 1}, {"a": ConfDict.ops.DELETE}],
             {"b": {}, "c": {}},
             id="delete-key-set-by-an-earlier-layer",
