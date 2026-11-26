@@ -64,10 +64,6 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-def _is_delete(val: tp.Any) -> bool:
-    return isinstance(val, str) and val == ConfDict.ops.DELETE
-
-
 @dataclasses.dataclass(frozen=True)
 class _Op:
     """Structural change at one level of a ConfDict (which keys exist, where, whether
@@ -85,7 +81,7 @@ class _Op:
 @dataclasses.dataclass(frozen=True)
 class _Add(_Op):
     def apply(self, cfg: "ConfDict") -> bool:
-        if not _is_delete(dict.get(cfg, self.key, ConfDict.ops.DELETE)):
+        if not _Delete.is_marker(dict.get(cfg, self.key, ConfDict.ops.DELETE)):
             return False  # already there
         dict.pop(cfg, self.key, None)  # re-added after a pending delete: fresh, last
         dict.__setitem__(cfg, self.key, ConfDict())
@@ -94,8 +90,12 @@ class _Add(_Op):
 
 @dataclasses.dataclass(frozen=True)
 class _Delete(_Op):
+    @staticmethod
+    def is_marker(val: tp.Any) -> bool:
+        return isinstance(val, str) and val == ConfDict.ops.DELETE
+
     def apply(self, cfg: "ConfDict") -> bool:
-        if _is_delete(dict.pop(cfg, self.key, ConfDict.ops.DELETE)):
+        if _Delete.is_marker(dict.pop(cfg, self.key, ConfDict.ops.DELETE)):
             dict.__setitem__(cfg, self.key, ConfDict.ops.DELETE)  # nothing to delete yet
         return True
 
@@ -109,7 +109,7 @@ class _Replace(_Op):
     def apply(self, cfg: "ConfDict") -> bool:
         old = dict.get(cfg, self.key, ConfDict.ops.DELETE)
         new = ConfDict()
-        if _is_delete(old):  # missing key, or a pending delete: fresh, last
+        if _Delete.is_marker(old):  # missing key, or a pending delete: fresh, last
             dict.pop(cfg, self.key, None)
             dict.__setitem__(new, ConfDict.ops.REPLACE, True)
         elif isinstance(old, dict):  # keeps a pending move
@@ -126,7 +126,7 @@ class _ReplaceAll(_Op):
     """
 
     def apply(self, cfg: "ConfDict") -> bool:
-        empty = all(ConfDict.ops.is_op(k) or _is_delete(v) for k, v in cfg.items())
+        empty = all(ConfDict.ops.is_op(k) or _Delete.is_marker(v) for k, v in cfg.items())
         moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
         position = [(k, v) for k, v in cfg.items() if k in moves]  # its parent's move
         dict.clear(cfg)
@@ -174,7 +174,7 @@ class _Move(_Stay):
 
     def apply(self, cfg: "ConfDict") -> bool:
         super().apply(cfg)
-        if _is_delete(dict.get(cfg, self.anchor, ConfDict.ops.DELETE)):
+        if _Delete.is_marker(dict.get(cfg, self.anchor, ConfDict.ops.DELETE)):
             sub = _as_confdict(cfg, self.key)  # waits for its anchor, shown first
             items = list(sub.items())
             dict.clear(sub)
@@ -205,7 +205,9 @@ class _Patch(tp.NamedTuple):
         values = []
         if isinstance(mapping, ConfDict):
             for key, val in mapping.items():
-                if not ConfDict.ops.is_op(key) and not _is_delete(val):  # pending: in log
+                if not ConfDict.ops.is_op(key) and not _Delete.is_marker(
+                    val
+                ):  # pending: in log
                     values.append((key, val))
             return cls(mapping._log, values)
         replace_all = mapping.get(ConfDict.ops.REPLACE, False)
@@ -282,7 +284,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     if rest:
         val = {rest[0]: val}
     elif _is_seq(obj):
-        if _is_delete(val):
+        if _Delete.is_marker(val):
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
         obj[p] = _propagate_confdict(val)  # type: ignore
         return
@@ -302,17 +304,17 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
 
 def _as_confdict(obj: tp.Any, p: tp.Any) -> "ConfDict":
     """Returns obj[p] as a ConfDict, converting a dict or replacing any other value"""
-    sub = obj[p] if _is_seq(obj) else dict.__getitem__(obj, p)
+    sub = dict.__getitem__(obj, p) if isinstance(obj, ConfDict) else obj[p]
     if isinstance(sub, ConfDict):
         return sub
     if isinstance(obj, ConfDict) and not isinstance(sub, dict):
         obj._apply([_Replace(p)])  # a dict replaces a non-dict value
         return dict.__getitem__(obj, p)
     new = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
-    if _is_seq(obj):
-        obj[p] = new
-    else:
+    if isinstance(obj, ConfDict):
         dict.__setitem__(obj, p, new)
+    else:  # a list
+        obj[p] = new
     return new
 
 
