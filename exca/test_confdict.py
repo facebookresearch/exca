@@ -176,6 +176,99 @@ item:
 
 
 @pytest.mark.parametrize(
+    "layers,expected",
+    [
+        pytest.param(
+            [{"a.x": 1}, {"n": {ConfDict.ops.AFTER: "a"}}],
+            {"a": {"x": 1, "z": 0}, "n": {}, "b": {}, "c": {}},
+            id="move-to-anchor-in-base",
+        ),
+        pytest.param(
+            [{"a.x": 1}, {"a": ConfDict.ops.DELETE}],
+            {"b": {}, "c": {}},
+            id="delete-key-set-by-an-earlier-layer",
+        ),
+        pytest.param(
+            [{"a.x": 1}, {"a": {ConfDict.ops.REPLACE: True, "y": 2}}],
+            {"a": {"y": 2}, "b": {}, "c": {}},
+            id="replace-key-set-by-an-earlier-layer",
+        ),
+        pytest.param(
+            [{"a": ConfDict.ops.DELETE}, {"a": {"y": 1}}],
+            {"b": {}, "c": {}, "a": {"y": 1}},
+            id="re-added-after-delete-is-fresh",
+        ),
+        pytest.param(
+            [
+                {"a.x": 1},
+                {"b": {ConfDict.ops.AFTER: "a"}},
+                {"a": {ConfDict.ops.AFTER: "c"}},
+            ],
+            {"b": {}, "c": {}, "a": {"x": 1, "z": 0}},
+            id="ops-apply-in-written-order",
+        ),
+        pytest.param(
+            [{"n": {ConfDict.ops.AFTER: "b"}}, {"b": ConfDict.ops.DELETE}],
+            {"a": {"x": 0, "z": 0}, "n": {}, "c": {}},
+            id="move-written-before-deleting-its-anchor",
+        ),
+        pytest.param(
+            [{"b": ConfDict.ops.DELETE}, {"n": {ConfDict.ops.AFTER: "b"}}],
+            {"a": {"x": 0, "z": 0}, "c": {}, "n": {ConfDict.ops.AFTER: "b"}},
+            id="pending-delete-is-no-anchor",
+        ),
+        pytest.param(
+            [{"n": {ConfDict.ops.AFTER: "m"}}, {"m": {}}],
+            {"a": {"x": 0, "z": 0}, "b": {}, "c": {}, "m": {}, "n": {}},
+            id="pending-move-applies-when-its-anchor-arrives",
+        ),
+        pytest.param(
+            [{"n": {ConfDict.ops.AFTER: "a"}}, {"n": {ConfDict.ops.BEFORE: "a"}}],
+            {"n": {}, "a": {"x": 0, "z": 0}, "b": {}, "c": {}},
+            id="latest-move-wins",
+        ),
+        pytest.param(
+            [{f"b.{ConfDict.ops.AFTER}": "c"}],
+            {"a": {"x": 0, "z": 0}, "c": {}, "b": {}},
+            id="dotted-op-key",
+        ),
+    ],
+)
+def test_update_layers(
+    layers: list[dict[str, tp.Any]], expected: dict[str, tp.Any]
+) -> None:
+    base = {"a": {"x": 0, "z": 0}, "b": {}, "c": {}}
+    one_by_one = ConfDict(base)
+    for layer in layers:
+        one_by_one.update(layer)
+    assert list(one_by_one.items()) == list(expected.items()), "layers one by one"
+    patch = ConfDict()  # e.g. task + dataset layers, before reaching a model's defaults
+    for layer in layers:
+        patch.update(layer)
+    merged = ConfDict(base)
+    merged.update(patch)
+    assert list(merged.items()) == list(expected.items()), "layers merged first"
+
+
+@pytest.mark.parametrize(
+    "convert",
+    [dict, ConfDict.flat, lambda c: ConfDict.from_yaml(c.to_yaml())],
+    ids=["dict", "flat", "yaml"],
+)
+def test_update_converted_patch(convert: tp.Callable[[ConfDict], tp.Any]) -> None:
+    patch = ConfDict(
+        {
+            "b": ConfDict.ops.DELETE,
+            "n": {ConfDict.ops.AFTER: "a"},
+            "c": {ConfDict.ops.REPLACE: True, "y": 1},
+        }
+    )
+    base = ConfDict({"a": {}, "b": {}, "c": {"x": 0}})
+    base.update(convert(patch))
+    assert list(base.items()) == [("a", {}), ("n", {}), ("c", {"y": 1})]
+
+
+@pytest.mark.parametrize(
     "data",
     [
         {"missing": ConfDict.ops.DELETE},
