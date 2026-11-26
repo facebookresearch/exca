@@ -247,7 +247,7 @@ def test_update_layers(
     for layer in layers:
         one_by_one.update(layer)
     assert list(one_by_one.items()) == list(expected.items()), "layers one by one"
-    patch = ConfDict()  # e.g. task + dataset layers, before reaching a model's defaults
+    patch = ConfDict()
     for layer in layers:
         patch.update(layer)
     merged = ConfDict(base)
@@ -275,21 +275,22 @@ def test_update_converted_patch(convert: tp.Callable[[ConfDict], tp.Any]) -> Non
 
 def test_update_after_pop() -> None:
     patch = ConfDict({"a.x": 1, "n": {ConfDict.ops.AFTER: "a"}})
-    patch.pop("a")  # TODO: behaviour TBC, pop could act like =delete= instead
+    patch.pop("a")
     patch.pop("n")
     patch["n"] = {}
     cfg = ConfDict({"a": {"x": 0}, "b": {}})
     cfg.update(patch)
     expected = [("a", {"x": 0}), ("b", {}), ("n", {})]
+    # TODO: TBC (alternative: pop acts like =delete=)
     assert list(cfg.items()) == expected, "pop forgets the key and its ops"
 
 
 def test_setdefault() -> None:
     patch = ConfDict({"a.x": 1, "d": ConfDict.ops.DELETE})
-    assert patch.setdefault("a.x", 2) == 1
+    assert patch.setdefault("a.x", 2) == 1, "existing dotted key kept"
     patch.setdefault("b.y", 2)
-    # TODO: behaviour TBC, a pending delete could count as absent
-    assert patch.setdefault("d", {}) == ConfDict.ops.DELETE
+    # TODO: TBC (alternative: a pending delete counts as absent)
+    assert patch.setdefault("d", {}) == ConfDict.ops.DELETE, "tombstone counts as set"
     cfg = ConfDict({"a": {}, "b": {}, "d": {}})
     cfg.update(patch)
     assert cfg == {"a": {"x": 1}, "b": {"y": 2}}, "dotted keys split, not 'b.y'"
