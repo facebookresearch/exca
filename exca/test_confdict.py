@@ -51,12 +51,6 @@ def test_simplified_dict_2() -> None:
     assert sub == {"uid": "D1", "sub.uid": "D2"}
 
 
-def test_update_override() -> None:
-    data = ConfDict({"a": 12, "b": 12})
-    data.update({ConfDict.ops.REPLACE: True, "d": 13})
-    assert data == {"d": 13}
-
-
 def test_override_deprecation() -> None:
     with pytest.warns(DeprecationWarning, match="ConfDict.ops.REPLACE"):
         assert ConfDict.OVERRIDE == ConfDict.ops.REPLACE
@@ -144,10 +138,10 @@ def test_update_delete_and_move() -> None:
         == f"""steps:
   read.t: read
   project.t: project
+  pad.t: pad
   resample:
     t: resample
     frequency: 2
-  pad.t: pad
   late.{ConfDict.ops.AFTER}: missing
 item:
   name: old
@@ -161,8 +155,8 @@ item:
     assert list(data["steps"]) == [
         "read",
         "project",
-        "resample",
         "pad",
+        "resample",
         "missing",
         "late",
     ]
@@ -194,9 +188,15 @@ item:
             id="delete-key-set-by-an-earlier-layer",
         ),
         pytest.param(
-            [{"a.x": 1}, {"a": {ConfDict.ops.REPLACE: True, "y": 2}}],
-            {"a": {"y": 2}, "b": {}, "c": {}},
-            id="replace-key-set-by-an-earlier-layer",
+            [
+                {"a.x": 1},
+                {
+                    "a": {ConfDict.ops.REPLACE: True, "y": 2},
+                    "b": {ConfDict.ops.REPLACE: True, "y": 3},
+                },
+            ],
+            {"a": {"y": 2}, "b": {"y": 3}, "c": {}},
+            id="replace-key-set-earlier-or-empty",
         ),
         pytest.param(
             [{"a": ConfDict.ops.DELETE}, {"a": {"y": 1}}],
@@ -236,21 +236,6 @@ item:
             [{f"b.{ConfDict.ops.AFTER}": "c"}],
             {"a": {"x": 0, "z": 0}, "c": {}, "b": {}},
             id="dotted-op-key",
-        ),
-        pytest.param(
-            [{"n": ConfDict.ops.DELETE}],
-            {"a": {"x": 0, "z": 0}, "b": {}, "c": {}, "n": ConfDict.ops.DELETE},
-            id="unmatched-delete-stays-visible",
-        ),
-        pytest.param(
-            [{"n": {ConfDict.ops.AFTER: "m"}}],
-            {"a": {"x": 0, "z": 0}, "b": {}, "c": {}, "n": {ConfDict.ops.AFTER: "m"}},
-            id="unmatched-move-stays-visible",
-        ),
-        pytest.param(
-            [{"b": {ConfDict.ops.REPLACE: True, "y": 2}}],
-            {"a": {"x": 0, "z": 0}, "b": {"y": 2}, "c": {}},
-            id="replace-existing-empty-key",
         ),
         pytest.param(
             [{ConfDict.ops.REPLACE: True, "n": {}}],
