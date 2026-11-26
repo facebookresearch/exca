@@ -102,22 +102,59 @@ class _Delete(_Op):
 
 @dataclasses.dataclass(frozen=True)
 class _Replace(_Op):
-    mark_if_empty: bool = True  # False when replacing a non-dict value
+    """Replaces the value at key with an empty ConfDict, at the same place; a missing
+    key gets the marker instead, for what this ConfDict later updates
+    """
 
     def apply(self, cfg: "ConfDict") -> bool:
-        empty = all(ConfDict.ops.is_op(k) or _is_delete(v) for k, v in cfg.items())
-        moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
-        position = [(k, v) for k, v in cfg.items() if k in moves]
-        dict.clear(cfg)
-        dict.update(cfg, position)
-        if empty and self.mark_if_empty:
-            dict.__setitem__(cfg, ConfDict.ops.REPLACE, True)  # nothing to replace yet
+        old = dict.get(cfg, self.key, ConfDict.ops.DELETE)
+        new = ConfDict()
+        if _is_delete(old):  # missing key, or a pending delete: fresh, last
+            dict.pop(cfg, self.key, None)
+            dict.__setitem__(new, ConfDict.ops.REPLACE, True)
+        elif isinstance(old, dict):  # keeps a pending move
+            moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
+            dict.update(new, [(k, old[k]) for k in moves if k in old])
+        dict.__setitem__(cfg, self.key, new)
         return True
 
 
 @dataclasses.dataclass(frozen=True)
-class _Move(_Op):
-    op: str | None = None  # BEFORE/AFTER, None cancels a pending move
+class _ReplaceAll(_Op):
+    """Replaces the content of a ConfDict that has no parent (a REPLACE at its root);
+    if empty, the marker stays for what this ConfDict later updates
+    """
+
+    def apply(self, cfg: "ConfDict") -> bool:
+        empty = all(ConfDict.ops.is_op(k) or _is_delete(v) for k, v in cfg.items())
+        moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
+        position = [(k, v) for k, v in cfg.items() if k in moves]  # its parent's move
+        dict.clear(cfg)
+        dict.update(cfg, position)
+        if empty:
+            dict.__setitem__(cfg, ConfDict.ops.REPLACE, True)
+        return True
+
+
+@dataclasses.dataclass(frozen=True)
+class _Stay(_Op):
+    """Drops the pending move of the key (e.g. when its value gets overwritten)"""
+
+    def apply(self, cfg: "ConfDict") -> bool:
+        sub = dict.get(cfg, self.key)
+        if isinstance(sub, dict):
+            for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
+                dict.pop(sub, op, None)
+        return True
+
+
+@dataclasses.dataclass(frozen=True)
+class _Move(_Stay):
+    """Places the key next to its anchor, or shows the op until the anchor exists;
+    replaces any earlier move of the key
+    """
+
+    op: str = ""  # BEFORE/AFTER
     anchor: str = ""
 
     @classmethod
@@ -136,12 +173,7 @@ class _Move(_Op):
         return cls(key, ops[0], anchor)
 
     def apply(self, cfg: "ConfDict") -> bool:
-        sub = dict.get(cfg, self.key)
-        if isinstance(sub, dict):
-            for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
-                dict.pop(sub, op, None)  # the latest move wins
-        if self.op is None:
-            return True
+        super().apply(cfg)
         if _is_delete(dict.get(cfg, self.anchor, ConfDict.ops.DELETE)):
             sub = _as_confdict(cfg, self.key)  # waits for its anchor, shown first
             items = list(sub.items())
@@ -176,8 +208,8 @@ class _Patch(tp.NamedTuple):
                 if not ConfDict.ops.is_op(key) and not _is_delete(val):  # pending: in log
                     values.append((key, val))
             return cls(mapping._log, values)
-        replace = mapping.get(ConfDict.ops.REPLACE, False)
-        ops: list[_Op] = [_Replace()] if replace else []
+        replace_all = mapping.get(ConfDict.ops.REPLACE, False)
+        ops: list[_Op] = [_ReplaceAll()] if replace_all else []
         for key, val in mapping.items():
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
@@ -191,8 +223,13 @@ class _Patch(tp.NamedTuple):
                     raise ValueError(f"Unexpected ConfDict op value {val!r}")
                 ops.append(_Delete(head))
                 continue
-            ops.append(_Add(head))
-            if not rest and isinstance(val, dict) and not isinstance(val, OrderedDict):
+            is_dict = not rest and isinstance(val, dict)
+            if is_dict and val.get(ConfDict.ops.REPLACE, False):
+                ops.append(_Replace(head))
+                val = {k: v for k, v in val.items() if k != ConfDict.ops.REPLACE}
+            else:
+                ops.append(_Add(head))
+            if is_dict and not isinstance(val, OrderedDict):
                 move = _Move.parse(head, val)
                 if move is not None:
                     ops.append(move)
@@ -229,8 +266,8 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     """Merges a value (its operations already applied) into a ConfDict or a list"""
     p, *rest = key.split(".", maxsplit=1)
     if isinstance(obj, ConfDict):
-        if not dict.__contains__(obj, p):
-            obj._apply([_Add(p)])  # content written around the log
+        if not dict.__contains__(obj, p):  # content written around the log
+            dict.__setitem__(obj, p, ConfDict())
         sub = dict.__getitem__(obj, p)
     elif _is_seq(obj) and p.isdigit():
         p = int(p)  # type: ignore
@@ -250,7 +287,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     val = _propagate_confdict(val)
     if not isinstance(val, dict) or isinstance(val, OrderedDict):
         if isinstance(sub, dict) and _Move.parse(p, sub) is not None:
-            obj._apply([_Move(p)])  # a pending move leaves with its value
+            obj._apply([_Stay(p)])  # a pending move leaves with its value
         dict.__setitem__(obj, p, val)
     elif isinstance(sub, OrderedDict):
         patched = ConfDict(sub)
@@ -266,9 +303,10 @@ def _as_confdict(obj: tp.Any, p: tp.Any) -> "ConfDict":
     sub = obj[p] if _is_seq(obj) else dict.__getitem__(obj, p)
     if isinstance(sub, ConfDict):
         return sub
+    if isinstance(obj, ConfDict) and not isinstance(sub, dict):
+        obj._apply([_Replace(p)])  # a dict replaces a non-dict value
+        return dict.__getitem__(obj, p)
     new = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
-    if not isinstance(sub, dict):
-        new._log = [(_Replace(mark_if_empty=False),)]
     if _is_seq(obj):
         obj[p] = new
     else:
@@ -424,12 +462,11 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     def _apply(self, ops: tp.Iterable[_Op]) -> None:
         """Applies operations and logs them as one update"""
         logged = tuple(op for op in ops if op.apply(self))
-        if any(isinstance(op, _Add) for op in logged):  # pending moves may find an anchor
+        if logged:  # pending moves may find an anchor
             pending = [_Move.parse(k, v) for k, v in self.items() if isinstance(v, dict)]
             for move in pending:
                 if move is not None:
                     move.apply(self)
-        if logged:
             self._log.append(logged)
 
     def setdefault(self, key: str, default: tp.Any = None) -> tp.Any:

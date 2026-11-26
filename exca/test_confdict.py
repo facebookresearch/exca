@@ -202,6 +202,16 @@ item:
             id="replace-key-set-by-an-earlier-layer",
         ),
         pytest.param(
+            [{"b": {ConfDict.ops.REPLACE: True, "y": 2}}, {"c": None}],
+            {"a": {"x": 0, "z": 0}, "b": {"y": 2}, "c": None},
+            id="replace-existing-empty-key",
+        ),
+        pytest.param(
+            [{"c": None}, {"c": {ConfDict.ops.REPLACE: True, "y": 2}}],
+            {"a": {"x": 0, "z": 0}, "b": {}, "c": {"y": 2}},
+            id="replace-existing-non-dict-value",
+        ),
+        pytest.param(
             [{"a": ConfDict.ops.DELETE}, {"a": {"y": 1}}],
             {"b": {}, "c": {}, "a": {"y": 1}},
             id="re-added-after-delete-is-fresh",
