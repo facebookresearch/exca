@@ -64,33 +64,146 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-def _apply_move(obj: dict[str, tp.Any], key: str) -> None:
-    sub = obj[key]
-    present = [op for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in sub]
-    if len(present) > 1:
-        raise ValueError(
-            f"Use either {ConfDict.ops.BEFORE!r} or {ConfDict.ops.AFTER!r}, not both"
-        )
-    if not present:
-        return
-    op = present[0]
-    anchor = sub[op]
-    if not isinstance(anchor, str):
-        raise TypeError(f"{op!r} expects a key name, got {anchor!r}")
-    if anchor == key:
-        raise ValueError(f"Cannot move {key!r} relative to itself")
-    if anchor not in obj:
-        return
-    dict.pop(sub, op, None)
-    value = dict.pop(obj, key)
-    items = list(obj.items())
-    obj.clear()
-    for name, item in items:
-        if op == ConfDict.ops.BEFORE and name == anchor:
-            dict.__setitem__(obj, key, value)
-        dict.__setitem__(obj, name, item)
-        if op == ConfDict.ops.AFTER and name == anchor:
-            dict.__setitem__(obj, key, value)
+def _is_delete(val: tp.Any) -> bool:
+    return isinstance(val, str) and val == ConfDict.ops.DELETE
+
+
+@dataclasses.dataclass(frozen=True)
+class _Op:
+    """Structural change at one level of a ConfDict (which keys exist, where, whether
+    the content is wiped). A ConfDict logs the ones it ran and replays them, in order,
+    when it patches another ConfDict; values are merged afterwards.
+    """
+
+    key: str = ""
+
+    def apply(self, cfg: "ConfDict") -> bool:
+        """Changes cfg, returns whether to log the operation"""
+        raise NotImplementedError
+
+
+@dataclasses.dataclass(frozen=True)
+class _Add(_Op):
+    def apply(self, cfg: "ConfDict") -> bool:
+        if not _is_delete(dict.get(cfg, self.key, ConfDict.ops.DELETE)):
+            return False  # already there
+        dict.pop(cfg, self.key, None)  # re-added after a pending delete: fresh, last
+        dict.__setitem__(cfg, self.key, ConfDict())
+        return True
+
+
+@dataclasses.dataclass(frozen=True)
+class _Delete(_Op):
+    def apply(self, cfg: "ConfDict") -> bool:
+        if _is_delete(dict.pop(cfg, self.key, ConfDict.ops.DELETE)):
+            dict.__setitem__(cfg, self.key, ConfDict.ops.DELETE)  # nothing to delete yet
+        return True
+
+
+@dataclasses.dataclass(frozen=True)
+class _Replace(_Op):
+    mark_if_empty: bool = True  # False when replacing a non-dict value
+
+    def apply(self, cfg: "ConfDict") -> bool:
+        empty = all(ConfDict.ops.is_op(k) or _is_delete(v) for k, v in cfg.items())
+        moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
+        position = [(k, v) for k, v in cfg.items() if k in moves]
+        dict.clear(cfg)
+        dict.update(cfg, position)
+        if empty and self.mark_if_empty:
+            dict.__setitem__(cfg, ConfDict.ops.REPLACE, True)  # nothing to replace yet
+        return True
+
+
+@dataclasses.dataclass(frozen=True)
+class _Move(_Op):
+    op: str | None = None  # BEFORE/AFTER, None cancels a pending move
+    anchor: str = ""
+
+    @classmethod
+    def parse(cls, key: str, value: dict[str, tp.Any]) -> tp.Self | None:
+        moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
+        ops = [op for op in moves if op in value.keys()]
+        if len(ops) > 1:
+            raise ValueError(f"Use either {moves[0]!r} or {moves[1]!r}, not both")
+        if not ops:
+            return None
+        anchor = value[ops[0]]
+        if not isinstance(anchor, str):
+            raise TypeError(f"{ops[0]!r} expects a key name, got {anchor!r}")
+        if anchor == key:
+            raise ValueError(f"Cannot move {key!r} relative to itself")
+        return cls(key, ops[0], anchor)
+
+    def apply(self, cfg: "ConfDict") -> bool:
+        sub = dict.get(cfg, self.key)
+        if isinstance(sub, dict):
+            for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
+                dict.pop(sub, op, None)  # the latest move wins
+        if self.op is None:
+            return True
+        if _is_delete(dict.get(cfg, self.anchor, ConfDict.ops.DELETE)):
+            sub = _as_confdict(cfg, self.key)  # waits for its anchor, shown first
+            items = list(sub.items())
+            dict.clear(sub)
+            dict.update(sub, [(self.op, self.anchor)] + items)
+            return True
+        value = dict.pop(cfg, self.key)
+        items = list(cfg.items())
+        dict.clear(cfg)
+        for name, item in items:
+            if self.op == ConfDict.ops.BEFORE and name == self.anchor:
+                dict.__setitem__(cfg, self.key, value)
+            dict.__setitem__(cfg, name, item)
+            if self.op == ConfDict.ops.AFTER and name == self.anchor:
+                dict.__setitem__(cfg, self.key, value)
+        return True
+
+
+class _Patch(tp.NamedTuple):
+    """What an update applies: operations (one tuple per update they come from), then
+    values. A ConfDict is itself a patch: its log, then its content.
+    """
+
+    ops: list[tuple[_Op, ...]]
+    values: list[tuple[str, tp.Any]]
+
+    @classmethod
+    def of(cls, mapping: abc.Mapping[str, tp.Any]) -> "_Patch":
+        values = []
+        if isinstance(mapping, ConfDict):
+            for key, val in mapping.items():
+                if not ConfDict.ops.is_op(key) and not _is_delete(val):  # pending: in log
+                    values.append((key, val))
+            return cls(mapping._log, values)
+        replace = mapping.get(ConfDict.ops.REPLACE, False)
+        ops: list[_Op] = [_Replace()] if replace else []
+        for key, val in mapping.items():
+            if not isinstance(key, str):
+                raise TypeError(f"ConfDict only supports str keys, got {key!r}")
+            head, *rest = key.split(".", maxsplit=1)
+            if ConfDict.ops.is_op(head):
+                continue  # REPLACE: above, BEFORE/AFTER: the move of the parent's key
+            if rest and ConfDict.ops.is_op(rest[0]):  # to_yaml writes {"a.=after=": "b"}
+                key, rest, val = head, [], {rest[0]: val}
+            if not rest and ConfDict.ops.is_op(val):
+                if val != ConfDict.ops.DELETE:
+                    raise ValueError(f"Unexpected ConfDict op value {val!r}")
+                ops.append(_Delete(head))
+                continue
+            ops.append(_Add(head))
+            if not rest and isinstance(val, dict) and not isinstance(val, OrderedDict):
+                move = _Move.parse(head, val)
+                if move is not None:
+                    ops.append(move)
+            values.append((key, val))
+        return cls([tuple(ops)], values)
+
+    def apply(self, cfg: "ConfDict") -> None:
+        for ops in self.ops:
+            cfg._apply(ops)
+        for key, val in self.values:
+            _set_item(cfg, key, val)
 
 
 def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
@@ -113,58 +226,54 @@ def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
 
 
 def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
-    """Internal recursive setitem on ConfDict/list"""
+    """Merges a value (its operations already applied) into a ConfDict or a list"""
     p, *rest = key.split(".", maxsplit=1)
-    if not rest:
-        val = _propagate_confdict(val, replace_dicts=False)
-        if ConfDict.ops.is_op(val) and val != ConfDict.ops.DELETE:
-            raise ValueError(f"Unexpected ConfDict op value {val!r}")
-        if isinstance(obj, dict):
-            ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
-    if isinstance(obj, dict):
-        existed = p in obj
-        sub = obj.setdefault(p, ConfDict())
+    if isinstance(obj, ConfDict):
+        if not dict.__contains__(obj, p):
+            obj._apply([_Add(p)])  # content written around the log
+        sub = dict.__getitem__(obj, p)
     elif _is_seq(obj) and p.isdigit():
         p = int(p)  # type: ignore
-        existed = True
         sub = obj[p]  # type: ignore
     else:
         raise TypeError(f"Cannot handle key {p!r} on existing container {obj!r}")
-    if rest:
-        # replace sub by dict if not dict or sequence
-        if not _is_seq(sub) and not isinstance(sub, dict):
-            sub = ConfDict()
-            if _is_seq(obj):
-                obj[p] = sub  # type: ignore
-            else:
-                dict.__setitem__(obj, p, sub)
+    if rest and _is_seq(sub):
         _set_item(sub, rest[0], val)
         return
-    # final part
-    if val == ConfDict.ops.DELETE and existed:
-        if _is_seq(obj):
+    if rest:
+        val = {rest[0]: val}
+    elif _is_seq(obj):
+        if _is_delete(val):
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
-        dict.pop(obj, p, None)
+        obj[p] = _propagate_confdict(val)  # type: ignore
         return
-    # list case
-    if _is_seq(obj):
-        obj[p] = val  # type: ignore
-        return
-    if isinstance(val, dict) and not isinstance(val, OrderedDict):
-        if isinstance(sub, OrderedDict):
-            patched = ConfDict(sub)
-            patched.update(val)  # degrades to dict
-            sub.clear()
-            sub.update(OrderedDict(patched.items()))
-        elif not isinstance(sub, ConfDict):
-            sub = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
-            dict.__setitem__(obj, p, sub)
-            sub.update(val)
-        else:
-            sub.update(val)
-        _apply_move(obj, p)
-    else:
+    val = _propagate_confdict(val)
+    if not isinstance(val, dict) or isinstance(val, OrderedDict):
+        if isinstance(sub, dict) and _Move.parse(p, sub) is not None:
+            obj._apply([_Move(p)])  # a pending move leaves with its value
         dict.__setitem__(obj, p, val)
+    elif isinstance(sub, OrderedDict):
+        patched = ConfDict(sub)
+        patched.update(val)  # degrades to dict
+        sub.clear()
+        sub.update(OrderedDict(patched.items()))
+    else:
+        _as_confdict(obj, p).update(val)
+
+
+def _as_confdict(obj: tp.Any, p: tp.Any) -> "ConfDict":
+    """Returns obj[p] as a ConfDict, converting a dict or replacing any other value"""
+    sub = obj[p] if _is_seq(obj) else dict.__getitem__(obj, p)
+    if isinstance(sub, ConfDict):
+        return sub
+    new = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
+    if not isinstance(sub, dict):
+        new._log = [(_Replace(mark_if_empty=False),)]
+    if _is_seq(obj):
+        obj[p] = new
+    else:
+        dict.__setitem__(obj, p, new)
+    return new
 
 
 class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
@@ -192,6 +301,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
+        self._log: list[tuple[_Op, ...]] = []  # operations run, one tuple per update
         self.update(mapping, **kwargs)
 
     @classmethod
@@ -221,9 +331,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         return ConfDict(exporter.apply(model))
 
     def __setitem__(self, key: str, val: tp.Any) -> None:
-        if not isinstance(key, str):
-            raise TypeError(f"ConfDict only supports str keys, got {key!r}")
-        _set_item(self, key, val)
+        self.update({key: val})
 
     def __getitem__(self, key: str) -> tp.Any:
         parts = key.split(".")
@@ -259,6 +367,9 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         if isinstance(sub, dict):
             default = () if default is _sentinel else (default,)
             out = dict.pop(sub, parts[-1], *default)
+            if isinstance(sub, ConfDict):  # forgets the key's operations
+                log = (tuple(op for op in ops if op.key != parts[-1]) for ops in sub._log)
+                sub._log = [ops for ops in log if ops]
         elif default is _sentinel:
             raise KeyError(key)
         else:
@@ -285,6 +396,12 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         - :code:`ConfDict.ops.BEFORE` and :code:`ConfDict.ops.AFTER` reorders a key
           relative to an existing sibling.
 
+        An operation with nothing to act on yet (missing key, content or anchor) stays
+        in the content. Applied operations are logged instead, and replayed in order
+        when this ConfDict (or a copy or pickle of it) updates another ConfDict, so
+        merging patches first matches applying them one by one; dict, flat and yaml
+        exports only carry the content.
+
         Example
         -------
         >>> cfg = ConfDict({"a": {"x": 1}, "b": {"x": 2}})
@@ -297,18 +414,43 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         >>> cfg
         {'b': {'x': 2, 'y': 12}, 'a': {'y': 4}}
         """
-        if mapping is not None:
-            if not isinstance(mapping, abc.Mapping):
-                mapping = dict(mapping)
-            kwargs.update(mapping)
-        if not kwargs:
-            return
-        if self and kwargs.pop(ConfDict.ops.REPLACE, False):
-            self.clear()
-        for key, val in kwargs.items():
-            if not isinstance(key, str):
-                raise TypeError(f"ConfDict only supports str keys, got {key!r}")
-            _set_item(self, key, val)
+        if mapping is not None and kwargs:
+            self.update(kwargs)  # then mapping, which wins
+            kwargs = {}
+        if mapping is not None and not isinstance(mapping, abc.Mapping):
+            mapping = dict(mapping)
+        _Patch.of(kwargs if mapping is None else mapping).apply(self)
+
+    def _apply(self, ops: tp.Iterable[_Op]) -> None:
+        """Applies operations and logs them as one update"""
+        logged = tuple(op for op in ops if op.apply(self))
+        if any(isinstance(op, _Add) for op in logged):  # pending moves may find an anchor
+            pending = [_Move.parse(k, v) for k, v in self.items() if isinstance(v, dict)]
+            for move in pending:
+                if move is not None:
+                    move.apply(self)
+        if logged:
+            self._log.append(logged)
+
+    def setdefault(self, key: str, default: tp.Any = None) -> tp.Any:
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def clear(self) -> None:
+        super().clear()
+        self._log = []
+
+    def __reduce__(self) -> tuple[tp.Any, ...]:
+        # content as is, not re-run as a patch (copy.deepcopy sets attributes first)
+        return self._restore, (dict(self), self._log)
+
+    @classmethod
+    def _restore(cls, content: dict[str, tp.Any], log: list[tuple[_Op, ...]]) -> tp.Self:
+        out = cls()
+        dict.update(out, content)
+        out._log = list(log)
+        return out
 
     def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as
@@ -317,7 +459,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         return _flatten(self)  # type: ignore
 
     def copy(self) -> tp.Self:
-        return self.__class__(super().copy())
+        return self.__class__(self)
 
     @classmethod
     def from_yaml(
