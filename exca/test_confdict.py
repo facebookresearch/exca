@@ -273,6 +273,17 @@ def test_update_converted_patch(convert: tp.Callable[[ConfDict], tp.Any]) -> Non
     assert list(base.items()) == [("a", {}), ("n", {}), ("c", {"y": 1})]
 
 
+def test_update_after_pop() -> None:
+    patch = ConfDict({"a.x": 1, "n": {ConfDict.ops.AFTER: "a"}})
+    patch.pop("a")  # TODO: behaviour TBC, pop could act like =delete= instead
+    patch.pop("n")
+    patch["n"] = {}
+    cfg = ConfDict({"a": {"x": 0}, "b": {}})
+    cfg.update(patch)
+    expected = [("a", {"x": 0}), ("b", {}), ("n", {})]
+    assert list(cfg.items()) == expected, "pop forgets the key and its ops"
+
+
 @pytest.mark.parametrize(
     "data",
     [
