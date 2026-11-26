@@ -168,7 +168,10 @@ item:
     grid = ConfDict({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
     data.update({"item": grid.flat()["item"][0]})
     assert data["item"] == {"name": "new"}
-    data.update({"item.name": ConfDict.ops.DELETE})
+    patch = ConfDict({"item": {ConfDict.ops.REPLACE: True, "size": 2}})
+    data["item"].update(patch["item"])
+    assert data["item"] == {"size": 2}, "a child keeps its pending replace"
+    data.update({"item.size": ConfDict.ops.DELETE})
     assert data["item"] == {}
 
 
@@ -285,14 +288,6 @@ def test_update_converted_patch(convert: tp.Callable[[ConfDict], tp.Any]) -> Non
     base = ConfDict({"a": {}, "b": {}, "c": {"x": 0}})
     base.update(convert(patch))
     assert list(base.items()) == [("a", {}), ("n", {}), ("c", {"y": 1})]
-
-
-def test_update_from_child_with_pending_replace() -> None:
-    cfg = ConfDict()
-    cfg.update({"steps": {ConfDict.ops.REPLACE: True, "read": {}, "flat": {}}})
-    default = ConfDict({"read": {}, "pad": {}})
-    default.update(cfg["steps"])
-    assert list(default) == ["read", "flat"]
 
 
 def test_update_after_pop() -> None:
