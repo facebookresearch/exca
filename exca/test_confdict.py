@@ -166,12 +166,11 @@ item:
     assert data["steps.late"] == {"t": 1}
 
     grid = ConfDict({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
-    data.update({"item": grid["item"][0]})
+    data.update({"item": grid.flat()["item"][0]})
     assert data["item"] == {"name": "new"}
-    patch = ConfDict({"item": {"name": "x"}})
-    patch.update({"item": {ConfDict.ops.REPLACE: True, "size": 2}})
+    patch = ConfDict({"item": {ConfDict.ops.REPLACE: True, "size": 2}})
     data["item"].update(patch["item"])
-    assert data["item"] == {"size": 2}, "a replaced child replaces in turn"
+    assert data["item"] == {"size": 2}, "a child keeps its pending replace"
     data.update({"item.size": ConfDict.ops.DELETE})
     assert data["item"] == {}
 
@@ -202,10 +201,9 @@ item:
                     "b": {ConfDict.ops.REPLACE: True, "y": 3},
                     "c": {ConfDict.ops.REPLACE: True, "y": 4},
                 },
-                {"b": {ConfDict.ops.REPLACE: True, "z": 5}},
             ],
-            {"a": {"y": 2}, "b": {"z": 5}, "c": {"y": 4}},
-            id="replace-key-set-earlier-empty-non-dict-or-replaced",
+            {"a": {"y": 2}, "b": {"y": 3}, "c": {"y": 4}},
+            id="replace-key-set-earlier-empty-or-non-dict",
         ),
         pytest.param(
             [{"b.x": 1, "b": ConfDict.ops.DELETE}, {"b": {ConfDict.ops.AFTER: "a"}}],
@@ -280,10 +278,16 @@ def test_update_layers(
     ids=["dict", "flat", "yaml"],
 )
 def test_update_converted_patch(convert: tp.Callable[[ConfDict], tp.Any]) -> None:
-    patch = ConfDict({"b": ConfDict.ops.DELETE, "n": {ConfDict.ops.AFTER: "a"}})
-    base = ConfDict({"a": {}, "b": {}, "c": {}})
+    patch = ConfDict(
+        {
+            "b": ConfDict.ops.DELETE,
+            "n": {ConfDict.ops.AFTER: "a"},
+            "c": {ConfDict.ops.REPLACE: True, "y": 1},
+        }
+    )
+    base = ConfDict({"a": {}, "b": {}, "c": {"x": 0}})
     base.update(convert(patch))
-    assert list(base.items()) == [("a", {}), ("n", {}), ("c", {})]
+    assert list(base.items()) == [("a", {}), ("n", {}), ("c", {"y": 1})]
 
 
 def test_update_after_pop() -> None:
@@ -313,6 +317,7 @@ def test_setdefault() -> None:
     "data",
     [
         {"missing": ConfDict.ops.DELETE},
+        {"item": {ConfDict.ops.REPLACE: True, "name": "new"}},
         {"item": {ConfDict.ops.BEFORE: "anchor"}},
         {"item": {ConfDict.ops.AFTER: "anchor"}},
     ],

@@ -6,7 +6,7 @@
 
 - `ContiguousMemmap`: faster loading and fewer open files when reading many cache files. [#360]
 - `CacheDict`/`steps`: registry databases (`inflight.db`, `errors.db`) follow the process umask, so they can be group-writable. [#366]
-- `ConfDict`: merging patches first gives the same result as applying them one by one, a pending move applies once its anchor arrives, a replace always applies (no pending marker), `setdefault` takes dotted keys, and array values no longer raise. [#376]
+- `ConfDict`: merging patches first gives the same result as applying them one by one, a pending move applies once its anchor arrives, a replace applies on any existing key, `setdefault` takes dotted keys, and array values no longer raise. [#376]
 
 ## 0.6.1 - 26-11-16
 
