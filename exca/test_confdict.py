@@ -51,12 +51,6 @@ def test_simplified_dict_2() -> None:
     assert sub == {"uid": "D1", "sub.uid": "D2"}
 
 
-def test_update_override() -> None:
-    data = ConfDict({"a": 12, "b": 12})
-    data.update({ConfDict.ops.REPLACE: True, "d": 13})
-    assert data == {"d": 13}
-
-
 def test_override_deprecation() -> None:
     with pytest.warns(DeprecationWarning, match="ConfDict.ops.REPLACE"):
         assert ConfDict.OVERRIDE == ConfDict.ops.REPLACE
@@ -144,10 +138,10 @@ def test_update_delete_and_move() -> None:
         == f"""steps:
   read.t: read
   project.t: project
+  pad.t: pad
   resample:
     t: resample
     frequency: 2
-  pad.t: pad
   late.{ConfDict.ops.AFTER}: missing
 item:
   name: old
@@ -157,12 +151,15 @@ item:
     with pytest.raises(ValueError, match="unresolved config"):
         data.to_uid()
 
-    data.update({"steps": {"missing": {}, "late": {"t": 1}}})
+    data.update(
+        {"steps": {"missing": {}, "late": {"t": 1}}, "item.size": np.array([1, 2])}
+    )
+    assert data["item.size"].tolist() == [1, 2], "arrays are not compared to ops"
     assert list(data["steps"]) == [
         "read",
         "project",
-        "resample",
         "pad",
+        "resample",
         "missing",
         "late",
     ]
@@ -171,8 +168,149 @@ item:
     grid = ConfDict({"item": [{ConfDict.ops.REPLACE: True, "name": "new"}]})
     data.update({"item": grid.flat()["item"][0]})
     assert data["item"] == {"name": "new"}
-    data.update({"item.name": ConfDict.ops.DELETE})
+    patch = ConfDict({"item": {ConfDict.ops.REPLACE: True, "size": 2}})
+    data["item"].update(patch["item"])
+    assert data["item"] == {"size": 2}, "a child keeps its pending replace"
+    data.update({"item.size": ConfDict.ops.DELETE})
     assert data["item"] == {}
+
+
+@pytest.mark.parametrize(
+    "layers,expected",
+    [
+        pytest.param(
+            [{"a.x": 1}, {"n": {ConfDict.ops.AFTER: "a"}}],
+            {"a": {"x": 1, "z": 0}, "n": {}, "b": {}, "c": {}},
+            id="move-to-anchor-in-base",
+        ),
+        pytest.param(
+            [{"a.x": 1, "n": {ConfDict.ops.AFTER: "a"}}],
+            {"a": {"x": 1, "z": 0}, "n": {}, "b": {}, "c": {}},
+            id="move-to-anchor-set-in-the-same-layer",
+        ),
+        pytest.param(
+            [{"a.x": 1}, {"a": ConfDict.ops.DELETE}],
+            {"b": {}, "c": {}},
+            id="delete-key-set-by-an-earlier-layer",
+        ),
+        pytest.param(
+            [
+                {"a.x": 1, "c": None},
+                {
+                    "a": {ConfDict.ops.REPLACE: True, "y": 2},
+                    "b": {ConfDict.ops.REPLACE: True, "y": 3},
+                    "c": {ConfDict.ops.REPLACE: True, "y": 4},
+                },
+            ],
+            {"a": {"y": 2}, "b": {"y": 3}, "c": {"y": 4}},
+            id="replace-key-set-earlier-empty-or-non-dict",
+        ),
+        pytest.param(
+            [{"b.x": 1, "b": ConfDict.ops.DELETE}, {"b": {ConfDict.ops.AFTER: "a"}}],
+            {"a": {"x": 0, "z": 0}, "b": {}, "c": {}},
+            id="delete-after-a-dotted-key-then-move",
+        ),
+        pytest.param(
+            [{"a": ConfDict.ops.DELETE}, {"a": {"y": 1}}],
+            {"b": {}, "c": {}, "a": {"y": 1}},
+            id="re-added-after-delete-is-fresh",
+        ),
+        pytest.param(
+            [
+                {"a.x": 1},
+                {"b": {ConfDict.ops.AFTER: "a"}},
+                {"a": {ConfDict.ops.AFTER: "c"}},
+            ],
+            {"b": {}, "c": {}, "a": {"x": 1, "z": 0}},
+            id="ops-apply-in-written-order",
+        ),
+        pytest.param(
+            [{"n": {ConfDict.ops.AFTER: "b"}}, {"b": ConfDict.ops.DELETE}],
+            {"a": {"x": 0, "z": 0}, "n": {}, "c": {}},
+            id="move-written-before-deleting-its-anchor",
+        ),
+        pytest.param(
+            [{"b": ConfDict.ops.DELETE}, {"n": {ConfDict.ops.AFTER: "b"}}],
+            {"a": {"x": 0, "z": 0}, "c": {}, "n": {ConfDict.ops.AFTER: "b"}},
+            id="pending-delete-is-no-anchor",
+        ),
+        pytest.param(
+            [{"n": {ConfDict.ops.AFTER: "m"}}, {"m": {}}],
+            {"a": {"x": 0, "z": 0}, "b": {}, "c": {}, "m": {}, "n": {}},
+            id="pending-move-applies-when-its-anchor-arrives",
+        ),
+        pytest.param(
+            [{"n": {ConfDict.ops.AFTER: "a"}}, {"n": {ConfDict.ops.BEFORE: "a"}}],
+            {"n": {}, "a": {"x": 0, "z": 0}, "b": {}, "c": {}},
+            id="latest-move-wins",
+        ),
+        pytest.param(
+            [{f"b.{ConfDict.ops.AFTER}": "c"}],
+            {"a": {"x": 0, "z": 0}, "c": {}, "b": {}},
+            id="dotted-op-key",
+        ),
+        pytest.param(
+            [{ConfDict.ops.REPLACE: True, "n": {}}],
+            {"n": {}},
+            id="root-replace",
+        ),
+    ],
+)
+def test_update_layers(
+    layers: list[dict[str, tp.Any]], expected: dict[str, tp.Any]
+) -> None:
+    base = {"a": {"x": 0, "z": 0}, "b": {}, "c": {}}
+    one_by_one = ConfDict(base)
+    for layer in layers:
+        one_by_one.update(layer)
+    assert list(one_by_one.items()) == list(expected.items()), "layers one by one"
+    patch = ConfDict()
+    for layer in layers:
+        patch.update(layer)
+    merged = ConfDict(base)
+    merged.update(patch)
+    assert list(merged.items()) == list(expected.items()), "layers merged first"
+
+
+@pytest.mark.parametrize(
+    "convert",
+    [dict, ConfDict.flat, lambda c: ConfDict.from_yaml(c.to_yaml())],
+    ids=["dict", "flat", "yaml"],
+)
+def test_update_converted_patch(convert: tp.Callable[[ConfDict], tp.Any]) -> None:
+    patch = ConfDict(
+        {
+            "b": ConfDict.ops.DELETE,
+            "n": {ConfDict.ops.AFTER: "a"},
+            "c": {ConfDict.ops.REPLACE: True, "y": 1},
+        }
+    )
+    base = ConfDict({"a": {}, "b": {}, "c": {"x": 0}})
+    base.update(convert(patch))
+    assert list(base.items()) == [("a", {}), ("n", {}), ("c", {"y": 1})]
+
+
+def test_update_after_pop() -> None:
+    patch = ConfDict({"a.x": 1, "n": {ConfDict.ops.AFTER: "a"}})
+    patch.pop("a")
+    patch.pop("n")
+    patch["n"] = {}
+    cfg = ConfDict({"a": {"x": 0}, "b": {}})
+    cfg.update(patch)
+    expected = [("a", {"x": 0}), ("b", {}), ("n", {})]
+    # debatable: pop could act like =delete= instead
+    assert list(cfg.items()) == expected, "pop forgets the key and its ops"
+
+
+def test_setdefault() -> None:
+    patch = ConfDict({"a.x": 1, "d": ConfDict.ops.DELETE})
+    assert patch.setdefault("a.x", 2) == 1, "existing dotted key kept"
+    patch.setdefault("b.y", 2)
+    # debatable: a pending delete could count as absent instead
+    assert patch.setdefault("d", {}) == ConfDict.ops.DELETE, "tombstone counts as set"
+    cfg = ConfDict({"a": {}, "b": {}, "d": {}})
+    cfg.update(patch)
+    assert cfg == {"a": {"x": 1}, "b": {"y": 2}}, "dotted keys split, not 'b.y'"
 
 
 @pytest.mark.parametrize(

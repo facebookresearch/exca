@@ -4,6 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations
+
 import dataclasses
 import decimal
 import fractions
@@ -64,33 +66,188 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
     return isinstance(val, abc.Sequence) and not isinstance(val, str)
 
 
-def _apply_move(obj: dict[str, tp.Any], key: str) -> None:
-    sub = obj[key]
-    present = [op for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER) if op in sub]
-    if len(present) > 1:
-        raise ValueError(
-            f"Use either {ConfDict.ops.BEFORE!r} or {ConfDict.ops.AFTER!r}, not both"
-        )
-    if not present:
-        return
-    op = present[0]
-    anchor = sub[op]
-    if not isinstance(anchor, str):
-        raise TypeError(f"{op!r} expects a key name, got {anchor!r}")
-    if anchor == key:
-        raise ValueError(f"Cannot move {key!r} relative to itself")
-    if anchor not in obj:
-        return
-    dict.pop(sub, op, None)
-    value = dict.pop(obj, key)
-    items = list(obj.items())
-    obj.clear()
-    for name, item in items:
-        if op == ConfDict.ops.BEFORE and name == anchor:
-            dict.__setitem__(obj, key, value)
-        dict.__setitem__(obj, name, item)
-        if op == ConfDict.ops.AFTER and name == anchor:
-            dict.__setitem__(obj, key, value)
+@dataclasses.dataclass(frozen=True)
+class _Op:
+    """Structural change at one level of a ConfDict: which keys exist, where, and
+    whether the content is wiped
+    """
+
+    key: str = ""
+
+    def apply(self, cfg: ConfDict) -> bool:
+        """Changes cfg, returns whether to log the operation"""
+        raise NotImplementedError
+
+
+@dataclasses.dataclass(frozen=True)
+class _Add(_Op):
+    def apply(self, cfg: ConfDict) -> bool:
+        if not _Delete.absent(cfg, self.key):
+            return False  # already there
+        dict.pop(cfg, self.key, None)  # re-added after a pending delete: fresh, last
+        dict.__setitem__(cfg, self.key, ConfDict())
+        return True
+
+
+@dataclasses.dataclass(frozen=True)
+class _Delete(_Op):
+    @staticmethod
+    def is_marker(val: tp.Any) -> bool:
+        return isinstance(val, str) and val == ConfDict.ops.DELETE
+
+    @staticmethod
+    def absent(cfg: ConfDict, key: str) -> bool:
+        """Missing, or pending a delete"""
+        return _Delete.is_marker(dict.get(cfg, key, ConfDict.ops.DELETE))
+
+    def apply(self, cfg: ConfDict) -> bool:
+        if _Delete.is_marker(dict.pop(cfg, self.key, ConfDict.ops.DELETE)):
+            dict.__setitem__(cfg, self.key, ConfDict.ops.DELETE)  # nothing to delete yet
+        return True
+
+
+@dataclasses.dataclass(frozen=True)
+class _Replace(_Op):
+    """Empties the dict at key (the ConfDict itself without key), keeping its pending
+    move; with nothing to replace yet, shows the marker for what it later updates
+    """
+
+    def apply(self, cfg: ConfDict) -> bool:
+        if self.key:  # unlike a ConfDict, a key can be missing
+            pending = _Delete.absent(cfg, self.key)
+            if pending:
+                dict.pop(cfg, self.key, None)  # fresh, last
+            old, target = dict.get(cfg, self.key), ConfDict()  # fresh: drops old's log
+            dict.__setitem__(cfg, self.key, target)
+        else:  # nothing to replace in a new ConfDict
+            old = target = cfg
+            pending = not cfg._log and all(ConfDict.ops.is_op(k) for k in cfg)
+        moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
+        kept = [(k, old[k]) for k in moves if isinstance(old, dict) and k in old]
+        dict.clear(target)
+        dict.update(target, kept)
+        if pending:
+            dict.__setitem__(target, ConfDict.ops.REPLACE, True)
+        return bool(self.key) or not pending  # a pending root replace stays visible
+
+
+@dataclasses.dataclass(frozen=True)
+class _Stay(_Op):
+    """Drops the pending move of the key (e.g. when its value gets overwritten)"""
+
+    def apply(self, cfg: ConfDict) -> bool:
+        sub = dict.get(cfg, self.key)
+        if isinstance(sub, dict):
+            for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
+                dict.pop(sub, op, None)
+        return True
+
+
+@dataclasses.dataclass(frozen=True)
+class _Move(_Stay):
+    """Places the key next to its anchor, or shows the op until the anchor exists;
+    replaces any earlier move of the key
+    """
+
+    op: str = ""  # BEFORE/AFTER
+    anchor: str = ""
+
+    @classmethod
+    def parse(cls, key: str, value: dict[str, tp.Any]) -> tp.Self | None:
+        moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
+        ops = [op for op in moves if op in value.keys()]
+        if len(ops) > 1:
+            raise ValueError(f"Use either {moves[0]!r} or {moves[1]!r}, not both")
+        if not ops:
+            return None
+        anchor = value[ops[0]]
+        if not isinstance(anchor, str):
+            raise TypeError(f"{ops[0]!r} expects a key name, got {anchor!r}")
+        if anchor == key:
+            raise ValueError(f"Cannot move {key!r} relative to itself")
+        return cls(key, ops[0], anchor)
+
+    def apply(self, cfg: ConfDict) -> bool:
+        if _Delete.absent(cfg, self.key):
+            return False  # no key to place
+        super().apply(cfg)
+        if _Delete.absent(cfg, self.anchor):
+            sub = _as_confdict(cfg, self.key)  # waits for its anchor, shown first
+            items = list(sub.items())
+            dict.clear(sub)
+            dict.update(sub, [(self.op, self.anchor)] + items)
+            return True
+        value = dict.pop(cfg, self.key)
+        items = list(cfg.items())
+        dict.clear(cfg)
+        for name, item in items:
+            if self.op == ConfDict.ops.BEFORE and name == self.anchor:
+                dict.__setitem__(cfg, self.key, value)
+            dict.__setitem__(cfg, name, item)
+            if self.op == ConfDict.ops.AFTER and name == self.anchor:
+                dict.__setitem__(cfg, self.key, value)
+        return True
+
+
+class _Patch(tp.NamedTuple):
+    """What an update applies: a REPLACE at its root, operations (one tuple per update
+    they come from), then values. A ConfDict is itself a patch: its visible REPLACE,
+    its log, then its content.
+    """
+
+    replace: bool
+    ops: list[tuple[_Op, ...]]
+    values: list[tuple[str, tp.Any]]
+
+    @classmethod
+    def of(cls, mapping: abc.Mapping[str, tp.Any]) -> _Patch:
+        root = bool(mapping.get(ConfDict.ops.REPLACE, False))
+        if isinstance(mapping, ConfDict):  # its other operations are logged
+            values = [
+                (k, v)
+                for k, v in mapping.items()
+                if not ConfDict.ops.is_op(k) and not _Delete.is_marker(v)
+            ]
+            return cls(root, mapping._log, values)
+        values = []
+        ops: list[_Op] = []
+        for key, val in mapping.items():
+            if not isinstance(key, str):
+                raise TypeError(f"ConfDict only supports str keys, got {key!r}")
+            head, *rest = key.split(".", maxsplit=1)
+            if ConfDict.ops.is_op(head):  # REPLACE taken above, a root move stays visible
+                if head != ConfDict.ops.REPLACE:
+                    values.append((key, val))
+                continue
+            if rest and ConfDict.ops.is_op(rest[0]):  # to_yaml writes {"a.=after=": "b"}
+                key, rest, val = head, [], {rest[0]: val}
+            if not rest and ConfDict.ops.is_op(val):
+                if val != ConfDict.ops.DELETE:
+                    raise ValueError(f"Unexpected ConfDict op value {val!r}")
+                ops.append(_Delete(head))
+                values = [(k, v) for k, v in values if k.split(".")[0] != head]  # deleted
+                continue
+            is_dict = (
+                not rest and isinstance(val, dict) and not isinstance(val, OrderedDict)
+            )
+            replace = is_dict and val.get(ConfDict.ops.REPLACE, False)
+            if replace:  # written earlier: replaced
+                values = [(k, v) for k, v in values if k.split(".")[0] != head]
+            ops.append(_Replace(head) if replace else _Add(head))
+            move = _Move.parse(head, val) if is_dict else None
+            if move is not None:
+                ops.append(move)
+            if replace or (is_dict and not isinstance(val, ConfDict)):  # ops taken above
+                val = {k: v for k, v in val.items() if not ConfDict.ops.is_op(k)}
+            values.append((key, val))
+        return cls(root, [tuple(ops)], values)
+
+    def apply(self, cfg: ConfDict) -> None:
+        """Applies the operations and values (a REPLACE at the root is the caller's)"""
+        for ops in self.ops:
+            cfg._apply(ops)
+        for key, val in self.values:
+            _set_item(cfg, key, val)
 
 
 def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
@@ -113,58 +270,55 @@ def _propagate_confdict(obj: tp.Any, replace_dicts: bool = False) -> tp.Any:
 
 
 def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
-    """Internal recursive setitem on ConfDict/list"""
+    """Merges a value (its operations already applied) into a ConfDict or a list"""
     p, *rest = key.split(".", maxsplit=1)
-    if not rest:
-        val = _propagate_confdict(val, replace_dicts=False)
-        if ConfDict.ops.is_op(val) and val != ConfDict.ops.DELETE:
-            raise ValueError(f"Unexpected ConfDict op value {val!r}")
-        if isinstance(obj, dict):
-            ConfDict.ops.is_op(p)  # reject op-shaped typos used as keys
-    if isinstance(obj, dict):
-        existed = p in obj
-        sub = obj.setdefault(p, ConfDict())
+    if isinstance(obj, ConfDict):
+        if not dict.__contains__(obj, p):  # set outside the log (e.g. |=)
+            dict.__setitem__(obj, p, ConfDict())
+        sub = dict.__getitem__(obj, p)
     elif _is_seq(obj) and p.isdigit():
         p = int(p)  # type: ignore
-        existed = True
         sub = obj[p]  # type: ignore
     else:
         raise TypeError(f"Cannot handle key {p!r} on existing container {obj!r}")
-    if rest:
-        # replace sub by dict if not dict or sequence
-        if not _is_seq(sub) and not isinstance(sub, dict):
-            sub = ConfDict()
-            if _is_seq(obj):
-                obj[p] = sub  # type: ignore
-            else:
-                dict.__setitem__(obj, p, sub)
+    if rest and _is_seq(sub):
         _set_item(sub, rest[0], val)
         return
-    # final part
-    if val == ConfDict.ops.DELETE and existed:
-        if _is_seq(obj):
+    if rest:
+        val = {rest[0]: val}
+    elif _is_seq(obj):
+        if _Delete.is_marker(val):
             raise TypeError(f"Cannot delete key {p!r} on existing sequence {obj!r}")
-        dict.pop(obj, p, None)
+        obj[p] = _propagate_confdict(val)  # type: ignore
         return
-    # list case
-    if _is_seq(obj):
-        obj[p] = val  # type: ignore
-        return
-    if isinstance(val, dict) and not isinstance(val, OrderedDict):
-        if isinstance(sub, OrderedDict):
-            patched = ConfDict(sub)
-            patched.update(val)  # degrades to dict
-            sub.clear()
-            sub.update(OrderedDict(patched.items()))
-        elif not isinstance(sub, ConfDict):
-            sub = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
-            dict.__setitem__(obj, p, sub)
-            sub.update(val)
-        else:
-            sub.update(val)
-        _apply_move(obj, p)
-    else:
+    val = _propagate_confdict(val)
+    if not isinstance(val, dict) or isinstance(val, OrderedDict):
+        if isinstance(sub, dict) and _Move.parse(p, sub) is not None:
+            obj._apply([_Stay(p)])  # a pending move leaves with its value
         dict.__setitem__(obj, p, val)
+    elif isinstance(sub, OrderedDict):
+        patched = ConfDict(sub)
+        patched.update(val)  # degrades to dict
+        sub.clear()
+        sub.update(OrderedDict(patched.items()))
+    else:
+        _Patch.of(val).apply(_as_confdict(obj, p))  # not update: _Replace did its REPLACE
+
+
+def _as_confdict(obj: tp.Any, p: tp.Any) -> ConfDict:
+    """Returns obj[p] as a ConfDict, converting a dict or replacing any other value"""
+    sub = dict.__getitem__(obj, p) if isinstance(obj, ConfDict) else obj[p]
+    if isinstance(sub, ConfDict):
+        return sub
+    if isinstance(obj, ConfDict) and not isinstance(sub, dict):
+        obj._apply([_Replace(p)])  # a dict replaces a non-dict value
+        return dict.__getitem__(obj, p)
+    new = ConfDict(sub) if isinstance(sub, dict) else ConfDict()
+    if isinstance(obj, ConfDict):
+        dict.__setitem__(obj, p, new)
+    else:  # a list
+        obj[p] = new
+    return new
 
 
 class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
@@ -192,12 +346,13 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
 
     def __init__(self, mapping: Mapping | None = None, **kwargs: tp.Any) -> None:
         super().__init__()
+        self._log: list[tuple[_Op, ...]] = []  # operations run, one tuple per update
         self.update(mapping, **kwargs)
 
     @classmethod
     def from_model(
         cls, model: pydantic.BaseModel, uid: bool = False, exclude_defaults: bool = False
-    ) -> "ConfDict":
+    ) -> ConfDict:
         """Creates a ConfDict based on a pydantic model
 
         Parameters
@@ -221,9 +376,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         return ConfDict(exporter.apply(model))
 
     def __setitem__(self, key: str, val: tp.Any) -> None:
-        if not isinstance(key, str):
-            raise TypeError(f"ConfDict only supports str keys, got {key!r}")
-        _set_item(self, key, val)
+        self.update({key: val})
 
     def __getitem__(self, key: str) -> tp.Any:
         parts = key.split(".")
@@ -259,6 +412,9 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         if isinstance(sub, dict):
             default = () if default is _sentinel else (default,)
             out = dict.pop(sub, parts[-1], *default)
+            if isinstance(sub, ConfDict):  # forgets the key's operations
+                log = (tuple(op for op in ops if op.key != parts[-1]) for ops in sub._log)
+                sub._log = [ops for ops in log if ops]
         elif default is _sentinel:
             raise KeyError(key)
         else:
@@ -274,8 +430,13 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         -----
         - dict values merge recursively.
         - non-dict values replace existing values.
-        - operations (see below) apply top to bottom; unresolved ops stay in the config until
-          applicable.
+        - operations (see below) apply top to bottom.
+        - an operation with nothing to act on yet (missing key or anchor) stays visible in
+          the content, and applies once its key or anchor arrives.
+        - an applied operation leaves the content and is logged instead; the log replays
+          when this ConfDict (or a copy) updates another ConfDict.
+        - :code:`dict`, :code:`flat` and :code:`to_yaml` export the content only: pending
+          operations, not applied ones.
 
         Operations
         -----------
@@ -296,19 +457,53 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         ... )
         >>> cfg
         {'b': {'x': 2, 'y': 12}, 'a': {'y': 4}}
+        >>> patch = ConfDict({"n": {ConfDict.ops.AFTER: "a"}})
+        >>> patch  # no a yet: pending
+        {'n': {'=after=': 'a'}}
+        >>> cfg = ConfDict({"a": {}, "c": {}})
+        >>> cfg.update(patch)
+        >>> list(cfg)
+        ['a', 'n', 'c']
         """
-        if mapping is not None:
-            if not isinstance(mapping, abc.Mapping):
-                mapping = dict(mapping)
-            kwargs.update(mapping)
-        if not kwargs:
-            return
-        if self and kwargs.pop(ConfDict.ops.REPLACE, False):
-            self.clear()
-        for key, val in kwargs.items():
-            if not isinstance(key, str):
-                raise TypeError(f"ConfDict only supports str keys, got {key!r}")
-            _set_item(self, key, val)
+        if mapping is not None and kwargs:
+            self.update(kwargs)  # then mapping, which wins
+            kwargs = {}
+        if mapping is not None and not isinstance(mapping, abc.Mapping):
+            mapping = dict(mapping)
+        patch = _Patch.of(kwargs if mapping is None else mapping)
+        if patch.replace:
+            self._apply([_Replace()])
+        patch.apply(self)
+
+    def _apply(self, ops: tp.Iterable[_Op]) -> None:
+        """Applies operations and logs them as one update"""
+        logged = tuple(op for op in ops if op.apply(self))
+        if logged:  # pending moves may find an anchor
+            pending = [_Move.parse(k, v) for k, v in self.items() if isinstance(v, dict)]
+            for move in pending:
+                if move is not None:
+                    move.apply(self)
+            self._log.append(logged)
+
+    def setdefault(self, key: str, default: tp.Any = None) -> tp.Any:
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def clear(self) -> None:
+        super().clear()
+        self._log = []
+
+    def __reduce__(self) -> tuple[tp.Any, ...]:
+        # content as is, not re-run as a patch (copy.deepcopy sets attributes first)
+        return self._restore, (dict(self), self._log)
+
+    @classmethod
+    def _restore(cls, content: dict[str, tp.Any], log: list[tuple[_Op, ...]]) -> tp.Self:
+        out = cls()
+        dict.update(out, content)
+        out._log = list(log)
+        return out
 
     def flat(self) -> dict[str, tp.Any]:
         """Returns a flat dictionary such as
@@ -317,13 +512,13 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         return _flatten(self)  # type: ignore
 
     def copy(self) -> tp.Self:
-        return self.__class__(super().copy())
+        return self.__class__(self)
 
     @classmethod
     def from_yaml(
         cls,
         yaml: str | Path | tp.IO[str] | tp.IO[bytes],
-    ) -> "ConfDict":
+    ) -> ConfDict:
         """Loads a ConfDict from a yaml string/filepath/file handle."""
         input_ = yaml
         if isinstance(yaml, str):
