@@ -435,10 +435,13 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         -----
         - dict values merge recursively.
         - non-dict values replace existing values.
-        - operations (see below) apply top to bottom; unresolved ops stay in the config until
-          applicable.
-        - applied operations replay when this ConfDict (or a copy) updates another one;
-          dict, flat and yaml exports only carry the content.
+        - operations (see below) apply top to bottom.
+        - an operation with nothing to act on yet (missing key or anchor) stays visible in
+          the content, and applies once its key or anchor arrives.
+        - an applied operation leaves the content and is logged instead: the log replays
+          when this ConfDict (or a copy) updates another ConfDict. :code:`dict`,
+          :code:`flat` and :code:`to_yaml` only export the content, so they carry pending
+          operations but not applied ones.
 
         Operations
         -----------
@@ -459,13 +462,20 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
         ... )
         >>> cfg
         {'b': {'x': 2, 'y': 12}, 'a': {'y': 4}}
-        >>> patch = ConfDict({"a": 1})
-        >>> patch.update({"a": ConfDict.ops.DELETE, "b": ConfDict.ops.DELETE})
-        >>> patch  # the delete of b waits for a b
-        {'b': '=delete='}
-        >>> cfg.update(patch)  # replays the delete of a
-        >>> cfg
-        {}
+        >>> patch = ConfDict({"b": {ConfDict.ops.AFTER: "a"}})
+        >>> patch  # no a: pending
+        {'b': {'=after=': 'a'}}
+        >>> patch.update({"a": {}})
+        >>> patch  # applied: logged
+        {'a': {}, 'b': {}}
+        >>> cfg = ConfDict({"a": {}, "c": {}})
+        >>> cfg.update(patch)  # replays the move
+        >>> list(cfg)
+        ['a', 'b', 'c']
+        >>> cfg = ConfDict({"a": {}, "c": {}})
+        >>> cfg.update(dict(patch))  # content only
+        >>> list(cfg)
+        ['a', 'c', 'b']
         """
         if mapping is not None and kwargs:
             self.update(kwargs)  # then mapping, which wins
