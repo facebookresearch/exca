@@ -298,7 +298,7 @@ def test_update_after_pop() -> None:
     cfg = ConfDict({"a": {"x": 0}, "b": {}})
     cfg.update(patch)
     expected = [("a", {"x": 0}), ("b", {}), ("n", {})]
-    # TODO: TBC (alternative: pop acts like =delete=)
+    # debatable: pop could act like =delete= instead
     assert list(cfg.items()) == expected, "pop forgets the key and its ops"
 
 
@@ -306,7 +306,7 @@ def test_setdefault() -> None:
     patch = ConfDict({"a.x": 1, "d": ConfDict.ops.DELETE})
     assert patch.setdefault("a.x", 2) == 1, "existing dotted key kept"
     patch.setdefault("b.y", 2)
-    # TODO: TBC (alternative: a pending delete counts as absent)
+    # debatable: a pending delete could count as absent instead
     assert patch.setdefault("d", {}) == ConfDict.ops.DELETE, "tombstone counts as set"
     cfg = ConfDict({"a": {}, "b": {}, "d": {}})
     cfg.update(patch)
