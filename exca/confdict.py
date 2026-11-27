@@ -4,6 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations
+
 import dataclasses
 import decimal
 import fractions
@@ -73,15 +75,15 @@ class _Op:
 
     key: str = ""
 
-    def apply(self, cfg: "ConfDict") -> bool:
+    def apply(self, cfg: ConfDict) -> bool:
         """Changes cfg, returns whether to log the operation"""
         raise NotImplementedError
 
 
 @dataclasses.dataclass(frozen=True)
 class _Add(_Op):
-    def apply(self, cfg: "ConfDict") -> bool:
-        if not _Delete.is_marker(dict.get(cfg, self.key, ConfDict.ops.DELETE)):
+    def apply(self, cfg: ConfDict) -> bool:
+        if not _Delete.absent(cfg, self.key):
             return False  # already there
         dict.pop(cfg, self.key, None)  # re-added after a pending delete: fresh, last
         dict.__setitem__(cfg, self.key, ConfDict())
@@ -94,7 +96,12 @@ class _Delete(_Op):
     def is_marker(val: tp.Any) -> bool:
         return isinstance(val, str) and val == ConfDict.ops.DELETE
 
-    def apply(self, cfg: "ConfDict") -> bool:
+    @staticmethod
+    def absent(cfg: ConfDict, key: str) -> bool:
+        """Missing, or deleted pending"""
+        return _Delete.is_marker(dict.get(cfg, key, ConfDict.ops.DELETE))
+
+    def apply(self, cfg: ConfDict) -> bool:
         if _Delete.is_marker(dict.pop(cfg, self.key, ConfDict.ops.DELETE)):
             dict.__setitem__(cfg, self.key, ConfDict.ops.DELETE)  # nothing to delete yet
         return True
@@ -106,10 +113,10 @@ class _Replace(_Op):
     key gets the marker instead, for what this ConfDict later updates
     """
 
-    def apply(self, cfg: "ConfDict") -> bool:
-        old = dict.get(cfg, self.key, ConfDict.ops.DELETE)
+    def apply(self, cfg: ConfDict) -> bool:
+        old = dict.get(cfg, self.key)
         new = ConfDict()
-        if _Delete.is_marker(old):  # missing key, or a pending delete: fresh, last
+        if _Delete.absent(cfg, self.key):  # fresh, last
             dict.pop(cfg, self.key, None)
             dict.__setitem__(new, ConfDict.ops.REPLACE, True)
         elif isinstance(old, dict):  # keeps a pending move
@@ -121,11 +128,11 @@ class _Replace(_Op):
 
 @dataclasses.dataclass(frozen=True)
 class _ReplaceAll(_Op):
-    """Replaces the content of a ConfDict (a REPLACE at its root, its parent's
-    _Replace otherwise); a new one shows the marker instead, for what it later updates
+    """Replaces the content of a ConfDict given a REPLACE at its root (a child's REPLACE
+    is its parent's _Replace); a new one shows the marker instead
     """
 
-    def apply(self, cfg: "ConfDict") -> bool:
+    def apply(self, cfg: ConfDict) -> bool:
         if not cfg._log and all(ConfDict.ops.is_op(k) for k in cfg):  # new
             dict.__setitem__(cfg, ConfDict.ops.REPLACE, True)
             return False  # pending, visible
@@ -139,7 +146,7 @@ class _ReplaceAll(_Op):
 class _Stay(_Op):
     """Drops the pending move of the key (e.g. when its value gets overwritten)"""
 
-    def apply(self, cfg: "ConfDict") -> bool:
+    def apply(self, cfg: ConfDict) -> bool:
         sub = dict.get(cfg, self.key)
         if isinstance(sub, dict):
             for op in (ConfDict.ops.BEFORE, ConfDict.ops.AFTER):
@@ -171,11 +178,11 @@ class _Move(_Stay):
             raise ValueError(f"Cannot move {key!r} relative to itself")
         return cls(key, ops[0], anchor)
 
-    def apply(self, cfg: "ConfDict") -> bool:
-        if _Delete.is_marker(dict.get(cfg, self.key, ConfDict.ops.DELETE)):
+    def apply(self, cfg: ConfDict) -> bool:
+        if _Delete.absent(cfg, self.key):
             return False  # no key to place
         super().apply(cfg)
-        if _Delete.is_marker(dict.get(cfg, self.anchor, ConfDict.ops.DELETE)):
+        if _Delete.absent(cfg, self.anchor):
             sub = _as_confdict(cfg, self.key)  # waits for its anchor, shown first
             items = list(sub.items())
             dict.clear(sub)
@@ -204,17 +211,16 @@ class _Patch(tp.NamedTuple):
     values: list[tuple[str, tp.Any]]
 
     @classmethod
-    def of(cls, mapping: abc.Mapping[str, tp.Any]) -> "_Patch":
+    def of(cls, mapping: abc.Mapping[str, tp.Any]) -> _Patch:
+        root = bool(mapping.get(ConfDict.ops.REPLACE, False))
+        if isinstance(mapping, ConfDict):  # its other operations are logged
+            values = [
+                (k, v)
+                for k, v in mapping.items()
+                if not ConfDict.ops.is_op(k) and not _Delete.is_marker(v)
+            ]
+            return cls(root, mapping._log, values)
         values = []
-        if isinstance(mapping, ConfDict):
-            for key, val in mapping.items():
-                if not ConfDict.ops.is_op(key) and not _Delete.is_marker(
-                    val
-                ):  # pending: in log
-                    values.append((key, val))
-            return cls(
-                dict.__contains__(mapping, ConfDict.ops.REPLACE), mapping._log, values
-            )
         ops: list[_Op] = []
         for key, val in mapping.items():
             if not isinstance(key, str):
@@ -245,9 +251,9 @@ class _Patch(tp.NamedTuple):
             if replace or (is_dict and not isinstance(val, ConfDict)):  # ops taken above
                 val = {k: v for k, v in val.items() if not ConfDict.ops.is_op(k)}
             values.append((key, val))
-        return cls(bool(mapping.get(ConfDict.ops.REPLACE, False)), [tuple(ops)], values)
+        return cls(root, [tuple(ops)], values)
 
-    def apply(self, cfg: "ConfDict") -> None:
+    def apply(self, cfg: ConfDict) -> None:
         """Applies the operations and values (a REPLACE at the root is the caller's)"""
         for ops in self.ops:
             cfg._apply(ops)
@@ -310,7 +316,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         _Patch.of(val).apply(_as_confdict(obj, p))  # its root REPLACE: our _Replace
 
 
-def _as_confdict(obj: tp.Any, p: tp.Any) -> "ConfDict":
+def _as_confdict(obj: tp.Any, p: tp.Any) -> ConfDict:
     """Returns obj[p] as a ConfDict, converting a dict or replacing any other value"""
     sub = dict.__getitem__(obj, p) if isinstance(obj, ConfDict) else obj[p]
     if isinstance(sub, ConfDict):
@@ -357,7 +363,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     @classmethod
     def from_model(
         cls, model: pydantic.BaseModel, uid: bool = False, exclude_defaults: bool = False
-    ) -> "ConfDict":
+    ) -> ConfDict:
         """Creates a ConfDict based on a pydantic model
 
         Parameters
@@ -523,7 +529,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
     def from_yaml(
         cls,
         yaml: str | Path | tp.IO[str] | tp.IO[bytes],
-    ) -> "ConfDict":
+    ) -> ConfDict:
         """Loads a ConfDict from a yaml string/filepath/file handle."""
         input_ = yaml
         if isinstance(yaml, str):
