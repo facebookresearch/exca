@@ -68,9 +68,8 @@ def _is_seq(val: tp.Any) -> tp.TypeGuard[tp.Sequence[tp.Any]]:
 
 @dataclasses.dataclass(frozen=True)
 class _Op:
-    """Structural change at one level of a ConfDict (which keys exist, where, whether
-    the content is wiped). A ConfDict logs the ones it ran and replays them, in order,
-    when it patches another ConfDict; values are merged afterwards.
+    """Structural change at one level of a ConfDict: which keys exist, where, and
+    whether the content is wiped
     """
 
     key: str = ""
@@ -98,7 +97,7 @@ class _Delete(_Op):
 
     @staticmethod
     def absent(cfg: ConfDict, key: str) -> bool:
-        """Missing, or deleted pending"""
+        """Missing, or pending a delete"""
         return _Delete.is_marker(dict.get(cfg, key, ConfDict.ops.DELETE))
 
     def apply(self, cfg: ConfDict) -> bool:
@@ -118,7 +117,7 @@ class _Replace(_Op):
             pending = _Delete.absent(cfg, self.key)
             if pending:
                 dict.pop(cfg, self.key, None)  # fresh, last
-            old, target = dict.get(cfg, self.key), ConfDict()  # new: no earlier ops
+            old, target = dict.get(cfg, self.key), ConfDict()  # fresh: drops old's log
             dict.__setitem__(cfg, self.key, target)
         else:  # nothing to replace in a new ConfDict
             old = target = cfg
@@ -216,7 +215,7 @@ class _Patch(tp.NamedTuple):
             if not isinstance(key, str):
                 raise TypeError(f"ConfDict only supports str keys, got {key!r}")
             head, *rest = key.split(".", maxsplit=1)
-            if ConfDict.ops.is_op(head):  # REPLACE: above, a root move: kept visible
+            if ConfDict.ops.is_op(head):  # REPLACE taken above, a root move stays visible
                 if head != ConfDict.ops.REPLACE:
                     values.append((key, val))
                 continue
@@ -274,7 +273,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
     """Merges a value (its operations already applied) into a ConfDict or a list"""
     p, *rest = key.split(".", maxsplit=1)
     if isinstance(obj, ConfDict):
-        if not dict.__contains__(obj, p):  # content written around the log
+        if not dict.__contains__(obj, p):  # set outside the log (e.g. |=)
             dict.__setitem__(obj, p, ConfDict())
         sub = dict.__getitem__(obj, p)
     elif _is_seq(obj) and p.isdigit():
@@ -303,7 +302,7 @@ def _set_item(obj: tp.Any, key: str, val: tp.Any) -> None:
         sub.clear()
         sub.update(OrderedDict(patched.items()))
     else:
-        _Patch.of(val).apply(_as_confdict(obj, p))  # its root REPLACE: our _Replace
+        _Patch.of(val).apply(_as_confdict(obj, p))  # not update: _Replace did its REPLACE
 
 
 def _as_confdict(obj: tp.Any, p: tp.Any) -> ConfDict:
