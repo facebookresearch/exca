@@ -109,37 +109,27 @@ class _Delete(_Op):
 
 @dataclasses.dataclass(frozen=True)
 class _Replace(_Op):
-    """Replaces the value at key with an empty ConfDict, at the same place; a missing
-    key gets the marker instead, for what this ConfDict later updates
+    """Empties the dict at key (the ConfDict itself without key), keeping its pending
+    move; with nothing to replace yet, shows the marker for what it later updates
     """
 
     def apply(self, cfg: ConfDict) -> bool:
-        old = dict.get(cfg, self.key)
-        new = ConfDict()
-        if _Delete.absent(cfg, self.key):  # fresh, last
-            dict.pop(cfg, self.key, None)
-            dict.__setitem__(new, ConfDict.ops.REPLACE, True)
-        elif isinstance(old, dict):  # keeps a pending move
-            moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
-            dict.update(new, [(k, old[k]) for k in moves if k in old])
-        dict.__setitem__(cfg, self.key, new)
-        return True
-
-
-@dataclasses.dataclass(frozen=True)
-class _ReplaceAll(_Op):
-    """Replaces the content of a ConfDict given a REPLACE at its root (a child's REPLACE
-    is its parent's _Replace); a new one shows the marker instead
-    """
-
-    def apply(self, cfg: ConfDict) -> bool:
-        if not cfg._log and all(ConfDict.ops.is_op(k) for k in cfg):  # new
-            dict.__setitem__(cfg, ConfDict.ops.REPLACE, True)
-            return False  # pending, visible
-        markers = [(k, v) for k, v in cfg.items() if ConfDict.ops.is_op(k)]
-        dict.clear(cfg)
-        dict.update(cfg, markers)
-        return True
+        if self.key:  # unlike a ConfDict, a key can be missing
+            pending = _Delete.absent(cfg, self.key)
+            if pending:
+                dict.pop(cfg, self.key, None)  # fresh, last
+            old, target = dict.get(cfg, self.key), ConfDict()  # new: no earlier ops
+            dict.__setitem__(cfg, self.key, target)
+        else:  # nothing to replace in a new ConfDict
+            old = target = cfg
+            pending = not cfg._log and all(ConfDict.ops.is_op(k) for k in cfg)
+        moves = (ConfDict.ops.BEFORE, ConfDict.ops.AFTER)
+        kept = [(k, old[k]) for k in moves if isinstance(old, dict) and k in old]
+        dict.clear(target)
+        dict.update(target, kept)
+        if pending:
+            dict.__setitem__(target, ConfDict.ops.REPLACE, True)
+        return bool(self.key) or not pending  # a pending root replace stays visible
 
 
 @dataclasses.dataclass(frozen=True)
@@ -483,7 +473,7 @@ class ConfDict(dict[str, tp.Any], metaclass=_ConfDictMeta):
             mapping = dict(mapping)
         patch = _Patch.of(kwargs if mapping is None else mapping)
         if patch.replace:
-            self._apply([_ReplaceAll()])
+            self._apply([_Replace()])
         patch.apply(self)
 
     def _apply(self, ops: tp.Iterable[_Op]) -> None:
