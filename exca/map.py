@@ -404,8 +404,9 @@ class MapInfra(base.BaseInfra, slurm.SubmititMixin):
             pool = self.cluster
             if len(missing) == 1:
                 pool = None
-            # avoid processing same files at same time if several jobs overlap
-            np.random.shuffle(missing)
+            if pool is not None:  # inline computation keeps the input order
+                # avoid processing same files at same time if several jobs overlap
+                np.random.shuffle(missing)
             reg = self._inflight_registry()
             with inflight.inflight_session(reg, [k for k, _ in missing]) as claim:
                 missing = self._recheck_after_wait(missing, claim)
